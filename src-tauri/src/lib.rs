@@ -18,6 +18,8 @@ pub fn run() {
             fs_commands::read_dir,
             fs_commands::read_file,
             fs_commands::write_file,
+            fs_commands::create_file,
+            fs_commands::create_folder,
             search::search_in_dir,
             file_index::list_project_files,
             git::git_branch,

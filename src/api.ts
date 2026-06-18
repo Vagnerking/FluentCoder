@@ -48,6 +48,30 @@ export function writeFile(path: string, contents: string): Promise<void> {
   return invoke("write_file", { path, contents });
 }
 
+function mapDirEntry(entry: RawDirEntry): FileNode {
+  return { name: entry.name, path: entry.path, isDir: entry.is_dir };
+}
+
+export async function createFile(
+  workspaceRoot: string,
+  parent: string,
+  name: string
+): Promise<FileNode> {
+  return mapDirEntry(
+    await invoke<RawDirEntry>("create_file", { workspaceRoot, parent, name })
+  );
+}
+
+export async function createFolder(
+  workspaceRoot: string,
+  parent: string,
+  name: string
+): Promise<FileNode> {
+  return mapDirEntry(
+    await invoke<RawDirEntry>("create_folder", { workspaceRoot, parent, name })
+  );
+}
+
 /** Recursively searches `root` for lines containing `query` (case-insensitive). */
 export function searchInDir(root: string, query: string): Promise<SearchMatch[]> {
   return invoke<SearchMatch[]>("search_in_dir", { root, query });

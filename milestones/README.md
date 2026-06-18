@@ -43,6 +43,9 @@ Planejamento de features do **Code Editor** (Tauri + React + Monaco), organizado
 - [Ações do Explorador de Arquivos](EPIC-file-explorer-actions.md) — barra de ações com
   Novo arquivo, Nova pasta, Atualizar explorador e Recolher pastas.
   **Status:** planejado.
+- [Barra de Menu (VSCode)](EPIC-menu-bar-vscode.md) — barra de menu no topo estilo VSCode
+  (File, Edit, Selection, View, Go, Run, Terminal, Help), substituindo o botão "Abrir pasta".
+  **Status:** planejado.
 
 ## Issues — Fluent VSCode Layout
 
@@ -129,6 +132,20 @@ Planejamento de features do **Code Editor** (Tauri + React + Monaco), organizado
 | 44 | [Atualizar explorador](issues/ISSUE-44-explorer-refresh.md) | ⬜ Pendente |
 | 45 | [Recolher pastas](issues/ISSUE-45-explorer-collapse-folders.md) | ⬜ Pendente |
 | 46 | [Integração, acessibilidade e E2E](issues/ISSUE-46-explorer-actions-integration.md) | ⬜ Pendente |
+
+## Issues — Barra de Menu (VSCode)
+
+| # | Issue | Status |
+| --- | --- | --- |
+| 47 | [Componente MenuBar: modelo de dados + dropdown (portal)](issues/ISSUE-47-menubar-component-infra.md) | ⬜ Pendente |
+| 48 | [Navegação por teclado + Alt + acessibilidade](issues/ISSUE-48-menubar-keyboard-a11y.md) | ⬜ Pendente |
+| 49 | [Integrar MenuBar na TitleBar](issues/ISSUE-49-menubar-titlebar-integration.md) | ⬜ Pendente |
+| 50 | [Ponte de comandos do Monaco (ref do EditorPane)](issues/ISSUE-50-editor-command-bridge.md) | ⬜ Pendente |
+| 51 | [Menu File](issues/ISSUE-51-menu-file.md) | ⬜ Pendente |
+| 52 | [Menus Edit + Selection](issues/ISSUE-52-menu-edit-selection.md) | ⬜ Pendente |
+| 53 | [Menus View / Go / Run / Terminal](issues/ISSUE-53-menu-view-go-run-terminal.md) | ⬜ Pendente |
+| 54 | [Menu Help + remover botão "Abrir pasta"](issues/ISSUE-54-menu-help-remove-open-button.md) | ⬜ Pendente |
+| 55 | [Integração, atalhos e E2E](issues/ISSUE-55-menubar-integration-e2e.md) | ⬜ Pendente |
 
 ## Convenção
 

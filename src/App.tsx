@@ -144,6 +144,13 @@ export default function App() {
     []
   );
 
+  const refreshExplorerRoot = useCallback(async () => {
+    if (!rootPath) return;
+    const entries = await readDir(rootPath);
+    setRoots(entries);
+    gitStatus(rootPath).then(setGitState).catch(() => setGitState(null));
+  }, [rootPath]);
+
   /** Native folder picker → load top-level entries into the explorer. */
   async function handleOpenFolder() {
     const folder = await pickFolder();
@@ -308,10 +315,12 @@ export default function App() {
         return (
           <FileExplorer
             rootName={rootName}
+            rootPath={rootPath}
             roots={roots}
             activePath={activePath}
             onOpenFolder={handleOpenFolder}
             onOpenFile={handleOpenFile}
+            onRefreshRoot={refreshExplorerRoot}
             decorationFor={decorationFor}
           />
         );
@@ -334,10 +343,12 @@ export default function App() {
         return (
           <FileExplorer
             rootName={rootName}
+            rootPath={rootPath}
             roots={roots}
             activePath={activePath}
             onOpenFolder={handleOpenFolder}
             onOpenFile={handleOpenFile}
+            onRefreshRoot={refreshExplorerRoot}
             decorationFor={decorationFor}
           />
         );

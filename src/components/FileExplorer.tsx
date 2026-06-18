@@ -1,40 +1,229 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createFile, createFolder } from "../api";
 import type { FileNode, FileDecoration } from "../types";
+import { Codicon } from "../icons/codicons/Codicon";
 import { TreeNode } from "./TreeNode";
 
+export type PendingCreation = {
+  kind: "file" | "folder";
+  parentPath: string;
+};
+
 interface FileExplorerProps {
-  /** Root folder name (e.g. "my-project"), or null when nothing is open. */
   rootName: string | null;
-  /** Top-level entries of the open folder. */
+  rootPath: string | null;
   roots: FileNode[];
   activePath: string | null;
   onOpenFolder: () => void;
   onOpenFile: (node: FileNode) => void;
-  /** Resolves the git/diagnostic decoration for a path; default = none. */
+  onRefreshRoot: () => Promise<void>;
   decorationFor?: (path: string) => FileDecoration | undefined;
 }
 
-/** The left sidebar: a header with the folder name and the file tree. */
+interface InlineCreationProps {
+  kind: PendingCreation["kind"];
+  depth: number;
+  busy: boolean;
+  error: string | null;
+  onSubmit: (name: string) => void;
+  onCancel: () => void;
+}
+
+export function InlineCreation({
+  kind,
+  depth,
+  busy,
+  error,
+  onSubmit,
+  onCancel,
+}: InlineCreationProps) {
+  const [name, setName] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => inputRef.current?.focus(), []);
+
+  return (
+    <div className="explorer-inline-wrap">
+      <div className="tree-row explorer-inline-row" style={{ paddingLeft: depth * 12 + 6 }}>
+        <span className="tree-chevron" />
+        <Codicon name={kind === "file" ? "newFile" : "newFolder"} size={16} />
+        <input
+          ref={inputRef}
+          className="explorer-inline-input"
+          aria-label={kind === "file" ? "Nome do novo arquivo" : "Nome da nova pasta"}
+          value={name}
+          disabled={busy}
+          onChange={(event) => setName(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              onSubmit(name);
+            } else if (event.key === "Escape") {
+              event.preventDefault();
+              onCancel();
+            }
+          }}
+        />
+      </div>
+      {error && (
+        <div className="explorer-inline-error" role="alert" style={{ paddingLeft: depth * 12 + 34 }}>
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function FileExplorer({
   rootName,
+  rootPath,
   roots,
   activePath,
   onOpenFolder,
   onOpenFile,
+  onRefreshRoot,
   decorationFor = () => undefined,
 }: FileExplorerProps) {
+  const [selectedDirectory, setSelectedDirectory] = useState<string | null>(rootPath);
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const [pending, setPending] = useState<PendingCreation | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState("");
+
+  useEffect(() => {
+    setSelectedDirectory(rootPath);
+    setExpandedPaths(new Set());
+    setPending(null);
+    setError(null);
+  }, [rootPath]);
+
+  const hasExpandedFolders = expandedPaths.size > 0;
+  const actionsDisabled = !rootPath || busy;
+  const targetDirectory = selectedDirectory ?? rootPath;
+
+  const actionButtons = useMemo(
+    () => [
+      { action: "newFile" as const, label: "Novo arquivo", kind: "file" as const },
+      { action: "newFolder" as const, label: "Nova pasta", kind: "folder" as const },
+    ],
+    []
+  );
+
+  function beginCreation(kind: PendingCreation["kind"]) {
+    if (!targetDirectory) return;
+    setPending({ kind, parentPath: targetDirectory });
+    setError(null);
+    if (targetDirectory !== rootPath) {
+      setExpandedPaths((current) => new Set(current).add(targetDirectory));
+    }
+  }
+
+  async function submitCreation(name: string) {
+    if (!rootPath || !pending || busy) return;
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setError("Informe um nome.");
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    try {
+      const created =
+        pending.kind === "file"
+          ? await createFile(rootPath, pending.parentPath, trimmed)
+          : await createFolder(rootPath, pending.parentPath, trimmed);
+      await onRefreshRoot();
+      setRefreshVersion((value) => value + 1);
+      setPending(null);
+      setStatus(pending.kind === "file" ? "Arquivo criado." : "Pasta criada.");
+      if (created.isDir) {
+        setSelectedDirectory(created.path);
+        setExpandedPaths((current) => new Set(current).add(created.path));
+      } else {
+        onOpenFile(created);
+      }
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refresh() {
+    if (!rootPath || busy) return;
+    setBusy(true);
+    setStatus("Atualizando explorador…");
+    try {
+      await onRefreshRoot();
+      setRefreshVersion((value) => value + 1);
+      setStatus("Explorador atualizado.");
+    } catch (cause) {
+      setStatus(`Não foi possível atualizar o explorador: ${String(cause)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function collapseAll() {
+    setExpandedPaths(new Set());
+    setStatus("Pastas recolhidas.");
+  }
+
   return (
     <div className="explorer">
       <div className="explorer-header">
-        <span className="explorer-title">
+        <span className="explorer-title" title={rootName ?? "EXPLORADOR"}>
           {rootName ?? "EXPLORADOR"}
         </span>
-        <button className="explorer-open-btn" onClick={onOpenFolder} title="Abrir pasta">
-          Abrir pasta
-        </button>
+        {rootPath ? (
+          <div className="explorer-actions" role="toolbar" aria-label="Ações do explorador">
+            {actionButtons.map(({ action, label, kind }) => (
+              <button
+                key={action}
+                className="explorer-action"
+                title={label}
+                aria-label={label}
+                disabled={actionsDisabled}
+                onClick={() => beginCreation(kind)}
+              >
+                <Codicon name={action} size={16} />
+              </button>
+            ))}
+            <button
+              className="explorer-action"
+              title="Atualizar explorador"
+              aria-label="Atualizar explorador"
+              disabled={actionsDisabled}
+              onClick={refresh}
+            >
+              <Codicon name="refresh" size={16} spin={busy} />
+            </button>
+            <button
+              className="explorer-action"
+              title="Recolher pastas"
+              aria-label="Recolher pastas"
+              disabled={actionsDisabled || !hasExpandedFolders}
+              onClick={collapseAll}
+            >
+              <Codicon name="collapseAll" size={16} />
+            </button>
+          </div>
+        ) : (
+          <button className="explorer-open-btn" onClick={onOpenFolder} title="Abrir pasta">
+            Abrir pasta
+          </button>
+        )}
+      </div>
+
+      <div className="explorer-status" aria-live="polite">
+        {status}
       </div>
 
       <div className="explorer-tree">
-        {roots.length === 0 ? (
+        {!rootPath ? (
           <div className="explorer-empty">
             Nenhuma pasta aberta.
             <br />
@@ -43,16 +232,45 @@ export function FileExplorer({
             </button>
           </div>
         ) : (
-          roots.map((node) => (
-            <TreeNode
-              key={node.path}
-              node={node}
-              depth={0}
-              activePath={activePath}
-              onOpenFile={onOpenFile}
-              decorationFor={decorationFor}
-            />
-          ))
+          <>
+            {pending?.parentPath === rootPath && (
+              <InlineCreation
+                kind={pending.kind}
+                depth={0}
+                busy={busy}
+                error={error}
+                onSubmit={submitCreation}
+                onCancel={() => setPending(null)}
+              />
+            )}
+            {roots.map((node) => (
+              <TreeNode
+                key={node.path}
+                node={node}
+                depth={0}
+                activePath={activePath}
+                selectedDirectory={selectedDirectory}
+                expandedPaths={expandedPaths}
+                refreshVersion={refreshVersion}
+                pendingCreation={pending}
+                creationBusy={busy}
+                creationError={error}
+                onSelectDirectory={setSelectedDirectory}
+                onToggleDirectory={(path) =>
+                  setExpandedPaths((current) => {
+                    const next = new Set(current);
+                    if (next.has(path)) next.delete(path);
+                    else next.add(path);
+                    return next;
+                  })
+                }
+                onOpenFile={onOpenFile}
+                onSubmitCreation={submitCreation}
+                onCancelCreation={() => setPending(null)}
+                decorationFor={decorationFor}
+              />
+            ))}
+          </>
         )}
       </div>
     </div>
