@@ -27,3 +27,16 @@ export function readFile(path: string): Promise<string> {
 export function writeFile(path: string, contents: string): Promise<void> {
   return invoke("write_file", { path, contents });
 }
+
+export function termCreate(id: string, cwd: string, cols: number, rows: number): Promise<void> {
+  return invoke("term_create", { id, cwd, cols, rows });
+}
+export function termWrite(id: string, data: string): Promise<void> {
+  return invoke("term_write", { id, data });
+}
+export function termResize(id: string, cols: number, rows: number): Promise<void> {
+  return invoke("term_resize", { id, cols, rows });
+}
+export function termClose(id: string): Promise<void> {
+  return invoke("term_close", { id });
+}

@@ -1,14 +1,20 @@
-import Editor from "@monaco-editor/react";
+import Editor, { OnMount } from "@monaco-editor/react";
 import type { OpenFile } from "../types";
 import { languageForFile } from "../language";
 
 interface EditorPaneProps {
   file: OpenFile | null;
   onChange: (value: string) => void;
+  onCursorChange: (line: number, col: number) => void;
 }
 
-/** The right side: Monaco editor, or a placeholder when no file is open. */
-export function EditorPane({ file, onChange }: EditorPaneProps) {
+export function EditorPane({ file, onChange, onCursorChange }: EditorPaneProps) {
+  const handleMount: OnMount = (editor) => {
+    editor.onDidChangeCursorPosition((e) => {
+      onCursorChange(e.position.lineNumber, e.position.column);
+    });
+  };
+
   if (!file) {
     return (
       <div className="editor-empty">
@@ -28,6 +34,7 @@ export function EditorPane({ file, onChange }: EditorPaneProps) {
       language={languageForFile(file.name)}
       value={file.content}
       onChange={(value) => onChange(value ?? "")}
+      onMount={handleMount}
       options={{
         fontSize: 14,
         minimap: { enabled: true },

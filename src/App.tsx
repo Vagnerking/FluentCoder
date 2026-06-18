@@ -3,7 +3,12 @@ import { FileExplorer } from "./components/FileExplorer";
 import { EditorPane } from "./components/EditorPane";
 import { TabBar } from "./components/TabBar";
 import { TitleBar } from "./components/TitleBar";
+import { ActivityBar } from "./components/ActivityBar";
+import { Breadcrumbs } from "./components/Breadcrumbs";
+import { StatusBar } from "./components/StatusBar";
+import { TerminalPanel } from "./components/TerminalPanel";
 import { pickFolder, readDir, readFile, writeFile } from "./api";
+import { languageForFile } from "./language";
 import type { FileNode, OpenFile } from "./types";
 
 /** Returns the last path segment, handling both Windows and POSIX separators. */
@@ -14,11 +19,19 @@ function baseName(path: string): string {
 
 export default function App() {
   const [rootName, setRootName] = useState<string | null>(null);
+  const [rootPath, setRootPath] = useState<string | null>(null);
   const [roots, setRoots] = useState<FileNode[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
+
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [panelHeight, setPanelHeight] = useState(220);
+  const [activeView, setActiveView] = useState("explorer");
+
+  const [cursorLine, setCursorLine] = useState(1);
+  const [cursorCol, setCursorCol] = useState(1);
 
   const activeFile = openFiles.find((f) => f.path === activePath) ?? null;
 
@@ -30,6 +43,7 @@ export default function App() {
       const entries = await readDir(folder);
       setRoots(entries);
       setRootName(baseName(folder).toUpperCase());
+      setRootPath(folder);
     } catch (err) {
       console.error(err);
       alert(`Não foi possível abrir a pasta:\n${err}`);
@@ -73,7 +87,6 @@ export default function App() {
     setOpenFiles((prev) => {
       const next = prev.filter((f) => f.path !== path);
       if (path === activePath) {
-        // Focus the neighbouring tab, if any.
         setActivePath(next.length ? next[next.length - 1].path : null);
       }
       return next;
@@ -95,12 +108,16 @@ export default function App() {
     }
   }, [openFiles, activePath]);
 
-  // Ctrl+S / Cmd+S to save the active file.
+  // Ctrl+S / Cmd+S to save; Ctrl+` to toggle terminal.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
         handleSave();
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === "`") {
+        e.preventDefault();
+        setPanelOpen((v) => !v);
       }
     }
     window.addEventListener("keydown", onKeyDown);
@@ -120,6 +137,8 @@ export default function App() {
       />
 
       <div className="body">
+        <ActivityBar activeView={activeView} onViewChange={setActiveView} />
+
         {sidebarOpen && (
           <aside className="sidebar">
             <FileExplorer
@@ -133,6 +152,7 @@ export default function App() {
         )}
 
         <main className="main">
+          <Breadcrumbs filePath={activePath} rootPath={rootPath} />
           <TabBar
             files={openFiles}
             activePath={activePath}
@@ -140,10 +160,54 @@ export default function App() {
             onClose={handleCloseTab}
           />
           <div className="editor-host">
-            <EditorPane file={activeFile} onChange={handleEditorChange} />
+            <EditorPane
+              file={activeFile}
+              onChange={handleEditorChange}
+              onCursorChange={(l, c) => {
+                setCursorLine(l);
+                setCursorCol(c);
+              }}
+            />
           </div>
+          {panelOpen && (
+            <>
+              <div
+                className="panel-resize-handle"
+                onPointerDown={(e) => {
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                  const startY = e.clientY;
+                  const startH = panelHeight;
+                  const onMove = (me: PointerEvent) => {
+                    const delta = startY - me.clientY;
+                    setPanelHeight(
+                      Math.max(80, Math.min(startH + delta, window.innerHeight * 0.7))
+                    );
+                  };
+                  const onUp = () => {
+                    window.removeEventListener("pointermove", onMove);
+                    window.removeEventListener("pointerup", onUp);
+                  };
+                  window.addEventListener("pointermove", onMove);
+                  window.addEventListener("pointerup", onUp);
+                }}
+              />
+              <TerminalPanel
+                open={panelOpen}
+                height={panelHeight}
+                cwd={rootPath}
+                onClose={() => setPanelOpen(false)}
+              />
+            </>
+          )}
         </main>
       </div>
+
+      <StatusBar
+        language={activeFile ? languageForFile(activeFile.name) : ""}
+        line={cursorLine}
+        column={cursorCol}
+        fileName={activeFile?.name ?? null}
+      />
     </div>
   );
 }
