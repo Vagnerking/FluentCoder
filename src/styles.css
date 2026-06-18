@@ -1,0 +1,391 @@
+:root {
+  /* Windows 11 / Fluent dark palette. Surfaces use alpha so the native
+     Mica backdrop shows through; the editor stays opaque for legibility. */
+  --accent: #60cdff; /* Win11 dark-mode accent */
+  --accent-strong: #0e639c;
+
+  --text: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.82);
+  --text-muted: rgba(255, 255, 255, 0.54);
+  --text-disabled: rgba(255, 255, 255, 0.36);
+
+  /* Layered surfaces — translucent so Mica is visible behind them. */
+  --titlebar-bg: rgba(32, 32, 32, 0.55);
+  --sidebar-bg: rgba(32, 32, 32, 0.45);
+  --tabbar-bg: rgba(40, 40, 40, 0.55);
+
+  /* The editor host is opaque — Monaco needs a solid background to read well. */
+  --editor-bg: #1f1f1f;
+
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --stroke: rgba(255, 255, 255, 0.06);
+
+  /* Fluent control fills (hover/active layering). */
+  --fill-subtle-hover: rgba(255, 255, 255, 0.06);
+  --fill-subtle-active: rgba(255, 255, 255, 0.04);
+  --fill-selected: rgba(96, 205, 255, 0.16);
+  --fill-selected-hover: rgba(96, 205, 255, 0.22);
+
+  --radius-control: 4px;
+  --radius-card: 8px;
+
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  /* Segoe UI Variable is the Windows 11 system font; graceful fallbacks. */
+  font-family: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI",
+    system-ui, sans-serif;
+  font-size: 13px;
+  color: var(--text-secondary);
+  /* Fully transparent so the Mica backdrop is what we see between surfaces. */
+  background: transparent;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  /* Rounded window corners to match Win11 (the transparent margin reveals them). */
+  background: transparent;
+}
+
+/* ---- Title bar ---- */
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 40px;
+  min-height: 40px;
+  background: var(--titlebar-bg);
+  padding-left: 6px;
+  /* No bottom border — Mica reads better as one continuous surface up top. */
+}
+
+/* Draggable empty regions are handled by data-tauri-drag-region in markup. */
+
+.titlebar-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 30px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-icon-btn:hover {
+  background: var(--fill-subtle-hover);
+  color: var(--text);
+}
+
+.titlebar-title {
+  flex: 1;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none; /* let drags pass through the label text */
+}
+
+/* ---- Window caption buttons (min / max / close) ---- */
+.window-controls {
+  display: flex;
+  height: 100%;
+  margin-left: auto;
+}
+
+.caption-btn {
+  width: 46px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+
+.caption-btn:hover {
+  background: var(--fill-subtle-hover);
+}
+
+.caption-btn:active {
+  background: var(--fill-subtle-active);
+}
+
+.caption-close:hover {
+  background: #c42b1c; /* Win11 close-button red */
+  color: #fff;
+}
+
+.caption-close:active {
+  background: #b9281b;
+}
+
+/* ---- Body layout ---- */
+.body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.sidebar {
+  width: 260px;
+  min-width: 260px;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- Explorer ---- */
+.explorer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.explorer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px 8px;
+  font-size: 11px;
+}
+
+.explorer-title {
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.explorer-open-btn {
+  background: var(--accent);
+  color: #003a52;
+  border: none;
+  border-radius: var(--radius-control);
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: filter 0.12s ease;
+}
+
+.explorer-open-btn:hover {
+  filter: brightness(1.08);
+}
+
+.explorer-open-btn:active {
+  filter: brightness(0.94);
+}
+
+.explorer-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 2px 6px 12px;
+}
+
+.explorer-empty {
+  padding: 16px 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.9;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+  text-decoration: underline;
+}
+
+/* ---- Tree rows ---- */
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding-right: 8px;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  color: var(--text-secondary);
+}
+
+.tree-row:hover {
+  background: var(--fill-subtle-hover);
+}
+
+.tree-row.active {
+  background: var(--fill-selected);
+  color: var(--text);
+}
+
+.tree-row.active:hover {
+  background: var(--fill-selected-hover);
+}
+
+.tree-chevron {
+  width: 12px;
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.tree-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.tree-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-muted {
+  color: var(--text-disabled);
+  font-style: italic;
+  cursor: default;
+}
+
+/* ---- Tabs ---- */
+.tab-bar {
+  display: flex;
+  height: 36px;
+  min-height: 36px;
+  background: var(--tabbar-bg);
+  border-bottom: 1px solid var(--border-subtle);
+  overflow-x: auto;
+  padding: 4px 4px 0;
+  gap: 2px;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  height: 32px;
+  border-radius: var(--radius-control) var(--radius-control) 0 0;
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.tab:hover {
+  background: var(--fill-subtle-hover);
+}
+
+.tab.active {
+  background: var(--editor-bg);
+  color: var(--text);
+}
+
+.tab-close {
+  font-size: 14px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+}
+
+.tab-close:hover {
+  background: var(--fill-subtle-hover);
+  color: var(--text);
+}
+
+/* ---- Editor ---- */
+.editor-host {
+  flex: 1;
+  min-height: 0;
+  background: var(--editor-bg); /* opaque — keeps code readable over Mica */
+}
+
+.editor-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  background: var(--editor-bg);
+  color: var(--text-muted);
+}
+
+.editor-empty-inner {
+  text-align: center;
+}
+
+.editor-empty-inner h2 {
+  font-weight: 300;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+
+/* ---- Focus visibility (Fluent keyboard focus) ---- */
+button:focus-visible,
+.tree-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ---- Scrollbars ---- */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+  background-clip: padding-box;
+}

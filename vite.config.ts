@@ -1,0 +1,29 @@
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+// @tauri-apps/cli sets these; we honor them so dev works on any host.
+const host = process.env.TAURI_DEV_HOST;
+
+// https://vitejs.dev/config/
+export default defineConfig(async () => ({
+  plugins: [react()],
+
+  // Vite options tailored for Tauri development.
+  clearScreen: false,
+  server: {
+    port: 1420,
+    strictPort: true,
+    host: host || false,
+    hmr: host
+      ? {
+          protocol: "ws",
+          host,
+          port: 1421,
+        }
+      : undefined,
+    watch: {
+      // Don't watch the Rust side from Vite.
+      ignored: ["**/src-tauri/**"],
+    },
+  },
+}));
