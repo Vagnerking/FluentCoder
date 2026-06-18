@@ -9,24 +9,31 @@
   --text-muted: rgba(255, 255, 255, 0.54);
   --text-disabled: rgba(255, 255, 255, 0.36);
 
-  /* Layered surfaces — translucent so Mica is visible behind them. */
-  --titlebar-bg: rgba(32, 32, 32, 0.55);
-  --sidebar-bg: rgba(32, 32, 32, 0.45);
-  --tabbar-bg: rgba(40, 40, 40, 0.55);
+  /* Fluent 2 dark surfaces: cool gray-blue tint with acrylic luminosity. */
+  --titlebar-bg: rgba(25, 31, 40, 0.82);
+  --acrylic-tint: rgba(31, 38, 48, 0.78);
+  --acrylic-tint-strong: rgba(28, 34, 43, 0.9);
+  --acrylic-control: rgba(211, 229, 243, 0.075);
+  --acrylic-control-hover: rgba(211, 229, 243, 0.12);
+  --acrylic-control-pressed: rgba(211, 229, 243, 0.055);
+  --acrylic-luminosity: rgba(132, 170, 201, 0.08);
+  --acrylic-border: rgba(210, 228, 242, 0.13);
+  --acrylic-border-strong: rgba(210, 228, 242, 0.2);
+  --sidebar-bg: var(--acrylic-tint);
+  --tabbar-bg: rgba(35, 43, 54, 0.76);
 
-  /* The editor host is opaque — Monaco needs a solid background to read well. */
-  --editor-bg: #1f1f1f;
+  --editor-bg: #1c222b;
 
   --border-subtle: rgba(255, 255, 255, 0.08);
   --stroke: rgba(255, 255, 255, 0.06);
 
   /* Fluent control fills (hover/active layering). */
-  --fill-subtle-hover: rgba(255, 255, 255, 0.06);
-  --fill-subtle-active: rgba(255, 255, 255, 0.04);
+  --fill-subtle-hover: var(--acrylic-control-hover);
+  --fill-subtle-active: var(--acrylic-control-pressed);
   --fill-selected: rgba(96, 205, 255, 0.16);
   --fill-selected-hover: rgba(96, 205, 255, 0.22);
 
-  --radius-control: 4px;
+  --radius-control: 6px;
   --radius-card: 8px;
 
   font-synthesis: none;
@@ -73,7 +80,13 @@ body {
   gap: 4px;
   height: 40px;
   min-height: 40px;
-  background: var(--titlebar-bg);
+  background:
+    linear-gradient(90deg, rgba(114, 153, 184, 0.07), transparent 38%),
+    var(--titlebar-bg);
+  border-bottom: 1px solid rgba(210, 228, 242, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  backdrop-filter: blur(30px) saturate(125%);
+  -webkit-backdrop-filter: blur(30px) saturate(125%);
   padding-left: 6px;
   /* No bottom border — Mica reads better as one continuous surface up top. */
 }
@@ -92,6 +105,9 @@ body {
   color: var(--text-secondary);
   cursor: pointer;
   -webkit-app-region: no-drag;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
 }
 
 .titlebar-icon-btn:hover {
@@ -152,15 +168,30 @@ body {
   display: flex;
   flex: 1;
   min-height: 0;
+  gap: 10px;
+  padding: 10px;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(74, 111, 143, 0.12), transparent 38%),
+    rgba(15, 18, 23, 0.82);
 }
 
 .sidebar {
   width: 260px;
   min-width: 260px;
-  background: var(--sidebar-bg);
-  border-right: 1px solid var(--border-subtle);
+  background:
+    linear-gradient(145deg, var(--acrylic-luminosity), transparent 42%),
+    var(--acrylic-tint);
+  border: 1px solid var(--acrylic-border);
+  border-radius: 8px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 8px 24px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(28px) saturate(125%);
+  -webkit-backdrop-filter: blur(28px) saturate(125%);
   display: flex;
   flex-direction: column;
+  /* Contain panel content so long titles/text never spill past the sidebar. */
+  overflow: hidden;
 }
 
 .main {
@@ -168,6 +199,17 @@ body {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  background:
+    linear-gradient(145deg, rgba(119, 158, 190, 0.07), transparent 35%),
+    var(--acrylic-tint-strong);
+  border: 1px solid var(--acrylic-border);
+  border-radius: 8px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.035),
+    0 8px 24px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(28px) saturate(120%);
+  -webkit-backdrop-filter: blur(28px) saturate(120%);
+  overflow: hidden;
 }
 
 /* ---- Explorer ---- */
@@ -194,6 +236,10 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* Allow the title to shrink and ellipsize inside the flex header instead of
+     forcing the row wider than the sidebar. */
+  min-width: 0;
+  flex: 1;
 }
 
 .explorer-open-btn {
@@ -206,11 +252,14 @@ body {
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
-  transition: filter 0.12s ease;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
 }
 
 .explorer-open-btn:hover {
-  filter: brightness(1.08);
+  filter: brightness(1.06);
+  box-shadow: 0 2px 8px rgba(96, 205, 255, 0.18);
 }
 
 .explorer-open-btn:active {
@@ -238,20 +287,25 @@ body {
   font-size: 12px;
   padding: 0;
   text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 /* ---- Tree rows ---- */
 .tree-row {
   display: flex;
   align-items: center;
-  gap: 4px;
-  height: 26px;
+  gap: 6px;
+  height: 32px;
   padding-right: 8px;
   border-radius: var(--radius-control);
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   color: var(--text-secondary);
+  font-family: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: 450;
+  line-height: 1;
 }
 
 .tree-row:hover {
@@ -269,19 +323,56 @@ body {
 
 .tree-chevron {
   width: 12px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-muted);
   flex-shrink: 0;
 }
 
+.tree-chevron.folder {
+  transform-origin: center;
+  transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.tree-chevron.folder.expanded {
+  transform: rotate(90deg);
+}
+
+.tree-children {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 150ms ease;
+}
+
+.tree-children.expanded {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.tree-children-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
 .tree-icon {
-  font-size: 12px;
+  margin-right: 4px;
+}
+
+/* Trailing git/diagnostic letter badge in an explorer row. */
+.tree-badge {
+  margin-left: auto;
+  padding-left: 6px;
+  font-size: 11px;
+  font-weight: 600;
   flex-shrink: 0;
 }
 
 .tree-label {
   overflow: hidden;
   text-overflow: ellipsis;
+  letter-spacing: 0.01em;
 }
 
 .tree-muted {
@@ -296,10 +387,12 @@ body {
   height: 36px;
   min-height: 36px;
   background: var(--tabbar-bg);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--acrylic-border);
   overflow-x: auto;
-  padding: 4px 4px 0;
-  gap: 2px;
+  padding: 5px 6px;
+  gap: 4px;
+  backdrop-filter: blur(20px) saturate(120%);
+  -webkit-backdrop-filter: blur(20px) saturate(120%);
 }
 
 .tab {
@@ -307,8 +400,9 @@ body {
   align-items: center;
   gap: 8px;
   padding: 0 10px;
-  height: 32px;
-  border-radius: var(--radius-control) var(--radius-control) 0 0;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
   cursor: pointer;
   white-space: nowrap;
   color: var(--text-muted);
@@ -316,10 +410,13 @@ body {
 
 .tab:hover {
   background: var(--fill-subtle-hover);
+  border-color: rgba(210, 228, 242, 0.08);
 }
 
 .tab.active {
-  background: var(--editor-bg);
+  background: var(--acrylic-control);
+  border-color: var(--acrylic-border);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
   color: var(--text);
 }
 
@@ -339,6 +436,48 @@ body {
   color: var(--text);
 }
 
+/* ---- Tab context menu ---- */
+.tab-context-menu {
+  position: fixed;
+  z-index: 9999;
+  background: var(--acrylic-bg, #1e2430);
+  border: 1px solid var(--acrylic-border, rgba(255,255,255,0.08));
+  border-radius: var(--radius-control, 6px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  padding: 4px;
+  min-width: 180px;
+  backdrop-filter: blur(20px) saturate(120%);
+  -webkit-backdrop-filter: blur(20px) saturate(120%);
+}
+
+.tab-context-item {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text, #d6e2f0);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tab-context-item:hover:not(.disabled) {
+  background: var(--fill-subtle-hover, rgba(255,255,255,0.07));
+}
+
+.tab-context-item.disabled {
+  color: var(--text-muted, #6b7280);
+  cursor: default;
+}
+
+.tab-context-separator {
+  height: 1px;
+  background: var(--acrylic-border, rgba(255,255,255,0.08));
+  margin: 4px 0;
+}
+
 /* ---- Editor ---- */
 .editor-host {
   flex: 1;
@@ -351,7 +490,9 @@ body {
   align-items: center;
   justify-content: center;
   height: 100%;
-  background: var(--editor-bg);
+  background:
+    radial-gradient(circle at 50% 42%, rgba(96, 205, 255, 0.055), transparent 32%),
+    var(--editor-bg);
   color: var(--text-muted);
 }
 
@@ -363,6 +504,18 @@ body {
   font-weight: 300;
   margin-bottom: 8px;
   color: var(--text);
+}
+
+/* ---- Git Lens inline blame annotations ---- */
+/* Monaco injects `after` content into a span with this class. We raise
+   specificity (.monaco-editor prefix + !important) so the editor's own
+   token colors don't override the muted blame color. */
+.monaco-editor .git-lens-inline-active {
+  color: #93a1b5 !important;
+  font-style: italic !important;
+  opacity: 1;
+  pointer-events: none;
+  user-select: none;
 }
 
 /* ---- Focus visibility (Fluent keyboard focus) ---- */
@@ -379,52 +532,260 @@ button:focus-visible,
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(184, 199, 213, 0.18);
   border: 3px solid transparent;
   background-clip: padding-box;
   border-radius: 8px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.28);
+  background: rgba(184, 199, 213, 0.3);
   background-clip: padding-box;
 }
 
 /* ---- Activity Bar ---- */
-.activity-bar { width: 48px; min-width: 48px; background: rgba(32,32,32,0.45); border-right: 1px solid rgba(255,255,255,0.06); display: flex; flex-direction: column; }
+.activity-bar { position: relative; width: 48px; min-width: 48px; background: linear-gradient(145deg, var(--acrylic-luminosity), transparent 48%), var(--acrylic-tint); border: 1px solid var(--acrylic-border); border-radius: 8px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 8px 24px rgba(0,0,0,0.24); backdrop-filter: blur(28px) saturate(125%); -webkit-backdrop-filter: blur(28px) saturate(125%); display: flex; flex-direction: column; overflow: hidden; }
 .activity-items { display: flex; flex-direction: column; padding: 4px; }
 .activity-items-bottom { margin-top: auto; padding: 4px; display: flex; flex-direction: column; }
-.activity-item { position: relative; width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; background: transparent; border: none; color: rgba(255,255,255,0.54); cursor: pointer; border-radius: 4px; }
-.activity-item:hover { color: rgba(255,255,255,0.82); background: rgba(255,255,255,0.06); }
+.activity-item { position: relative; width: 100%; height: 48px; flex: 0 0 48px; display: flex; align-items: center; justify-content: center; background: transparent; border: none; color: rgba(255,255,255,0.54); cursor: pointer; border-radius: 6px; }
+.activity-item:hover { color: rgba(255,255,255,0.88); background: var(--acrylic-control-hover); }
 .activity-item.active { color: #fff; }
-.activity-item.active::before { content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 2px; height: 20px; background: #60cdff; border-radius: 0 2px 2px 0; }
+.activity-indicator { position: absolute; z-index: 1; left: 0; top: 0; width: 2px; height: 20px; pointer-events: none; background: #60cdff; border-radius: 0 2px 2px 0; transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 100ms ease; }
 
 /* ---- Breadcrumbs ---- */
-.breadcrumbs { height: 24px; display: flex; align-items: center; padding: 0 12px; gap: 0; background: rgba(40,40,40,0.4); border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 12px; overflow: hidden; white-space: nowrap; }
+.breadcrumbs { height: 26px; min-height: 26px; display: flex; align-items: center; padding: 0 12px; gap: 0; background: rgba(34,42,53,0.7); border-bottom: 1px solid var(--acrylic-border); font-size: 12px; overflow: hidden; white-space: nowrap; backdrop-filter: blur(20px) saturate(120%); -webkit-backdrop-filter: blur(20px) saturate(120%); }
 .crumb { color: rgba(255,255,255,0.54); }
 .crumb.last { color: rgba(255,255,255,0.82); }
 .crumb-sep { color: rgba(255,255,255,0.3); margin: 0 4px; }
 
 /* ---- Status Bar ---- */
-.status-bar { height: 22px; min-height: 22px; background: rgba(32,32,32,0.6); border-top: 1px solid rgba(255,255,255,0.06); display: flex; align-items: center; padding: 0; font-size: 11px; color: rgba(255,255,255,0.54); }
+.status-bar { height: 26px; min-height: 26px; background: linear-gradient(90deg, rgba(93,132,164,0.08), transparent 45%), var(--titlebar-bg); border-top: 1px solid rgba(210,228,242,0.09); display: flex; align-items: center; padding: 0 6px; font-size: 11px; color: var(--text-muted); backdrop-filter: blur(30px) saturate(125%); -webkit-backdrop-filter: blur(30px) saturate(125%); }
 .status-left, .status-right { display: flex; align-items: center; }
 .status-right { margin-left: auto; }
-.status-item { padding: 0 8px; height: 22px; display: flex; align-items: center; cursor: pointer; white-space: nowrap; }
-.status-item:hover { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.82); }
+.status-item { padding: 0 8px; height: 20px; display: flex; align-items: center; cursor: pointer; white-space: nowrap; border-radius: 5px; }
+.status-item:hover { background: var(--acrylic-control-hover); color: var(--text-secondary); }
+.status-workspace { color: var(--text-secondary); }
+.status-workspace .codicon { margin-right: 5px; color: var(--accent); }
 
 /* ---- Panel Resize ---- */
-.panel-resize-handle { height: 4px; min-height: 4px; cursor: ns-resize; background: rgba(255,255,255,0.04); }
+.panel-resize-handle { height: 4px; min-height: 4px; cursor: ns-resize; background: rgba(210,228,242,0.06); }
 .panel-resize-handle:hover { background: rgba(96,205,255,0.3); }
 
 /* ---- Terminal Panel ---- */
-.terminal-panel { display: flex; flex-direction: column; background: #1f1f1f; overflow: hidden; }
-.terminal-header { height: 35px; min-height: 35px; display: flex; align-items: center; border-top: 1px solid rgba(255,255,255,0.08); background: rgba(30,30,30,0.9); padding: 0 8px; }
+.terminal-panel { display: flex; flex-direction: column; background: var(--editor-bg); overflow: hidden; }
+.terminal-header { height: 36px; min-height: 36px; display: flex; align-items: center; border-top: 1px solid var(--acrylic-border); background: rgba(34,42,53,0.82); padding: 0 8px; backdrop-filter: blur(20px) saturate(120%); -webkit-backdrop-filter: blur(20px) saturate(120%); }
 .terminal-tabs { display: flex; flex: 1; }
-.terminal-tab { padding: 0 16px; height: 35px; display: flex; align-items: center; cursor: pointer; font-size: 12px; color: rgba(255,255,255,0.54); border-bottom: 1px solid transparent; }
-.terminal-tab.active { color: #fff; border-bottom-color: #60cdff; }
+.terminal-tab { padding: 0 12px; height: 28px; display: flex; align-items: center; cursor: pointer; font-size: 12px; color: var(--text-muted); border: 1px solid transparent; border-radius: var(--radius-control); }
+.terminal-tab:hover { background: var(--fill-subtle-hover); color: var(--text-secondary); }
+.terminal-tab.active { color: var(--text); background: var(--acrylic-control); border-color: var(--acrylic-border); }
 .terminal-body { flex: 1; min-height: 0; overflow: hidden; padding: 4px; }
-.terminal-close { background: transparent; border: none; color: rgba(255,255,255,0.54); cursor: pointer; padding: 4px 8px; border-radius: 4px; font-size: 14px; }
-.terminal-close:hover { background: rgba(255,255,255,0.06); color: #fff; }
+.terminal-close { background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 4px 8px; border-radius: var(--radius-control); font-size: 14px; }
+.terminal-close:hover { background: var(--fill-subtle-hover); color: var(--text); }
 
 .xterm-container { width: 100%; height: 100%; }
 .xterm-container .xterm { height: 100%; }
+
+/* ---- Shared panel empty/placeholder text ---- */
+.panel-empty { padding: 8px 12px; color: var(--text-muted); font-size: 12px; }
+
+/* ---- Search panel ---- */
+.search-panel { display: flex; flex-direction: column; height: 100%; }
+.search-header { padding: 10px 12px 4px; }
+.search-input-row { padding: 4px 12px 8px; }
+.search-input { width: 100%; height: 30px; padding: 0 9px; font-size: 13px; color: var(--text); background: var(--acrylic-control); border: 1px solid var(--acrylic-border); border-bottom-color: var(--acrylic-border-strong); border-radius: var(--radius-control); outline: none; box-shadow: inset 0 1px 0 rgba(255,255,255,0.025); }
+.search-input:hover:not(:disabled) { background: var(--acrylic-control-hover); }
+.search-input:focus { border-color: var(--accent); box-shadow: inset 0 -1px 0 var(--accent); }
+.search-input:disabled { opacity: 0.5; cursor: not-allowed; }
+.search-results { flex: 1; overflow-y: auto; padding-bottom: 12px; }
+.search-empty { padding: 8px 12px; color: var(--text-muted); font-size: 12px; }
+.search-summary { padding: 4px 12px; color: var(--text-muted); font-size: 11px; }
+.search-file-group { margin-top: 4px; }
+.search-file-name { padding: 4px 12px; font-size: 12px; font-weight: 600; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-match-row { display: flex; gap: 8px; margin: 1px 6px; padding: 4px 8px 4px 18px; cursor: pointer; font-size: 12px; color: var(--text-muted); overflow: hidden; border-radius: var(--radius-control); }
+.search-match-row:hover { background: var(--fill-subtle-hover); color: var(--text-secondary); }
+.search-match-line { flex-shrink: 0; width: 30px; text-align: right; color: var(--text-disabled); font-variant-numeric: tabular-nums; }
+.search-match-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: "Cascadia Code", "Consolas", monospace; }
+
+/* ---- Placeholder panel ---- */
+.placeholder-panel { display: flex; flex-direction: column; height: 100%; }
+.placeholder-body { padding: 16px 12px; color: var(--text-muted); font-size: 12px; }
+
+/* ---- Problems panel ---- */
+.problems-list { height: 100%; overflow-y: auto; padding: 4px 0; }
+.problem-row { display: flex; align-items: baseline; gap: 8px; margin: 1px 6px; padding: 5px 8px; cursor: pointer; font-size: 12px; color: var(--text-secondary); border-radius: var(--radius-control); }
+.problem-row:hover { background: var(--fill-subtle-hover); }
+.problem-icon { flex-shrink: 0; }
+.problem-error .problem-icon { color: #f14c4c; }
+.problem-warning .problem-icon { color: #cca700; }
+.problem-info .problem-icon { color: var(--accent); }
+.problem-message { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.problem-location { margin-left: auto; flex-shrink: 0; color: var(--text-disabled); font-size: 11px; }
+
+/* ---- Git / Source control panel ---- */
+.git-panel { display: flex; flex-direction: column; height: 100%; }
+.git-header { gap: 4px; }
+.git-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.git-icon-btn { min-width: 24px; height: 24px; padding: 0 5px; background: transparent; border: none; border-radius: var(--radius-control); color: var(--text-secondary); cursor: pointer; font-size: 13px; font-variant-numeric: tabular-nums; }
+.git-icon-btn:hover:not(:disabled) { background: var(--fill-subtle-hover); color: var(--text); }
+.git-icon-btn:disabled { opacity: 0.35; cursor: default; }
+.git-branch-row { padding: 0 12px 8px; font-size: 12px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.git-commit-box { padding: 0 12px 8px; display: flex; flex-direction: column; gap: 6px; }
+.git-message { width: 100%; resize: vertical; min-height: 48px; padding: 7px 9px; font-family: inherit; font-size: 13px; color: var(--text); background: var(--acrylic-control); border: 1px solid var(--acrylic-border); border-bottom-color: var(--acrylic-border-strong); border-radius: var(--radius-control); outline: none; box-shadow: inset 0 1px 0 rgba(255,255,255,0.025); }
+.git-message:hover { background: var(--acrylic-control-hover); }
+.git-message:focus { border-color: var(--accent); box-shadow: inset 0 -1px 0 var(--accent); }
+.git-commit-btn { height: 28px; background: var(--accent); color: #003a52; border: none; border-radius: var(--radius-control); font-weight: 600; font-size: 12px; cursor: pointer; }
+.git-commit-btn:hover:not(:disabled) { filter: brightness(1.08); }
+.git-commit-btn:disabled { opacity: 0.4; cursor: default; }
+
+.git-error { margin: 0 12px 8px; padding: 6px 8px; font-size: 11px; color: #ffb4ab; background: rgba(196,43,28,0.18); border: 1px solid rgba(196,43,28,0.4); border-radius: var(--radius-control); white-space: pre-wrap; word-break: break-word; }
+
+.git-lists { flex: 1; overflow-y: auto; padding-bottom: 12px; }
+.git-group { margin-top: 4px; }
+.git-group-header { display: flex; align-items: center; justify-content: space-between; padding: 4px 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted); }
+.git-group-header-actions { display: flex; align-items: center; gap: 6px; }
+.git-count { min-width: 18px; text-align: center; padding: 0 5px; font-size: 10px; font-weight: 600; color: var(--text-secondary); background: var(--acrylic-control-hover); border: 1px solid rgba(210,228,242,0.08); border-radius: 9px; }
+.git-link-btn { background: transparent; border: none; color: var(--text-secondary); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 4px; border-radius: var(--radius-control); }
+.git-link-btn:hover:not(:disabled) { background: var(--fill-subtle-hover); color: var(--text); }
+.git-link-btn:disabled { opacity: 0.4; cursor: default; }
+
+.git-group-toggle { display: flex; align-items: center; gap: 4px; width: calc(100% - 12px); margin: 0 6px; padding: 5px 6px; background: transparent; border: none; border-radius: var(--radius-control); color: var(--text-muted); cursor: pointer; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; text-align: left; }
+.git-group-toggle:hover { background: var(--fill-subtle-hover); color: var(--text-secondary); }
+
+.git-file-row { display: flex; align-items: center; gap: 6px; height: 28px; margin: 1px 6px; padding: 0 6px; cursor: default; border-radius: var(--radius-control); }
+.git-file-row:hover { background: var(--fill-subtle-hover); }
+.git-file-name { font-size: 13px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.git-file-name:hover { color: var(--text); text-decoration: underline; }
+.git-file-spacer { flex: 1; min-width: 0; }
+.git-file-action { width: 20px; height: 20px; flex-shrink: 0; background: transparent; border: none; border-radius: var(--radius-control); color: var(--text-secondary); cursor: pointer; font-size: 14px; line-height: 1; opacity: 0; }
+.git-file-row:hover .git-file-action { opacity: 1; }
+.git-file-action:hover:not(:disabled) { background: var(--fill-subtle-hover); color: var(--text); }
+.git-file-badge { width: 16px; text-align: center; flex-shrink: 0; font-size: 12px; font-weight: 700; font-family: "Cascadia Code", "Consolas", monospace; }
+.git-badge-modified { color: #e2c08d; }
+.git-badge-added, .git-badge-untracked { color: #73c991; }
+.git-badge-deleted { color: #f14c4c; }
+.git-badge-renamed { color: var(--accent); }
+
+.git-commit-row { display: flex; flex-direction: column; gap: 1px; margin: 1px 6px; padding: 5px 6px; cursor: default; border-radius: var(--radius-control); }
+.git-commit-row:hover { background: var(--fill-subtle-hover); }
+.git-commit-subject { font-size: 12px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-commit-meta { font-size: 10px; color: var(--text-disabled); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- Run / Debug panel ---- */
+.run-panel { display: flex; flex-direction: column; height: 100%; }
+.run-header { gap: 4px; }
+.run-draft { display: flex; flex-direction: column; gap: 6px; padding: 4px 12px 10px; }
+.run-draft .search-input { height: 28px; }
+.run-draft-actions { display: flex; align-items: center; gap: 8px; }
+.run-draft-actions .git-commit-btn { flex: 1; }
+.run-lists { flex: 1; overflow-y: auto; padding-bottom: 12px; }
+.run-row { display: flex; align-items: center; gap: 8px; margin: 1px 6px; padding: 4px 6px; border-radius: var(--radius-control); cursor: default; }
+.run-row:hover { background: var(--fill-subtle-hover); }
+.run-play { width: 24px; height: 24px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: transparent; border: none; border-radius: var(--radius-control); color: #73c991; cursor: pointer; font-size: 12px; }
+.run-play:hover { background: var(--fill-subtle-hover); color: #8fe0ad; }
+.run-info { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.run-name { font-size: 13px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-cmd { font-size: 10px; color: var(--text-disabled); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: "Cascadia Code", "Consolas", monospace; }
+.run-remove { width: 20px; height: 20px; flex-shrink: 0; background: transparent; border: none; border-radius: var(--radius-control); color: var(--text-muted); cursor: pointer; font-size: 12px; opacity: 0; }
+.run-row:hover .run-remove { opacity: 1; }
+.run-remove:hover { background: var(--fill-subtle-hover); color: var(--text); }
+
+/* ---- Quick Open (Ctrl+P) ---- */
+.quick-open-backdrop { position: fixed; inset: 0; z-index: 100; display: flex; justify-content: center; align-items: flex-start; }
+.quick-open { margin-top: 8px; width: 600px; max-width: calc(100vw - 32px); max-height: 60vh; display: flex; flex-direction: column; background: var(--acrylic-tint-strong); border: 1px solid var(--acrylic-border-strong); border-radius: var(--radius-card); box-shadow: 0 16px 48px rgba(0,0,0,0.5); backdrop-filter: blur(40px) saturate(140%); -webkit-backdrop-filter: blur(40px) saturate(140%); overflow: hidden; }
+.quick-open-input { margin: 8px; height: 32px; padding: 0 10px; font-size: 13px; color: var(--text); background: var(--acrylic-control); border: 1px solid var(--acrylic-border); border-bottom-color: var(--acrylic-border-strong); border-radius: var(--radius-control); outline: none; }
+.quick-open-input:focus { border-color: var(--accent); }
+.quick-open-list { overflow-y: auto; padding: 0 4px 4px; min-height: 0; }
+.quick-open-empty { padding: 10px 12px; color: var(--text-muted); font-size: 12px; }
+.quick-open-item { display: flex; align-items: baseline; gap: 8px; padding: 5px 8px; border-radius: var(--radius-control); cursor: pointer; overflow: hidden; }
+.quick-open-item.selected { background: var(--fill-selected); }
+.quick-open-name { font-size: 13px; color: var(--text); white-space: nowrap; flex-shrink: 0; }
+.quick-open-match { color: var(--accent); font-weight: 600; }
+.quick-open-path { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ==========================================================================
+   Icon pack — Material Icon Theme (files/folders) + Codicons (UI/actions)
+   File-state colors and a couple of context placements. The icon *choice*
+   lives in the resolver/codicon-map; this file only styles size/color/state.
+   ========================================================================== */
+
+/* ---- Material file/folder icons (the <FileIcon> wrapper) ---- */
+.file-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+.file-icon img {
+  display: block;
+  /* SVGs already carry their own colors from the Material theme. */
+  pointer-events: none;
+}
+/* Dimmed icon for git-ignored files (decoration state). */
+.tree-label.deco-ignored ~ .file-icon,
+.file-icon.deco-ignored { opacity: 0.5; }
+
+/* ---- Codicons: align the web-font glyphs with adjacent text ---- */
+.codicon {
+  vertical-align: middle;
+  line-height: 1;
+}
+button .codicon { pointer-events: none; }
+
+/* Diagnostic / status codicon colors (shared by status bar + problems). */
+.status-left .codicon-error,
+.problem-error .problem-icon .codicon { color: #f14c4c; }
+.status-left .codicon-warning,
+.problem-warning .problem-icon .codicon { color: #cca700; }
+.problem-info .problem-icon .codicon { color: var(--accent); }
+
+/* ---- File-state decorations (label color + badge) ----
+   Diagnostics outrank git; colors mirror VSCode's gitDecoration.*. */
+.deco-modified  { color: #e2c08d; }   /* modified (orange) */
+.deco-added,
+.deco-untracked { color: #73c991; }   /* new / untracked (green) */
+.deco-deleted   { color: #c74e39; }   /* deleted (red) */
+.deco-conflict  { color: #e4676b; }   /* merge conflict */
+.deco-ignored   { color: var(--text-disabled); }
+.deco-error     { color: #f14c4c; }   /* has error diagnostic */
+.deco-warning   { color: #cca700; }   /* has warning diagnostic */
+
+/* The active row keeps its accent label; the badge still shows state. */
+.tree-row.active .tree-label[class*="deco-"] { color: var(--text); }
+
+/* ---- Tabs: file icon + dirty dot ---- */
+.tab-icon { margin-right: 2px; }
+.tab-dirty-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  display: inline-block;
+}
+.tab-close.dirty { color: var(--text-secondary); }
+.tab-close.dirty:hover .tab-dirty-dot { display: none; }
+.tab-close.dirty:hover::before {
+  content: "";
+  font-family: codicon;
+}
+
+/* ---- Search: input icon + per-file icon ---- */
+.search-input-row { position: relative; display: flex; align-items: center; }
+.search-input-icon {
+  position: absolute;
+  left: 18px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.search-input-row .search-input { padding-left: 30px; }
+.search-file-name { display: flex; align-items: center; gap: 6px; }
+.search-file-icon { flex-shrink: 0; }
+
+/* ---- Quick Open: per-result file icon ---- */
+.quick-open-item { align-items: center; }
+.quick-open-icon { margin-right: 2px; }
+
+/* ---- Git panel: file icon in change rows ---- */
+.git-file-row { display: flex; align-items: center; gap: 6px; }
+.git-file-icon { flex-shrink: 0; }

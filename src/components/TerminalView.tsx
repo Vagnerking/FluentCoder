@@ -8,6 +8,8 @@ import "@xterm/xterm/css/xterm.css";
 interface TerminalViewProps {
   id: string;
   cwd: string;
+  /** When set, the PTY runs this command line on start (used by "Run"). */
+  command?: string | null;
 }
 
 interface TermDataPayload {
@@ -15,7 +17,7 @@ interface TermDataPayload {
   data: string;
 }
 
-export function TerminalView({ id, cwd }: TerminalViewProps) {
+export function TerminalView({ id, cwd, command }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -23,10 +25,18 @@ export function TerminalView({ id, cwd }: TerminalViewProps) {
 
     const term = new Terminal({
       theme: {
-        background: "#1f1f1f",
-        foreground: "#cccccc",
+        background: "#1c222b",
+        foreground: "#d2dce7",
         cursor: "#60cdff",
         selectionBackground: "rgba(96,205,255,0.3)",
+        black: "#1c222b",
+        brightBlack: "#708090",
+        blue: "#75beff",
+        brightBlue: "#9cdcfe",
+        cyan: "#4ec9b0",
+        brightCyan: "#7fdbca",
+        white: "#d2dce7",
+        brightWhite: "#ffffff",
       },
       fontFamily: '"Cascadia Code", "Consolas", monospace',
       fontSize: 13,
@@ -41,7 +51,7 @@ export function TerminalView({ id, cwd }: TerminalViewProps) {
     requestAnimationFrame(() => {
       fitAddon.fit();
       const { cols, rows } = term;
-      termCreate(id, cwd, cols, rows).catch(console.error);
+      termCreate(id, cwd, cols, rows, command).catch(console.error);
     });
 
     const onData = term.onData((data) => {
@@ -69,7 +79,7 @@ export function TerminalView({ id, cwd }: TerminalViewProps) {
       termClose(id).catch(console.error);
       term.dispose();
     };
-  }, [id, cwd]);
+  }, [id, cwd, command]);
 
   return <div ref={containerRef} className="xterm-container" />;
 }

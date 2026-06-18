@@ -1,9 +1,9 @@
 /** Maps a file extension to a Monaco language id for syntax highlighting. */
 const EXT_TO_LANG: Record<string, string> = {
   ts: "typescript",
-  tsx: "typescript",
+  tsx: "typescriptreact",
   js: "javascript",
-  jsx: "javascript",
+  jsx: "javascriptreact",
   mjs: "javascript",
   cjs: "javascript",
   json: "json",
@@ -24,6 +24,8 @@ const EXT_TO_LANG: Record<string, string> = {
   cc: "cpp",
   hpp: "cpp",
   cs: "csharp",
+  cshtml: "razor",
+  razor: "razor",
   php: "php",
   rb: "ruby",
   sh: "shell",

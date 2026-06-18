@@ -24,6 +24,20 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 portable-pty = "0.9"
 
+# --- LSP module (src/lsp) ---
+# Async runtime + WS bridge between the frontend monaco-languageclient and the
+# stdio language-server processes. Scoped to the `lsp` module.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "net", "sync", "time"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+uuid = { version = "1", features = ["v4"] }
+# Roslyn/rzls acquisition (download + verify + extract).
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+sha2 = "0.10"
+# Locate node / typescript-language-server / npm on PATH.
+which = "6"
+
 [profile.release]
 panic = "abort"
 codegen-units = 1

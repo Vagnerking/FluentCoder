@@ -1,18 +1,38 @@
 import { useState } from "react";
 import { TerminalView } from "./TerminalView";
+import { ProblemsPanel } from "./ProblemsPanel";
+import type { Problem } from "../types";
 
 interface TerminalPanelProps {
   open: boolean;
   height: number;
   cwd: string | null;
   onClose: () => void;
+  problems: Problem[];
+  onOpenProblem: (problem: Problem) => void;
+  /** Command line a "Run" requested, or null for a plain interactive shell. */
+  runCommand?: string | null;
+  /** Identifies the current run; changing it spawns a fresh PTY session. */
+  runNonce?: number;
 }
 
 type PanelTab = "terminal" | "problems" | "output";
 
-export function TerminalPanel({ open, height, cwd, onClose }: TerminalPanelProps) {
+export function TerminalPanel({
+  open,
+  height,
+  cwd,
+  onClose,
+  problems,
+  onOpenProblem,
+  runCommand,
+  runNonce = 0,
+}: TerminalPanelProps) {
   const [activeTab, setActiveTab] = useState<PanelTab>("terminal");
-  const [termId] = useState(() => crypto.randomUUID());
+  // Base id for the plain interactive shell; a run uses a nonce-derived id so
+  // each ▶ starts a new PTY instead of reusing the previous one.
+  const [baseId] = useState(() => crypto.randomUUID());
+  const termId = runCommand ? `${baseId}-run-${runNonce}` : baseId;
 
   if (!open) return null;
 
@@ -26,19 +46,29 @@ export function TerminalPanel({ open, height, cwd, onClose }: TerminalPanelProps
               className={`terminal-tab${activeTab === tab ? " active" : ""}`}
               onClick={() => setActiveTab(tab)}
             >
-              {tab === "problems" ? "Problemas" : tab === "output" ? "Saída" : "Terminal"}
+              {tab === "problems"
+                ? `Problemas${problems.length ? ` (${problems.length})` : ""}`
+                : tab === "output"
+                ? "Saída"
+                : "Terminal"}
             </button>
           ))}
         </div>
-        <button className="terminal-close" onClick={onClose} title="Fechar painel">✕</button>
+        <button className="terminal-close" onClick={onClose} title="Fechar painel">
+          ✕
+        </button>
       </div>
       <div className="terminal-body">
-        {activeTab === "terminal" && cwd ? (
-          <TerminalView id={termId} cwd={cwd} />
+        {activeTab === "terminal" ? (
+          cwd ? (
+            <TerminalView id={termId} cwd={cwd} command={runCommand ?? null} />
+          ) : (
+            <div className="panel-empty">Abra uma pasta para usar o terminal.</div>
+          )
+        ) : activeTab === "problems" ? (
+          <ProblemsPanel problems={problems} onOpenProblem={onOpenProblem} />
         ) : (
-          <div style={{ padding: "8px", color: "rgba(255,255,255,0.4)", fontSize: "12px" }}>
-            {activeTab === "terminal" ? "Abra uma pasta para usar o terminal." : "Sem itens."}
-          </div>
+          <div className="panel-empty">Sem saída.</div>
         )}
       </div>
     </div>

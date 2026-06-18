@@ -1,4 +1,4 @@
-import type { FileNode } from "../types";
+import type { FileNode, FileDecoration } from "../types";
 import { TreeNode } from "./TreeNode";
 
 interface FileExplorerProps {
@@ -9,6 +9,8 @@ interface FileExplorerProps {
   activePath: string | null;
   onOpenFolder: () => void;
   onOpenFile: (node: FileNode) => void;
+  /** Resolves the git/diagnostic decoration for a path; default = none. */
+  decorationFor?: (path: string) => FileDecoration | undefined;
 }
 
 /** The left sidebar: a header with the folder name and the file tree. */
@@ -18,6 +20,7 @@ export function FileExplorer({
   activePath,
   onOpenFolder,
   onOpenFile,
+  decorationFor = () => undefined,
 }: FileExplorerProps) {
   return (
     <div className="explorer">
@@ -47,6 +50,7 @@ export function FileExplorer({
               depth={0}
               activePath={activePath}
               onOpenFile={onOpenFile}
+              decorationFor={decorationFor}
             />
           ))
         )}

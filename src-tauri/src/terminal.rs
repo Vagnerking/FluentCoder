@@ -27,6 +27,10 @@ pub fn term_create(
     cwd: String,
     cols: u16,
     rows: u16,
+    // When set, the PTY launches a shell that runs this command line and keeps
+    // the session open afterwards (so the program's output stays visible). When
+    // None, it's a plain interactive PowerShell — the original behavior.
+    command: Option<String>,
     state: State<'_, TerminalState>,
     app: AppHandle,
 ) -> Result<(), String> {
@@ -37,6 +41,12 @@ pub fn term_create(
 
     let mut cmd = CommandBuilder::new("powershell.exe");
     cmd.cwd(&cwd);
+    if let Some(line) = command.as_ref().filter(|l| !l.trim().is_empty()) {
+        // -NoExit keeps the prompt after the command finishes; -Command runs it.
+        cmd.arg("-NoExit");
+        cmd.arg("-Command");
+        cmd.arg(line);
+    }
 
     let _child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
 
