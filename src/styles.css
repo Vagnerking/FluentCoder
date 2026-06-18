@@ -80,6 +80,7 @@ body {
   gap: 4px;
   height: 40px;
   min-height: 40px;
+  position: relative;
   background:
     linear-gradient(90deg, rgba(114, 153, 184, 0.07), transparent 38%),
     var(--titlebar-bg);
@@ -116,7 +117,12 @@ body {
 }
 
 .titlebar-title {
-  flex: 1;
+  /* Absolutely centred across the whole bar so the left-hand menu doesn't
+     push the title off-centre. Sits behind the interactive controls. */
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 40%;
   text-align: center;
   font-size: 12px;
   color: var(--text-muted);
@@ -124,6 +130,12 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   pointer-events: none; /* let drags pass through the label text */
+}
+
+.titlebar-spacer {
+  flex: 1;
+  height: 100%;
+  align-self: stretch;
 }
 
 /* ---- Window caption buttons (min / max / close) ---- */
@@ -242,29 +254,6 @@ body {
   flex: 1;
 }
 
-.explorer-open-btn {
-  background: var(--accent);
-  color: #003a52;
-  border: none;
-  border-radius: var(--radius-control);
-  padding: 4px 10px;
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-  transition:
-    background-color 120ms ease,
-    color 120ms ease;
-}
-
-.explorer-open-btn:hover {
-  filter: brightness(1.06);
-  box-shadow: 0 2px 8px rgba(96, 205, 255, 0.18);
-}
-
-.explorer-open-btn:active {
-  filter: brightness(0.94);
-}
 
 .explorer-tree {
   flex: 1;
@@ -703,6 +692,24 @@ button:focus-visible,
 .quick-open-match { color: var(--accent); font-weight: 600; }
 .quick-open-path { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* ---- About / Keyboard Shortcuts dialog (Help menu) ---- */
+.about-backdrop { position: fixed; inset: 0; z-index: 100; display: flex; justify-content: center; align-items: center; background: rgba(0,0,0,0.32); }
+.about-dialog { width: 420px; max-width: calc(100vw - 32px); max-height: 70vh; display: flex; flex-direction: column; background: var(--acrylic-tint-strong); border: 1px solid var(--acrylic-border-strong); border-radius: var(--radius-card); box-shadow: 0 16px 48px rgba(0,0,0,0.5); backdrop-filter: blur(40px) saturate(140%); -webkit-backdrop-filter: blur(40px) saturate(140%); overflow: hidden; outline: none; }
+.about-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 8px 8px 14px; border-bottom: 1px solid var(--acrylic-border); }
+.about-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.about-close { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-size: 18px; line-height: 1; color: var(--text-muted); background: transparent; border: none; border-radius: var(--radius-control); cursor: pointer; }
+.about-close:hover { background: var(--fill-selected); color: var(--text); }
+.about-body { padding: 16px; overflow-y: auto; min-height: 0; }
+.about-app-name { margin: 0 0 4px; font-size: 18px; color: var(--text); }
+.about-version { margin: 0 0 12px; font-size: 12px; color: var(--text-muted); }
+.about-link a { font-size: 12px; color: var(--accent); text-decoration: none; }
+.about-link a:hover { text-decoration: underline; }
+.about-shortcuts { list-style: none; margin: 0; padding: 0; }
+.about-shortcut-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 6px 4px; }
+.about-shortcut-row + .about-shortcut-row { border-top: 1px solid var(--acrylic-border); }
+.about-shortcut-label { font-size: 13px; color: var(--text); }
+.about-shortcut-keys { font-size: 11px; color: var(--text-muted); background: var(--acrylic-control); border: 1px solid var(--acrylic-border); border-radius: var(--radius-control); padding: 2px 6px; font-family: var(--font-mono, monospace); }
+
 /* ==========================================================================
    Icon pack — Material Icon Theme (files/folders) + Codicons (UI/actions)
    File-state colors and a couple of context placements. The icon *choice*
@@ -789,3 +796,91 @@ button .codicon { pointer-events: none; }
 /* ---- Git panel: file icon in change rows ---- */
 .git-file-row { display: flex; align-items: center; gap: 6px; }
 .git-file-icon { flex-shrink: 0; }
+
+/* ---- Menu bar (File, Edit, …) ---- */
+.menubar {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+.menubar-menu {
+  height: 100%;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-control, 6px);
+  color: var(--text, #fff);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.menubar-menu:hover,
+.menubar-menu.active {
+  background: var(--fill-subtle-hover, rgba(255, 255, 255, 0.07));
+}
+
+.menubar-dropdown {
+  position: fixed;
+  z-index: 9999;
+  min-width: 200px;
+  background: var(--acrylic-tint-strong, #1e2430);
+  border: 1px solid var(--acrylic-border, rgba(255, 255, 255, 0.13));
+  border-radius: var(--radius-control, 6px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  padding: 4px;
+  backdrop-filter: blur(20px) saturate(120%);
+  -webkit-backdrop-filter: blur(20px) saturate(120%);
+}
+
+.menubar-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 6px 14px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text, #fff);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menubar-item:hover:not(.disabled) {
+  background: var(--fill-selected, rgba(96, 205, 255, 0.16));
+}
+
+.menubar-item.disabled {
+  color: var(--text-muted, rgba(255, 255, 255, 0.54));
+  cursor: default;
+}
+
+.menubar-item-accel {
+  margin-left: auto;
+  padding-left: 24px;
+  color: var(--text-muted, rgba(255, 255, 255, 0.54));
+  font-size: 11px;
+}
+
+.menubar-separator {
+  height: 1px;
+  background: var(--acrylic-border, rgba(255, 255, 255, 0.13));
+  margin: 4px 0;
+}
+
+/* Keyboard focus states (ISSUE-48). Subtle accent ring, Fluent-coherent. */
+.menubar-menu:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.menubar-item:focus-visible,
+.menubar-item.focused:not(.disabled) {
+  background: var(--fill-selected, rgba(96, 205, 255, 0.16));
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}

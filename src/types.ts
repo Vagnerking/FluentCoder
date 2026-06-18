@@ -130,3 +130,33 @@ export interface Problem {
   line: number;
   column: number;
 }
+
+/** One item in a MenuBar dropdown. */
+export interface MenuItem {
+  id: string;
+  label: string;
+  /** Accelerator hint shown right-aligned, e.g. "Ctrl+S". */
+  accelerator?: string;
+  /** Invoked on click/activation. Omitted for separators/disabled placeholders. */
+  run?: () => void;
+  /** When false, the item renders dimmed and never fires. Default true. */
+  enabled?: boolean;
+  /** When true, renders a divider instead of a clickable row. */
+  separator?: boolean;
+}
+
+/** A top-level menu in the MenuBar (e.g. File, Edit). */
+export interface MenuDef {
+  label: string;
+  items: MenuItem[];
+}
+
+/** Imperative handle the App holds to drive the active Monaco editor. */
+export interface EditorActionsApi {
+  /** Runs a Monaco editor action by id, e.g. "undo", "editor.action.selectAll". */
+  run: (actionId: string) => void;
+  /** Low-level trigger, e.g. trigger("menu","editor.action.clipboardCutAction"). */
+  trigger: (source: string, handlerId: string, payload?: unknown) => void;
+  /** Focuses the editor. */
+  focus: () => void;
+}
