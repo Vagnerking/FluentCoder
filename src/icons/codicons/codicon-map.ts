@@ -24,6 +24,17 @@ export type IconAction =
   | "folder"
   | "folderOpened"
   | "file"
+  // Explorer context-menu actions
+  | "rename"
+  | "delete"
+  | "cut"
+  | "copy"
+  | "paste"
+  | "copyPath"
+  | "revealExplorer"
+  | "findInFolder"
+  | "splitEditor"
+  | "openWith"
   // Search
   | "search"
   | "replace"
@@ -95,6 +106,18 @@ export const CODICON_MAP: Record<IconAction, string> = {
   folder: "folder",
   folderOpened: "folder-opened",
   file: "file",
+
+  // Explorer context-menu actions
+  rename: "edit",
+  delete: "trash",
+  cut: "list-selection",
+  copy: "copy",
+  paste: "clippy",
+  copyPath: "link",
+  revealExplorer: "folder-opened",
+  findInFolder: "search",
+  splitEditor: "split-horizontal",
+  openWith: "go-to-file",
 
   // Search
   search: "search",

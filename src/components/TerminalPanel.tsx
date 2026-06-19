@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { TerminalView } from "./TerminalView";
 import { ProblemsPanel } from "./ProblemsPanel";
 import { Codicon } from "../icons/codicons/Codicon";
@@ -15,6 +15,10 @@ interface TerminalPanelProps {
   runCommand?: string | null;
   /** Identifies the current run; changing it spawns a fresh PTY session. */
   runNonce?: number;
+  /** Working directory requested by "Abrir no Terminal", or null. */
+  openCwd?: string | null;
+  /** Bumps on each "Abrir no Terminal" to spawn a fresh PTY at `openCwd`. */
+  openNonce?: number;
 }
 
 type PanelTab = "terminal" | "problems" | "output";
@@ -28,14 +32,34 @@ export function TerminalPanel({
   onOpenProblem,
   runCommand,
   runNonce = 0,
+  openCwd = null,
+  openNonce = 0,
 }: TerminalPanelProps) {
   const [activeTab, setActiveTab] = useState<PanelTab>("terminal");
   // Base id for the plain interactive shell; a run uses a nonce-derived id so
   // each ▶ starts a new PTY instead of reusing the previous one.
   const [baseId] = useState(() => crypto.randomUUID());
-  const termId = runCommand ? `${baseId}-run-${runNonce}` : baseId;
+
+  // An "Abrir no Terminal" request: switch to the terminal tab and use the
+  // requested cwd with a nonce-derived id so a new PTY spawns each time.
+  useEffect(() => {
+    if (openNonce > 0) setActiveTab("terminal");
+  }, [openNonce]);
 
   if (!open) return null;
+
+  // Resolve the effective session id + cwd. "Abrir no Terminal" (openNonce > 0)
+  // wins, then a run, then the plain interactive shell at the workspace root.
+  let termId = baseId;
+  let termCwd = cwd;
+  let termCommand: string | null = null;
+  if (openNonce > 0 && openCwd) {
+    termId = `${baseId}-open-${openNonce}`;
+    termCwd = openCwd;
+  } else if (runCommand) {
+    termId = `${baseId}-run-${runNonce}`;
+    termCommand = runCommand;
+  }
 
   return (
     <div className="terminal-panel" style={{ height }}>
@@ -69,8 +93,8 @@ export function TerminalPanel({
       </div>
       <div className="terminal-body">
         {activeTab === "terminal" ? (
-          cwd ? (
-            <TerminalView id={termId} cwd={cwd} command={runCommand ?? null} />
+          termCwd ? (
+            <TerminalView id={termId} cwd={termCwd} command={termCommand} />
           ) : (
             <div className="panel-empty">Abra uma pasta para usar o terminal.</div>
           )

@@ -85,6 +85,71 @@ fn validate_child_path(
     Ok(parent.join(name))
 }
 
+/// Canonicalizes `path` and confirms it stays under `workspace_root`.
+/// Returns the canonical source path, rejecting directory traversal (`..`).
+fn validate_existing_path(workspace_root: &str, path: &str) -> Result<PathBuf, String> {
+    let root = fs::canonicalize(workspace_root)
+        .map_err(|e| format!("Não foi possível validar o workspace: {e}"))?;
+    let target = fs::canonicalize(path)
+        .map_err(|e| format!("Não foi possível acessar o item: {e}"))?;
+    if !target.starts_with(&root) {
+        return Err("O item está fora do workspace.".into());
+    }
+    Ok(target)
+}
+
+/// Given a desired path that may already exist, returns a non-colliding
+/// alternative by appending " - Cópia", " - Cópia (2)", … before the
+/// extension. Never overwrites an existing path.
+fn resolve_collision(desired: &Path) -> PathBuf {
+    if !desired.exists() {
+        return desired.to_path_buf();
+    }
+    let parent = desired.parent().unwrap_or_else(|| Path::new("."));
+    let stem = desired
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("item")
+        .to_string();
+    let ext = desired.extension().and_then(|e| e.to_str());
+    let build = |suffix: &str| -> PathBuf {
+        let name = match ext {
+            Some(ext) => format!("{stem}{suffix}.{ext}"),
+            None => format!("{stem}{suffix}"),
+        };
+        parent.join(name)
+    };
+    let first = build(" - Cópia");
+    if !first.exists() {
+        return first;
+    }
+    let mut n = 2;
+    loop {
+        let candidate = build(&format!(" - Cópia ({n})"));
+        if !candidate.exists() {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// Recursively copies `src` (file or directory) to `dest` (full path).
+fn copy_recursive(src: &Path, dest: &Path) -> Result<(), String> {
+    if src.is_dir() {
+        fs::create_dir(dest).map_err(|e| format!("Não foi possível criar a pasta: {e}"))?;
+        for item in fs::read_dir(src).map_err(|e| e.to_string())? {
+            let item = item.map_err(|e| e.to_string())?;
+            let child_dest = dest.join(item.file_name());
+            copy_recursive(&item.path(), &child_dest)?;
+        }
+        Ok(())
+    } else {
+        fs::copy(src, dest)
+            .map(|_| ())
+            .map_err(|e| format!("Não foi possível copiar o arquivo: {e}"))
+    }
+}
+
 fn entry_for(path: PathBuf, is_dir: bool) -> Result<DirEntry, String> {
     let name = path
         .file_name()
@@ -171,10 +236,123 @@ pub fn create_folder(
     entry_for(path, true)
 }
 
+/// Renames `path` to `new_name` within the same parent folder. Rejects a
+/// collision (never overwrites) and revalidates both ends against the workspace.
+#[tauri::command]
+pub fn rename_path(
+    workspace_root: String,
+    path: String,
+    new_name: String,
+) -> Result<DirEntry, String> {
+    let source = validate_existing_path(&workspace_root, &path)?;
+    let is_dir = source.is_dir();
+    let parent = source
+        .parent()
+        .ok_or_else(|| "O item não tem uma pasta-pai válida.".to_string())?;
+    let parent_str = parent.to_string_lossy().to_string();
+    let dest = validate_child_path(&workspace_root, &parent_str, &new_name)?;
+    if dest == source {
+        // Same name → nothing to do; report the unchanged entry.
+        return entry_for(source, is_dir);
+    }
+    if dest.exists() {
+        return Err("Já existe um item com esse nome.".into());
+    }
+    fs::rename(&source, &dest).map_err(|e| format!("Não foi possível renomear: {e}"))?;
+    entry_for(dest, is_dir)
+}
+
+/// Sends `path` to the OS recycle bin (recoverable). Never deletes permanently.
+#[tauri::command]
+pub fn delete_to_trash(workspace_root: String, path: String) -> Result<(), String> {
+    let target = validate_existing_path(&workspace_root, &path)?;
+    trash::delete(&target).map_err(|e| format!("Não foi possível mover para a Lixeira: {e}"))
+}
+
+/// Copies `src` (file or directory, recursive) into `dest_parent`, resolving any
+/// name collision without overwriting. Revalidates both ends in the workspace.
+#[tauri::command]
+pub fn copy_path(
+    workspace_root: String,
+    src: String,
+    dest_parent: String,
+) -> Result<DirEntry, String> {
+    let source = validate_existing_path(&workspace_root, &src)?;
+    let dest_parent = validate_existing_path(&workspace_root, &dest_parent)?;
+    if !dest_parent.is_dir() {
+        return Err("O destino selecionado não é uma pasta.".into());
+    }
+    let name = source
+        .file_name()
+        .ok_or_else(|| "O item de origem não tem nome.".to_string())?;
+    let desired = dest_parent.join(name);
+    let dest = resolve_collision(&desired);
+    let is_dir = source.is_dir();
+    copy_recursive(&source, &dest)?;
+    entry_for(dest, is_dir)
+}
+
+/// Moves `src` (file or directory, recursive) into `dest_parent`, resolving any
+/// name collision without overwriting. Falls back to copy+remove across volumes.
+#[tauri::command]
+pub fn move_path(
+    workspace_root: String,
+    src: String,
+    dest_parent: String,
+) -> Result<DirEntry, String> {
+    let source = validate_existing_path(&workspace_root, &src)?;
+    let dest_parent = validate_existing_path(&workspace_root, &dest_parent)?;
+    if !dest_parent.is_dir() {
+        return Err("O destino selecionado não é uma pasta.".into());
+    }
+    let name = source
+        .file_name()
+        .ok_or_else(|| "O item de origem não tem nome.".to_string())?;
+    let desired = dest_parent.join(name);
+    let dest = resolve_collision(&desired);
+    let is_dir = source.is_dir();
+    // Try a plain rename first; fall back to copy+remove on cross-volume moves.
+    if fs::rename(&source, &dest).is_err() {
+        copy_recursive(&source, &dest)?;
+        if is_dir {
+            fs::remove_dir_all(&source)
+                .map_err(|e| format!("Não foi possível remover a origem: {e}"))?;
+        } else {
+            fs::remove_file(&source)
+                .map_err(|e| format!("Não foi possível remover a origem: {e}"))?;
+        }
+    }
+    entry_for(dest, is_dir)
+}
+
+/// Opens the OS file manager with `path` selected. On Windows this runs
+/// `explorer /select,<path>`; `explorer.exe` returns a non-zero exit code even
+/// on success, so the exit status is intentionally ignored.
+#[tauri::command]
+pub fn reveal_in_explorer(workspace_root: String, path: String) -> Result<(), String> {
+    let target = validate_existing_path(&workspace_root, &path)?;
+    let target_str = target.to_string_lossy().to_string();
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg("/select,")
+            .arg(&target_str)
+            .spawn()
+            .map_err(|e| format!("Não foi possível abrir o Explorer: {e}"))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = target_str;
+        Err("Revelar no Explorer só é suportado no Windows.".into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{create_file, create_folder};
+    use super::{copy_path, create_file, create_folder, move_path, rename_path};
     use std::fs;
+    use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn workspace() -> std::path::PathBuf {
@@ -220,5 +398,95 @@ mod tests {
             );
         }
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn renames_file_and_rejects_collision() {
+        let root = workspace();
+        let root_text = root.to_string_lossy().to_string();
+        let a = create_file(root_text.clone(), root_text.clone(), "a.txt".into()).unwrap();
+        create_file(root_text.clone(), root_text.clone(), "b.txt".into()).unwrap();
+
+        let renamed = rename_path(root_text.clone(), a.path.clone(), "c.txt".into()).unwrap();
+        assert_eq!(renamed.name, "c.txt");
+        assert!(!Path::new(&a.path).exists());
+        assert!(Path::new(&renamed.path).exists());
+
+        // Renaming onto an existing name must be rejected (no overwrite).
+        assert!(rename_path(root_text.clone(), renamed.path, "b.txt".into()).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copies_file_with_collision_suffix() {
+        let root = workspace();
+        let root_text = root.to_string_lossy().to_string();
+        let f = create_file(root_text.clone(), root_text.clone(), "doc.txt".into()).unwrap();
+        fs::write(&f.path, "hello").unwrap();
+
+        // Copy into the same parent → collision resolved with a suffix.
+        let copied = copy_path(root_text.clone(), f.path.clone(), root_text.clone()).unwrap();
+        assert_ne!(copied.path, f.path);
+        assert!(copied.name.contains("Cópia"));
+        assert_eq!(fs::read_to_string(&copied.path).unwrap(), "hello");
+        assert!(Path::new(&f.path).exists(), "origem deve permanecer");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copies_folder_recursively() {
+        let root = workspace();
+        let root_text = root.to_string_lossy().to_string();
+        let dir = create_folder(root_text.clone(), root_text.clone(), "pasta".into()).unwrap();
+        create_file(root_text.clone(), dir.path.clone(), "inner.txt".into()).unwrap();
+        let dest = create_folder(root_text.clone(), root_text.clone(), "destino".into()).unwrap();
+
+        let copied = copy_path(root_text.clone(), dir.path.clone(), dest.path.clone()).unwrap();
+        assert!(copied.is_dir);
+        assert!(Path::new(&copied.path).join("inner.txt").exists());
+        assert!(Path::new(&dir.path).exists(), "origem deve permanecer");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn moves_file_and_folder() {
+        let root = workspace();
+        let root_text = root.to_string_lossy().to_string();
+        let dest = create_folder(root_text.clone(), root_text.clone(), "out".into()).unwrap();
+
+        let file = create_file(root_text.clone(), root_text.clone(), "m.txt".into()).unwrap();
+        let moved = move_path(root_text.clone(), file.path.clone(), dest.path.clone()).unwrap();
+        assert!(!Path::new(&file.path).exists(), "origem deve sumir após mover");
+        assert!(Path::new(&moved.path).exists());
+
+        let folder = create_folder(root_text.clone(), root_text.clone(), "mp".into()).unwrap();
+        create_file(root_text.clone(), folder.path.clone(), "k.txt".into()).unwrap();
+        let moved_dir = move_path(root_text.clone(), folder.path.clone(), dest.path.clone()).unwrap();
+        assert!(moved_dir.is_dir);
+        assert!(!Path::new(&folder.path).exists());
+        assert!(Path::new(&moved_dir.path).join("k.txt").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_operations_outside_workspace() {
+        let root = workspace();
+        let root_text = root.to_string_lossy().to_string();
+        // A sibling temp dir, definitely outside `root`.
+        let outside = workspace();
+        let outside_file =
+            create_file(outside.to_string_lossy().to_string(), outside.to_string_lossy().to_string(), "x.txt".into())
+                .unwrap();
+
+        assert!(
+            rename_path(root_text.clone(), outside_file.path.clone(), "y.txt".into()).is_err(),
+            "renomear fora do workspace deve falhar"
+        );
+        assert!(
+            copy_path(root_text.clone(), outside_file.path.clone(), root_text.clone()).is_err(),
+            "copiar origem fora do workspace deve falhar"
+        );
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(outside).unwrap();
     }
 }
