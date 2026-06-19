@@ -151,6 +151,27 @@ export interface MenuDef {
   items: MenuItem[];
 }
 
+/**
+ * One row in the explorer's right-click context menu. Purely data — the
+ * `TreeContextMenu` component renders it and fires `run` on activation.
+ */
+export interface ContextMenuItem {
+  id: string;
+  label: string;
+  /** Accelerator hint shown right-aligned, e.g. "F2", "Del", "Ctrl+C". */
+  accelerator?: string;
+  /** Semantic icon (codicon map key) shown before the label. */
+  icon?: import("./icons/codicons/codicon-map").IconAction;
+  /** Invoked on click/activation. Omitted for separators/disabled placeholders. */
+  run?: () => void;
+  /** When false, the item renders dimmed and never fires. Default true. */
+  enabled?: boolean;
+  /** When true, renders a divider instead of a clickable row. */
+  separator?: boolean;
+  /** Nested items shown in a submenu anchored to the right. */
+  submenu?: ContextMenuItem[];
+}
+
 /** Imperative handle the App holds to drive the active Monaco editor. */
 export interface EditorActionsApi {
   /** Runs a Monaco editor action by id, e.g. "undo", "editor.action.selectAll". */

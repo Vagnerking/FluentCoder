@@ -69,6 +69,12 @@ export default function App() {
   const [runCommand, setRunCommand] = useState<string | null>(null);
   const [runNonce, setRunNonce] = useState(0);
 
+  // "Abrir no Terminal" target: a cwd + nonce that spawns a fresh PTY there.
+  const [terminalOpenCwd, setTerminalOpenCwd] = useState<string | null>(null);
+  const [terminalOpenNonce, setTerminalOpenNonce] = useState(0);
+  // "Localizar na pasta": sub-folder the search is scoped to (null = root).
+  const [searchScope, setSearchScope] = useState<string | null>(null);
+
   const [cursorLine, setCursorLine] = useState(1);
   const [cursorCol, setCursorCol] = useState(1);
 
@@ -318,6 +324,72 @@ export default function App() {
     setRoots([]);
     setOpenFiles([]);
     setActivePath(null);
+  }, []);
+
+  /** Re-point any open tab(s) when the explorer renames a file or folder. */
+  const handlePathRenamed = useCallback(
+    (oldPath: string, newPath: string, isDir: boolean) => {
+      setOpenFiles((prev) =>
+        prev.map((f) => {
+          if (!isDir) {
+            return f.path === oldPath
+              ? { ...f, path: newPath, name: baseName(newPath) }
+              : f;
+          }
+          // Folder rename: rewrite the prefix of any tab under it.
+          if (f.path === oldPath || f.path.startsWith(oldPath + "\\") || f.path.startsWith(oldPath + "/")) {
+            const suffix = f.path.slice(oldPath.length);
+            const next = newPath + suffix;
+            return { ...f, path: next, name: baseName(next) };
+          }
+          return f;
+        })
+      );
+      setActivePath((prev) => {
+        if (prev == null) return prev;
+        if (!isDir) return prev === oldPath ? newPath : prev;
+        if (prev === oldPath || prev.startsWith(oldPath + "\\") || prev.startsWith(oldPath + "/")) {
+          return newPath + prev.slice(oldPath.length);
+        }
+        return prev;
+      });
+    },
+    []
+  );
+
+  /** Close tabs that point at a path removed by the explorer (folder = prefix). */
+  const handlePathDeleted = useCallback(
+    (path: string, isDir: boolean) => {
+      setOpenFiles((prev) => {
+        const next = prev.filter((f) =>
+          isDir
+            ? !(f.path === path || f.path.startsWith(path + "\\") || f.path.startsWith(path + "/"))
+            : f.path !== path
+        );
+        setActivePath((cur) =>
+          cur && !next.find((f) => f.path === cur)
+            ? next.length
+              ? next[next.length - 1].path
+              : null
+            : cur
+        );
+        return next;
+      });
+    },
+    []
+  );
+
+  /** Open/focus the integrated terminal at `cwd` (explorer "Abrir no Terminal"). */
+  const handleOpenTerminalAt = useCallback((cwd: string) => {
+    setTerminalOpenCwd(cwd);
+    setTerminalOpenNonce((n) => n + 1);
+    setPanelOpen(true);
+  }, []);
+
+  /** Open/focus the search panel scoped to `folderPath` (explorer "Localizar na pasta"). */
+  const handleFindInFolder = useCallback((folderPath: string) => {
+    setSearchScope(folderPath);
+    setActiveView("search");
   }, []);
 
   // True while we're waiting for the second key of the Ctrl+K chord (e.g. the
@@ -790,7 +862,14 @@ export default function App() {
   function renderSidebar() {
     switch (activeView) {
       case "search":
-        return <SearchPanel rootPath={rootPath} onOpenMatch={handleOpenFile} />;
+        return (
+          <SearchPanel
+            rootPath={rootPath}
+            scopePath={searchScope}
+            onClearScope={() => setSearchScope(null)}
+            onOpenMatch={handleOpenFile}
+          />
+        );
       case "explorer":
         return (
           <FileExplorer
@@ -801,6 +880,10 @@ export default function App() {
             onOpenFile={handleOpenFile}
             onRefreshRoot={refreshExplorerRoot}
             decorationFor={decorationFor}
+            onPathRenamed={handlePathRenamed}
+            onPathDeleted={handlePathDeleted}
+            onOpenTerminalAt={handleOpenTerminalAt}
+            onFindInFolder={handleFindInFolder}
           />
         );
       case "git":
@@ -828,6 +911,10 @@ export default function App() {
             onOpenFile={handleOpenFile}
             onRefreshRoot={refreshExplorerRoot}
             decorationFor={decorationFor}
+            onPathRenamed={handlePathRenamed}
+            onPathDeleted={handlePathDeleted}
+            onOpenTerminalAt={handleOpenTerminalAt}
+            onFindInFolder={handleFindInFolder}
           />
         );
     }
@@ -912,6 +999,8 @@ export default function App() {
                 onOpenProblem={handleOpenProblem}
                 runCommand={runCommand}
                 runNonce={runNonce}
+                openCwd={terminalOpenCwd}
+                openNonce={terminalOpenNonce}
               />
             </>
           )}

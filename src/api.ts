@@ -84,6 +84,66 @@ export async function createFolder(
   );
 }
 
+/** Renames `path` to `newName` in place; rejects on collision. */
+export async function renamePath(
+  workspaceRoot: string,
+  path: string,
+  newName: string
+): Promise<FileNode> {
+  return mapDirEntry(
+    await invoke<RawDirEntry>("rename_path", { workspaceRoot, path, newName })
+  );
+}
+
+/** Moves `path` to the OS recycle bin (recoverable). */
+export function deleteToTrash(workspaceRoot: string, path: string): Promise<void> {
+  return invoke("delete_to_trash", { workspaceRoot, path });
+}
+
+/** Copies `src` (file/folder, recursive) into `destParent`, resolving collisions. */
+export async function copyPath(
+  workspaceRoot: string,
+  src: string,
+  destParent: string
+): Promise<FileNode> {
+  return mapDirEntry(
+    await invoke<RawDirEntry>("copy_path", { workspaceRoot, src, destParent })
+  );
+}
+
+/** Moves `src` (file/folder, recursive) into `destParent`, resolving collisions. */
+export async function movePath(
+  workspaceRoot: string,
+  src: string,
+  destParent: string
+): Promise<FileNode> {
+  return mapDirEntry(
+    await invoke<RawDirEntry>("move_path", { workspaceRoot, src, destParent })
+  );
+}
+
+/** Opens the OS file manager with `path` selected (Windows `explorer /select,`). */
+export function revealInExplorer(workspaceRoot: string, path: string): Promise<void> {
+  return invoke("reveal_in_explorer", { workspaceRoot, path });
+}
+
+/**
+ * Writes `text` to the OS clipboard. Uses the WebView clipboard API, which is
+ * available inside a user-gesture handler (menu click / shortcut) in Tauri's
+ * WebView2; this avoids pulling in an extra Tauri plugin just for plain text.
+ * Returns false (without throwing) when the write fails, so callers can decide
+ * whether to surface a message.
+ */
+export async function copyTextToClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (err) {
+    console.error("Falha ao copiar para a área de transferência:", err);
+    return false;
+  }
+}
+
 /** Recursively searches `root` for lines containing `query` (case-insensitive). */
 export function searchInDir(root: string, query: string): Promise<SearchMatch[]> {
   return invoke<SearchMatch[]>("search_in_dir", { root, query });
