@@ -16,6 +16,14 @@ export interface RawDirEntry {
   is_dir: boolean;
 }
 
+/**
+ * How a file is rendered when open. `"text"` is the Monaco editor (the default
+ * for every file); `"image"` is the read-only image preview. The "Open With…"
+ * selector (ISSUE-70) lets the user pick which one, and `OpenFile.mode` records
+ * the choice so the App can route the buffer to the right view.
+ */
+export type OpenMode = "text" | "image";
+
 /** A file currently open in the editor. */
 export interface OpenFile {
   path: string;
@@ -23,6 +31,56 @@ export interface OpenFile {
   content: string;
   /** True when the buffer differs from what's on disk. */
   dirty: boolean;
+  /**
+   * Which view renders this file. Defaults to `"text"` when omitted (every
+   * pre-Open-With caller). Image files opened by double-click default to
+   * `"image"`; "Open With…" can override either way.
+   */
+  mode?: OpenMode;
+}
+
+/**
+ * A registered "Open With…" mode (ISSUE-70). The selector is data-driven: it
+ * lists every mode whose `appliesTo(path)` is true and opens the file in the
+ * chosen `mode`. Adding a future mode (hex, markdown preview, …) means adding
+ * one entry here — no change to the selector UI.
+ */
+export interface OpenWithMode {
+  /** The {@link OpenMode} this entry opens the file in. */
+  mode: OpenMode;
+  /** Human label shown in the selector, e.g. "Editor de Texto". */
+  label: string;
+  /** Codicon action name (central icon map) shown beside the label. */
+  icon: import("./icons/codicons/codicon-map").IconAction;
+  /** True when this mode can open `path` (e.g. image preview ⇒ image files). */
+  appliesTo: (path: string) => boolean;
+  /** True when this is the default mode for files it applies to. */
+  isDefaultFor?: (path: string) => boolean;
+}
+
+/**
+ * One item in the explorer's tree context menu (ISSUE-56 / épico A). Defined
+ * here so the advanced-action builders (ISSUE-69/70/71) can produce items
+ * without importing the not-yet-merged `TreeContextMenu` component. Keep this
+ * shape in sync with épico A's `ContextMenuItem`.
+ */
+export interface ContextMenuItem {
+  id: string;
+  label: string;
+  /** Right-aligned accelerator hint, e.g. "Ctrl+Enter". */
+  accelerator?: string;
+  /** Invoked when the (enabled) item is clicked. Omitted for separators. */
+  run?: () => void;
+  /** When false the item renders dimmed and never fires. Default true. */
+  enabled?: boolean;
+  /** Tooltip shown on hover — used for the "em breve" hints on disabled items. */
+  title?: string;
+  /** Renders a divider instead of a clickable row. */
+  separator?: boolean;
+  /** Nested submenu (e.g. the modes under "Open With…"). */
+  submenu?: ContextMenuItem[];
+  /** Optional Codicon action name shown at the start of the row. */
+  icon?: import("./icons/codicons/codicon-map").IconAction;
 }
 
 /** Persisted UI session, mirroring the Rust `Session`. */

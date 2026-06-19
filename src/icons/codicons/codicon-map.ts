@@ -87,7 +87,15 @@ export type IconAction =
   | "menu"
   | "chevronRight"
   | "chevronDown"
-  | "close";
+  | "close"
+  // Explorer advanced actions (épico "Ações Avançadas do Explorador")
+  | "textEditor"
+  | "imagePreview"
+  | "openChanges"
+  | "selectForCompare"
+  | "compareWithSelected"
+  | "fileHistory"
+  | "timeline";
 
 /** action → codicon name (without the `codicon-` prefix). */
 export const CODICON_MAP: Record<IconAction, string> = {
@@ -178,6 +186,15 @@ export const CODICON_MAP: Record<IconAction, string> = {
   chevronRight: "chevron-right",
   chevronDown: "chevron-down",
   close: "close",
+
+  // Explorer advanced actions (open with / diff / history)
+  textEditor: "file-code",
+  imagePreview: "file-media",
+  openChanges: "diff",
+  selectForCompare: "inspect",
+  compareWithSelected: "diff-multiple",
+  fileHistory: "history",
+  timeline: "history",
 };
 
 /** Codicon names that should spin (loading/sync feedback). */

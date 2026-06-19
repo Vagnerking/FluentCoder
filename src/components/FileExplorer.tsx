@@ -18,6 +18,7 @@ import {
 import { TreeNode } from "./TreeNode";
 import { TreeContextMenu } from "./TreeContextMenu";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { buildAdvancedFileMenuItems } from "../explorer/advancedFileMenu";
 
 /** Internal cut/copy clipboard for explorer file operations (not the OS one). */
 export interface FileClipboard {
@@ -48,6 +49,22 @@ interface FileExplorerProps {
   onOpenTerminalAt?: (cwd: string) => void;
   /** Opens/focuses the search panel scoped to the given folder. */
   onFindInFolder?: (folderPath: string) => void;
+  /**
+   * Advanced file actions (épico "Ações Avançadas do Explorador", issues
+   * 69-71), wired by App and folded into the file context menu via
+   * `buildAdvancedFileMenuItems` (see `src/explorer/advancedFileMenu.ts`).
+   */
+  advancedActions?: ExplorerAdvancedActions;
+}
+
+/** Handlers App passes down for the advanced file context-menu items. */
+export interface ExplorerAdvancedActions {
+  /** ISSUE-70 — open the "Open With…" selector for `path` at `x,y`. */
+  onShowOpenWith: (path: string, x: number, y: number) => void;
+  /** ISSUE-71 — show `path`'s git history in the Source Control panel. */
+  onFileHistory: (path: string) => void;
+  /** True when the workspace is a git repo (gates File History). */
+  isGitRepo: boolean;
 }
 
 /** Last path segment, handling Windows and POSIX separators. */
@@ -74,6 +91,7 @@ export function FileExplorer({
   onPathDeleted,
   onOpenTerminalAt,
   onFindInFolder,
+  advancedActions,
 }: FileExplorerProps) {
   const [selectedDirectory, setSelectedDirectory] = useState<string | null>(rootPath);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
@@ -314,7 +332,7 @@ export function FileExplorer({
   // ---- Context-menu item assembly (VS Code order, folder × file) ----
 
   const buildItems = useCallback(
-    (node: FileNode): ContextMenuItem[] => {
+    (node: FileNode, x: number, y: number): ContextMenuItem[] => {
       const pasteEnabled = clipboard != null;
       const common: ContextMenuItem[] = [
         { id: "reveal", label: "Revelar no Explorer do Windows", icon: "revealExplorer", run: () => revealInOs(node) },
@@ -363,18 +381,34 @@ export function FileExplorer({
         ];
       }
 
-      // File: leading disabled "advanced" items (Épico de Ações Avançadas).
+      // File: base items, then the advanced items from the "Ações Avançadas"
+      // épico (Open With works; split/diff/timeline stay disabled). When the
+      // host didn't wire advancedActions, fall back to a single disabled stub.
+      const advanced: ContextMenuItem[] = advancedActions
+        ? buildAdvancedFileMenuItems(
+            {
+              path: node.path,
+              x,
+              y,
+              isGitRepo: advancedActions.isGitRepo,
+              compareSelection: null,
+            },
+            {
+              onOpenWith: advancedActions.onShowOpenWith,
+              onFileHistory: advancedActions.onFileHistory,
+            }
+          )
+        : [{ id: "advanced", label: "Mais ações", enabled: false }];
+
       return [
-        { id: "openToSide", label: "Abrir ao lado", enabled: false },
-        { id: "openWith", label: "Abrir com…", icon: "openWith", enabled: false },
-        { id: "sep-open", label: "", separator: true },
+        ...advanced,
+        { id: "sep-adv", label: "", separator: true },
         ...common,
-        { id: "sep-git", label: "", separator: true },
-        { id: "git", label: "Git", enabled: false },
       ];
     },
     [
       clipboard,
+      advancedActions,
       revealInOs,
       openInTerminal,
       onFindInFolder,
@@ -393,7 +427,7 @@ export function FileExplorer({
       e.stopPropagation();
       setFocusedPath(node.path);
       if (node.isDir) setSelectedDirectory(node.path);
-      setContextMenu({ x: e.clientX, y: e.clientY, items: buildItems(node) });
+      setContextMenu({ x: e.clientX, y: e.clientY, items: buildItems(node, e.clientX, e.clientY) });
     },
     [buildItems]
   );
