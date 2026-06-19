@@ -13,6 +13,7 @@ import { StatusBar } from "./components/StatusBar";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { QuickOpen } from "./components/QuickOpen";
 import { AboutDialog } from "./components/AboutDialog";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import {
   gitBranch,
   gitStatus,
@@ -30,6 +31,7 @@ import { languageForFile } from "./language";
 import { buildDecorations, decoKey } from "./icon-theme/decorations";
 import { useLspManager } from "./lsp/useLspManager";
 import type {
+  ConfirmButton,
   EditorActionsApi,
   FileNode,
   GitStatus,
@@ -64,6 +66,38 @@ export default function App() {
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   // Which Help dialog is open: the About box, the shortcuts list, or none.
   const [helpDialog, setHelpDialog] = useState<"about" | "shortcuts" | null>(null);
+
+  // The unsaved-changes confirmation dialog, when one is open. `resolve` feeds
+  // the user's choice back to the awaiting `askConfirm` Promise. The buttons are
+  // typed as strings so each caller can use its own answer set.
+  const [confirm, setConfirm] = useState<{
+    title: string;
+    message: string;
+    buttons: ConfirmButton<string>[];
+    resolve: (value: string | null) => void;
+  } | null>(null);
+
+  /**
+   * Opens the {@link ConfirmDialog} and resolves with the chosen button's value
+   * (or `null` on Esc/overlay). The dialog is modeless to React state, so this
+   * just parks a `resolve` until the user picks. Reused by the close-tab,
+   * close-window and switch-folder guards.
+   */
+  const askConfirm = useCallback(
+    (
+      title: string,
+      message: string,
+      buttons: ConfirmButton<string>[]
+    ): Promise<string | null> =>
+      new Promise((resolve) => {
+        setConfirm({ title, message, buttons, resolve });
+      }),
+    []
+  );
+
+  // Paths whose close is mid-confirmation, so a second X/Ctrl+W on the same tab
+  // doesn't stack a duplicate dialog (simple debounce per path).
+  const closingPaths = useRef<Set<string>>(new Set());
 
   // Current "Run": command line + a nonce that bumps on each ▶ to respawn the PTY.
   const [runCommand, setRunCommand] = useState<string | null>(null);
@@ -171,6 +205,10 @@ export default function App() {
   async function handleOpenFolder() {
     const folder = await pickFolder();
     if (!folder) return;
+    // Switching folders drops the current session — guard unsaved buffers first.
+    if (!(await guardDirtySession())) return;
+    setOpenFiles([]);
+    setActivePath(null);
     await openFolder(folder);
   }
 
@@ -224,15 +262,156 @@ export default function App() {
     );
   }
 
-  function handleCloseTab(path: string) {
-    setOpenFiles((prev) => {
-      const next = prev.filter((f) => f.path !== path);
-      if (path === activePath) {
-        setActivePath(next.length ? next[next.length - 1].path : null);
+  /**
+   * Writes a single open file to disk and clears its dirty flag. The shared
+   * persistence path: the active-buffer Save, the close-tab guard and the
+   * close-window/switch-folder "save all" all funnel through here so there's one
+   * place that calls `write_file`. Throws on failure so callers can keep the tab
+   * open; reports via alert (kept from the existing flow).
+   */
+  const saveFile = useCallback(
+    async (file: OpenFile) => {
+      try {
+        await writeFile(file.path, file.content);
+        setOpenFiles((prev) =>
+          prev.map((f) => (f.path === file.path ? { ...f, dirty: false } : f))
+        );
+      } catch (err) {
+        console.error(err);
+        alert(`Não foi possível salvar:\n${err}`);
+        throw err;
       }
-      return next;
+    },
+    []
+  );
+
+  /** Remove a tab from `openFiles`, moving focus off it if it was active. */
+  const removeTab = useCallback(
+    (path: string) => {
+      setOpenFiles((prev) => {
+        const next = prev.filter((f) => f.path !== path);
+        if (path === activePath) {
+          setActivePath(next.length ? next[next.length - 1].path : null);
+        }
+        return next;
+      });
+    },
+    [activePath]
+  );
+
+  /**
+   * Close a tab, guarding unsaved work. A clean buffer closes immediately; a
+   * dirty one asks "Salvar / Não salvar / Cancelar" first: Salvar writes then
+   * closes (an error keeps the tab), Não salvar discards and closes, Cancelar/Esc
+   * aborts. Async so the close waits for the user's decision.
+   */
+  const handleCloseTab = useCallback(
+    async (path: string) => {
+      const file = openFiles.find((f) => f.path === path);
+      if (!file) return;
+      if (!file.dirty) {
+        removeTab(path);
+        return;
+      }
+      // Don't stack a second dialog for a tab already mid-confirmation.
+      if (closingPaths.current.has(path)) return;
+      closingPaths.current.add(path);
+      try {
+        const choice = await askConfirm(
+          "Deseja salvar as alterações?",
+          `Deseja salvar as alterações em ${baseName(path)}?`,
+          [
+            { label: "Salvar", variant: "primary", value: "save", default: true },
+            { label: "Não salvar", variant: "danger", value: "discard" },
+            { label: "Cancelar", variant: "secondary", value: "cancel" },
+          ]
+        );
+        if (choice === "save") {
+          // Save the current buffer; only close if the write succeeds.
+          try {
+            await saveFile(file);
+          } catch {
+            return; // error already reported; keep the tab open and dirty
+          }
+          removeTab(path);
+        } else if (choice === "discard") {
+          removeTab(path);
+        }
+        // "cancel" / null (Esc/overlay): do nothing.
+      } finally {
+        closingPaths.current.delete(path);
+      }
+    },
+    [openFiles, askConfirm, saveFile, removeTab]
+  );
+
+  // Latest open files / active path, readable from non-reactive listeners
+  // (window-close handler, Ctrl+W) without re-subscribing on every change.
+  const openFilesRef = useRef<OpenFile[]>(openFiles);
+  openFilesRef.current = openFiles;
+  const activePathRef = useRef<string | null>(activePath);
+  activePathRef.current = activePath;
+
+  /**
+   * Batch unsaved-changes guard for actions that drop the whole session at once
+   * (close window, switch/close folder). With no dirty buffers it resolves
+   * `true` straight away. Otherwise it asks "Salvar tudo / Descartar tudo /
+   * Cancelar": Salvar tudo writes every dirty file and proceeds only if all
+   * succeed; Descartar tudo proceeds without saving; Cancelar/Esc aborts.
+   * Returns whether the caller may proceed to discard the session.
+   */
+  const guardDirtySession = useCallback(async (): Promise<boolean> => {
+    const dirty = openFilesRef.current.filter((f) => f.dirty);
+    if (dirty.length === 0) return true;
+    const choice = await askConfirm(
+      "Deseja salvar as alterações?",
+      dirty.length === 1
+        ? `Há alterações não salvas em ${dirty[0].name}.`
+        : `Há alterações não salvas em ${dirty.length} arquivos.`,
+      [
+        { label: "Salvar tudo", variant: "primary", value: "save", default: true },
+        { label: "Descartar tudo", variant: "danger", value: "discard" },
+        { label: "Cancelar", variant: "secondary", value: "cancel" },
+      ]
+    );
+    if (choice === "discard") return true;
+    if (choice === "save") {
+      // Save each dirty file sequentially; abort the action if any write fails.
+      try {
+        for (const file of dirty) await saveFile(file);
+        return true;
+      } catch {
+        return false; // error already reported; keep the session open
+      }
+    }
+    return false; // "cancel" / Esc
+  }, [askConfirm, saveFile]);
+
+  // Once true, the next close request is the real one we triggered after the
+  // dialog — let it through instead of reopening the guard (reentrancy guard).
+  const confirmedClose = useRef(false);
+
+  /**
+   * Intercept the window's close request (X button, Alt+F4, File ▸ Exit). With
+   * dirty buffers, cancel the close, run the batch guard and — if the user
+   * confirms — close for real. The reentrancy flag lets that real close pass.
+   */
+  useEffect(() => {
+    const appWindow = getCurrentWindow();
+    const unlistenPromise = appWindow.onCloseRequested(async (event) => {
+      if (confirmedClose.current) return; // our own close — let it proceed
+      if (openFilesRef.current.every((f) => !f.dirty)) return; // nothing to guard
+      event.preventDefault();
+      const ok = await guardDirtySession();
+      if (ok) {
+        confirmedClose.current = true;
+        appWindow.close();
+      }
     });
-  }
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, [guardDirtySession]);
 
   function handleCloseAll() {
     setOpenFiles([]);
@@ -270,16 +449,9 @@ export default function App() {
   const handleSave = useCallback(async () => {
     const file = openFiles.find((f) => f.path === activePath);
     if (!file || !file.dirty) return;
-    try {
-      await writeFile(file.path, file.content);
-      setOpenFiles((prev) =>
-        prev.map((f) => (f.path === file.path ? { ...f, dirty: false } : f))
-      );
-    } catch (err) {
-      console.error(err);
-      alert(`Não foi possível salvar:\n${err}`);
-    }
-  }, [openFiles, activePath]);
+    // saveFile already reports/throws on failure; swallow here (no close to gate).
+    await saveFile(file).catch(() => {});
+  }, [openFiles, activePath, saveFile]);
 
   /** Open a file chosen via the native file picker (File ▸ Open File…). */
   const handleOpenFileDialog = useCallback(async () => {
@@ -312,13 +484,15 @@ export default function App() {
   }, [openFiles, activePath]);
 
   /** Close the current workspace folder, returning to the empty state. */
-  const handleCloseFolder = useCallback(() => {
+  const handleCloseFolder = useCallback(async () => {
+    // Closing the folder discards the session — guard unsaved buffers first.
+    if (!(await guardDirtySession())) return;
     setRootPath(null);
     setRootName(null);
     setRoots([]);
     setOpenFiles([]);
     setActivePath(null);
-  }, []);
+  }, [guardDirtySession]);
 
   // True while we're waiting for the second key of the Ctrl+K chord (e.g. the
   // "O" in the VSCode-style "Ctrl+K Ctrl+O" Open Folder binding).
@@ -405,13 +579,19 @@ export default function App() {
         setQuickOpenOpen(true);
         return;
       }
+      // Ctrl+W → close the active tab (through the unsaved-changes guard).
+      if (key === "w") {
+        e.preventDefault();
+        if (activePathRef.current) handleCloseTab(activePathRef.current);
+        return;
+      }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       clearChord();
     };
-  }, [handleSave, handleSaveAs, handleOpenFileDialog]);
+  }, [handleSave, handleSaveAs, handleOpenFileDialog, handleCloseTab]);
 
   /** Run a configuration: open the terminal panel and (re)spawn a PTY for it. */
   function handleRun(command: string) {
@@ -941,6 +1121,19 @@ export default function App() {
 
       {helpDialog && (
         <AboutDialog mode={helpDialog} onClose={() => setHelpDialog(null)} />
+      )}
+
+      {confirm && (
+        <ConfirmDialog
+          title={confirm.title}
+          message={confirm.message}
+          buttons={confirm.buttons}
+          onChoice={(value) => {
+            const { resolve } = confirm;
+            setConfirm(null);
+            resolve(value);
+          }}
+        />
       )}
     </div>
   );

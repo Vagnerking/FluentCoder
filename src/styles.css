@@ -820,6 +820,22 @@ button:focus-visible,
 .about-shortcut-label { font-size: 13px; color: var(--text); }
 .about-shortcut-keys { font-size: 11px; color: var(--text-muted); background: var(--acrylic-control); border: 1px solid var(--acrylic-border); border-radius: var(--radius-control); padding: 2px 6px; font-family: var(--font-mono, monospace); }
 
+/* ---- Confirm dialog (reusable Fluent 2 modal: unsaved guard, delete, …) ---- */
+.confirm-overlay { position: fixed; inset: 0; z-index: 200; display: flex; justify-content: center; align-items: center; background: rgba(0,0,0,0.4); }
+.confirm-dialog { width: 440px; max-width: calc(100vw - 32px); display: flex; flex-direction: column; gap: 8px; padding: 20px; background: var(--acrylic-tint-strong); border: 1px solid var(--acrylic-border-strong); border-radius: var(--radius-card); box-shadow: 0 16px 48px rgba(0,0,0,0.5); backdrop-filter: blur(40px) saturate(140%); -webkit-backdrop-filter: blur(40px) saturate(140%); outline: none; }
+.confirm-title { margin: 0; font-size: 15px; font-weight: 600; color: var(--text); }
+.confirm-message { margin: 0 0 8px; font-size: 13px; line-height: 1.5; color: var(--text-secondary); }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.confirm-button { min-width: 84px; height: 30px; padding: 0 14px; font-size: 13px; font-family: inherit; color: var(--text); background: var(--acrylic-control); border: 1px solid var(--acrylic-border); border-radius: var(--radius-control); cursor: pointer; outline: none; }
+.confirm-button:hover { background: var(--acrylic-control-hover); }
+.confirm-button:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.confirm-button.is-default { box-shadow: 0 0 0 1px var(--accent); }
+.confirm-primary { color: #1a1a1a; background: var(--accent); border-color: var(--accent); font-weight: 600; }
+.confirm-primary:hover { background: #7ad6ff; }
+.confirm-secondary { /* neutral, inherits the base style */ }
+.confirm-danger { color: var(--error); border-color: rgba(255,153,164,0.4); }
+.confirm-danger:hover { background: rgba(255,153,164,0.14); border-color: var(--error); }
+
 /* ==========================================================================
    Icon pack — Material Icon Theme (files/folders) + Codicons (UI/actions)
    File-state colors and a couple of context placements. The icon *choice*
