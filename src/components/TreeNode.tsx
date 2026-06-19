@@ -3,7 +3,10 @@ import type { FileNode, FileDecoration } from "../types";
 import { readDir } from "../api";
 import { FileIcon } from "../icon-theme/material/FileIcon";
 import { Codicon } from "../icons/codicons/Codicon";
-import { InlineCreation, type PendingCreation } from "./FileExplorer";
+import {
+  ExplorerInlineCreation,
+  type PendingCreation,
+} from "./ExplorerInlineCreation";
 
 interface TreeNodeProps {
   node: FileNode;
@@ -114,7 +117,7 @@ export function TreeNode({
               </div>
             )}
             {pendingCreation?.parentPath === node.path && (
-              <InlineCreation
+              <ExplorerInlineCreation
                 kind={pendingCreation.kind}
                 depth={depth + 1}
                 busy={creationBusy}

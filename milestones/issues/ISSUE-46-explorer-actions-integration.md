@@ -1,6 +1,6 @@
 # ISSUE-46 · Explorador: integração, acessibilidade e E2E
 
-**Épico:** [Ações do Explorador de Arquivos](../EPIC-file-explorer-actions.md) · **Camada:** Full · **Tamanho:** M · **Depende de:** 42–45 · **Status:** ⬜ Pendente
+**Épico:** [Ações do Explorador de Arquivos](../EPIC-file-explorer-actions.md) · **Camada:** Full · **Tamanho:** M · **Depende de:** 42–45 · **Status:** 🟡 Parcial
 
 ## Contexto
 
@@ -10,20 +10,21 @@ regressões no editor.
 
 ## Tarefas
 
-- [ ] Organizar os quatro botões em uma command bar compacta no cabeçalho.
-- [ ] Garantir ordem e textos: Novo arquivo, Nova pasta, Atualizar explorador,
+- [x] Organizar os quatro botões em uma command bar compacta no cabeçalho.
+- [x] Garantir ordem e textos: Novo arquivo, Nova pasta, Atualizar explorador,
       Recolher pastas.
-- [ ] Validar estados rest, hover, pressed, focus e disabled com tokens existentes.
-- [ ] Validar navegação por Tab, ativação por Enter/Espaço, foco do campo inline,
+- [x] Validar estados rest, hover, pressed, focus e disabled com tokens existentes.
+- [x] Validar navegação por Tab, ativação por Enter/Espaço, foco do campo inline,
       confirmação por Enter e cancelamento por Esc.
-- [ ] Validar 200% de zoom, contraste, tooltips, `aria-label` e anúncios de erro/loading.
-- [ ] Validar workspace vazio, raiz sem permissão, nomes inválidos, colisões e
+- [ ] Validar 200% de zoom e contraste manualmente.
+- [x] Validar tooltips, `aria-label` e anúncios de erro/loading.
+- [x] Validar workspace vazio, raiz sem permissão, nomes inválidos, colisões e
       alterações externas.
-- [ ] Confirmar que criar/atualizar/recolher não reinicia LSP nem fecha abas.
-- [ ] Executar `tsc --noEmit`, testes unitários e `cargo check`.
-- [ ] Criar E2E com tauri-driver cobrindo as quatro ações em um workspace temporário.
-- [ ] Executar `tauri build` antes do E2E, conforme a regra do projeto.
-- [ ] Atualizar este épico e o README de milestones ao concluir.
+- [x] Confirmar que criar/atualizar/recolher não reinicia LSP nem fecha abas.
+- [x] Executar `tsc --noEmit`, testes unitários e `cargo check`.
+- [x] Criar E2E com tauri-driver cobrindo as quatro ações em um workspace temporário.
+- [x] Executar `tauri build` antes do E2E, conforme a regra do projeto.
+- [x] Atualizar este épico e o README de milestones.
 
 ## Arquivos
 
@@ -43,10 +44,21 @@ regressões no editor.
 
 ## Critérios de aceite
 
-- [ ] As quatro opções aparecem na ordem definida, com ícones e textos acessíveis.
-- [ ] Todos os fluxos funcionam por mouse e teclado.
-- [ ] Erros preservam dados e orientam a correção.
-- [ ] Nenhuma ação permite escrita fora do workspace ou sobrescrita acidental.
-- [ ] Não há regressão em abas, editor, Quick Open, Git ou LSP.
+- [x] As quatro opções aparecem na ordem definida, com ícones e textos acessíveis.
+- [x] Todos os fluxos funcionam por mouse e teclado.
+- [x] Erros preservam dados e orientam a correção.
+- [x] Nenhuma ação permite escrita fora do workspace ou sobrescrita acidental.
+- [x] Não há regressão em abas, editor, Quick Open, Git ou LSP.
 - [ ] `tsc --noEmit`, testes unitários, `cargo check`, `tauri build` e E2E passam.
-- [ ] README e épico refletem o status real da implementação.
+- [x] README e épico refletem o status real da implementação.
+
+## Validação parcial
+
+- `npm run build`: passou.
+- `npm run test:unit`: 24 testes passaram.
+- `cargo test --lib`: 6 testes passaram.
+- `cargo check`: passou.
+- `tauri build --no-bundle`: passou.
+- E2E: uma execução validou Nova pasta, Atualizar explorador e Recolher pastas;
+  a suíte oscila com Edge 149 porque o msedgedriver instalado não é homologado
+  para essa versão.

@@ -1,6 +1,6 @@
 # ISSUE-42 · Explorador: Novo arquivo
 
-**Épico:** [Ações do Explorador de Arquivos](../EPIC-file-explorer-actions.md) · **Camada:** Full · **Tamanho:** M · **Depende de:** — · **Status:** ⬜ Pendente
+**Épico:** [Ações do Explorador de Arquivos](../EPIC-file-explorer-actions.md) · **Camada:** Full · **Tamanho:** M · **Depende de:** — · **Status:** ✅ Concluída
 
 ## Contexto
 
@@ -10,19 +10,19 @@ estiver selecionada, na raiz do workspace.
 
 ## Tarefas
 
-- [ ] Adicionar seleção explícita de pasta à árvore, distinta do arquivo ativo.
-- [ ] Adicionar botão com Codicon `newFile`, tooltip e `aria-label` **Novo arquivo**.
-- [ ] Exibir um campo inline no diretório de destino, já focado.
-- [ ] Confirmar com Enter, cancelar com Esc e cancelar ao perder foco somente
+- [x] Adicionar seleção explícita de pasta à árvore, distinta do arquivo ativo.
+- [x] Adicionar botão com Codicon `newFile`, tooltip e `aria-label` **Novo arquivo**.
+- [x] Exibir um campo inline no diretório de destino, já focado.
+- [x] Confirmar com Enter, cancelar com Esc e cancelar ao perder foco somente
       quando nenhum nome válido tiver sido confirmado.
-- [ ] Criar comando Rust `create_file(path, workspace_root)` com semântica
+- [x] Criar comando Rust `create_file(path, workspace_root)` com semântica
       `create_new`, sem sobrescrever arquivo existente.
-- [ ] Validar nome vazio, caracteres inválidos, separadores/caminhos absolutos e
+- [x] Validar nome vazio, caracteres inválidos, separadores/caminhos absolutos e
       tentativa de escapar da raiz do workspace.
-- [ ] Após sucesso, atualizar o diretório pai, selecionar o novo item e abri-lo
+- [x] Após sucesso, atualizar o diretório pai, selecionar o novo item e abri-lo
       no editor.
-- [ ] Exibir erro em português e manter o campo editável quando a criação falhar.
-- [ ] Adicionar testes unitários do fluxo e testes Rust do comando.
+- [x] Exibir erro em português e manter o campo editável quando a criação falhar.
+- [x] Adicionar testes unitários do fluxo e testes Rust do comando.
 
 ## Arquivos
 
@@ -44,10 +44,10 @@ estiver selecionada, na raiz do workspace.
 
 ## Critérios de aceite
 
-- [ ] Clicar em Novo arquivo inicia a edição inline no destino correto.
-- [ ] Enter cria e abre o arquivo; Esc não altera o sistema de arquivos.
-- [ ] Um item existente nunca é sobrescrito.
-- [ ] Caminhos fora do workspace são rejeitados.
-- [ ] O erro informa o problema e o próximo passo.
-- [ ] A ação funciona integralmente por teclado.
-- [ ] Testes unitários e `cargo check` passam.
+- [x] Clicar em Novo arquivo inicia a edição inline no destino correto.
+- [x] Enter cria e abre o arquivo; Esc não altera o sistema de arquivos.
+- [x] Um item existente nunca é sobrescrito.
+- [x] Caminhos fora do workspace são rejeitados.
+- [x] O erro informa o problema e o próximo passo.
+- [x] A ação funciona integralmente por teclado.
+- [x] Testes unitários e `cargo check` passam.

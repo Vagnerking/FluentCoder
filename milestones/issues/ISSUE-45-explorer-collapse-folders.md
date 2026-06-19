@@ -1,6 +1,6 @@
 # ISSUE-45 · Explorador: Recolher pastas
 
-**Épico:** [Ações do Explorador de Arquivos](../EPIC-file-explorer-actions.md) · **Camada:** Front · **Tamanho:** S · **Depende de:** 44 · **Status:** ⬜ Pendente
+**Épico:** [Ações do Explorador de Arquivos](../EPIC-file-explorer-actions.md) · **Camada:** Front · **Tamanho:** S · **Depende de:** 44 · **Status:** ✅ Concluída
 
 ## Contexto
 
@@ -10,14 +10,14 @@ arquivos abertos ou o conteúdo do workspace.
 
 ## Tarefas
 
-- [ ] Adicionar botão com Codicon `collapseAll`, tooltip e `aria-label`
+- [x] Adicionar botão com Codicon `collapseAll`, tooltip e `aria-label`
       **Recolher pastas**.
-- [ ] Limpar o conjunto de caminhos expandidos ou incrementar uma versão de
+- [x] Limpar o conjunto de caminhos expandidos ou incrementar uma versão de
       recolhimento consumida por todos os `TreeNode`.
-- [ ] Manter a pasta selecionada, o arquivo ativo e todas as abas.
-- [ ] Desabilitar a ação quando não houver workspace ou nenhuma pasta expandida.
-- [ ] Devolver o foco ao botão após a ação e anunciar o resultado para leitor de tela.
-- [ ] Adicionar testes com múltiplos níveis expandidos.
+- [x] Manter a pasta selecionada, o arquivo ativo e todas as abas.
+- [x] Desabilitar a ação quando não houver workspace ou nenhuma pasta expandida.
+- [x] Devolver o foco ao botão após a ação e anunciar o resultado para leitor de tela.
+- [x] Adicionar testes com múltiplos níveis expandidos.
 
 ## Arquivos
 
@@ -32,8 +32,8 @@ arquivos abertos ou o conteúdo do workspace.
 
 ## Critérios de aceite
 
-- [ ] Uma única ação recolhe todas as pastas, inclusive níveis aninhados.
-- [ ] Arquivo ativo, abas e seleção não são alterados.
-- [ ] O botão fica desabilitado quando não há nada a recolher.
-- [ ] Mouse, teclado e leitor de tela recebem comportamento consistente.
-- [ ] Testes unitários e `tsc --noEmit` passam.
+- [x] Uma única ação recolhe todas as pastas, inclusive níveis aninhados.
+- [x] Arquivo ativo, abas e seleção não são alterados.
+- [x] O botão fica desabilitado quando não há nada a recolher.
+- [x] Mouse, teclado e leitor de tela recebem comportamento consistente.
+- [x] Testes unitários e `tsc --noEmit` passam.

@@ -1,6 +1,6 @@
 # Épico: Ações do Explorador de Arquivos
 
-> **Status:** Planejado
+> **Status:** Parcial — implementação concluída; E2E WebView2 instável com Edge 149
 > **Owner:** Vagner
 > **Stack:** Tauri 2 · Rust · React 18 · TypeScript
 
@@ -73,15 +73,19 @@ documentados em [docs/design/fluent-design.md](../docs/design/fluent-design.md).
 
 ## Critérios de aceite do épico
 
-- [ ] As quatro ações aparecem no cabeçalho do Explorador com Codicons e tooltips em português.
-- [ ] Novo arquivo e Nova pasta usam a pasta selecionada ou a raiz como destino.
-- [ ] Enter confirma a criação, Esc cancela e o foco segue um fluxo previsível.
-- [ ] Nomes vazios, inválidos ou já existentes não criam nem sobrescrevem itens.
-- [ ] Atualizar explorador reflete alterações feitas dentro e fora do aplicativo.
-- [ ] Recolher pastas fecha toda a árvore com uma única ação.
-- [ ] Sem workspace aberto, as quatro ações ficam desabilitadas.
-- [ ] Estados rest, hover, pressed, focus e disabled seguem o guia Fluent 2.
+- [x] As quatro ações aparecem no cabeçalho do Explorador com Codicons e tooltips em português.
+- [x] Novo arquivo e Nova pasta usam a pasta selecionada ou a raiz como destino.
+- [x] Enter confirma a criação, Esc cancela e o foco segue um fluxo previsível.
+- [x] Nomes vazios, inválidos ou já existentes não criam nem sobrescrevem itens.
+- [x] Atualizar explorador reflete alterações feitas dentro e fora do aplicativo.
+- [x] Recolher pastas fecha toda a árvore com uma única ação.
+- [x] Sem workspace aberto, as quatro ações ficam indisponíveis.
+- [x] Estados rest, hover, pressed, focus e disabled seguem o guia Fluent 2.
 - [ ] `tsc --noEmit`, testes unitários, `cargo check` e E2E passam.
+
+> Build, testes unitários, testes Rust e `cargo check` passam. O E2E nativo
+> validou três dos quatro fluxos em uma execução, mas permanece instável porque
+> o msedgedriver instalado não foi homologado para o Edge 149.
 
 ## Riscos e notas
 

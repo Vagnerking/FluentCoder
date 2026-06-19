@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -17,6 +18,14 @@ const appBinary = path.resolve(
 )
 
 let tauriDriver: ChildProcess
+const explorerActionsE2e = process.env.EXPLORER_ACTIONS_E2E === '1'
+const explorerWorkspace = path.join(os.tmpdir(), 'code-editor-explorer-actions-e2e')
+const sessionFile = path.join(
+  process.env.APPDATA ?? '',
+  'com.codeeditor.app',
+  'session.json',
+)
+let previousSession: string | null = null
 
 export const config: WebdriverIO.Config = {
   // tauri-driver expõe um servidor WebDriver em 127.0.0.1:4444 por padrão.
@@ -52,6 +61,7 @@ export const config: WebdriverIO.Config = {
   // (localhost:1420), e a WebView abre em "localhost refused to connect".
   // --no-bundle pula a geração de instaladores (.msi/.exe), bem mais rápido.
   onPrepare: () => {
+    if (process.env.E2E_SKIP_BUILD === '1') return
     const r = spawnSync('npx', ['tauri', 'build', '--no-bundle'], {
       cwd: projectRoot,
       stdio: 'inherit',
@@ -64,13 +74,36 @@ export const config: WebdriverIO.Config = {
 
   // Sobe o tauri-driver antes de cada sessão e derruba ao final.
   beforeSession: () => {
+    if (explorerActionsE2e) {
+      previousSession = fs.existsSync(sessionFile)
+        ? fs.readFileSync(sessionFile, 'utf8')
+        : null
+      fs.rmSync(explorerWorkspace, { recursive: true, force: true })
+      fs.mkdirSync(path.join(explorerWorkspace, 'src'), { recursive: true })
+      fs.writeFileSync(path.join(explorerWorkspace, 'src', 'existente.txt'), 'conteúdo')
+      fs.mkdirSync(path.dirname(sessionFile), { recursive: true })
+      fs.writeFileSync(
+        sessionFile,
+        JSON.stringify({ lastFolder: explorerWorkspace }, null, 2),
+      )
+    }
     tauriDriver = spawn('tauri-driver', [], {
       stdio: [null, process.stdout, process.stderr],
-      shell: os.platform() === 'win32',
+      shell: false,
     })
   },
 
-  afterSession: () => {
+  afterSession: async () => {
     tauriDriver?.kill()
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    if (explorerActionsE2e) {
+      if (previousSession === null) fs.rmSync(sessionFile, { force: true })
+      else fs.writeFileSync(sessionFile, previousSession)
+      try {
+        fs.rmSync(explorerWorkspace, { recursive: true, force: true })
+      } catch {
+        // WebView2 may release the workspace a few milliseconds after this hook.
+      }
+    }
   },
 }

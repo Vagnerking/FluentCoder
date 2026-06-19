@@ -1,6 +1,6 @@
 # ISSUE-43 · Explorador: Nova pasta
 
-**Épico:** [Ações do Explorador de Arquivos](../EPIC-file-explorer-actions.md) · **Camada:** Full · **Tamanho:** M · **Depende de:** 42 · **Status:** ⬜ Pendente
+**Épico:** [Ações do Explorador de Arquivos](../EPIC-file-explorer-actions.md) · **Camada:** Full · **Tamanho:** M · **Depende de:** 42 · **Status:** ✅ Concluída
 
 ## Contexto
 
@@ -10,13 +10,13 @@ validação e erro.
 
 ## Tarefas
 
-- [ ] Adicionar botão com Codicon `newFolder`, tooltip e `aria-label` **Nova pasta**.
-- [ ] Reutilizar o componente/estado de entrada inline da criação de arquivo.
-- [ ] Criar comando Rust `create_folder(path, workspace_root)`.
-- [ ] Aplicar as mesmas validações de nome, colisão e limite do workspace.
-- [ ] Após sucesso, atualizar o diretório pai, selecionar e expandir a nova pasta.
-- [ ] Não alterar o conteúdo de uma pasta existente em caso de colisão.
-- [ ] Adicionar testes unitários do fluxo e testes Rust do comando.
+- [x] Adicionar botão com Codicon `newFolder`, tooltip e `aria-label` **Nova pasta**.
+- [x] Reutilizar o componente/estado de entrada inline da criação de arquivo.
+- [x] Criar comando Rust `create_folder(path, workspace_root)`.
+- [x] Aplicar as mesmas validações de nome, colisão e limite do workspace.
+- [x] Após sucesso, atualizar o diretório pai, selecionar e expandir a nova pasta.
+- [x] Não alterar o conteúdo de uma pasta existente em caso de colisão.
+- [x] Adicionar testes unitários do fluxo e testes Rust do comando.
 
 ## Arquivos
 
@@ -37,9 +37,9 @@ validação e erro.
 
 ## Critérios de aceite
 
-- [ ] Clicar em Nova pasta inicia a edição inline no destino correto.
-- [ ] Enter cria, seleciona e expande a pasta; Esc cancela.
-- [ ] Pastas existentes não são modificadas.
-- [ ] Caminhos fora do workspace são rejeitados.
-- [ ] O fluxo visual e de teclado é consistente com Novo arquivo.
-- [ ] Testes unitários e `cargo check` passam.
+- [x] Clicar em Nova pasta inicia a edição inline no destino correto.
+- [x] Enter cria, seleciona e expande a pasta; Esc cancela.
+- [x] Pastas existentes não são modificadas.
+- [x] Caminhos fora do workspace são rejeitados.
+- [x] O fluxo visual e de teclado é consistente com Novo arquivo.
+- [x] Testes unitários e `cargo check` passam.

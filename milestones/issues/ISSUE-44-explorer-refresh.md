@@ -1,6 +1,6 @@
 # ISSUE-44 · Explorador: Atualizar explorador
 
-**Épico:** [Ações do Explorador de Arquivos](../EPIC-file-explorer-actions.md) · **Camada:** Front · **Tamanho:** M · **Depende de:** 42, 43 · **Status:** ⬜ Pendente
+**Épico:** [Ações do Explorador de Arquivos](../EPIC-file-explorer-actions.md) · **Camada:** Front · **Tamanho:** M · **Depende de:** 42, 43 · **Status:** ✅ Concluída
 
 ## Contexto
 
@@ -11,19 +11,19 @@ cache e reler a árvore.
 
 ## Tarefas
 
-- [ ] Adicionar botão com Codicon `refresh`, tooltip e `aria-label`
+- [x] Adicionar botão com Codicon `refresh`, tooltip e `aria-label`
       **Atualizar explorador**.
-- [ ] Definir um mecanismo declarativo de revisão da árvore (`refreshVersion`
+- [x] Definir um mecanismo declarativo de revisão da árvore (`refreshVersion`
       ou estado de árvore centralizado).
-- [ ] Recarregar as entradas da raiz.
-- [ ] Invalidar e reler os filhos das pastas que estavam expandidas.
-- [ ] Preservar, quando ainda existirem, a pasta selecionada, o arquivo ativo e
+- [x] Recarregar as entradas da raiz.
+- [x] Invalidar e reler os filhos das pastas que estavam expandidas.
+- [x] Preservar, quando ainda existirem, a pasta selecionada, o arquivo ativo e
       o conjunto de pastas expandidas.
-- [ ] Remover da árvore itens que deixaram de existir sem fechar
+- [x] Remover da árvore itens que deixaram de existir sem fechar
       automaticamente abas já abertas.
-- [ ] Exibir estado de carregamento acessível e impedir disparos concorrentes.
-- [ ] Tratar falha sem apagar a última árvore válida.
-- [ ] Adicionar testes para inclusão, remoção, preservação de expansão e erro.
+- [x] Exibir estado de carregamento acessível e impedir disparos concorrentes.
+- [x] Tratar falha sem apagar a última árvore válida.
+- [x] Adicionar testes para inclusão, remoção, preservação de expansão e erro.
 
 ## Arquivos
 
@@ -41,9 +41,9 @@ cache e reler a árvore.
 
 ## Critérios de aceite
 
-- [ ] Mudanças externas aparecem após uma única atualização.
-- [ ] Pastas previamente expandidas continuam expandidas e exibem dados novos.
-- [ ] Seleção e arquivo ativo são preservados quando os caminhos ainda existem.
-- [ ] Falha mantém a árvore anterior e mostra mensagem com próximo passo.
-- [ ] Cliques repetidos não criam corridas nem resultados antigos.
-- [ ] Testes unitários e `tsc --noEmit` passam.
+- [x] Mudanças externas aparecem após uma única atualização.
+- [x] Pastas previamente expandidas continuam expandidas e exibem dados novos.
+- [x] Seleção e arquivo ativo são preservados quando os caminhos ainda existem.
+- [x] Falha mantém a árvore anterior e mostra mensagem com próximo passo.
+- [x] Cliques repetidos não criam corridas nem resultados antigos.
+- [x] Testes unitários e `tsc --noEmit` passam.

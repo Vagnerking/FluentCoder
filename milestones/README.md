@@ -42,7 +42,7 @@ Planejamento de features do **Code Editor** (Tauri + React + Monaco), organizado
   **Status:** concluído.
 - [Ações do Explorador de Arquivos](EPIC-file-explorer-actions.md) — barra de ações com
   Novo arquivo, Nova pasta, Atualizar explorador e Recolher pastas.
-  **Status:** planejado.
+  **Status:** parcial — implementação concluída; E2E WebView2 instável com Edge 149.
 - [Barra de Menu (VSCode)](EPIC-menu-bar-vscode.md) — barra de menu no topo estilo VSCode
   (File, Edit, Selection, View, Go, Run, Terminal, Help), substituindo o botão "Abrir pasta".
   **Status:** planejado.
@@ -127,11 +127,11 @@ Planejamento de features do **Code Editor** (Tauri + React + Monaco), organizado
 
 | # | Issue | Status |
 | --- | --- | --- |
-| 42 | [Novo arquivo](issues/ISSUE-42-explorer-new-file.md) | ⬜ Pendente |
-| 43 | [Nova pasta](issues/ISSUE-43-explorer-new-folder.md) | ⬜ Pendente |
-| 44 | [Atualizar explorador](issues/ISSUE-44-explorer-refresh.md) | ⬜ Pendente |
-| 45 | [Recolher pastas](issues/ISSUE-45-explorer-collapse-folders.md) | ⬜ Pendente |
-| 46 | [Integração, acessibilidade e E2E](issues/ISSUE-46-explorer-actions-integration.md) | ⬜ Pendente |
+| 42 | [Novo arquivo](issues/ISSUE-42-explorer-new-file.md) | ✅ Concluída |
+| 43 | [Nova pasta](issues/ISSUE-43-explorer-new-folder.md) | ✅ Concluída |
+| 44 | [Atualizar explorador](issues/ISSUE-44-explorer-refresh.md) | ✅ Concluída |
+| 45 | [Recolher pastas](issues/ISSUE-45-explorer-collapse-folders.md) | ✅ Concluída |
+| 46 | [Integração, acessibilidade e E2E](issues/ISSUE-46-explorer-actions-integration.md) | 🟡 Parcial (E2E WebView2 instável) |
 
 ## Issues — Barra de Menu (VSCode)
 

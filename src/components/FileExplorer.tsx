@@ -1,13 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createFile, createFolder } from "../api";
 import type { FileNode, FileDecoration } from "../types";
 import { Codicon } from "../icons/codicons/Codicon";
+import {
+  ExplorerInlineCreation,
+  type PendingCreation,
+} from "./ExplorerInlineCreation";
 import { TreeNode } from "./TreeNode";
-
-export type PendingCreation = {
-  kind: "file" | "folder";
-  parentPath: string;
-};
 
 interface FileExplorerProps {
   rootName: string | null;
@@ -18,60 +17,6 @@ interface FileExplorerProps {
   onOpenFile: (node: FileNode) => void;
   onRefreshRoot: () => Promise<void>;
   decorationFor?: (path: string) => FileDecoration | undefined;
-}
-
-interface InlineCreationProps {
-  kind: PendingCreation["kind"];
-  depth: number;
-  busy: boolean;
-  error: string | null;
-  onSubmit: (name: string) => void;
-  onCancel: () => void;
-}
-
-export function InlineCreation({
-  kind,
-  depth,
-  busy,
-  error,
-  onSubmit,
-  onCancel,
-}: InlineCreationProps) {
-  const [name, setName] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => inputRef.current?.focus(), []);
-
-  return (
-    <div className="explorer-inline-wrap">
-      <div className="tree-row explorer-inline-row" style={{ paddingLeft: depth * 12 + 6 }}>
-        <span className="tree-chevron" />
-        <Codicon name={kind === "file" ? "newFile" : "newFolder"} size={16} />
-        <input
-          ref={inputRef}
-          className="explorer-inline-input"
-          aria-label={kind === "file" ? "Nome do novo arquivo" : "Nome da nova pasta"}
-          value={name}
-          disabled={busy}
-          onChange={(event) => setName(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              onSubmit(name);
-            } else if (event.key === "Escape") {
-              event.preventDefault();
-              onCancel();
-            }
-          }}
-        />
-      </div>
-      {error && (
-        <div className="explorer-inline-error" role="alert" style={{ paddingLeft: depth * 12 + 34 }}>
-          {error}
-        </div>
-      )}
-    </div>
-  );
 }
 
 export function FileExplorer({
@@ -234,7 +179,7 @@ export function FileExplorer({
         ) : (
           <>
             {pending?.parentPath === rootPath && (
-              <InlineCreation
+              <ExplorerInlineCreation
                 kind={pending.kind}
                 depth={0}
                 busy={busy}

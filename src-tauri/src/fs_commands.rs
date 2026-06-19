@@ -18,6 +18,9 @@ fn validate_child_path(
     parent: &str,
     name: &str,
 ) -> Result<PathBuf, String> {
+    if name != name.trim() {
+        return Err("O nome não pode começar ou terminar com espaço.".into());
+    }
     let name = name.trim();
     if name.is_empty() {
         return Err("Informe um nome.".into());
@@ -25,8 +28,43 @@ fn validate_child_path(
     if name == "." || name == ".." {
         return Err("Use um nome diferente de ponto ou ponto duplo.".into());
     }
+    if name.ends_with('.') {
+        return Err("O nome não pode terminar com ponto.".into());
+    }
     if name.chars().any(|c| c.is_control() || r#"<>:"/\|?*"#.contains(c)) {
         return Err("O nome contém caracteres inválidos.".into());
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    if matches!(
+        stem.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    ) {
+        return Err("Esse nome é reservado pelo Windows.".into());
     }
     if Path::new(name).components().any(|part| {
         !matches!(part, Component::Normal(_))
@@ -168,6 +206,19 @@ mod tests {
             create_folder(root_text.clone(), root_text.clone(), "src".into()).unwrap();
         assert!(created.is_dir);
         assert!(create_folder(root_text.clone(), root_text, "../fora".into()).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_windows_reserved_or_invalid_names() {
+        let root = workspace();
+        let root_text = root.to_string_lossy().to_string();
+        for name in ["CON", "aux.txt", "nome.", "nome ", "a/b"] {
+            assert!(
+                create_file(root_text.clone(), root_text.clone(), name.into()).is_err(),
+                "{name} deveria ser rejeitado"
+            );
+        }
         fs::remove_dir_all(root).unwrap();
     }
 }
