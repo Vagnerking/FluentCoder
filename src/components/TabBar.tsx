@@ -14,7 +14,11 @@ interface TabBarProps {
   files: OpenFile[];
   activePath: string | null;
   onSelect: (path: string) => void;
-  onClose: (path: string) => void;
+  /**
+   * Closes a tab. Async because a dirty tab prompts a save/discard/cancel
+   * dialog before closing — callers fire-and-forget (no need to await).
+   */
+  onClose: (path: string) => void | Promise<void>;
   onCloseAll: () => void;
   onCloseOthers: (path: string) => void;
   onCloseLeft: (path: string) => void;

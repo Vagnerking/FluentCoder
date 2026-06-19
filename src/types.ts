@@ -151,6 +151,32 @@ export interface MenuDef {
   items: MenuItem[];
 }
 
+/**
+ * One button in a {@link ConfirmDialog}. The caller decides the meaning by the
+ * `value` returned when the button is chosen — the dialog itself stays agnostic.
+ */
+export interface ConfirmButton<T> {
+  label: string;
+  /** Visual style only: `primary` (accent), `secondary` (neutral), `danger` (red). */
+  variant: "primary" | "secondary" | "danger";
+  /** Value handed back to the caller when this button is chosen. */
+  value: T;
+  /** When true, this button gets initial focus, the default highlight and Enter. */
+  default?: boolean;
+}
+
+/** Props for the reusable {@link ConfirmDialog} modal. */
+export interface ConfirmDialogProps<T> {
+  title: string;
+  message: string;
+  buttons: ConfirmButton<T>[];
+  /**
+   * Reports the user's choice. Receives a button's `value`, or `null` when the
+   * dialog is cancelled (Esc / overlay click) without an explicit cancel button.
+   */
+  onChoice: (value: T | null) => void;
+}
+
 /** Imperative handle the App holds to drive the active Monaco editor. */
 export interface EditorActionsApi {
   /** Runs a Monaco editor action by id, e.g. "undo", "editor.action.selectAll". */
