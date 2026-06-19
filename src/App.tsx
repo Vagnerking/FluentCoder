@@ -5,6 +5,9 @@ import { GitPanel } from "./components/GitPanel";
 import { RunPanel } from "./components/RunPanel";
 import { PlaceholderPanel } from "./components/PlaceholderPanel";
 import { EditorPane } from "./components/EditorPane";
+import { ImagePreview } from "./components/ImagePreview";
+import { OpenWithPicker } from "./explorer/OpenWithPicker";
+import { defaultModeFor } from "./explorer/openWith";
 import { TabBar } from "./components/TabBar";
 import { TitleBar } from "./components/TitleBar";
 import { ActivityBar } from "./components/ActivityBar";
@@ -35,6 +38,7 @@ import type {
   GitStatus,
   MenuDef,
   OpenFile,
+  OpenMode,
   Problem,
 } from "./types";
 import type { LspServerStatus } from "./components/StatusBar";
@@ -62,6 +66,15 @@ export default function App() {
   const [panelHeight, setPanelHeight] = useState(220);
   const [activeView, setActiveView] = useState("explorer");
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
+
+  // "Open With…" selector (ISSUE-70): the file + anchor point while it's shown.
+  const [openWith, setOpenWith] = useState<
+    { path: string; x: number; y: number } | null
+  >(null);
+
+  // File whose git history the Source Control panel should show (ISSUE-71 ·
+  // File History). Null = the panel shows its normal repo-wide history.
+  const [historyFile, setHistoryFile] = useState<string | null>(null);
   // Which Help dialog is open: the About box, the shortcuts list, or none.
   const [helpDialog, setHelpDialog] = useState<"about" | "shortcuts" | null>(null);
 
@@ -185,33 +198,92 @@ export default function App() {
     // openFolder is stable (useCallback []), so this runs exactly once.
   }, [openFolder]);
 
-  /** Open a file in a tab (or focus it if already open), optionally at a line. */
+  /**
+   * Open a file in a tab (or focus it if already open), optionally at a line.
+   *
+   * `mode` (ISSUE-70) picks the view: omitted ⇒ the file type's default (images
+   * preview, everything else text). Image-mode tabs don't read text content —
+   * the {@link ImagePreview} loads the bytes itself — so we skip `readFile`.
+   */
   const handleOpenFile = useCallback(
-    async (node: FileNode, line?: number) => {
+    async (node: FileNode, line?: number, mode?: OpenMode) => {
       if (node.isDir) return;
+
+      const resolvedMode: OpenMode = mode ?? defaultModeFor(node.path);
 
       const already = openFiles.find((f) => f.path === node.path);
       if (already) {
+        // Re-opening with a different mode (e.g. via "Open With…") switches the
+        // existing tab's view rather than duplicating it.
+        if (mode && already.mode !== mode) {
+          setOpenFiles((prev) =>
+            prev.map((f) =>
+              f.path === node.path ? { ...f, mode: resolvedMode } : f
+            )
+          );
+        }
         setActivePath(node.path);
-        if (line != null) revealRef.current?.(line);
+        if (line != null && resolvedMode === "text") revealRef.current?.(line);
         return;
       }
 
       try {
-        const content = await readFile(node.path);
+        const content =
+          resolvedMode === "image" ? "" : await readFile(node.path);
         setOpenFiles((prev) => [
           ...prev,
-          { path: node.path, name: node.name, content, dirty: false },
+          {
+            path: node.path,
+            name: node.name,
+            content,
+            dirty: false,
+            mode: resolvedMode,
+          },
         ]);
         setActivePath(node.path);
         // The editor isn't mounted with this content yet; defer the reveal.
-        if (line != null) pendingRevealLine.current = line;
+        if (line != null && resolvedMode === "text") {
+          pendingRevealLine.current = line;
+        }
       } catch (err) {
         console.error(err);
         alert(`Não foi possível abrir o arquivo:\n${err}`);
       }
     },
     [openFiles]
+  );
+
+  /** "Open With…" → open `path` in the chosen mode (ISSUE-70). */
+  const handleOpenWith = useCallback(
+    (path: string, mode: OpenMode) => {
+      handleOpenFile(
+        { name: baseName(path), path, isDir: false },
+        undefined,
+        mode
+      );
+    },
+    [handleOpenFile]
+  );
+
+  /** Show a file's git history in the Source Control panel (ISSUE-71). */
+  const handleFileHistory = useCallback((path: string) => {
+    setHistoryFile(path);
+    setActiveView("git");
+  }, []);
+
+  /**
+   * Advanced explorer actions handed to the FileExplorer for épico A's file
+   * context menu to consume (issues 69-71). Bundled so the menu can build its
+   * items with `buildAdvancedFileMenuItems` without App reaching into the tree.
+   */
+  const explorerAdvancedActions = useMemo(
+    () => ({
+      onShowOpenWith: (path: string, x: number, y: number) =>
+        setOpenWith({ path, x, y }),
+      onFileHistory: handleFileHistory,
+      isGitRepo: gitState?.isRepo ?? false,
+    }),
+    [handleFileHistory, gitState]
   );
 
   /** Editor edits update the active buffer and mark it dirty. */
@@ -801,6 +873,7 @@ export default function App() {
             onOpenFile={handleOpenFile}
             onRefreshRoot={refreshExplorerRoot}
             decorationFor={decorationFor}
+            advancedActions={explorerAdvancedActions}
           />
         );
       case "git":
@@ -810,6 +883,8 @@ export default function App() {
             onOpenFile={(path, name) =>
               handleOpenFile({ name, path, isDir: false })
             }
+            historyFile={historyFile}
+            onClearHistoryFile={() => setHistoryFile(null)}
           />
         );
       case "debug":
@@ -828,6 +903,7 @@ export default function App() {
             onOpenFile={handleOpenFile}
             onRefreshRoot={refreshExplorerRoot}
             decorationFor={decorationFor}
+            advancedActions={explorerAdvancedActions}
           />
         );
     }
@@ -861,25 +937,30 @@ export default function App() {
             decorationFor={decorationFor}
           />
           <div className="editor-host">
-            <EditorPane
-              file={activeFile}
-              rootPath={rootPath}
-              onChange={handleEditorChange}
-              onCursorChange={(l, c) => {
-                setCursorLine(l);
-                setCursorCol(c);
-              }}
-              onProblemsChange={setProblems}
-              revealRef={revealRef}
-              pendingRevealLine={pendingRevealLine}
-              actionsRef={editorActionsRef}
-              onOpenDefinition={(path, line) =>
-                handleOpenFile(
-                  { name: baseName(path), path, isDir: false },
-                  line
-                )
-              }
-            />
+            {activeFile && activeFile.mode === "image" ? (
+              // Image-mode tab (ISSUE-70): read-only preview, no Monaco.
+              <ImagePreview path={activeFile.path} name={activeFile.name} />
+            ) : (
+              <EditorPane
+                file={activeFile}
+                rootPath={rootPath}
+                onChange={handleEditorChange}
+                onCursorChange={(l, c) => {
+                  setCursorLine(l);
+                  setCursorCol(c);
+                }}
+                onProblemsChange={setProblems}
+                revealRef={revealRef}
+                pendingRevealLine={pendingRevealLine}
+                actionsRef={editorActionsRef}
+                onOpenDefinition={(path, line) =>
+                  handleOpenFile(
+                    { name: baseName(path), path, isDir: false },
+                    line
+                  )
+                }
+              />
+            )}
           </div>
           {panelOpen && (
             <>
@@ -941,6 +1022,16 @@ export default function App() {
 
       {helpDialog && (
         <AboutDialog mode={helpDialog} onClose={() => setHelpDialog(null)} />
+      )}
+
+      {openWith && (
+        <OpenWithPicker
+          path={openWith.path}
+          x={openWith.x}
+          y={openWith.y}
+          onPick={(mode) => handleOpenWith(openWith.path, mode)}
+          onClose={() => setOpenWith(null)}
+        />
       )}
     </div>
   );

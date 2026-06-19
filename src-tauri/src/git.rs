@@ -366,6 +366,37 @@ pub fn git_log(path: String, limit: u32) -> Result<Vec<GitCommit>, String> {
         &["log", &format!("-{limit}"), "--no-color", fmt],
     )?;
 
+    parse_log_records(&raw)
+}
+
+/// History of a single file (ISSUE-71 · File History): the commits that touched
+/// `file` (absolute path or path relative to the repo at `path`), newest first.
+/// Reuses the same `GitCommit` shape as `git_log`, adding `--follow` so renames
+/// are tracked across history. Returns an empty list when not a repo.
+#[tauri::command]
+pub fn git_log_file(path: String, file: String, limit: u32) -> Result<Vec<GitCommit>, String> {
+    if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
+        return Ok(Vec::new());
+    }
+    let fmt = "--pretty=format:%H\x1f%h\x1f%an\x1f%ar\x1f%s\x1e";
+    let raw = run_git(
+        &path,
+        &[
+            "log",
+            &format!("-{limit}"),
+            "--no-color",
+            "--follow",
+            fmt,
+            "--",
+            &file,
+        ],
+    )?;
+    parse_log_records(&raw)
+}
+
+/// Parses the `%H\x1f%h\x1f%an\x1f%ar\x1f%s\x1e` record stream shared by the
+/// repo-wide and per-file log commands into `GitCommit`s.
+fn parse_log_records(raw: &str) -> Result<Vec<GitCommit>, String> {
     let mut commits = Vec::new();
     for record in raw.split('\x1e') {
         let record = record.trim_start_matches('\n');

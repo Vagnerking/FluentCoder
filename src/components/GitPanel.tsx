@@ -3,6 +3,7 @@ import {
   gitCommit,
   gitFetch,
   gitLog,
+  gitLogFile,
   gitPull,
   gitPush,
   gitStage,
@@ -20,6 +21,14 @@ interface GitPanelProps {
   rootPath: string | null;
   /** Open a file (e.g. when a changed file is clicked). */
   onOpenFile: (path: string, name: string) => void;
+  /**
+   * Absolute path whose history to show (ISSUE-71 · File History). When set, the
+   * History section auto-expands and lists only this file's commits, with a
+   * banner to clear back to the repo-wide log. Null = normal repo history.
+   */
+  historyFile?: string | null;
+  /** Clears the file-history filter, returning to the repo-wide log. */
+  onClearHistoryFile?: () => void;
 }
 
 /** Maps a porcelain code to a single-letter badge + a CSS modifier. */
@@ -48,13 +57,21 @@ function fileName(p: string): string {
   return parts[parts.length - 1] || p;
 }
 
-export function GitPanel({ rootPath, onOpenFile }: GitPanelProps) {
+export function GitPanel({
+  rootPath,
+  onOpenFile,
+  historyFile = null,
+  onClearHistoryFile,
+}: GitPanelProps) {
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [message, setMessage] = useState("");
   const [commits, setCommits] = useState<GitCommit[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Commits for the file under "File History" (ISSUE-71). Separate from the
+  // repo-wide `commits` so switching back doesn't refetch the whole log.
+  const [fileCommits, setFileCommits] = useState<GitCommit[]>([]);
 
   const refresh = useCallback(async () => {
     if (!rootPath) {
@@ -104,6 +121,27 @@ export function GitPanel({ rootPath, onOpenFile }: GitPanelProps) {
     setShowHistory(next);
     if (next && commits.length === 0) loadHistory();
   }
+
+  // File History (ISSUE-71): when App sets `historyFile`, expand the History
+  // section and fetch that file's commits via `git_log_file`.
+  useEffect(() => {
+    if (!rootPath || !historyFile) {
+      setFileCommits([]);
+      return;
+    }
+    setShowHistory(true);
+    let cancelled = false;
+    gitLogFile(rootPath, historyFile, 50)
+      .then((c) => {
+        if (!cancelled) setFileCommits(c);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [rootPath, historyFile]);
 
   if (!rootPath) {
     return (
@@ -258,21 +296,38 @@ export function GitPanel({ rootPath, onOpenFile }: GitPanelProps) {
             <span className="tree-chevron">
               <Codicon name={showHistory ? "chevronDown" : "chevronRight"} size={12} />
             </span>
-            Histórico
+            {historyFile ? `Histórico de ${fileName(historyFile)}` : "Histórico"}
           </button>
+          {historyFile && (
+            <button
+              className="git-link-btn git-history-clear"
+              title="Voltar ao histórico do repositório"
+              onClick={() => onClearHistoryFile?.()}
+            >
+              <Codicon name="close" size={12} /> Limpar filtro
+            </button>
+          )}
           {showHistory &&
-            (commits.length === 0 ? (
-              <div className="panel-empty">Sem commits.</div>
-            ) : (
-              commits.map((c) => (
+            (() => {
+              const list = historyFile ? fileCommits : commits;
+              if (list.length === 0) {
+                return (
+                  <div className="panel-empty">
+                    {historyFile
+                      ? "Nenhum commit para este arquivo."
+                      : "Sem commits."}
+                  </div>
+                );
+              }
+              return list.map((c) => (
                 <div key={c.hash} className="git-commit-row" title={c.hash}>
                   <span className="git-commit-subject">{c.subject}</span>
                   <span className="git-commit-meta">
                     {c.short} · {c.author} · {c.date}
                   </span>
                 </div>
-              ))
-            ))}
+              ));
+            })()}
         </div>
       </div>
     </div>

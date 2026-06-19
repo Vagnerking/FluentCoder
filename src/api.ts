@@ -55,6 +55,14 @@ export function readFile(path: string): Promise<string> {
   return invoke<string>("read_file", { path });
 }
 
+/**
+ * Reads a file's bytes as a base64 `data:` URL (mime inferred from extension).
+ * Used by the image preview mode — see {@link ImagePreview}.
+ */
+export function readFileBase64(path: string): Promise<string> {
+  return invoke<string>("read_file_base64", { path });
+}
+
 /** Writes contents to a file. */
 export function writeFile(path: string, contents: string): Promise<void> {
   return invoke("write_file", { path, contents });
@@ -135,6 +143,19 @@ export function gitPush(path: string): Promise<string> {
 }
 export function gitLog(path: string, limit = 30): Promise<GitCommit[]> {
   return invoke<GitCommit[]>("git_log", { path, limit });
+}
+
+/**
+ * History of a single file (ISSUE-71 · File History): commits that touched
+ * `file`, newest first, following renames. `file` may be absolute or relative
+ * to the repo at `path`.
+ */
+export function gitLogFile(
+  path: string,
+  file: string,
+  limit = 50
+): Promise<GitCommit[]> {
+  return invoke<GitCommit[]>("git_log_file", { path, file, limit });
 }
 
 /** Returns per-line blame info for `file` inside the repo at `root`. */

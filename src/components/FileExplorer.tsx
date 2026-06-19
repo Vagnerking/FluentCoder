@@ -16,6 +16,24 @@ interface FileExplorerProps {
   onOpenFile: (node: FileNode) => void;
   onRefreshRoot: () => Promise<void>;
   decorationFor?: (path: string) => FileDecoration | undefined;
+  /**
+   * Advanced file actions (épico "Ações Avançadas do Explorador", issues
+   * 69-71). These are wired by App and meant to be consumed by épico A's
+   * file context menu (`TreeContextMenu`). They're optional here so the
+   * explorer keeps working before that menu is merged. See
+   * `src/explorer/advancedFileMenu.ts` for how to build the menu items.
+   */
+  advancedActions?: ExplorerAdvancedActions;
+}
+
+/** Handlers App passes down for the advanced file context-menu items. */
+export interface ExplorerAdvancedActions {
+  /** ISSUE-70 — open the "Open With…" selector for `path` at `x,y`. */
+  onShowOpenWith: (path: string, x: number, y: number) => void;
+  /** ISSUE-71 — show `path`'s git history in the Source Control panel. */
+  onFileHistory: (path: string) => void;
+  /** True when the workspace is a git repo (gates File History). */
+  isGitRepo: boolean;
 }
 
 export function FileExplorer({
@@ -26,7 +44,14 @@ export function FileExplorer({
   onOpenFile,
   onRefreshRoot,
   decorationFor = () => undefined,
+  // Consumed by épico A's file context menu once merged; see ISSUE-69/70/71 and
+  // src/explorer/advancedFileMenu.ts. Referenced here so the prop is "used".
+  advancedActions: _advancedActions,
 }: FileExplorerProps) {
+  // Forward-declared for épico A: when TreeContextMenu lands, build the file
+  // menu's advanced items with buildAdvancedFileMenuItems(...) using
+  // `_advancedActions`. Kept off the render path until then.
+  void _advancedActions;
   const [selectedDirectory, setSelectedDirectory] = useState<string | null>(rootPath);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [refreshVersion, setRefreshVersion] = useState(0);

@@ -17,6 +17,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             fs_commands::read_dir,
             fs_commands::read_file,
+            fs_commands::read_file_base64,
             fs_commands::write_file,
             fs_commands::create_file,
             fs_commands::create_folder,
@@ -32,6 +33,7 @@ pub fn run() {
             git::git_pull,
             git::git_push,
             git::git_log,
+            git::git_log_file,
             git::git_blame,
             runner::run_configs_load,
             runner::run_configs_save,

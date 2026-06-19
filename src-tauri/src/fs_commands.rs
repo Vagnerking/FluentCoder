@@ -134,6 +134,65 @@ pub fn read_file(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))
 }
 
+/// Reads a file's raw bytes and returns them as a base64 `data:` URL.
+///
+/// Used by the image preview ("Open With… ▸ Preview de Imagem", ISSUE-70): the
+/// WebView can't load arbitrary local paths without the asset protocol, so we
+/// inline the bytes. `mime` is inferred from the extension; unknown types fall
+/// back to `application/octet-stream` (the browser still renders common images).
+#[tauri::command]
+pub fn read_file_base64(path: String) -> Result<String, String> {
+    let bytes = fs::read(&path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+    let mime = mime_for_path(&path);
+    Ok(format!("data:{};base64,{}", mime, base64_encode(&bytes)))
+}
+
+/// Best-effort MIME type from a file extension (image types we preview).
+fn mime_for_path(path: &str) -> &'static str {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "svg" => "image/svg+xml",
+        "avif" => "image/avif",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Minimal standard-base64 encoder (avoids pulling in a crate for one use).
+fn base64_encode(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[(n >> 18 & 63) as usize] as char);
+        out.push(TABLE[(n >> 12 & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[(n >> 6 & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
 /// Writes `contents` to `path`, creating parent directories if needed.
 #[tauri::command]
 pub fn write_file(path: String, contents: String) -> Result<(), String> {
