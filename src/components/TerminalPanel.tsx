@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { TerminalView } from "./TerminalView";
 import { ProblemsPanel } from "./ProblemsPanel";
+import { Codicon } from "../icons/codicons/Codicon";
 import type { Problem } from "../types";
 
 interface TerminalPanelProps {
@@ -43,8 +44,10 @@ export function TerminalPanel({
           {(["problems", "output", "terminal"] as PanelTab[]).map((tab) => (
             <button
               key={tab}
+              type="button"
               className={`terminal-tab${activeTab === tab ? " active" : ""}`}
               onClick={() => setActiveTab(tab)}
+              aria-pressed={activeTab === tab}
             >
               {tab === "problems"
                 ? `Problemas${problems.length ? ` (${problems.length})` : ""}`
@@ -54,8 +57,14 @@ export function TerminalPanel({
             </button>
           ))}
         </div>
-        <button className="terminal-close" onClick={onClose} title="Fechar painel">
-          ✕
+        <button
+          type="button"
+          className="terminal-close"
+          onClick={onClose}
+          title="Fechar painel"
+          aria-label="Fechar painel"
+        >
+          <Codicon name="close" size={16} />
         </button>
       </div>
       <div className="terminal-body">

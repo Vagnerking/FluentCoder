@@ -673,12 +673,41 @@ button:focus-visible,
 /* ---- Terminal Panel ---- */
 .terminal-panel { display: flex; flex-direction: column; background: var(--editor-bg); overflow: hidden; }
 .terminal-header { height: 36px; min-height: 36px; display: flex; align-items: center; border-top: 1px solid var(--acrylic-border); background: rgba(34,42,53,0.82); padding: 0 8px; backdrop-filter: blur(20px) saturate(120%); -webkit-backdrop-filter: blur(20px) saturate(120%); }
-.terminal-tabs { display: flex; flex: 1; }
-.terminal-tab { padding: 0 12px; height: 28px; display: flex; align-items: center; cursor: pointer; font-size: 12px; color: var(--text-muted); border: 1px solid transparent; border-radius: var(--radius-control); }
+.terminal-tabs { display: flex; align-items: center; gap: 2px; flex: 1; }
+.terminal-tab {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 0 12px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+}
 .terminal-tab:hover { background: var(--fill-subtle-hover); color: var(--text-secondary); }
+.terminal-tab:active { background: var(--fill-subtle-active); }
 .terminal-tab.active { color: var(--text); background: var(--acrylic-control); border-color: var(--acrylic-border); }
 .terminal-body { flex: 1; min-height: 0; overflow: hidden; padding: 4px; }
-.terminal-close { background: transparent; border: none; color: var(--text-muted); cursor: pointer; padding: 4px 8px; border-radius: var(--radius-control); font-size: 14px; }
+.terminal-close {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  border-radius: var(--radius-control);
+}
 .terminal-close:hover { background: var(--fill-subtle-hover); color: var(--text); }
 
 .xterm-container { width: 100%; height: 100%; }
