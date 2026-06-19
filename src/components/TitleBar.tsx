@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { MenuBar } from "./MenuBar";
+import type { MenuDef } from "../types";
 
 interface TitleBarProps {
   /** Text shown centred in the bar (e.g. active file name). */
   title: string;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
+  /** Menu definitions (File, Edit, …) rendered in the left-hand MenuBar. */
+  menus: MenuDef[];
 }
 
 /**
@@ -13,7 +17,7 @@ interface TitleBarProps {
  * the right side hosts minimize / maximize / close caption buttons that
  * drive the native window through the Tauri window API.
  */
-export function TitleBar({ title, sidebarOpen, onToggleSidebar }: TitleBarProps) {
+export function TitleBar({ title, sidebarOpen, onToggleSidebar, menus }: TitleBarProps) {
   const appWindow = getCurrentWindow();
   const [maximized, setMaximized] = useState(false);
 
@@ -38,6 +42,14 @@ export function TitleBar({ title, sidebarOpen, onToggleSidebar }: TitleBarProps)
       >
         <SidebarIcon />
       </button>
+
+      {/* No data-tauri-drag-region here: the menu and its buttons must not drag
+          the window. Children without the attribute already opt out of drag. */}
+      <MenuBar menus={menus} />
+
+      {/* Flexible drag region filling the space between menu and window
+          controls; the centred title floats above it (position: absolute). */}
+      <div className="titlebar-spacer" data-tauri-drag-region />
 
       <span className="titlebar-title" data-tauri-drag-region>
         {title}

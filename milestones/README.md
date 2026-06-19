@@ -46,6 +46,17 @@ Planejamento de features do **Code Editor** (Tauri + React + Monaco), organizado
 - [Barra de Menu (VSCode)](EPIC-menu-bar-vscode.md) — barra de menu no topo estilo VSCode
   (File, Edit, Selection, View, Go, Run, Terminal, Help), substituindo o botão "Abrir pasta".
   **Status:** planejado.
+- [Menu de Contexto do Explorador](EPIC-explorer-context-menu.md) — clique direito na árvore
+  (pasta e arquivo) com renomear, excluir, recortar/copiar/colar, copiar caminho, revelar no
+  Explorer, abrir no terminal, localizar na pasta e atalhos (Del, F2, Ctrl+X/C/V, Enter).
+  **Status:** planejado.
+- [Guarda de Alterações Não Salvas](EPIC-unsaved-changes-guard.md) — diálogo Salvar / Não
+  salvar / Cancelar ao fechar arquivo, janela ou trocar de pasta com abas sujas, estilo VSCode.
+  **Status:** planejado.
+- [Ações Avançadas do Explorador](EPIC-explorer-advanced-actions.md) — itens do menu de arquivo
+  que dependem de features base (editor dividido, diff/compare view, timeline): Abrir ao lado,
+  Open With e itens de Git, exibidos desabilitados até existirem.
+  **Status:** planejado (bloqueado por features base).
 
 ## Issues — Fluent VSCode Layout
 
@@ -137,15 +148,46 @@ Planejamento de features do **Code Editor** (Tauri + React + Monaco), organizado
 
 | # | Issue | Status |
 | --- | --- | --- |
-| 47 | [Componente MenuBar: modelo de dados + dropdown (portal)](issues/ISSUE-47-menubar-component-infra.md) | ⬜ Pendente |
-| 48 | [Navegação por teclado + Alt + acessibilidade](issues/ISSUE-48-menubar-keyboard-a11y.md) | ⬜ Pendente |
-| 49 | [Integrar MenuBar na TitleBar](issues/ISSUE-49-menubar-titlebar-integration.md) | ⬜ Pendente |
-| 50 | [Ponte de comandos do Monaco (ref do EditorPane)](issues/ISSUE-50-editor-command-bridge.md) | ⬜ Pendente |
-| 51 | [Menu File](issues/ISSUE-51-menu-file.md) | ⬜ Pendente |
-| 52 | [Menus Edit + Selection](issues/ISSUE-52-menu-edit-selection.md) | ⬜ Pendente |
-| 53 | [Menus View / Go / Run / Terminal](issues/ISSUE-53-menu-view-go-run-terminal.md) | ⬜ Pendente |
-| 54 | [Menu Help + remover botão "Abrir pasta"](issues/ISSUE-54-menu-help-remove-open-button.md) | ⬜ Pendente |
-| 55 | [Integração, atalhos e E2E](issues/ISSUE-55-menubar-integration-e2e.md) | ⬜ Pendente |
+| 47 | [Componente MenuBar: modelo de dados + dropdown (portal)](issues/ISSUE-47-menubar-component-infra.md) | ✅ Concluída |
+| 48 | [Navegação por teclado + Alt + acessibilidade](issues/ISSUE-48-menubar-keyboard-a11y.md) | ✅ Concluída |
+| 49 | [Integrar MenuBar na TitleBar](issues/ISSUE-49-menubar-titlebar-integration.md) | ✅ Concluída |
+| 50 | [Ponte de comandos do Monaco (ref do EditorPane)](issues/ISSUE-50-editor-command-bridge.md) | ✅ Concluída |
+| 51 | [Menu File](issues/ISSUE-51-menu-file.md) | ✅ Concluída |
+| 52 | [Menus Edit + Selection](issues/ISSUE-52-menu-edit-selection.md) | ✅ Concluída |
+| 53 | [Menus View / Go / Run / Terminal](issues/ISSUE-53-menu-view-go-run-terminal.md) | ✅ Concluída |
+| 54 | [Menu Help + remover botão "Abrir pasta"](issues/ISSUE-54-menu-help-remove-open-button.md) | ✅ Concluída |
+| 55 | [Integração, atalhos e E2E](issues/ISSUE-55-menubar-integration-e2e.md) | 🟡 Parcial (atalhos/polimento feitos; E2E tauri-driver pendente) |
+
+## Issues — Menu de Contexto do Explorador
+
+| # | Issue | Status |
+| --- | --- | --- |
+| 56 | [Componente de menu de contexto (infra)](issues/ISSUE-56-explorer-context-menu-infra.md) | ⬜ Pendente |
+| 57 | [Comandos Rust de mutação (rename/delete/copy/move)](issues/ISSUE-57-fs-mutation-commands.md) | ⬜ Pendente |
+| 58 | [Renomear inline + F2](issues/ISSUE-58-explorer-rename.md) | ⬜ Pendente |
+| 59 | [Excluir para Lixeira + Del](issues/ISSUE-59-explorer-delete.md) | ⬜ Pendente |
+| 60 | [Recortar / Copiar / Colar](issues/ISSUE-60-explorer-cut-copy-paste.md) | ⬜ Pendente |
+| 61 | [Copiar caminho e caminho relativo](issues/ISSUE-61-explorer-copy-paths.md) | ⬜ Pendente |
+| 62 | [Revelar no Explorer + Abrir no Terminal](issues/ISSUE-62-explorer-os-terminal-actions.md) | ⬜ Pendente |
+| 63 | [Localizar na pasta](issues/ISSUE-63-explorer-find-in-folder.md) | ⬜ Pendente |
+| 64 | [Navegação por teclado (Enter/setas)](issues/ISSUE-64-explorer-keyboard-nav.md) | ⬜ Pendente |
+| 65 | [Integração, a11y, build e E2E](issues/ISSUE-65-explorer-context-menu-integration.md) | ⬜ Pendente |
+
+## Issues — Guarda de Alterações Não Salvas
+
+| # | Issue | Status |
+| --- | --- | --- |
+| 66 | [Componente `ConfirmDialog` reutilizável](issues/ISSUE-66-confirm-modal-component.md) | ⬜ Pendente |
+| 67 | [Guarda ao fechar aba suja](issues/ISSUE-67-close-tab-dirty-guard.md) | ⬜ Pendente |
+| 68 | [Guarda ao fechar janela/app e trocar de pasta](issues/ISSUE-68-close-window-app-dirty-guard.md) | ⬜ Pendente |
+
+## Issues — Ações Avançadas do Explorador
+
+| # | Issue | Status |
+| --- | --- | --- |
+| 69 | [Editor dividido + Abrir ao lado](issues/ISSUE-69-editor-split-open-to-side.md) | ⬜ Pendente |
+| 70 | [Open With…](issues/ISSUE-70-explorer-open-with.md) | ⬜ Pendente |
+| 71 | [Itens de Git no menu (diff/compare/history/timeline)](issues/ISSUE-71-explorer-git-diff-actions.md) | ⬜ Pendente |
 
 ## Convenção
 

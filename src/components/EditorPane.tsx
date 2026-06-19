@@ -1,7 +1,7 @@
 import Editor, { BeforeMount, OnMount } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import { useEffect, useRef } from "react";
-import type { BlameHunk, OpenFile, Problem } from "../types";
+import type { BlameHunk, EditorActionsApi, OpenFile, Problem } from "../types";
 import { languageForFile } from "../language";
 import { gitBlame, writeFile } from "../api";
 import { toFileUri, fromFileUri } from "../lsp/uri";
@@ -33,6 +33,11 @@ interface EditorPaneProps {
   revealRef?: React.MutableRefObject<((line: number) => void) | null>;
   /** A line to reveal as soon as the editor mounts (for just-opened files). */
   pendingRevealLine?: React.MutableRefObject<number | null>;
+  /**
+   * Imperative bridge the App holds to drive the editor (run actions, trigger
+   * commands, focus). The Edit/Selection menus from ISSUE-52 depend on it.
+   */
+  actionsRef?: React.MutableRefObject<EditorActionsApi | null>;
   /**
    * Opens a definition target that lives in another file (go-to-definition /
    * Ctrl+Click across files). The app loads the file into a tab and reveals the
@@ -73,6 +78,7 @@ export function EditorPane({
   onProblemsChange,
   revealRef,
   pendingRevealLine,
+  actionsRef,
   onOpenDefinition,
 }: EditorPaneProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
@@ -88,6 +94,20 @@ export function EditorPane({
   const decorationIdsRef = useRef<string[]>([]);
   // Current cursor line to highlight a specific blame.
   const cursorLineRef = useRef<number>(1);
+
+  // Clear the actions bridge when the EditorPane unmounts, so the App's helper
+  // (`actionsRef.current != null`) correctly reports "no active editor".
+  useEffect(() => {
+    return () => {
+      if (actionsRef) actionsRef.current = null;
+    };
+  }, [actionsRef]);
+
+  // When there is no file, the <Editor> doesn't mount (empty-state below), so
+  // the bridge is never repopulated. Clear it so the App can disable menu items.
+  useEffect(() => {
+    if (!file && actionsRef) actionsRef.current = null;
+  }, [file, actionsRef]);
 
   // -------------------------------------------------------------------------
   // Helpers
@@ -335,6 +355,18 @@ export function EditorPane({
 
     if (revealRef) revealRef.current = reveal;
 
+    if (actionsRef) {
+      actionsRef.current = {
+        run: (actionId) => {
+          editorInstance.getAction(actionId)?.run();
+        },
+        trigger: (source, handlerId, payload) => {
+          editorInstance.trigger(source, handlerId, payload);
+        },
+        focus: () => editorInstance.focus(),
+      };
+    }
+
     if (pendingRevealLine?.current != null) {
       reveal(pendingRevealLine.current);
       pendingRevealLine.current = null;
@@ -370,7 +402,7 @@ export function EditorPane({
       <div className="editor-empty">
         <div className="editor-empty-inner">
           <h2>Code Editor</h2>
-          <p>Abra uma pasta e selecione um arquivo para começar a editar.</p>
+          <p>Abra uma pasta pelo menu Arquivo (ou Ctrl+K Ctrl+O) para começar.</p>
         </div>
       </div>
     );

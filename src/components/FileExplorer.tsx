@@ -13,7 +13,6 @@ interface FileExplorerProps {
   rootPath: string | null;
   roots: FileNode[];
   activePath: string | null;
-  onOpenFolder: () => void;
   onOpenFile: (node: FileNode) => void;
   onRefreshRoot: () => Promise<void>;
   decorationFor?: (path: string) => FileDecoration | undefined;
@@ -24,7 +23,6 @@ export function FileExplorer({
   rootPath,
   roots,
   activePath,
-  onOpenFolder,
   onOpenFile,
   onRefreshRoot,
   decorationFor = () => undefined,
@@ -156,11 +154,7 @@ export function FileExplorer({
               <Codicon name="collapseAll" size={16} />
             </button>
           </div>
-        ) : (
-          <button className="explorer-open-btn" onClick={onOpenFolder} title="Abrir pasta">
-            Abrir pasta
-          </button>
-        )}
+        ) : null}
       </div>
 
       <div className="explorer-status" aria-live="polite">
@@ -172,9 +166,7 @@ export function FileExplorer({
           <div className="explorer-empty">
             Nenhuma pasta aberta.
             <br />
-            <button className="link-btn" onClick={onOpenFolder}>
-              Abrir uma pasta
-            </button>
+            Use o menu Arquivo (ou Ctrl+K Ctrl+O) para abrir uma pasta.
           </div>
         ) : (
           <>

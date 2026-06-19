@@ -12,20 +12,31 @@ import { Breadcrumbs } from "./components/Breadcrumbs";
 import { StatusBar } from "./components/StatusBar";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { QuickOpen } from "./components/QuickOpen";
+import { AboutDialog } from "./components/AboutDialog";
 import {
   gitBranch,
   gitStatus,
+  pickFile,
   pickFolder,
+  pickSavePath,
   readDir,
   readFile,
   sessionLoad,
   sessionSetLastFolder,
   writeFile,
 } from "./api";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { languageForFile } from "./language";
 import { buildDecorations, decoKey } from "./icon-theme/decorations";
 import { useLspManager } from "./lsp/useLspManager";
-import type { FileNode, GitStatus, OpenFile, Problem } from "./types";
+import type {
+  EditorActionsApi,
+  FileNode,
+  GitStatus,
+  MenuDef,
+  OpenFile,
+  Problem,
+} from "./types";
 import type { LspServerStatus } from "./components/StatusBar";
 
 /** Returns the last path segment, handling both Windows and POSIX separators. */
@@ -51,6 +62,8 @@ export default function App() {
   const [panelHeight, setPanelHeight] = useState(220);
   const [activeView, setActiveView] = useState("explorer");
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
+  // Which Help dialog is open: the About box, the shortcuts list, or none.
+  const [helpDialog, setHelpDialog] = useState<"about" | "shortcuts" | null>(null);
 
   // Current "Run": command line + a nonce that bumps on each ▶ to respawn the PTY.
   const [runCommand, setRunCommand] = useState<string | null>(null);
@@ -80,6 +93,9 @@ export default function App() {
   const revealRef = useRef<((line: number) => void) | null>(null);
   // A line to reveal once a freshly-opened file finishes mounting.
   const pendingRevealLine = useRef<number | null>(null);
+  // Imperative bridge to the active Monaco editor; consumed by the Edit/Selection
+  // menus (ISSUE-52). Null when no file is open.
+  const editorActionsRef = useRef<EditorActionsApi | null>(null);
 
   const activeFile = openFiles.find((f) => f.path === activePath) ?? null;
 
@@ -265,27 +281,137 @@ export default function App() {
     }
   }, [openFiles, activePath]);
 
-  // Ctrl+S / Cmd+S to save; Ctrl+` to toggle terminal; Ctrl+P for Quick Open.
+  /** Open a file chosen via the native file picker (File ▸ Open File…). */
+  const handleOpenFileDialog = useCallback(async () => {
+    const p = await pickFile();
+    if (!p) return;
+    await handleOpenFile({ name: baseName(p), path: p, isDir: false });
+  }, [handleOpenFile]);
+
+  /** Save the active buffer to a new path chosen via the save dialog (Save As…). */
+  const handleSaveAs = useCallback(async () => {
+    const file = openFiles.find((f) => f.path === activePath);
+    if (!file) return;
+    const dest = await pickSavePath(file.name);
+    if (!dest) return;
+    try {
+      await writeFile(dest, file.content);
+      // Re-point the active tab at the new path and clear its dirty flag.
+      setOpenFiles((prev) =>
+        prev.map((f) =>
+          f.path === activePath
+            ? { ...f, path: dest, name: baseName(dest), dirty: false }
+            : f
+        )
+      );
+      setActivePath(dest);
+    } catch (err) {
+      console.error(err);
+      alert(`Não foi possível salvar:\n${err}`);
+    }
+  }, [openFiles, activePath]);
+
+  /** Close the current workspace folder, returning to the empty state. */
+  const handleCloseFolder = useCallback(() => {
+    setRootPath(null);
+    setRootName(null);
+    setRoots([]);
+    setOpenFiles([]);
+    setActivePath(null);
+  }, []);
+
+  // True while we're waiting for the second key of the Ctrl+K chord (e.g. the
+  // "O" in the VSCode-style "Ctrl+K Ctrl+O" Open Folder binding).
+  const awaitingChordRef = useRef(false);
+  const chordTimerRef = useRef<number | null>(null);
+
+  // App-level keyboard shortcuts. These mirror the accelerators shown in the
+  // menus (Save, Save As, Open File/Folder, toggles, Quick Open). We deliberately
+  // do NOT intercept editor chords (Ctrl+F/H/Z/Y/A/C/V/X) — those belong to
+  // Monaco when the editor is focused, so they're left to bubble through.
   useEffect(() => {
+    function clearChord() {
+      awaitingChordRef.current = false;
+      if (chordTimerRef.current != null) {
+        window.clearTimeout(chordTimerRef.current);
+        chordTimerRef.current = null;
+      }
+    }
+
     function onKeyDown(e: KeyboardEvent) {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+      const mod = e.ctrlKey || e.metaKey;
+
+      // --- Ctrl+K chord: arm, then resolve the second stroke. ---
+      if (awaitingChordRef.current) {
+        // Ctrl+K Ctrl+O → Open Folder. Any other key cancels the chord.
+        if (mod && e.key.toLowerCase() === "o") {
+          e.preventDefault();
+          clearChord();
+          handleOpenFolder();
+          return;
+        }
+        clearChord();
+        // fall through so a non-chord key still works as its own shortcut
+      }
+      if (mod && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        awaitingChordRef.current = true;
+        if (chordTimerRef.current != null) window.clearTimeout(chordTimerRef.current);
+        // Give up on the chord if the next key doesn't arrive promptly.
+        chordTimerRef.current = window.setTimeout(() => {
+          awaitingChordRef.current = false;
+          chordTimerRef.current = null;
+        }, 1500);
+        return;
+      }
+
+      if (!mod) return;
+
+      const key = e.key.toLowerCase();
+
+      // Ctrl+Shift+S → Save As (check before plain Ctrl+S).
+      if (e.shiftKey && key === "s") {
+        e.preventDefault();
+        handleSaveAs();
+        return;
+      }
+      // Ctrl+S → Save.
+      if (key === "s") {
         e.preventDefault();
         handleSave();
+        return;
       }
-      if ((e.ctrlKey || e.metaKey) && e.key === "`") {
+      // Ctrl+O → Open File…
+      if (key === "o") {
+        e.preventDefault();
+        handleOpenFileDialog();
+        return;
+      }
+      // Ctrl+` → toggle terminal panel.
+      if (e.key === "`") {
         e.preventDefault();
         setPanelOpen((v) => !v);
+        return;
       }
-      // Ctrl+P / Cmd+P opens Quick Open (file search by name). preventDefault
-      // also stops the browser/Monaco from hijacking the chord.
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "p") {
+      // Ctrl+B → toggle the sidebar.
+      if (key === "b") {
+        e.preventDefault();
+        setSidebarOpen((v) => !v);
+        return;
+      }
+      // Ctrl+P → Quick Open (file search by name).
+      if (key === "p") {
         e.preventDefault();
         setQuickOpenOpen(true);
+        return;
       }
     }
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleSave]);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      clearChord();
+    };
+  }, [handleSave, handleSaveAs, handleOpenFileDialog]);
 
   /** Run a configuration: open the terminal panel and (re)spawn a PTY for it. */
   function handleRun(command: string) {
@@ -301,6 +427,360 @@ export default function App() {
       problem.line
     );
   }
+
+  // True when there's an active editor buffer; gates Edit/Selection/Go items.
+  const hasEditor = activeFile != null;
+
+  /** Fire a Monaco editor action by id on the focused editor (no-op if none). */
+  const runEditorAction = useCallback((id: string) => {
+    editorActionsRef.current?.run(id);
+  }, []);
+
+  // Data-driven menu bar definitions (File, Edit, …). Rebuilt only when the
+  // inputs the items capture change (handlers are stable; flags are reactive).
+  const menus: MenuDef[] = useMemo(() => {
+    const fileMenu: MenuDef = {
+      label: "File",
+      items: [
+        // untitled buffers: recortado p/ v2 (ISSUE-51)
+        { id: "file.newTextFile", label: "New Text File", enabled: false },
+        { id: "file.newFile", label: "New File", enabled: false },
+        { id: "file.sep1", label: "", separator: true },
+        {
+          id: "file.open",
+          label: "Open File…",
+          accelerator: "Ctrl+O",
+          run: handleOpenFileDialog,
+        },
+        {
+          id: "file.openFolder",
+          label: "Open Folder…",
+          accelerator: "Ctrl+K Ctrl+O",
+          run: handleOpenFolder,
+        },
+        { id: "file.sep2", label: "", separator: true },
+        {
+          id: "file.save",
+          label: "Save",
+          accelerator: "Ctrl+S",
+          enabled: hasEditor,
+          run: hasEditor ? handleSave : undefined,
+        },
+        {
+          id: "file.saveAs",
+          label: "Save As…",
+          accelerator: "Ctrl+Shift+S",
+          enabled: hasEditor,
+          run: hasEditor ? handleSaveAs : undefined,
+        },
+        { id: "file.sep3", label: "", separator: true },
+        { id: "file.autoSave", label: "Auto Save", enabled: false },
+        { id: "file.revert", label: "Revert File", enabled: false },
+        { id: "file.sep4", label: "", separator: true },
+        {
+          id: "file.closeEditor",
+          label: "Close Editor",
+          enabled: hasEditor,
+          run: hasEditor && activePath ? () => handleCloseTab(activePath) : undefined,
+        },
+        {
+          id: "file.closeFolder",
+          label: "Close Folder",
+          enabled: rootPath != null,
+          run: rootPath != null ? handleCloseFolder : undefined,
+        },
+        { id: "file.sep5", label: "", separator: true },
+        { id: "file.exit", label: "Exit", run: () => getCurrentWindow().close() },
+      ],
+    };
+
+    const editMenu: MenuDef = {
+      label: "Edit",
+      items: [
+        {
+          id: "edit.undo",
+          label: "Undo",
+          accelerator: "Ctrl+Z",
+          enabled: hasEditor,
+          run: hasEditor ? () => runEditorAction("undo") : undefined,
+        },
+        {
+          id: "edit.redo",
+          label: "Redo",
+          accelerator: "Ctrl+Y",
+          enabled: hasEditor,
+          run: hasEditor ? () => runEditorAction("redo") : undefined,
+        },
+        { id: "edit.sep1", label: "", separator: true },
+        {
+          id: "edit.cut",
+          label: "Cut",
+          accelerator: "Ctrl+X",
+          enabled: hasEditor,
+          run: hasEditor
+            ? () => runEditorAction("editor.action.clipboardCutAction")
+            : undefined,
+        },
+        {
+          id: "edit.copy",
+          label: "Copy",
+          accelerator: "Ctrl+C",
+          enabled: hasEditor,
+          run: hasEditor
+            ? () => runEditorAction("editor.action.clipboardCopyAction")
+            : undefined,
+        },
+        {
+          id: "edit.paste",
+          label: "Paste",
+          accelerator: "Ctrl+V",
+          enabled: hasEditor,
+          run: hasEditor
+            ? () => runEditorAction("editor.action.clipboardPasteAction")
+            : undefined,
+        },
+        { id: "edit.sep2", label: "", separator: true },
+        {
+          id: "edit.find",
+          label: "Find",
+          accelerator: "Ctrl+F",
+          enabled: hasEditor,
+          run: hasEditor ? () => runEditorAction("actions.find") : undefined,
+        },
+        {
+          id: "edit.replace",
+          label: "Replace",
+          accelerator: "Ctrl+H",
+          enabled: hasEditor,
+          run: hasEditor
+            ? () => runEditorAction("editor.action.startFindReplaceAction")
+            : undefined,
+        },
+        { id: "edit.sep3", label: "", separator: true },
+        {
+          id: "edit.findInFiles",
+          label: "Find in Files",
+          run: () => setActiveView("search"),
+        },
+      ],
+    };
+
+    const selectionMenu: MenuDef = {
+      label: "Selection",
+      items: [
+        {
+          id: "selection.selectAll",
+          label: "Select All",
+          accelerator: "Ctrl+A",
+          enabled: hasEditor,
+          run: hasEditor ? () => runEditorAction("editor.action.selectAll") : undefined,
+        },
+        {
+          id: "selection.expand",
+          label: "Expand Selection",
+          enabled: hasEditor,
+          run: hasEditor
+            ? () => runEditorAction("editor.action.smartSelect.expand")
+            : undefined,
+        },
+        {
+          id: "selection.shrink",
+          label: "Shrink Selection",
+          enabled: hasEditor,
+          run: hasEditor
+            ? () => runEditorAction("editor.action.smartSelect.shrink")
+            : undefined,
+        },
+        { id: "selection.sep1", label: "", separator: true },
+        {
+          id: "selection.copyLineUp",
+          label: "Copy Line Up",
+          enabled: hasEditor,
+          run: hasEditor
+            ? () => runEditorAction("editor.action.copyLinesUpAction")
+            : undefined,
+        },
+        {
+          id: "selection.copyLineDown",
+          label: "Copy Line Down",
+          enabled: hasEditor,
+          run: hasEditor
+            ? () => runEditorAction("editor.action.copyLinesDownAction")
+            : undefined,
+        },
+        {
+          id: "selection.moveLineUp",
+          label: "Move Line Up",
+          enabled: hasEditor,
+          run: hasEditor
+            ? () => runEditorAction("editor.action.moveLinesUpAction")
+            : undefined,
+        },
+        {
+          id: "selection.moveLineDown",
+          label: "Move Line Down",
+          enabled: hasEditor,
+          run: hasEditor
+            ? () => runEditorAction("editor.action.moveLinesDownAction")
+            : undefined,
+        },
+        { id: "selection.sep2", label: "", separator: true },
+        {
+          id: "selection.addCursorAbove",
+          label: "Add Cursor Above",
+          enabled: hasEditor,
+          run: hasEditor
+            ? () => runEditorAction("editor.action.insertCursorAbove")
+            : undefined,
+        },
+        {
+          id: "selection.addCursorBelow",
+          label: "Add Cursor Below",
+          enabled: hasEditor,
+          run: hasEditor
+            ? () => runEditorAction("editor.action.insertCursorBelow")
+            : undefined,
+        },
+      ],
+    };
+
+    const viewMenu: MenuDef = {
+      label: "View",
+      items: [
+        { id: "view.explorer", label: "Explorer", run: () => setActiveView("explorer") },
+        { id: "view.search", label: "Search", run: () => setActiveView("search") },
+        {
+          id: "view.scm",
+          label: "Source Control",
+          run: () => setActiveView("git"),
+        },
+        { id: "view.run", label: "Run", run: () => setActiveView("debug") },
+        { id: "view.sep1", label: "", separator: true },
+        {
+          id: "view.toggleSidebar",
+          label: "Toggle Sidebar",
+          accelerator: "Ctrl+B",
+          run: () => setSidebarOpen((v) => !v),
+        },
+        {
+          id: "view.toggleTerminal",
+          label: "Toggle Terminal",
+          accelerator: "Ctrl+`",
+          run: () => setPanelOpen((v) => !v),
+        },
+        { id: "view.sep2", label: "", separator: true },
+        {
+          id: "view.commandPalette",
+          label: "Command Palette",
+          accelerator: "Ctrl+P",
+          run: () => setQuickOpenOpen(true),
+        },
+        {
+          id: "view.quickOpen",
+          label: "Quick Open",
+          accelerator: "Ctrl+P",
+          run: () => setQuickOpenOpen(true),
+        },
+      ],
+    };
+
+    const goMenu: MenuDef = {
+      label: "Go",
+      items: [
+        {
+          id: "go.goToFile",
+          label: "Go to File…",
+          accelerator: "Ctrl+P",
+          run: () => setQuickOpenOpen(true),
+        },
+        {
+          id: "go.goToLine",
+          label: "Go to Line…",
+          accelerator: "Ctrl+G",
+          enabled: hasEditor,
+          run: hasEditor ? () => runEditorAction("editor.action.gotoLine") : undefined,
+        },
+        {
+          id: "go.goToDefinition",
+          label: "Go to Definition",
+          accelerator: "F12",
+          enabled: hasEditor,
+          run: hasEditor
+            ? () => runEditorAction("editor.action.revealDefinition")
+            : undefined,
+        },
+      ],
+    };
+
+    const runMenu: MenuDef = {
+      label: "Run",
+      items: [
+        { id: "run.start", label: "Start Debugging", enabled: false },
+        { id: "run.startNoDebug", label: "Run Without Debugging", enabled: false },
+        { id: "run.sep1", label: "", separator: true },
+        {
+          id: "run.openRunView",
+          label: "Abrir Run e Depurar",
+          run: () => setActiveView("debug"),
+        },
+      ],
+    };
+
+    const terminalMenu: MenuDef = {
+      label: "Terminal",
+      items: [
+        {
+          id: "terminal.new",
+          label: "New Terminal",
+          accelerator: "Ctrl+`",
+          run: () => setPanelOpen(true),
+        },
+        { id: "terminal.split", label: "Split Terminal", enabled: false },
+        { id: "terminal.kill", label: "Kill Terminal", enabled: false },
+        { id: "terminal.sep1", label: "", separator: true },
+        { id: "terminal.runTask", label: "Run Task…", enabled: false },
+      ],
+    };
+
+    const helpMenu: MenuDef = {
+      label: "Help",
+      items: [
+        { id: "help.welcome", label: "Bem-vindo", enabled: false },
+        { id: "help.docs", label: "Documentação", enabled: false },
+        { id: "help.sep1", label: "", separator: true },
+        {
+          id: "help.keyboardShortcuts",
+          label: "Atalhos de Teclado",
+          accelerator: "Ctrl+K Ctrl+S",
+          run: () => setHelpDialog("shortcuts"),
+        },
+        { id: "help.sep2", label: "", separator: true },
+        { id: "help.about", label: "Sobre", run: () => setHelpDialog("about") },
+      ],
+    };
+
+    return [
+      fileMenu,
+      editMenu,
+      selectionMenu,
+      viewMenu,
+      goMenu,
+      runMenu,
+      terminalMenu,
+      helpMenu,
+    ];
+  }, [
+    hasEditor,
+    rootPath,
+    activePath,
+    handleOpenFileDialog,
+    handleOpenFolder,
+    handleSave,
+    handleSaveAs,
+    handleCloseTab,
+    handleCloseFolder,
+    runEditorAction,
+  ]);
 
   const titleText = activeFile
     ? `${activeFile.dirty ? "● " : ""}${activeFile.name} — Code Editor`
@@ -318,7 +798,6 @@ export default function App() {
             rootPath={rootPath}
             roots={roots}
             activePath={activePath}
-            onOpenFolder={handleOpenFolder}
             onOpenFile={handleOpenFile}
             onRefreshRoot={refreshExplorerRoot}
             decorationFor={decorationFor}
@@ -346,7 +825,6 @@ export default function App() {
             rootPath={rootPath}
             roots={roots}
             activePath={activePath}
-            onOpenFolder={handleOpenFolder}
             onOpenFile={handleOpenFile}
             onRefreshRoot={refreshExplorerRoot}
             decorationFor={decorationFor}
@@ -361,6 +839,7 @@ export default function App() {
         title={titleText}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
+        menus={menus}
       />
 
       <div className="body">
@@ -393,6 +872,7 @@ export default function App() {
               onProblemsChange={setProblems}
               revealRef={revealRef}
               pendingRevealLine={pendingRevealLine}
+              actionsRef={editorActionsRef}
               onOpenDefinition={(path, line) =>
                 handleOpenFile(
                   { name: baseName(path), path, isDir: false },
@@ -457,6 +937,10 @@ export default function App() {
           onOpenFile={handleOpenFile}
           onClose={() => setQuickOpenOpen(false)}
         />
+      )}
+
+      {helpDialog && (
+        <AboutDialog mode={helpDialog} onClose={() => setHelpDialog(null)} />
       )}
     </div>
   );

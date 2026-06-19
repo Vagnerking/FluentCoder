@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   BlameHunk,
   FileNode,
@@ -25,6 +25,18 @@ interface RawGitStatus {
 /** Opens the native folder picker; returns the chosen path or null if cancelled. */
 export async function pickFolder(): Promise<string | null> {
   const selected = await open({ directory: true, multiple: false });
+  return typeof selected === "string" ? selected : null;
+}
+
+/** Opens the native file picker (single file); returns the chosen path or null. */
+export async function pickFile(): Promise<string | null> {
+  const selected = await open({ multiple: false });
+  return typeof selected === "string" ? selected : null;
+}
+
+/** Native "save as" dialog; returns the chosen destination path or null if cancelled. */
+export async function pickSavePath(defaultName?: string): Promise<string | null> {
+  const selected = await save({ defaultPath: defaultName });
   return typeof selected === "string" ? selected : null;
 }
 
