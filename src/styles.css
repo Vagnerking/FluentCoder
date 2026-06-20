@@ -207,7 +207,7 @@ body {
   overflow: hidden;
 }
 
-.main {
+.app-main {
   flex: 1;
   min-width: 0;
   display: flex;

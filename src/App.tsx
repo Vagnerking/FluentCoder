@@ -1294,7 +1294,7 @@ export default function App() {
 
         {sidebarOpen && <aside className="sidebar">{renderSidebar()}</aside>}
 
-        <main className="main">
+        <main className="app-main">
           <Breadcrumbs filePath={activePath} rootPath={rootPath} />
           <TabBar
             files={openFiles}
