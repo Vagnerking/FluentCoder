@@ -97,6 +97,13 @@ export interface SearchMatch {
   text: string;
 }
 
+export interface SearchResponse {
+  matches: SearchMatch[];
+  limitHit: boolean;
+  cancelled: boolean;
+  elapsedMs: number;
+}
+
 /** One file in the Quick Open index, mirroring the Rust `ProjectFile`. */
 export interface ProjectFile {
   /** Absolute path — handed to the editor to open the file. */

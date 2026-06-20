@@ -8,7 +8,7 @@ import type {
   ProjectFile,
   RawDirEntry,
   RunConfig,
-  SearchMatch,
+  SearchResponse,
   Session,
 } from "./types";
 
@@ -153,8 +153,12 @@ export async function copyTextToClipboard(text: string): Promise<boolean> {
 }
 
 /** Recursively searches `root` for lines containing `query` (case-insensitive). */
-export function searchInDir(root: string, query: string): Promise<SearchMatch[]> {
-  return invoke<SearchMatch[]>("search_in_dir", { root, query });
+export function searchInDir(root: string, query: string): Promise<SearchResponse> {
+  return invoke<SearchResponse>("search_in_dir", { root, query });
+}
+
+export function cancelSearch(): Promise<void> {
+  return invoke<void>("cancel_search");
 }
 
 /** Lists every file under `root` (skipping heavy dirs) for Quick Open (Ctrl+P). */

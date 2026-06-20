@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FileNode, FileDecoration } from "../types";
 import { readDir } from "../api";
 import { FileIcon } from "../icon-theme/material/FileIcon";
@@ -72,15 +72,20 @@ export function TreeNode({
 }: TreeNodeProps) {
   const [children, setChildren] = useState<FileNode[] | null>(null);
   const [loading, setLoading] = useState(false);
+  const loadedVersionRef = useRef<number | null>(null);
   const expanded = node.isDir && expandedPaths.has(node.path);
 
   useEffect(() => {
     if (!expanded) return;
+    if (children !== null && loadedVersionRef.current === refreshVersion) return;
     let active = true;
     setLoading(true);
     readDir(node.path)
       .then((entries) => {
-        if (active) setChildren(entries);
+        if (active) {
+          setChildren(entries);
+          loadedVersionRef.current = refreshVersion;
+        }
       })
       .catch((error) => {
         console.error(error);
@@ -155,8 +160,8 @@ export function TreeNode({
         {deco?.badge && <span className={`tree-badge deco-${deco.kind}`}>{deco.badge}</span>}
       </div>
 
-      {node.isDir && (
-        <div className={`tree-children${expanded ? " expanded" : ""}`} role="group">
+      {node.isDir && expanded && (
+        <div className="tree-children expanded" role="group">
           <div className="tree-children-inner">
             {loading && (
               <div className="tree-row tree-muted" role="status" style={{ paddingLeft: (depth + 1) * 12 + 6 }}>

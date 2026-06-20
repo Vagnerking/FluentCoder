@@ -25,6 +25,11 @@ serde_json = "1"
 portable-pty = "0.9"
 # Move files/folders to the OS recycle bin (recoverable delete in the explorer).
 trash = "5"
+# Workspace search: ripgrep-compatible walking and incremental file scanning.
+ignore = "0.4"
+grep-regex = "0.1"
+grep-searcher = "0.1"
+regex = "1"
 
 # --- LSP module (src/lsp) ---
 # Async runtime + WS bridge between the frontend monaco-languageclient and the
