@@ -20,7 +20,7 @@ async function codiconGlyph(selector: string) {
   }, selector)
 }
 
-describe('Code Editor — Codicons na interface', () => {
+describe('Fluent Coder — Codicons na interface', () => {
   it('a activity bar renderiza ícones Codicon (não SVGs soltos)', async () => {
     await $('.activity-bar').waitForExist({ timeout: 10_000 })
 

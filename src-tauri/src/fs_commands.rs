@@ -442,7 +442,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("code-editor-explorer-{id}"));
+        let root = std::env::temp_dir().join(format!("fluent-coder-explorer-{id}"));
         fs::create_dir(&root).unwrap();
         root
     }

@@ -49,8 +49,8 @@ O `onPrepare` do [wdio.conf.ts](wdio.conf.ts) compila o app com
 
 ## Notas
 
-- O binário esperado é `src-tauri/target/release/code-editor.exe`. Se o
-  nome do produto mudar no `tauri.conf.json`, ajuste `appBinary` no
+- O binário esperado é `src-tauri/target/release/fluent-coder.exe`. Se o
+  nome do crate mudar no `Cargo.toml`, ajuste `appBinary` no
   `wdio.conf.ts`.
 - WebView2 (Chromium) é o engine no Windows, então seletores CSS/DOM
   funcionam normalmente.

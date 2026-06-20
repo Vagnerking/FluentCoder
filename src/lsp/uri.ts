@@ -17,7 +17,7 @@ type MutableUriFactory = {
   parse: typeof Monaco.Uri.parse;
   file: typeof Monaco.Uri.file;
   from: typeof Monaco.Uri.from;
-  __codeEditorWindowsUriPatched?: boolean;
+  __fluentCoderWindowsUriPatched?: boolean;
 };
 
 function canonicalizeWindowsFileUri(uri: Monaco.Uri): Monaco.Uri {
@@ -46,7 +46,7 @@ export function installWindowsFileUriSerialization(
   monaco: typeof Monaco
 ): void {
   const factory = monaco.Uri as unknown as MutableUriFactory;
-  if (factory.__codeEditorWindowsUriPatched) return;
+  if (factory.__fluentCoderWindowsUriPatched) return;
 
   const originalParse = factory.parse.bind(monaco.Uri);
   const originalFile = factory.file.bind(monaco.Uri);
@@ -63,7 +63,7 @@ export function installWindowsFileUriSerialization(
       originalFrom(components, strict)
     )) as typeof Monaco.Uri.from;
 
-  factory.__codeEditorWindowsUriPatched = true;
+  factory.__fluentCoderWindowsUriPatched = true;
 }
 
 /**
