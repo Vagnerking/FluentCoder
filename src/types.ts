@@ -89,20 +89,60 @@ export interface Session {
   lastFolder: string | null;
 }
 
-/** A single search hit, mirroring the Rust `SearchMatch`. */
-export interface SearchMatch {
-  path: string;
-  name: string;
-  line: number;
-  text: string;
+/** Search toggles + glob filters, mirroring the Rust `SearchOptions`. */
+export interface SearchOptions {
+  /** Treat the query as a regular expression instead of a literal string. */
+  regex: boolean;
+  /** Case-sensitive match (default is case-insensitive). */
+  caseSensitive: boolean;
+  /** Match whole words only (word boundaries, like ripgrep `-w`). */
+  wholeWord: boolean;
+  /** "files to include" globs (whitelist); empty = everything. */
+  includeGlobs: string[];
+  /** "files to exclude" globs (blacklist), applied on top of includes. */
+  excludeGlobs: string[];
 }
 
-export interface SearchResponse {
-  matches: SearchMatch[];
-  limitHit: boolean;
-  cancelled: boolean;
-  elapsedMs: number;
+/**
+ * A single-line selection to apply in the editor after opening a search result,
+ * so the matched term is highlighted (selected) and revealed, VSCode-style.
+ * Columns are 1-based, as Monaco expects.
+ */
+export interface MatchSelection {
+  startColumn: number;
+  endColumn: number;
 }
+
+/** One matching line within a file, mirroring the Rust `LineMatch`. */
+export interface LineMatch {
+  line: number;
+  text: string;
+  /** Char-offset `[start, end]` ranges of the matched term(s) within `text`. */
+  ranges: [number, number][];
+}
+
+/** All matches found in one file, mirroring the Rust `FileMatches`. */
+export interface FileMatches {
+  path: string;
+  name: string;
+  matches: LineMatch[];
+}
+
+/**
+ * Streaming events from the Rust `search_in_dir` command, delivered over a
+ * `Channel`. `matches` arrives once per file as hits are found; `done` closes
+ * the stream with a summary. Discriminated by `type`.
+ */
+export type SearchStreamEvent =
+  | { type: "matches"; file: FileMatches }
+  | {
+      type: "done";
+      limitHit: boolean;
+      cancelled: boolean;
+      elapsedMs: number;
+      totalMatches: number;
+      totalFiles: number;
+    };
 
 /** One file in the Quick Open index, mirroring the Rust `ProjectFile`. */
 export interface ProjectFile {

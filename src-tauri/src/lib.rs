@@ -31,6 +31,7 @@ pub fn run() {
             fs_commands::reveal_in_explorer,
             search::search_in_dir,
             search::cancel_search,
+            search::build_search_index,
             file_index::list_project_files,
             git::git_branch,
             git::git_status,

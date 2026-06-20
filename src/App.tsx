@@ -18,6 +18,7 @@ import { QuickOpen } from "./components/QuickOpen";
 import { AboutDialog } from "./components/AboutDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import {
+  buildSearchIndex,
   gitBranch,
   gitStatus,
   pickFile,
@@ -38,6 +39,7 @@ import type {
   EditorActionsApi,
   FileNode,
   GitStatus,
+  MatchSelection,
   MenuDef,
   OpenFile,
   OpenMode,
@@ -151,10 +153,15 @@ export default function App() {
     [decorations]
   );
 
-  // Lets Search/Problems jump to a line in the active editor.
-  const revealRef = useRef<((line: number) => void) | null>(null);
-  // A line to reveal once a freshly-opened file finishes mounting.
-  const pendingRevealLine = useRef<number | null>(null);
+  // Lets Search/Problems jump to a line in the active editor, optionally
+  // selecting a range on that line (search results highlight the matched term).
+  const revealRef = useRef<
+    ((line: number, selection?: MatchSelection) => void) | null
+  >(null);
+  // A line (+ optional selection) to reveal once a freshly-opened file mounts.
+  const pendingReveal = useRef<
+    { line: number; selection?: MatchSelection } | null
+  >(null);
   // Imperative bridge to the active Monaco editor; consumed by the Edit/Selection
   // menus (ISSUE-52). Null when no file is open.
   const editorActionsRef = useRef<EditorActionsApi | null>(null);
@@ -211,6 +218,9 @@ export default function App() {
         gitBranch(folder).then(setBranch).catch(() => setBranch(null));
         // Pull status to decorate the explorer (modified/new/conflict badges).
         gitStatus(folder).then(setGitState).catch(() => setGitState(null));
+        // Warm the search index so the first Ctrl+Shift+F is instant (the walk +
+        // ignore parsing happen now, in the background, not on the first query).
+        buildSearchIndex(folder).catch(() => {});
         if (persist) sessionSetLastFolder(folder).catch(() => {});
       } catch (err) {
         console.error(err);
@@ -259,7 +269,12 @@ export default function App() {
    * the {@link ImagePreview} loads the bytes itself — so we skip `readFile`.
    */
   const handleOpenFile = useCallback(
-    async (node: FileNode, line?: number, mode?: OpenMode) => {
+    async (
+      node: FileNode,
+      line?: number,
+      mode?: OpenMode,
+      selection?: MatchSelection
+    ): Promise<boolean> => {
       if (node.isDir) return false;
 
       const resolvedMode: OpenMode = mode ?? defaultModeFor(node.path);
@@ -276,7 +291,9 @@ export default function App() {
           );
         }
         setActivePath(node.path);
-        if (line != null && resolvedMode === "text") revealRef.current?.(line);
+        if (line != null && resolvedMode === "text") {
+          revealRef.current?.(line, selection);
+        }
         return true;
       }
 
@@ -296,7 +313,7 @@ export default function App() {
         setActivePath(node.path);
         // The editor isn't mounted with this content yet; defer the reveal.
         if (line != null && resolvedMode === "text") {
-          pendingRevealLine.current = line;
+          pendingReveal.current = { line, selection };
         }
         return true;
       } catch (err) {
@@ -306,6 +323,18 @@ export default function App() {
       }
     },
     [openFiles]
+  );
+
+  /**
+   * Open a search result: opens/focuses the file, then reveals and selects the
+   * matched term so it's highlighted in the editor, like VSCode. `startColumn`/
+   * `endColumn` are 1-based Monaco columns of the first match on the line.
+   */
+  const handleOpenMatch = useCallback(
+    (node: FileNode, line: number, startColumn: number, endColumn: number) => {
+      handleOpenFile(node, line, undefined, { startColumn, endColumn });
+    },
+    [handleOpenFile]
   );
 
   // Record every file activation regardless of whether it came from Explorer,
@@ -1223,7 +1252,7 @@ export default function App() {
             rootPath={rootPath}
             scopePath={searchScope}
             onClearScope={() => setSearchScope(null)}
-            onOpenMatch={handleOpenFile}
+            onOpenMatch={handleOpenMatch}
           />
         );
       case "explorer":
@@ -1322,7 +1351,7 @@ export default function App() {
                 }}
                 onProblemsChange={setProblems}
                 revealRef={revealRef}
-                pendingRevealLine={pendingRevealLine}
+                pendingReveal={pendingReveal}
                 actionsRef={editorActionsRef}
                 onOpenDefinition={(path, line) =>
                   handleOpenFile(

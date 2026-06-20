@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, Channel } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   BlameHunk,
@@ -8,7 +8,8 @@ import type {
   ProjectFile,
   RawDirEntry,
   RunConfig,
-  SearchResponse,
+  SearchOptions,
+  SearchStreamEvent,
   Session,
 } from "./types";
 
@@ -152,13 +153,37 @@ export async function copyTextToClipboard(text: string): Promise<boolean> {
   }
 }
 
-/** Recursively searches `root` for lines containing `query` (case-insensitive). */
-export function searchInDir(root: string, query: string): Promise<SearchResponse> {
-  return invoke<SearchResponse>("search_in_dir", { root, query });
+/**
+ * Streams a recursive search of `root` for `query`, honoring `.gitignore`, the
+ * fixed heavy-folder skip list and the user's `options` (regex, case-sensitivity,
+ * whole-word, include/exclude globs). Results arrive incrementally on `onEvent`
+ * — one `matches` event per file, then a final `done` event. The returned
+ * Promise resolves when the search finishes and rejects on an invalid regex (so
+ * callers can flag the input). Starting a new search cancels any in-flight one.
+ */
+export function searchInDir(
+  root: string,
+  query: string,
+  options: SearchOptions,
+  onEvent: (event: SearchStreamEvent) => void
+): Promise<void> {
+  const channel = new Channel<SearchStreamEvent>();
+  channel.onmessage = onEvent;
+  return invoke<void>("search_in_dir", { root, query, options, onEvent: channel });
 }
 
 export function cancelSearch(): Promise<void> {
   return invoke<void>("cancel_search");
+}
+
+/**
+ * Warms the in-memory file index for `root` so the first search is instant.
+ * Fire-and-forget: called when a folder opens. The index is the cached list of
+ * searchable paths (the directory walk + ignore-file parsing); searches reuse it
+ * while fresh, so typing doesn't re-walk the disk on every keystroke.
+ */
+export function buildSearchIndex(root: string): Promise<void> {
+  return invoke<void>("build_search_index", { root });
 }
 
 /** Lists every file under `root` (skipping heavy dirs) for Quick Open (Ctrl+P). */
