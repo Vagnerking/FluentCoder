@@ -12,6 +12,7 @@ import type {
   SearchStreamEvent,
   Session,
 } from "./types";
+import type { AcpEvent, AgentStore } from "./agents/types";
 
 /** Raw shape returned by the Rust `git_status` (snake_case from serde). */
 interface RawGitStatus {
@@ -284,6 +285,38 @@ export function runConfigsSave(root: string, configs: RunConfig[]): Promise<void
 /** Suggests run configs by inspecting package.json scripts, Cargo.toml, etc. */
 export function runConfigsDetect(root: string): Promise<RunConfig[]> {
   return invoke<RunConfig[]>("run_configs_detect", { root });
+}
+
+// ---- ACP agents ----
+
+/** Loads agents and conversation history from `<root>/.project/agents.json`. */
+export function agentsLoad(root: string): Promise<AgentStore> {
+  return invoke<AgentStore>("agents_load", { root });
+}
+
+/** Persists agents and conversation history inside the current workspace. */
+export function agentsSave(root: string, store: AgentStore): Promise<void> {
+  return invoke("agents_save", { root, store });
+}
+
+/**
+ * Runs one ACP prompt against the selected provider. Text and lifecycle updates
+ * are streamed through a request-scoped Tauri channel.
+ */
+export function acpPrompt(
+  provider: "codex" | "claude",
+  workspaceRoot: string,
+  prompt: string,
+  onEvent: (event: AcpEvent) => void,
+): Promise<void> {
+  const channel = new Channel<AcpEvent>();
+  channel.onmessage = onEvent;
+  return invoke("acp_prompt", {
+    provider,
+    workspaceRoot,
+    prompt,
+    onEvent: channel,
+  });
 }
 
 // ---- Session (reopen last project on launch) ----
