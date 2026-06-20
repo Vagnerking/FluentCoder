@@ -17,7 +17,13 @@ import { TerminalPanel } from "./components/TerminalPanel";
 import { QuickOpen } from "./components/QuickOpen";
 import { AboutDialog } from "./components/AboutDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
+import { AgentsPanel } from "./components/AgentsPanel";
+import { AgentWorkspace } from "./components/AgentWorkspace";
+import { Codicon } from "./icons/codicons/Codicon";
 import {
+  acpPrompt,
+  agentsLoad,
+  agentsSave,
   buildSearchIndex,
   gitBranch,
   gitStatus,
@@ -52,6 +58,20 @@ import {
   navigationTarget,
   recordNavigation,
 } from "./navigationHistory";
+import {
+  buildAgentPrompt,
+  createLocalId,
+  EMPTY_AGENT_STORE,
+  normalizeAgentStore,
+  replaceConversation,
+} from "./agents/store";
+import type {
+  AgentConversation,
+  AgentDraft,
+  AgentMessage,
+  AgentSelection,
+  AgentStore,
+} from "./agents/types";
 
 /** Returns the last path segment, handling both Windows and POSIX separators. */
 function baseName(path: string): string {
@@ -79,6 +99,13 @@ export default function App() {
   const [panelHeight, setPanelHeight] = useState(220);
   const [activeView, setActiveView] = useState("explorer");
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
+  const [agentStore, setAgentStore] = useState<AgentStore>(() => ({
+    ...EMPTY_AGENT_STORE,
+  }));
+  const [agentSelection, setAgentSelection] = useState<AgentSelection>(null);
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [agentStatus, setAgentStatus] = useState<string | null>(null);
+  const [agentError, setAgentError] = useState<string | null>(null);
 
   // "Open With…" selector (ISSUE-70): the file + anchor point while it's shown.
   const [openWith, setOpenWith] = useState<
@@ -260,6 +287,294 @@ export default function App() {
       .catch((err) => console.error("Falha ao restaurar sessão:", err));
     // openFolder is stable (useCallback []), so this runs exactly once.
   }, [openFolder]);
+
+  // Agent definitions and histories are isolated per workspace.
+  useEffect(() => {
+    let cancelled = false;
+    setAgentSelection(null);
+    setAgentError(null);
+    setAgentStatus(null);
+
+    if (!rootPath) {
+      setAgentStore({ ...EMPTY_AGENT_STORE });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    agentsLoad(rootPath)
+      .then((store) => {
+        if (!cancelled) setAgentStore(normalizeAgentStore(store));
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setAgentStore({ ...EMPTY_AGENT_STORE });
+          setAgentError(String(error));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [rootPath]);
+
+  const persistAgentStore = useCallback(
+    async (next: AgentStore) => {
+      setAgentStore(next);
+      if (!rootPath) return;
+      try {
+        await agentsSave(rootPath, next);
+      } catch (error) {
+        setAgentError(String(error));
+      }
+    },
+    [rootPath],
+  );
+
+  function createAgentConversation(agentId: string): AgentConversation {
+    const now = new Date().toISOString();
+    return {
+      id: createLocalId("conversation"),
+      agentId,
+      title: "Nova conversa",
+      messages: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  function handleCreateAgent() {
+    if (!rootPath) return;
+    setActiveView("agents");
+    setAgentSelection({ kind: "config", agentId: null });
+    setAgentError(null);
+  }
+
+  function handleEditAgent(agentId: string) {
+    setActiveView("agents");
+    setAgentSelection({ kind: "config", agentId });
+    setAgentError(null);
+  }
+
+  function handleSaveAgent(draft: AgentDraft) {
+    if (!rootPath) return;
+    const now = new Date().toISOString();
+    const existing = draft.id
+      ? agentStore.agents.find((agent) => agent.id === draft.id)
+      : undefined;
+    const agentId = existing?.id ?? createLocalId("agent");
+    const definition = {
+      id: agentId,
+      name: draft.name,
+      color: draft.color,
+      initialPrompt: draft.initialPrompt,
+      provider: draft.provider,
+      workspacePath: rootPath,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+    const agents = existing
+      ? agentStore.agents.map((agent) =>
+          agent.id === agentId ? definition : agent,
+        )
+      : [...agentStore.agents, definition];
+    const latest = [...agentStore.conversations]
+      .filter((conversation) => conversation.agentId === agentId)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    const conversation = latest ?? createAgentConversation(agentId);
+    const conversations = latest
+      ? agentStore.conversations
+      : [...agentStore.conversations, conversation];
+    const next = { ...agentStore, agents, conversations };
+    void persistAgentStore(next);
+    setAgentSelection({
+      kind: "chat",
+      agentId,
+      conversationId: conversation.id,
+    });
+  }
+
+  function handleSelectAgent(agentId: string) {
+    const latest = [...agentStore.conversations]
+      .filter((conversation) => conversation.agentId === agentId)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    if (latest) {
+      setAgentSelection({
+        kind: "chat",
+        agentId,
+        conversationId: latest.id,
+      });
+      return;
+    }
+    handleNewAgentConversation(agentId);
+  }
+
+  function handleNewAgentConversation(agentId: string) {
+    const conversation = createAgentConversation(agentId);
+    const next = {
+      ...agentStore,
+      conversations: [...agentStore.conversations, conversation],
+    };
+    void persistAgentStore(next);
+    setAgentSelection({
+      kind: "chat",
+      agentId,
+      conversationId: conversation.id,
+    });
+  }
+
+  function handleRenameAgent(agentId: string, name: string) {
+    const now = new Date().toISOString();
+    void persistAgentStore({
+      ...agentStore,
+      agents: agentStore.agents.map((agent) =>
+        agent.id === agentId ? { ...agent, name, updatedAt: now } : agent,
+      ),
+    });
+  }
+
+  function handleDeleteAgent(agentId: string) {
+    void persistAgentStore({
+      ...agentStore,
+      agents: agentStore.agents.filter((agent) => agent.id !== agentId),
+      conversations: agentStore.conversations.filter(
+        (conversation) => conversation.agentId !== agentId,
+      ),
+    });
+    if (agentSelection?.agentId === agentId) setAgentSelection(null);
+  }
+
+  function handleOpenAgentConversation(conversation: AgentConversation) {
+    setAgentSelection({
+      kind: "chat",
+      agentId: conversation.agentId,
+      conversationId: conversation.id,
+    });
+  }
+
+  async function handleSendAgentMessage(message: string) {
+    if (!rootPath || agentSelection?.kind !== "chat" || agentBusy) return;
+    const agent = agentStore.agents.find(
+      (candidate) => candidate.id === agentSelection.agentId,
+    );
+    const conversation = agentStore.conversations.find(
+      (candidate) => candidate.id === agentSelection.conversationId,
+    );
+    if (!agent || !conversation) return;
+
+    const now = new Date().toISOString();
+    const userMessage: AgentMessage = {
+      id: createLocalId("message"),
+      role: "user",
+      content: message,
+      createdAt: now,
+      status: "done",
+    };
+    const assistantMessage: AgentMessage = {
+      id: createLocalId("message"),
+      role: "assistant",
+      content: "",
+      createdAt: now,
+      status: "streaming",
+    };
+    const prompt = buildAgentPrompt(agent, conversation.messages, message);
+    let workingStore = replaceConversation(
+      agentStore,
+      conversation.id,
+      (current) => ({
+        ...current,
+        title:
+          current.messages.length === 0
+            ? message.slice(0, 52) || "Nova conversa"
+            : current.title,
+        messages: [...current.messages, userMessage, assistantMessage],
+        updatedAt: now,
+      }),
+    );
+
+    setAgentBusy(true);
+    setAgentError(null);
+    setAgentStatus("Conectando ao provedor ACP…");
+    await persistAgentStore(workingStore);
+
+    try {
+      await acpPrompt(agent.provider, rootPath, prompt, (event) => {
+        if (event.type === "status") {
+          setAgentStatus(event.message);
+          return;
+        }
+        if (event.type === "text") {
+          setAgentStatus("Recebendo resposta…");
+          workingStore = replaceConversation(
+            workingStore,
+            conversation.id,
+            (current) => ({
+              ...current,
+              messages: current.messages.map((candidate) =>
+                candidate.id === assistantMessage.id
+                  ? {
+                      ...candidate,
+                      content: candidate.content + event.content,
+                      status: "streaming",
+                    }
+                  : candidate,
+              ),
+              updatedAt: new Date().toISOString(),
+            }),
+          );
+          setAgentStore(workingStore);
+          return;
+        }
+        if (event.type === "error") setAgentError(event.message);
+      });
+
+      workingStore = replaceConversation(
+        workingStore,
+        conversation.id,
+        (current) => ({
+          ...current,
+          messages: current.messages.map((candidate) =>
+            candidate.id === assistantMessage.id
+              ? {
+                  ...candidate,
+                  content:
+                    candidate.content ||
+                    "O agente encerrou a resposta sem conteúdo textual.",
+                  status: "done",
+                }
+              : candidate,
+          ),
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      await persistAgentStore(workingStore);
+      setAgentStatus("Resposta concluída.");
+    } catch (error) {
+      const messageText = String(error);
+      workingStore = replaceConversation(
+        workingStore,
+        conversation.id,
+        (current) => ({
+          ...current,
+          messages: current.messages.map((candidate) =>
+            candidate.id === assistantMessage.id
+              ? {
+                  ...candidate,
+                  content: candidate.content || messageText,
+                  status: "error",
+                }
+              : candidate,
+          ),
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      await persistAgentStore(workingStore);
+      setAgentError(messageText);
+      setAgentStatus(null);
+    } finally {
+      setAgentBusy(false);
+    }
+  }
 
   /**
    * Open a file in a tab (or focus it if already open), optionally at a line.
@@ -1285,6 +1600,21 @@ export default function App() {
         );
       case "debug":
         return <RunPanel rootPath={rootPath} onRun={handleRun} />;
+      case "agents":
+        return (
+          <AgentsPanel
+            rootPath={rootPath}
+            store={agentStore}
+            selection={agentSelection}
+            onCreate={handleCreateAgent}
+            onSelectAgent={handleSelectAgent}
+            onEdit={handleEditAgent}
+            onRename={handleRenameAgent}
+            onDelete={handleDeleteAgent}
+            onNewConversation={handleNewAgentConversation}
+            onOpenConversation={handleOpenAgentConversation}
+          />
+        );
       case "account":
         return <PlaceholderPanel title="CONTAS" />;
       case "settings":
@@ -1324,20 +1654,45 @@ export default function App() {
         {sidebarOpen && <aside className="sidebar">{renderSidebar()}</aside>}
 
         <main className="app-main">
-          <Breadcrumbs filePath={activePath} rootPath={rootPath} />
-          <TabBar
-            files={openFiles}
-            activePath={activePath}
-            onSelect={setActivePath}
-            onClose={handleCloseTab}
-            onCloseAll={handleCloseAll}
-            onCloseOthers={handleCloseOthers}
-            onCloseLeft={handleCloseLeft}
-            onCloseRight={handleCloseRight}
-            decorationFor={decorationFor}
-          />
+          {activeView === "agents" ? (
+            <div className="agent-center-bar">
+              <Codicon name="agents" size={15} />
+              <span>Agentes</span>
+              <span className="agent-center-workspace">
+                {rootPath ?? "Nenhum workspace aberto"}
+              </span>
+            </div>
+          ) : (
+            <>
+              <Breadcrumbs filePath={activePath} rootPath={rootPath} />
+              <TabBar
+                files={openFiles}
+                activePath={activePath}
+                onSelect={setActivePath}
+                onClose={handleCloseTab}
+                onCloseAll={handleCloseAll}
+                onCloseOthers={handleCloseOthers}
+                onCloseLeft={handleCloseLeft}
+                onCloseRight={handleCloseRight}
+                decorationFor={decorationFor}
+              />
+            </>
+          )}
           <div className="editor-host">
-            {activeFile && activeFile.mode === "image" ? (
+            {activeView === "agents" ? (
+              <AgentWorkspace
+                rootPath={rootPath}
+                store={agentStore}
+                selection={agentSelection}
+                busy={agentBusy}
+                status={agentStatus}
+                error={agentError}
+                onCreate={handleCreateAgent}
+                onSaveAgent={handleSaveAgent}
+                onCancelConfig={() => setAgentSelection(null)}
+                onSendMessage={handleSendAgentMessage}
+              />
+            ) : activeFile && activeFile.mode === "image" ? (
               // Image-mode tab (ISSUE-70): read-only preview, no Monaco.
               <ImagePreview path={activeFile.path} name={activeFile.name} />
             ) : (

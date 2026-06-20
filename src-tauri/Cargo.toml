@@ -47,6 +47,9 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
 # Locate node / typescript-language-server / npm on PATH.
 which = "6"
+# Official Agent Client Protocol SDK. The editor acts as the ACP client and
+# spawns the registered Codex/Claude adapters over JSON-RPC stdio.
+agent-client-protocol = "0.15"
 
 [profile.release]
 panic = "abort"
