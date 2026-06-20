@@ -478,12 +478,20 @@ export default function App() {
     const appWindow = getCurrentWindow();
     const unlistenPromise = appWindow.onCloseRequested(async (event) => {
       if (confirmedClose.current) return; // our own close — let it proceed
-      if (openFilesRef.current.every((f) => !f.dirty)) return; // nothing to guard
+      const hasDirty = openFilesRef.current.some((f) => f.dirty);
+      if (!hasDirty) {
+        // Nothing to guard. Don't preventDefault — let the close proceed. We also
+        // destroy() explicitly as a fallback in case the default close is being
+        // swallowed, so the window always goes away.
+        confirmedClose.current = true;
+        void appWindow.destroy();
+        return;
+      }
       event.preventDefault();
       const ok = await guardDirtySession();
       if (ok) {
         confirmedClose.current = true;
-        appWindow.close();
+        void appWindow.destroy();
       }
     });
     return () => {

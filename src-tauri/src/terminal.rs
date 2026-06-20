@@ -7,6 +7,10 @@ use tauri::{AppHandle, Emitter, State};
 pub struct PtySession {
     writer: Box<dyn Write + Send>,
     master: Box<dyn portable_pty::MasterPty + Send>,
+    // The spawned shell. Kept so we can kill it on teardown — `portable-pty` does
+    // NOT kill the child on drop, so without this the PowerShell process (and the
+    // blocking reader thread) outlive the window and hang the app on close.
+    child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
 pub struct TerminalState {
@@ -17,6 +21,16 @@ impl TerminalState {
     pub fn new() -> Self {
         TerminalState {
             sessions: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Kills every live PTY child and clears the session table. Called on window
+    /// close so no shell process is left orphaned holding the app open.
+    pub fn shutdown_all(&self) {
+        if let Ok(mut sessions) = self.sessions.lock() {
+            for (_id, mut session) in sessions.drain() {
+                let _ = session.child.kill();
+            }
         }
     }
 }
@@ -48,7 +62,7 @@ pub fn term_create(
         cmd.arg(line);
     }
 
-    let _child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
 
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
@@ -73,7 +87,7 @@ pub fn term_create(
     });
 
     let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
-    sessions.insert(id, PtySession { writer, master: pair.master });
+    sessions.insert(id, PtySession { writer, master: pair.master, child });
 
     Ok(())
 }
@@ -113,6 +127,8 @@ pub fn term_close(
     state: State<'_, TerminalState>,
 ) -> Result<(), String> {
     let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
-    sessions.remove(&id);
+    if let Some(mut session) = sessions.remove(&id) {
+        let _ = session.child.kill();
+    }
     Ok(())
 }

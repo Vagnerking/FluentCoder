@@ -22,3 +22,9 @@ dist-ssr
 
 # Rust / Tauri
 src-tauri/target
+
+# Planejamento interno (EPICs / issues) — não versionado
+milestones/
+
+# Estado interno de ferramentas de IA (Claude Code)
+.claude/

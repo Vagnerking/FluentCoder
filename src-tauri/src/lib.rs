@@ -8,6 +8,8 @@ mod session;
 mod terminal;
 mod walk;
 
+use tauri::Manager;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -58,6 +60,35 @@ pub fn run() {
             lsp::lsp_ensure_ts_server,
             lsp::razor::lsp_ensure_razor_server,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Kill every child process (PTY shells + LSP servers) and their reader
+            // threads, then force-quit. `portable-pty` doesn't kill its child on
+            // drop and the PTY reader is a blocking OS thread, so relying on `Drop`
+            // alone leaves the process alive — the window disappears but the app
+            // process hangs around. We tear down on the window's Destroyed event
+            // (fires once the last window is gone) and then `exit(0)` ourselves so
+            // a stuck WebView/runtime thread can never keep the process up.
+            match event {
+                tauri::RunEvent::WindowEvent {
+                    event: tauri::WindowEvent::Destroyed,
+                    ..
+                } => {
+                    eprintln!("[exit] window destroyed — tearing down children");
+                    app.state::<terminal::TerminalState>().shutdown_all();
+                    app.state::<lsp::LspState>().shutdown_all();
+                    eprintln!("[exit] teardown done — forcing process exit");
+                    std::process::exit(0);
+                }
+                tauri::RunEvent::ExitRequested { .. } => {
+                    eprintln!("[exit] ExitRequested — tearing down children");
+                    app.state::<terminal::TerminalState>().shutdown_all();
+                    app.state::<lsp::LspState>().shutdown_all();
+                    eprintln!("[exit] teardown done — forcing process exit");
+                    std::process::exit(0);
+                }
+                _ => {}
+            }
+        });
 }

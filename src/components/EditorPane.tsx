@@ -328,6 +328,28 @@ export function EditorPane({
         "scrollbarSlider.background": "#B8C7D526",
         "scrollbarSlider.hoverBackground": "#B8C7D540",
         "scrollbarSlider.activeBackground": "#B8C7D55A",
+        // Completion (IntelliSense) widget. Without these the suggest list
+        // falls back to vs-dark defaults, which read as near-invisible text
+        // against this theme's customized surfaces — the dropdown of
+        // references becomes unreadable. Opaque surface (no acrylic alpha)
+        // so the editor text never bleeds through the list.
+        "editorSuggestWidget.background": "#202734",
+        "editorSuggestWidget.border": "#3A4150",
+        "editorSuggestWidget.foreground": "#D6E2F0",
+        "editorSuggestWidget.selectedBackground": "#2C5E80",
+        "editorSuggestWidget.selectedForeground": "#FFFFFF",
+        "editorSuggestWidget.highlightForeground": "#60CDFF",
+        "editorSuggestWidget.focusHighlightForeground": "#9DDCFF",
+        // Hover, signature-help and parameter-hint popups share the same
+        // surface so all editor flyouts stay legible and consistent.
+        "editorHoverWidget.background": "#202734",
+        "editorHoverWidget.border": "#3A4150",
+        "editorHoverWidget.foreground": "#D6E2F0",
+        "editorWidget.background": "#202734",
+        "editorWidget.border": "#3A4150",
+        "editorWidget.foreground": "#D6E2F0",
+        // Inline (ghost text) completion preview — the dimmed italic text.
+        "editorGhostText.foreground": "#7D8795",
       },
     });
   };
@@ -429,6 +451,13 @@ export function EditorPane({
         tabSize: 2,
         padding: { top: 12 },
         mouseWheelZoom: true,
+        // Suggest (IntelliSense) widget sizing. Monaco derives each row's
+        // height from `suggestLineHeight` or, when 0, the editor's computed
+        // `fontInfo.lineHeight`. Pinning both font size and line height keeps
+        // the virtual list rows tall enough for the label + 22px type icon, so
+        // entries don't overlap into an unreadable, doubled list.
+        suggestFontSize: 13,
+        suggestLineHeight: 22,
         // Render LSP semantic tokens. Literal `true` (not 'configuredByTheme')
         // because the standalone theme flag is hardcoded off; this turns the
         // type/method/param coloring on, resolved via the theme `rules` above.

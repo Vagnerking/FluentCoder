@@ -52,6 +52,29 @@ impl Default for LspState {
     }
 }
 
+impl LspState {
+    /// Shuts down every active LSP session (each bridge kills its server process)
+    /// and clears the table. Called on window close so no language server is left
+    /// orphaned holding the app open.
+    ///
+    /// `shutdown()` only signals the bridge task; the actual `process.kill()` runs
+    /// asynchronously on this state's tokio runtime. We give that runtime a brief
+    /// window to drain those kills before the process exits, so servers are
+    /// reaped rather than orphaned.
+    pub fn shutdown_all(&self) {
+        if let Ok(mut sessions) = self.sessions.lock() {
+            for (_id, mut session) in sessions.drain() {
+                session.bridge.shutdown();
+            }
+        }
+        // Let the bridge tasks observe the shutdown signal and kill their child
+        // processes. Bounded so a stuck server can't block app exit.
+        self.runtime.block_on(async {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        });
+    }
+}
+
 /// Spawns an LSP server and brings up its local WS bridge. If a session with the
 /// same `id` already exists it is stopped first (no duplicate instances).
 #[tauri::command]
