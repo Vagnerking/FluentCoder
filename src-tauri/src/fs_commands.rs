@@ -158,9 +158,32 @@ fn entry_for(path: PathBuf, is_dir: bool) -> Result<DirEntry, String> {
         .to_string();
     Ok(DirEntry {
         name,
-        path: path.to_string_lossy().to_string(),
+        path: path_for_frontend(&path),
         is_dir,
     })
+}
+
+/// Converts a native path to the stable form used by the frontend.
+///
+/// `fs::canonicalize` adds Windows' extended-length prefix (`\\?\`) even for
+/// ordinary drive paths. That form is valid for filesystem calls, but feeding
+/// it to Monaco's file-URI parser produces `file:////?/C:/...`, which is
+/// rejected as a URI with no authority. Keep extended paths internally and
+/// remove only the transport prefix when serializing entries to React.
+fn path_for_frontend(path: &Path) -> String {
+    let value = path.to_string_lossy();
+
+    #[cfg(windows)]
+    {
+        if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{rest}");
+        }
+        if let Some(rest) = value.strip_prefix(r"\\?\") {
+            return rest.to_string();
+        }
+    }
+
+    value.into_owned()
 }
 
 /// Lists the immediate children of `path`, directories first then files,
@@ -473,6 +496,23 @@ mod tests {
 
         // Renaming onto an existing name must be rejected (no overwrite).
         assert!(rename_path(root_text.clone(), renamed.path, "b.txt".into()).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn serializes_renamed_paths_without_windows_extended_prefix() {
+        let root = workspace();
+        let root_text = root.to_string_lossy().to_string();
+        let file = create_file(root_text.clone(), root_text.clone(), "before.txt".into()).unwrap();
+
+        let renamed = rename_path(root_text, file.path, "after.txt".into()).unwrap();
+
+        assert!(
+            !renamed.path.starts_with(r"\\?\"),
+            "o frontend não deve receber caminho estendido: {}",
+            renamed.path
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

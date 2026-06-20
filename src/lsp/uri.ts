@@ -10,6 +10,8 @@ import type * as Monaco from "monaco-editor";
 
 const WINDOWS_DRIVE_IN_FILE_URI = /^(file:\/\/\/)([a-z])%3A(?=\/)/i;
 const WINDOWS_FILE_PATH = /^\/[a-z]:\//i;
+const WINDOWS_EXTENDED_UNC_PATH = /^\\\\\?\\UNC\\/i;
+const WINDOWS_EXTENDED_PATH = /^\\\\\?\\/;
 
 type MutableUriFactory = {
   parse: typeof Monaco.Uri.parse;
@@ -69,7 +71,17 @@ export function installWindowsFileUriSerialization(
  * (`C:\foo` → `file:///c:/foo`) and POSIX paths alike.
  */
 export function toFileUri(p: string): string {
-  let normalized = p.replace(/\\/g, "/");
+  let filesystemPath = p;
+  if (WINDOWS_EXTENDED_UNC_PATH.test(filesystemPath)) {
+    filesystemPath = `\\\\${filesystemPath.slice(8)}`;
+  } else if (WINDOWS_EXTENDED_PATH.test(filesystemPath)) {
+    filesystemPath = filesystemPath.slice(4);
+  }
+
+  let normalized = filesystemPath.replace(/\\/g, "/");
+  if (normalized.startsWith("//")) {
+    return `file:${encodeURI(normalized)}`;
+  }
   if (!normalized.startsWith("/")) normalized = `/${normalized}`;
   // encodeURI keeps `/` and `:` intact while escaping spaces etc.
   return `file://${encodeURI(normalized)}`;
