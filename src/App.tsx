@@ -71,6 +71,7 @@ export default function App() {
   const [activePath, setActivePath] = useState<string | null>(null);
   const navigationHistoryRef = useRef(createNavigationHistory());
   const historyNavigationTargetRef = useRef<string | null>(null);
+  const historyNavigationPendingRef = useRef(false);
 
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelHeight, setPanelHeight] = useState(220);
@@ -329,24 +330,31 @@ export default function App() {
 
   const navigateFileHistory = useCallback(
     async (direction: -1 | 1) => {
-      const target = navigationTarget(navigationHistoryRef.current, direction);
-      if (!target) return;
+      if (historyNavigationPendingRef.current) return;
+      historyNavigationPendingRef.current = true;
 
-      historyNavigationTargetRef.current = target.path;
-      const opened = await handleOpenFile({
-        name: baseName(target.path),
-        path: target.path,
-        isDir: false,
-      });
-      if (!opened) {
-        historyNavigationTargetRef.current = null;
-        return;
+      try {
+        const target = navigationTarget(navigationHistoryRef.current, direction);
+        if (!target) return;
+
+        historyNavigationTargetRef.current = target.path;
+        const opened = await handleOpenFile({
+          name: baseName(target.path),
+          path: target.path,
+          isDir: false,
+        });
+        if (!opened) {
+          historyNavigationTargetRef.current = null;
+          return;
+        }
+
+        navigationHistoryRef.current = {
+          ...navigationHistoryRef.current,
+          index: target.index,
+        };
+      } finally {
+        historyNavigationPendingRef.current = false;
       }
-
-      navigationHistoryRef.current = {
-        ...navigationHistoryRef.current,
-        index: target.index,
-      };
     },
     [handleOpenFile]
   );
