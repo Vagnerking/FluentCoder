@@ -347,7 +347,7 @@ body {
   font-family: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   font-size: 14px;
   font-weight: 450;
-  line-height: 1;
+  line-height: 20px;
 }
 
 .tree-row:hover {
