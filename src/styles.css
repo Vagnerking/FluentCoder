@@ -199,8 +199,8 @@ body {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.04),
     0 8px 24px rgba(0, 0, 0, 0.24);
-  backdrop-filter: blur(28px) saturate(125%);
-  -webkit-backdrop-filter: blur(28px) saturate(125%);
+  /* Native Mica already supplies the backdrop. A second CSS blur forces
+     WebView2 to recompose this surface during every scroll frame. */
   display: flex;
   flex-direction: column;
   /* Contain panel content so long titles/text never spill past the sidebar. */
@@ -310,6 +310,8 @@ body {
   flex: 1;
   overflow-y: auto;
   padding: 2px 6px 12px;
+  contain: layout paint;
+  overscroll-behavior: contain;
 }
 
 .explorer-empty {
@@ -1046,8 +1048,13 @@ button:focus-visible,
 .search-input:disabled { opacity: 0.5; cursor: not-allowed; }
 .search-results { flex: 1; overflow-y: auto; padding-bottom: 12px; }
 .search-empty { padding: 8px 12px; color: var(--text-muted); font-size: 12px; }
+.search-progress { display: flex; align-items: center; gap: 6px; padding: 4px 12px; color: var(--text-muted); font-size: 11px; }
 .search-summary { padding: 4px 12px; color: var(--text-muted); font-size: 11px; }
-.search-file-group { margin-top: 4px; }
+.search-file-group {
+  margin-top: 4px;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 160px;
+}
 .search-file-name { padding: 4px 12px; font-size: 12px; font-weight: 600; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-match-row { display: flex; gap: 8px; margin: 1px 6px; padding: 4px 8px 4px 18px; cursor: pointer; font-size: 12px; color: var(--text-muted); overflow: hidden; border-radius: var(--radius-control); }
 .search-match-row:hover { background: var(--fill-subtle-hover); color: var(--text-secondary); }

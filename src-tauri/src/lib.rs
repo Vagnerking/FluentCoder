@@ -14,6 +14,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(terminal::TerminalState::new())
         .manage(lsp::LspState::new())
+        .manage(search::SearchState::new())
         .invoke_handler(tauri::generate_handler![
             fs_commands::read_dir,
             fs_commands::read_file,
@@ -27,6 +28,7 @@ pub fn run() {
             fs_commands::move_path,
             fs_commands::reveal_in_explorer,
             search::search_in_dir,
+            search::cancel_search,
             file_index::list_project_files,
             git::git_branch,
             git::git_status,

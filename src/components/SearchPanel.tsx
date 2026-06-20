@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { searchInDir } from "../api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { cancelSearch, searchInDir } from "../api";
 import type { FileNode, SearchMatch } from "../types";
 import { Codicon } from "../icons/codicons/Codicon";
 import { FileIcon } from "../icon-theme/material/FileIcon";
@@ -48,40 +48,97 @@ export function SearchPanel({
   const [query, setQuery] = useState("");
   const [matches, setMatches] = useState<SearchMatch[]>([]);
   const [status, setStatus] = useState<"idle" | "searching" | "done">("idle");
+  const [limitHit, setLimitHit] = useState(false);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const debounceRef = useRef<number | null>(null);
+  const requestRef = useRef(0);
 
   // Effective search root: the scoped folder when set, else the workspace root.
   const searchRoot =
     scopePath && rootPath && scopePath.startsWith(rootPath) ? scopePath : rootPath;
   const isScoped = !!searchRoot && searchRoot !== rootPath;
 
-  async function runSearch() {
-    if (!searchRoot || !query.trim()) return;
-    setStatus("searching");
-    try {
-      const results = await searchInDir(searchRoot, query.trim());
-      setMatches(results);
-    } catch (err) {
-      console.error(err);
-      setMatches([]);
-    } finally {
-      setStatus("done");
-    }
-  }
+  const runSearch = useCallback(
+    async (term: string, requestId: number) => {
+      if (!searchRoot || !term || requestId !== requestRef.current) return;
+      setStatus("searching");
+      setError(null);
+      try {
+        await cancelSearch();
+        if (requestId !== requestRef.current) return;
+        const response = await searchInDir(searchRoot, term);
+        if (requestId !== requestRef.current || response.cancelled) return;
+        setMatches(response.matches);
+        setLimitHit(response.limitHit);
+        setElapsedMs(response.elapsedMs);
+        setStatus("done");
+      } catch (err) {
+        if (requestId !== requestRef.current) return;
+        console.error(err);
+        setMatches([]);
+        setLimitHit(false);
+        setError("Não foi possível concluir a pesquisa.");
+        setStatus("done");
+      }
+    },
+    [searchRoot]
+  );
 
-  // Re-run when the scope changes if there is already a query typed.
   useEffect(() => {
-    if (query.trim()) runSearch();
-    // Only react to scope changes here.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchRoot]);
+    if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
+    const term = query.trim();
+    const requestId = ++requestRef.current;
+    void cancelSearch();
+
+    if (!searchRoot || !term) {
+      setMatches([]);
+      setLimitHit(false);
+      setElapsedMs(0);
+      setError(null);
+      setStatus("idle");
+      return;
+    }
+
+    debounceRef.current = window.setTimeout(() => {
+      debounceRef.current = null;
+      void runSearch(term, requestId);
+    }, 200);
+
+    return () => {
+      if (debounceRef.current !== null) {
+        window.clearTimeout(debounceRef.current);
+        debounceRef.current = null;
+      }
+    };
+  }, [query, searchRoot, runSearch]);
+
+  useEffect(
+    () => () => {
+      requestRef.current += 1;
+      void cancelSearch();
+    },
+    []
+  );
 
   // Focus the input when a scope is applied (the action opens the panel).
   useEffect(() => {
     if (isScoped) inputRef.current?.focus();
   }, [isScoped]);
 
-  const groups = groupByFile(matches);
+  const groups = useMemo(() => groupByFile(matches), [matches]);
+
+  function searchNow() {
+    const term = query.trim();
+    if (!searchRoot || !term) return;
+    if (debounceRef.current !== null) {
+      window.clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+    const requestId = ++requestRef.current;
+    void runSearch(term, requestId);
+  }
 
   return (
     <div className="search-panel">
@@ -99,7 +156,12 @@ export function SearchPanel({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") runSearch();
+            if (e.key === "Enter") searchNow();
+            if (e.key === "Escape") {
+              requestRef.current += 1;
+              void cancelSearch();
+              setStatus(matches.length ? "done" : "idle");
+            }
           }}
           disabled={!rootPath}
         />
@@ -125,15 +187,22 @@ export function SearchPanel({
       <div className="search-results">
         {!rootPath ? (
           <div className="search-empty">Abra uma pasta para pesquisar.</div>
-        ) : status === "searching" ? (
-          <div className="search-empty">Pesquisando…</div>
+        ) : error ? (
+          <div className="search-empty" role="alert">{error}</div>
         ) : status === "done" && matches.length === 0 ? (
           <div className="search-empty">Nenhum resultado.</div>
         ) : (
           <>
+            {status === "searching" && (
+              <div className="search-progress" role="status">
+                <Codicon name="loading" size={12} spin /> Pesquisando…
+              </div>
+            )}
             {matches.length > 0 && (
               <div className="search-summary">
                 {matches.length} resultado(s) em {groups.size} arquivo(s)
+                {limitHit ? " · limite atingido" : ""}
+                {status === "done" ? ` · ${elapsedMs} ms` : ""}
               </div>
             )}
             {[...groups.entries()].map(([path, fileMatches]) => (
