@@ -54,6 +54,7 @@ pub fn run() {
             runner::run_configs_detect,
             session::session_load,
             session::session_set_last_folder,
+            session::session_set_open_files,
             terminal::term_create,
             terminal::term_write,
             terminal::term_resize,
