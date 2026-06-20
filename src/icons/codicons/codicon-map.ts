@@ -41,6 +41,7 @@ export type IconAction =
   | "caseSensitive"
   | "wholeWord"
   | "regex"
+  | "filterFiles"
   // Run / debug
   | "run"
   | "debug"
@@ -133,6 +134,7 @@ export const CODICON_MAP: Record<IconAction, string> = {
   caseSensitive: "case-sensitive",
   wholeWord: "whole-word",
   regex: "regex",
+  filterFiles: "ellipsis",
 
   // Run / debug
   run: "play",

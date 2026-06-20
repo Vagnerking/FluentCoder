@@ -1267,9 +1267,79 @@ button .codicon { pointer-events: none; }
   color: var(--text-muted);
   pointer-events: none;
 }
-.search-input-row .search-input { padding-left: 30px; }
+.search-input-row .search-input { padding-left: 30px; padding-right: 96px; }
 .search-file-name { display: flex; align-items: center; gap: 6px; }
 .search-file-icon { flex-shrink: 0; }
+
+/* ---- Search: toggles (regex / case / whole-word / filters) ---- */
+.search-input.search-input-invalid,
+.search-input.search-input-invalid:focus {
+  border-color: var(--error);
+  box-shadow: inset 0 -1px 0 var(--error);
+}
+.search-controls {
+  position: absolute;
+  right: 17px;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+.search-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.search-toggle:hover:not(:disabled) {
+  background: var(--acrylic-control-hover);
+  color: var(--text-secondary);
+}
+.search-toggle.active {
+  background: var(--fill-selected);
+  border-color: rgba(96, 205, 255, 0.35);
+  color: var(--text);
+}
+.search-toggle:disabled { opacity: 0.4; cursor: default; }
+.search-controls-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 3px;
+  background: var(--acrylic-border-strong);
+}
+
+/* ---- Search: include/exclude glob fields ---- */
+.search-filters { display: flex; flex-direction: column; gap: 2px; padding: 0 12px 8px; }
+.search-filter-label { margin-top: 2px; font-size: 11px; color: var(--text-muted); }
+.search-glob-input {
+  width: 100%;
+  height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  border-bottom-color: var(--acrylic-border-strong);
+  border-radius: var(--radius-control);
+  outline: none;
+}
+.search-glob-input:hover:not(:disabled) { background: var(--acrylic-control-hover); }
+.search-glob-input:focus { border-color: var(--accent); box-shadow: inset 0 -1px 0 var(--accent); }
+.search-glob-input:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ---- Search: matched-term highlight ---- */
+.search-match-highlight {
+  background: rgba(255, 197, 61, 0.30);
+  color: inherit;
+  border-radius: 2px;
+}
+.search-match-row:hover .search-match-highlight { background: rgba(255, 197, 61, 0.42); }
 
 /* ---- Quick Open: per-result file icon ---- */
 .quick-open-item { align-items: center; }

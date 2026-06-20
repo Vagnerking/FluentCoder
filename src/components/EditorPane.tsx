@@ -1,7 +1,13 @@
 import Editor, { BeforeMount, OnMount } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import { useEffect, useRef } from "react";
-import type { BlameHunk, EditorActionsApi, OpenFile, Problem } from "../types";
+import type {
+  BlameHunk,
+  EditorActionsApi,
+  MatchSelection,
+  OpenFile,
+  Problem,
+} from "../types";
 import { languageForFile } from "../language";
 import { gitBlame, writeFile } from "../api";
 import { toFileUri, fromFileUri } from "../lsp/uri";
@@ -29,10 +35,19 @@ interface EditorPaneProps {
   onCursorChange: (line: number, col: number) => void;
   /** Emits the current diagnostics whenever Monaco's markers change. */
   onProblemsChange: (problems: Problem[]) => void;
-  /** Imperatively reveals a line; set by the parent to jump from search/problems. */
-  revealRef?: React.MutableRefObject<((line: number) => void) | null>;
-  /** A line to reveal as soon as the editor mounts (for just-opened files). */
-  pendingRevealLine?: React.MutableRefObject<number | null>;
+  /**
+   * Imperatively reveals a line; set by the parent to jump from search/problems.
+   * An optional `selection` highlights (selects) a range on that line — used by
+   * search results to highlight the matched term in the editor.
+   */
+  revealRef?: React.MutableRefObject<
+    ((line: number, selection?: MatchSelection) => void) | null
+  >;
+  /** A line (+ optional selection) to reveal as soon as the editor mounts. */
+  pendingReveal?: React.MutableRefObject<{
+    line: number;
+    selection?: MatchSelection;
+  } | null>;
   /**
    * Imperative bridge the App holds to drive the editor (run actions, trigger
    * commands, focus). The Edit/Selection menus from ISSUE-52 depend on it.
@@ -77,7 +92,7 @@ export function EditorPane({
   onCursorChange,
   onProblemsChange,
   revealRef,
-  pendingRevealLine,
+  pendingReveal,
   actionsRef,
   onOpenDefinition,
 }: EditorPaneProps) {
@@ -369,9 +384,21 @@ export function EditorPane({
       }
     });
 
-    const reveal = (line: number) => {
-      editorInstance.revealLineInCenter(line);
-      editorInstance.setPosition({ lineNumber: line, column: 1 });
+    const reveal = (line: number, selection?: MatchSelection) => {
+      if (selection) {
+        // Select the matched term so it's highlighted, then center the range.
+        const range = new monaco.Range(
+          line,
+          selection.startColumn,
+          line,
+          selection.endColumn
+        );
+        editorInstance.setSelection(range);
+        editorInstance.revealRangeInCenter(range);
+      } else {
+        editorInstance.revealLineInCenter(line);
+        editorInstance.setPosition({ lineNumber: line, column: 1 });
+      }
       editorInstance.focus();
     };
 
@@ -389,9 +416,9 @@ export function EditorPane({
       };
     }
 
-    if (pendingRevealLine?.current != null) {
-      reveal(pendingRevealLine.current);
-      pendingRevealLine.current = null;
+    if (pendingReveal?.current != null) {
+      reveal(pendingReveal.current.line, pendingReveal.current.selection);
+      pendingReveal.current = null;
     }
 
     // Reload blame when the model is replaced (file switch handled by useEffect,
