@@ -3,6 +3,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   BlameHunk,
   FileNode,
+  GitBranchInfo,
   GitCommit,
   GitStatus,
   ProjectFile,
@@ -195,6 +196,48 @@ export function listProjectFiles(root: string): Promise<ProjectFile[]> {
 /** Returns the current git branch for `path`, or null if not a repo. */
 export function gitBranch(path: string): Promise<string | null> {
   return invoke<string | null>("git_branch", { path });
+}
+
+/** Raw shape returned by the Rust `git_branches` (snake_case from serde). */
+interface RawGitBranchInfo {
+  name: string;
+  current: boolean;
+  short: string;
+  date: string;
+  author: string;
+  subject: string;
+  ahead: number;
+  behind: number;
+  has_upstream: boolean;
+}
+
+/**
+ * Lists local branches for the picker (issue #16), most-recently-committed
+ * first. Empty when `path` isn't a git repo.
+ */
+export async function gitBranches(path: string): Promise<GitBranchInfo[]> {
+  const raw = await invoke<RawGitBranchInfo[]>("git_branches", { path });
+  return raw.map((b) => ({
+    name: b.name,
+    current: b.current,
+    short: b.short,
+    date: b.date,
+    author: b.author,
+    subject: b.subject,
+    ahead: b.ahead,
+    behind: b.behind,
+    hasUpstream: b.has_upstream,
+  }));
+}
+
+/** Checks out an existing local branch. Rejects with git's message on failure. */
+export function gitCheckout(path: string, branch: string): Promise<void> {
+  return invoke("git_checkout", { path, branch });
+}
+
+/** Creates a new branch from HEAD and checks it out (`git checkout -b`). */
+export function gitCreateBranch(path: string, name: string): Promise<void> {
+  return invoke("git_create_branch", { path, name });
 }
 
 /** Working-tree status: branch, ahead/behind, and changed files. */

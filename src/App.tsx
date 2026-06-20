@@ -19,6 +19,7 @@ import { AboutDialog } from "./components/AboutDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { AgentsPanel } from "./components/AgentsPanel";
 import { AgentWorkspace } from "./components/AgentWorkspace";
+import { BranchPicker } from "./components/BranchPicker";
 import { Codicon } from "./icons/codicons/Codicon";
 import {
   acpPrompt,
@@ -26,6 +27,8 @@ import {
   agentsSave,
   buildSearchIndex,
   gitBranch,
+  gitCheckout,
+  gitCreateBranch,
   gitStatus,
   pickFile,
   pickFolder,
@@ -99,6 +102,7 @@ export default function App() {
   const [panelHeight, setPanelHeight] = useState(220);
   const [activeView, setActiveView] = useState("explorer");
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
+  const [branchPickerOpen, setBranchPickerOpen] = useState(false);
   const [agentStore, setAgentStore] = useState<AgentStore>(() => ({
     ...EMPTY_AGENT_STORE,
   }));
@@ -265,6 +269,46 @@ export default function App() {
     setRoots(entries);
     gitStatus(rootPath).then(setGitState).catch(() => setGitState(null));
   }, [rootPath]);
+
+  /**
+   * Re-syncs everything that a branch switch changes (issue #16): the status-bar
+   * branch, the git decorations, and the explorer tree (files differ between
+   * branches). Shared by checkout and create-branch.
+   */
+  const refreshAfterCheckout = useCallback(async () => {
+    if (!rootPath) return;
+    gitBranch(rootPath).then(setBranch).catch(() => setBranch(null));
+    await refreshExplorerRoot();
+  }, [rootPath, refreshExplorerRoot]);
+
+  /** Checks out an existing branch, then re-syncs branch/status/tree. */
+  const handleCheckoutBranch = useCallback(
+    async (branchName: string) => {
+      if (!rootPath) return;
+      try {
+        await gitCheckout(rootPath, branchName);
+        await refreshAfterCheckout();
+      } catch (err) {
+        console.error(err);
+        alert(`Não foi possível trocar de branch:\n${err}`);
+      }
+    },
+    [rootPath, refreshAfterCheckout]
+  );
+
+  /** Prompts for a name, creates a branch from HEAD, then re-syncs. */
+  const handleCreateBranch = useCallback(async () => {
+    if (!rootPath) return;
+    const name = window.prompt("Nome da nova branch:")?.trim();
+    if (!name) return;
+    try {
+      await gitCreateBranch(rootPath, name);
+      await refreshAfterCheckout();
+    } catch (err) {
+      console.error(err);
+      alert(`Não foi possível criar a branch:\n${err}`);
+    }
+  }, [rootPath, refreshAfterCheckout]);
 
   /** Native folder picker → load top-level entries into the explorer. */
   async function handleOpenFolder() {
@@ -1762,6 +1806,7 @@ export default function App() {
         column={cursorCol}
         fileName={activeFile?.name ?? null}
         branch={branch}
+        onClickBranch={rootPath ? () => setBranchPickerOpen(true) : undefined}
         tabSize={TAB_SIZE}
         errorCount={errorCount}
         warningCount={warningCount}
@@ -1774,6 +1819,15 @@ export default function App() {
           rootPath={rootPath}
           onOpenFile={handleOpenFile}
           onClose={() => setQuickOpenOpen(false)}
+        />
+      )}
+
+      {branchPickerOpen && (
+        <BranchPicker
+          rootPath={rootPath}
+          onCheckout={handleCheckoutBranch}
+          onCreateBranch={handleCreateBranch}
+          onClose={() => setBranchPickerOpen(false)}
         />
       )}
 
