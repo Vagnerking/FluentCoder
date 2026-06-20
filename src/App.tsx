@@ -44,6 +44,12 @@ import type {
   Problem,
 } from "./types";
 import type { LspServerStatus } from "./components/StatusBar";
+import {
+  createNavigationHistory,
+  mouseNavigationDirection,
+  navigationTarget,
+  recordNavigation,
+} from "./navigationHistory";
 
 /** Returns the last path segment, handling both Windows and POSIX separators. */
 function baseName(path: string): string {
@@ -63,6 +69,9 @@ export default function App() {
 
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
+  const navigationHistoryRef = useRef(createNavigationHistory());
+  const historyNavigationTargetRef = useRef<string | null>(null);
+  const historyNavigationPendingRef = useRef(false);
 
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelHeight, setPanelHeight] = useState(220);
@@ -251,7 +260,7 @@ export default function App() {
    */
   const handleOpenFile = useCallback(
     async (node: FileNode, line?: number, mode?: OpenMode) => {
-      if (node.isDir) return;
+      if (node.isDir) return false;
 
       const resolvedMode: OpenMode = mode ?? defaultModeFor(node.path);
 
@@ -268,7 +277,7 @@ export default function App() {
         }
         setActivePath(node.path);
         if (line != null && resolvedMode === "text") revealRef.current?.(line);
-        return;
+        return true;
       }
 
       try {
@@ -289,13 +298,100 @@ export default function App() {
         if (line != null && resolvedMode === "text") {
           pendingRevealLine.current = line;
         }
+        return true;
       } catch (err) {
         console.error(err);
         alert(`Não foi possível abrir o arquivo:\n${err}`);
+        return false;
       }
     },
     [openFiles]
   );
+
+  // Record every file activation regardless of whether it came from Explorer,
+  // tabs, Search, Quick Open or go-to-definition.
+  useEffect(() => {
+    if (!activePath) return;
+    if (historyNavigationTargetRef.current === activePath) {
+      historyNavigationTargetRef.current = null;
+      return;
+    }
+    navigationHistoryRef.current = recordNavigation(
+      navigationHistoryRef.current,
+      activePath
+    );
+  }, [activePath]);
+
+  // A workspace has its own navigation timeline.
+  useEffect(() => {
+    navigationHistoryRef.current = createNavigationHistory();
+    historyNavigationTargetRef.current = null;
+  }, [rootPath]);
+
+  const navigateFileHistory = useCallback(
+    async (direction: -1 | 1) => {
+      if (historyNavigationPendingRef.current) return;
+      historyNavigationPendingRef.current = true;
+
+      try {
+        const target = navigationTarget(navigationHistoryRef.current, direction);
+        if (!target) return;
+
+        historyNavigationTargetRef.current = target.path;
+        const opened = await handleOpenFile({
+          name: baseName(target.path),
+          path: target.path,
+          isDir: false,
+        });
+        if (!opened) {
+          historyNavigationTargetRef.current = null;
+          return;
+        }
+
+        navigationHistoryRef.current = {
+          ...navigationHistoryRef.current,
+          index: target.index,
+        };
+      } finally {
+        historyNavigationPendingRef.current = false;
+      }
+    },
+    [handleOpenFile]
+  );
+
+  useEffect(() => {
+    let lastHandledButton = -1;
+    let lastHandledAt = 0;
+
+    const handleNavigationButton = (event: MouseEvent) => {
+      const direction = mouseNavigationDirection(event.button);
+      if (direction === null) return;
+
+      // Prevent WebView2 from treating the side buttons as browser history.
+      event.preventDefault();
+      event.stopPropagation();
+
+      // Chromium may emit both mouseup and auxclick for one physical press.
+      const now = performance.now();
+      if (
+        event.button === lastHandledButton &&
+        now - lastHandledAt < 100
+      ) {
+        return;
+      }
+      lastHandledButton = event.button;
+      lastHandledAt = now;
+
+      void navigateFileHistory(direction);
+    };
+
+    window.addEventListener("mouseup", handleNavigationButton, true);
+    window.addEventListener("auxclick", handleNavigationButton, true);
+    return () => {
+      window.removeEventListener("mouseup", handleNavigationButton, true);
+      window.removeEventListener("auxclick", handleNavigationButton, true);
+    };
+  }, [navigateFileHistory]);
 
   /** "Open With…" → open `path` in the chosen mode (ISSUE-70). */
   const handleOpenWith = useCallback(
