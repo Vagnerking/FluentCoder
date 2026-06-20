@@ -1115,8 +1115,8 @@ export default function App() {
   ]);
 
   const titleText = activeFile
-    ? `${activeFile.dirty ? "● " : ""}${activeFile.name} — Code Editor`
-    : "Code Editor";
+    ? `${activeFile.dirty ? "● " : ""}${activeFile.name} — Fluent Coder`
+    : "Fluent Coder";
 
   /** Pick which sidebar view the activity bar selection maps to. */
   function renderSidebar() {

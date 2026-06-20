@@ -6,7 +6,7 @@
  *
  * Runs against the native Tauri window via tauri-driver (WebView2).
  */
-describe('Code Editor — ActivityBar swaps the sidebar', () => {
+describe('Fluent Coder — ActivityBar swaps the sidebar', () => {
   it('mostra o Explorer por padrão', async () => {
     const explorer = await $('.explorer')
     await explorer.waitForExist({ timeout: 10_000 })
@@ -85,7 +85,7 @@ describe('Code Editor — ActivityBar swaps the sidebar', () => {
   })
 })
 
-describe('Code Editor — StatusBar', () => {
+describe('Fluent Coder — StatusBar', () => {
   it('mostra os contadores de diagnóstico reais com ícones Codicon', async () => {
     const statusBar = await $('.status-bar')
     await expect(statusBar).toBeDisplayed()

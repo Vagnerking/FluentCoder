@@ -16,7 +16,7 @@ async function pressCtrlP() {
   await browser.keys(['Control', 'p'])
 }
 
-describe('Code Editor — Quick Open (Ctrl+P)', () => {
+describe('Fluent Coder — Quick Open (Ctrl+P)', () => {
   it('Ctrl+P abre a palette com o input focado', async () => {
     // Garante um ponto de partida estável: nenhuma palette aberta.
     await expect($('.quick-open')).not.toBeExisting()

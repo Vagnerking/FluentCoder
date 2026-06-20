@@ -1,9 +1,9 @@
 {
-  "name": "code-editor-e2e",
+  "name": "fluent-coder-e2e",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "End-to-end tests for the Code Editor Tauri app, driven via tauri-driver + WebdriverIO.",
+  "description": "End-to-end tests for the Fluent Coder Tauri app, driven via tauri-driver + WebdriverIO.",
   "scripts": {
     "test:e2e": "wdio run ./wdio.conf.ts"
   },

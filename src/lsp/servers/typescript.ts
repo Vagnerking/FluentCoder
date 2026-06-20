@@ -41,7 +41,7 @@ export async function startTypescriptServer(
     ],
     rootUri: toFileUri(rootPath),
     initializationOptions: {
-      hostInfo: "code-editor",
+      hostInfo: "fluent-coder",
       preferences: {
         includeInlayParameterNameHints: "none",
         importModuleSpecifierPreference: "shortest",

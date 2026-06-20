@@ -5,7 +5,7 @@
  * Roda contra o binário nativo via tauri-driver — não é o navegador web,
  * é a janela WebView2 real do app desktop.
  */
-describe('Code Editor — shell', () => {
+describe('Fluent Coder — shell', () => {
   it('renderiza a title bar com o título do app', async () => {
     const titlebar = await $('.titlebar')
     await titlebar.waitForExist({ timeout: 10_000 })

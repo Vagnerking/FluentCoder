@@ -20,7 +20,7 @@ const SHORTCUTS: { keys: string; label: string }[] = [
 ];
 
 /** Repository URL shown in the About view. */
-const REPO_URL = "https://github.com/SistemasSMN/CodeEditor";
+const REPO_URL = "https://github.com/Vagnerking/FluentCoder";
 
 /**
  * Modal dialog used for the Help menu's "Sobre" (about) and "Atalhos de Teclado"
@@ -69,7 +69,7 @@ export function AboutDialog({ mode, onClose }: AboutDialogProps) {
 
         {mode === "about" ? (
           <div className="about-body">
-            <h2 className="about-app-name">Code Editor</h2>
+            <h2 className="about-app-name">Fluent Coder</h2>
             <p className="about-version">Versão {pkg.version}</p>
             <p className="about-link">
               <a href={REPO_URL} target="_blank" rel="noreferrer">

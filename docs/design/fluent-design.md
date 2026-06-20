@@ -1,6 +1,6 @@
 # Fluent 2 — guia de design do editor
 
-> Referência visual para o CodeEditor: app **desktop** (Tauri + React + Monaco)
+> Referência visual para o Fluent Coder: app **desktop** (Tauri + React + Monaco)
 > com **CSS próprio** (`src/styles.css`), tema escuro estilo Windows 11.
 >
 > Usamos o Fluent 2 só como **base de princípios e tokens** — não usamos a lib

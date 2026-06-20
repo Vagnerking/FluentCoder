@@ -423,7 +423,7 @@ export function EditorPane({
     return (
       <div className="editor-empty">
         <div className="editor-empty-inner">
-          <h2>Code Editor</h2>
+          <h2>Fluent Coder</h2>
           <p>Abra uma pasta pelo menu Arquivo (ou Ctrl+K Ctrl+O) para começar.</p>
         </div>
       </div>

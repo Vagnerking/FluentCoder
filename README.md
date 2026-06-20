@@ -1,4 +1,4 @@
-# Code Editor
+# Fluent Coder
 
 Um editor de código desktop no estilo VSCode, construído com **Tauri 2**, **React** e **Monaco**. O backend nativo é escrito em **Rust**; a interface, em **TypeScript + React**. O design segue o guia **Fluent 2**.
 

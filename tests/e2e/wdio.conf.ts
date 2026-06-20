@@ -14,15 +14,15 @@ const appBinary = path.resolve(
   'src-tauri',
   'target',
   'release',
-  os.platform() === 'win32' ? 'code-editor.exe' : 'code-editor',
+  os.platform() === 'win32' ? 'fluent-coder.exe' : 'fluent-coder',
 )
 
 let tauriDriver: ChildProcess
 const explorerActionsE2e = process.env.EXPLORER_ACTIONS_E2E === '1'
-const explorerWorkspace = path.join(os.tmpdir(), 'code-editor-explorer-actions-e2e')
+const explorerWorkspace = path.join(os.tmpdir(), 'fluent-coder-explorer-actions-e2e')
 const sessionFile = path.join(
   process.env.APPDATA ?? '',
-  'com.codeeditor.app',
+  'com.fluentcoder.app',
   'session.json',
 )
 let previousSession: string | null = null

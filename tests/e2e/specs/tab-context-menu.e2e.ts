@@ -4,7 +4,7 @@
  * - Contém as opções esperadas
  * - Fecha ao clicar fora
  */
-describe('Code Editor — Tab Context Menu', () => {
+describe('Fluent Coder — Tab Context Menu', () => {
   const TEST_ROOT = 'C:\\Users\\Vagner\\Documents\\GitHub\\Projetos Pessoais\\CodeEditor\\src'
 
   before(async () => {

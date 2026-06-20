@@ -2,9 +2,9 @@ import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
 
-const workspace = path.join(os.tmpdir(), 'code-editor-explorer-actions-e2e')
+const workspace = path.join(os.tmpdir(), 'fluent-coder-explorer-actions-e2e')
 
-describe('Code Editor — ações do Explorador', () => {
+describe('Fluent Coder — ações do Explorador', () => {
   before(async () => {
     await $('.explorer-actions').waitForDisplayed({ timeout: 15_000 })
   })
