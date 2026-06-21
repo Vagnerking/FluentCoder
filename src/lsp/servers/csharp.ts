@@ -64,7 +64,12 @@ export async function startCsharpServer(
 
   const client = await createLanguageClient({
     serverId: CSHARP_SERVER_ID,
-    documentSelector: [{ scheme: "file", language: "csharp" }],
+    // Razor cohosting (issue #11): the same Roslyn also serves `.cshtml`, so the
+    // selector covers both languages and the client sends didOpen for each.
+    documentSelector: [
+      { scheme: "file", language: "csharp" },
+      { scheme: "file", language: "aspnetcorerazor" },
+    ],
     rootUri: toFileUri(rootPath),
     initializationOptions: ROSLYN_INIT_OPTIONS,
   });
@@ -174,7 +179,9 @@ async function reopenCsharpDocuments(
   const monaco = await import("monaco-editor");
   const models = monaco.editor
     .getModels()
-    .filter((model) => model.getLanguageId() === "csharp");
+    .filter((model) =>
+      ["csharp", "aspnetcorerazor"].includes(model.getLanguageId())
+    );
 
   for (const model of models) {
     const uri = model.uri.toString();

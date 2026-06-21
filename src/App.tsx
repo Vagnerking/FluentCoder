@@ -1,4 +1,21 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import {
+  subscribeDiagnostics,
+  diagnosticsVersion,
+  allStoredProblems,
+  clearAllDiagnostics,
+} from "./lsp/diagnosticsStore";
+import {
+  runBuildDiagnostics,
+  clearBuildDiagnostics,
+} from "./lsp/buildDiagnostics";
 import { FileExplorer } from "./components/FileExplorer";
 import { SearchPanel } from "./components/SearchPanel";
 import { GitPanel } from "./components/GitPanel";
@@ -14,8 +31,9 @@ import { TitleBar } from "./components/TitleBar";
 import { ActivityBar } from "./components/ActivityBar";
 import { Breadcrumbs } from "./components/Breadcrumbs";
 import { StatusBar } from "./components/StatusBar";
-import { TerminalPanel } from "./components/TerminalPanel";
+import { TerminalPanel, type PanelTab } from "./components/TerminalPanel";
 import { QuickOpen } from "./components/QuickOpen";
+import { CommandPalette, type Command } from "./components/CommandPalette";
 import { AboutDialog } from "./components/AboutDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { AgentsPanel } from "./components/AgentsPanel";
@@ -24,7 +42,6 @@ import { BranchPicker } from "./components/BranchPicker";
 import { SshConnectDialog } from "./components/SshConnectDialog";
 import { RemoteFolderBrowser } from "./components/RemoteFolderBrowser";
 import { RemoteConnectionMenu } from "./components/RemoteConnectionMenu";
-import { CommandPalette, type PaletteCommand } from "./components/CommandPalette";
 import { QuickPick } from "./components/QuickPick";
 import { QuickInput } from "./components/QuickInput";
 import { Codicon } from "./icons/codicons/Codicon";
@@ -41,6 +58,8 @@ import {
   gitSnapshotCreate,
   gitSnapshotRestore,
   gitStatus,
+  isFreshWindow,
+  openNewWindow,
   pickFile,
   pickFolder,
   pickSavePath,
@@ -73,6 +92,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { languageForFile } from "./language";
 import { buildDecorations, decoKey } from "./icon-theme/decorations";
 import { useLspManager } from "./lsp/useLspManager";
+import { serverIdForLanguage } from "./lsp/servers";
+import { TS_PREFER_EDITOR_KEY } from "./lsp/servers/typescript";
 import type {
   ConfirmButton,
   EditorActionsApi,
@@ -114,8 +135,92 @@ function baseName(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
+/** Untitled buffers use a synthetic `untitled:<name>` path (never on disk). */
+const UNTITLED_PREFIX = "untitled:";
+
+/** How long the user must press-and-hold a draggable chrome element (activity bar,
+ * panel) before the drag arms. A deliberate hold tells "I want to move this" apart
+ * from a click; the cursor and a charging ring give feedback while it builds up. */
+const DRAG_HOLD_MS = 600;
+
+/** Sidebar width clamps. With the activity bar on TOP it's a horizontal strip of
+ * ~6 icons, so the sidebar can't be narrower than that strip — otherwise the
+ * explorer keeps shrinking past the icons and the bar is left stranded wider than
+ * the explorer below it. Side/hidden modes use the smaller minimum. */
+const SIDEBAR_MIN = 180;
+const SIDEBAR_MIN_TOP = 280;
+
+function isUntitled(path: string): boolean {
+  return path.startsWith(UNTITLED_PREFIX);
+}
+
 /** Editor tab size — kept in one place so the StatusBar and Monaco agree. */
 const TAB_SIZE = 2;
+
+/** Reads a persisted layout number from localStorage, falling back on error. */
+function readStoredNumber(key: string, fallback: number): number {
+  try {
+    const raw = localStorage.getItem(key);
+    const n = raw == null ? NaN : Number(raw);
+    return Number.isFinite(n) ? n : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** Reads the persisted sidebar side ("left"/"right"), defaulting on error. */
+function readStoredSide(key: string, fallback: "left" | "right"): "left" | "right" {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw === "left" || raw === "right" ? raw : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** Activity bar placement: lateral (vertical), atop the sidebar (horizontal), or hidden. */
+type ActivityBarPos = "side" | "top" | "hidden";
+function readStoredActivityPos(key: string, fallback: ActivityBarPos): ActivityBarPos {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw === "side" || raw === "top" || raw === "hidden" ? raw : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** A drop target for the activity-bar drag (left/right edge, or top). */
+type DropZone = "left" | "right" | "top";
+/** Maps a pointer position to the activity-bar drop zone under it (or null). The
+ * top band wins first, so dragging upward reliably docks the bar horizontally. */
+function activityZoneAtPoint(x: number, y: number): DropZone | null {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  if (y < h * 0.22) return "top";
+  if (x < w * 0.35) return "left";
+  if (x > w * 0.65) return "right";
+  return null;
+}
+
+/** Where the bottom panel (terminal/problems) is docked relative to the editor. */
+type PanelPos = "bottom" | "right" | "left";
+function readStoredPanelPos(key: string, fallback: PanelPos): PanelPos {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw === "bottom" || raw === "right" || raw === "left" ? raw : fallback;
+  } catch {
+    return fallback;
+  }
+}
+/** Maps a pointer position to a panel drop zone (bottom / right / left, or null). */
+function panelZoneAtPoint(x: number, y: number): PanelPos | null {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  if (y > h * 0.7) return "bottom";
+  if (x > w * 0.7) return "right";
+  if (x < w * 0.3) return "left";
+  return null;
+}
 
 export default function App() {
   const [rootName, setRootName] = useState<string | null>(null);
@@ -126,6 +231,17 @@ export default function App() {
   rootPathRef.current = rootPath;
   const [roots, setRoots] = useState<FileNode[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Resizable + side-swappable sidebar (VSCode-style), persisted across sessions.
+  const [sidebarWidth, setSidebarWidth] = useState(() =>
+    readStoredNumber("ui.sidebarWidth", 260)
+  );
+  const [sidebarSide, setSidebarSide] = useState<"left" | "right">(() =>
+    readStoredSide("ui.sidebarSide", "left")
+  );
+  // Activity bar placement (independent of the sidebar) — lateral, top, or hidden.
+  const [activityBarPos, setActivityBarPos] = useState<ActivityBarPos>(() =>
+    readStoredActivityPos("ui.activityBarPos", "side")
+  );
   const [branch, setBranch] = useState<string | null>(null);
 
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
@@ -140,7 +256,21 @@ export default function App() {
   const restoringSessionRef = useRef(false);
 
   const [panelOpen, setPanelOpen] = useState(false);
-  const [panelHeight, setPanelHeight] = useState(220);
+  const [panelHeight, setPanelHeight] = useState(() =>
+    readStoredNumber("ui.panelHeight", 220)
+  );
+  // Bottom panel placement (bottom / docked right / docked left) + its width when
+  // docked to a side. Both persisted, like the rest of the layout.
+  const [panelPos, setPanelPos] = useState<PanelPos>(() =>
+    readStoredPanelPos("ui.panelPos", "bottom")
+  );
+  const [panelWidth, setPanelWidth] = useState(() =>
+    readStoredNumber("ui.panelWidth", 360)
+  );
+  // Which bottom-panel tab to focus + a nonce so the same tab can be re-focused.
+  // Lets the status bar's diagnostic counts open the panel straight to Problems.
+  const [panelTab, setPanelTab] = useState<PanelTab>("terminal");
+  const [panelTabNonce, setPanelTabNonce] = useState(0);
   const [activeView, setActiveView] = useState("explorer");
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -236,6 +366,27 @@ export default function App() {
 
   const [problems, setProblems] = useState<Problem[]>([]);
 
+  // Workspace-wide diagnostics (issue #6): the editor markers (`problems`) cover
+  // OPEN files; the LSP store adds diagnostics the servers reported for the rest
+  // of the workspace (e.g. Roslyn's `relatedDocuments`). Merge + de-dupe so the
+  // Problems panel, counts and explorer badges reflect the whole project.
+  const diagVersion = useSyncExternalStore(
+    subscribeDiagnostics,
+    diagnosticsVersion
+  );
+  const allProblems = useMemo(() => {
+    void diagVersion; // re-run when the store changes
+    const seen = new Set<string>();
+    const merged: Problem[] = [];
+    for (const p of [...problems, ...allStoredProblems()]) {
+      const key = `${p.path}|${p.line}|${p.column}|${p.severity}|${p.message}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(p);
+    }
+    return merged;
+  }, [problems, diagVersion]);
+
   // Git status of the open folder, used (with diagnostics) to decorate the
   // explorer/tabs. Refreshed when the folder changes; null when not a repo.
   const [gitState, setGitState] = useState<GitStatus | null>(null);
@@ -243,8 +394,8 @@ export default function App() {
   // path → decoration (label color + git badge), rebuilt only when an input
   // changes. The lookup normalizes separators so callers can pass any path.
   const decorations = useMemo(
-    () => buildDecorations(rootPath, gitState, problems),
-    [rootPath, gitState, problems]
+    () => buildDecorations(rootPath, gitState, allProblems),
+    [rootPath, gitState, allProblems]
   );
   const decorationFor = useCallback(
     (path: string) => decorations.get(decoKey(path)),
@@ -264,10 +415,48 @@ export default function App() {
   // menus (ISSUE-52). Null when no file is open.
   const editorActionsRef = useRef<EditorActionsApi | null>(null);
 
+  // Persist layout preferences so the workbench reopens the way it was left.
+  useEffect(() => {
+    try {
+      localStorage.setItem("ui.sidebarWidth", String(sidebarWidth));
+    } catch {
+      /* storage unavailable — ignore */
+    }
+  }, [sidebarWidth]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("ui.sidebarSide", sidebarSide);
+    } catch {
+      /* storage unavailable — ignore */
+    }
+  }, [sidebarSide]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("ui.activityBarPos", activityBarPos);
+    } catch {
+      /* storage unavailable — ignore */
+    }
+  }, [activityBarPos]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("ui.panelHeight", String(panelHeight));
+    } catch {
+      /* storage unavailable — ignore */
+    }
+  }, [panelHeight]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("ui.panelPos", panelPos);
+      localStorage.setItem("ui.panelWidth", String(panelWidth));
+    } catch {
+      /* storage unavailable — ignore */
+    }
+  }, [panelPos, panelWidth]);
+
   const activeFile = openFiles.find((f) => f.path === activePath) ?? null;
 
-  const errorCount = problems.filter((p) => p.severity === "error").length;
-  const warningCount = problems.filter((p) => p.severity === "warning").length;
+  const errorCount = allProblems.filter((p) => p.severity === "error").length;
+  const warningCount = allProblems.filter((p) => p.severity === "warning").length;
 
   // Languages currently open in tabs — drives which LSP servers the manager
   // brings up. Recomputed only when the set of open paths changes.
@@ -285,6 +474,7 @@ export default function App() {
     errors: lspErrors,
     workspaces: lspWorkspaces,
     restart: restartLsp,
+    restartAll: restartAllLsp,
   } = useLspManager(rootPath, openedLanguages);
 
   const lspServers: LspServerStatus[] = useMemo(
@@ -297,6 +487,74 @@ export default function App() {
       })),
     [lspStatus, lspErrors, lspWorkspaces]
   );
+
+  // Status bar shows only the server for the file you're actually editing — like
+  // VSCode, which surfaces the active file's language, not every running server.
+  // (Servers for other open files keep running in the background for instant tab
+  // switches; they're just hidden until you focus a file they handle.)
+  const activeServerId = activeFile
+    ? serverIdForLanguage(languageForFile(activeFile.name))?.serverId
+    : undefined;
+  const activeLspServers = useMemo(
+    () =>
+      activeServerId ? lspServers.filter((s) => s.id === activeServerId) : [],
+    [lspServers, activeServerId]
+  );
+
+  // Command Palette registry (Ctrl+Shift+P, issue #12). Extensible: add a command
+  // by pushing another entry. The status bar already reflects the LSP restart
+  // (servers flip to "starting" → "ready"), so resetting gives visible feedback.
+  const commands = useMemo<Command[]>(
+    () => [
+      {
+        id: "lsp.resetServers",
+        title: "Resetar Servidores de Código",
+        detail: "LSP",
+        run: () => {
+          void restartAllLsp();
+        },
+      },
+      {
+        id: "csharp.rebuild",
+        title: "Recompilar (mostrar erros de C#/Razor)",
+        detail: "Build",
+        run: () => {
+          if (rootPath) void runBuildDiagnostics(rootPath);
+        },
+      },
+    ],
+    [restartAllLsp, rootPath]
+  );
+
+  /**
+   * Clears every workspace-derived bit of UI state so nothing from the previous
+   * project leaks into the empty state — or into the next project while its git
+   * branch/status and LSP load asynchronously (issue #17). The LSP servers and
+   * their workspace info (C# solution/projects) tear down separately when
+   * `rootPath` changes (see useLspManager).
+   */
+  // Tracks the workspace we already ran an initial compiler build for (#11).
+  const builtForRootRef = useRef<string | null>(null);
+
+  const resetWorkspaceState = useCallback(() => {
+    setBranch(null);
+    setGitState(null);
+    setProblems([]);
+    clearAllDiagnostics();
+    clearBuildDiagnostics();
+    builtForRootRef.current = null;
+  }, []);
+
+  // Run the real compiler (dotnet build) once when a C#/Razor file first opens in
+  // a workspace, so its errors show on open — not only on save (issue #11).
+  useEffect(() => {
+    const isNet =
+      openedLanguages.has("csharp") || openedLanguages.has("aspnetcorerazor");
+    if (isNet && rootPath && builtForRootRef.current !== rootPath) {
+      builtForRootRef.current = rootPath;
+      void runBuildDiagnostics(rootPath);
+    }
+  }, [openedLanguages, rootPath]);
 
   /**
    * Loads a project folder into the explorer. Shared by the folder picker and
@@ -313,6 +571,10 @@ export default function App() {
       const remote = isRemoteActive();
       try {
         const entries = await readDir(folder);
+        // Now that the folder is confirmed to open, drop the previous project's
+        // branch/git/diagnostics before the new git/LSP load (issue #17) — a
+        // failed open must NOT leave the UI half-cleared (CodeRabbit).
+        resetWorkspaceState();
         setRoots(entries);
         setRootName(baseName(folder).toUpperCase());
         setRootPath(folder);
@@ -333,7 +595,7 @@ export default function App() {
         if (persist) sessionSetLastFolder(null).catch(() => {});
       }
     },
-    []
+    [resetWorkspaceState]
   );
 
   /**
@@ -549,8 +811,108 @@ export default function App() {
     await openFolder(folder);
   }
 
+  /** Opens a new isolated editor window (separate process), starting empty. */
+  const handleNewWindow = useCallback(() => {
+    openNewWindow().catch((err) => {
+      console.error(err);
+      alert(`Não foi possível abrir uma nova janela:\n${err}`);
+    });
+  }, []);
+
+  // Activity-bar drag-to-reposition. You must PRESS-AND-HOLD for DRAG_HOLD_MS
+  // (1.5s) to pick it up: while holding, the cursor turns to grabbing and a ring
+  // "charges up" (the arming state). Once armed, moving previews the new placement
+  // live; releasing keeps it, dropping outside any zone snaps it back. A normal
+  // click (release before the hold completes) still switches the view, and moving
+  // far before the hold completes aborts it (it wasn't a deliberate hold).
+  const [draggingActivity, setDraggingActivity] = useState(false);
+  const [armingActivity, setArmingActivity] = useState(false);
+
+  const startActivityDrag = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.button !== 0) return; // primary button (right-click = context menu)
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const origPos = activityBarPos;
+      const origSide = sidebarSide;
+      let armed = false;
+
+      setArmingActivity(true);
+      const arm = () => {
+        armed = true;
+        setArmingActivity(false);
+        setDraggingActivity(true);
+      };
+      const holdTimer = window.setTimeout(arm, DRAG_HOLD_MS);
+      const cancelHold = () => {
+        window.clearTimeout(holdTimer);
+        setArmingActivity(false);
+      };
+
+      const preview = (x: number, y: number) => {
+        const zone = activityZoneAtPoint(x, y);
+        if (zone === "left") {
+          setActivityBarPos("side");
+          setSidebarSide("left");
+        } else if (zone === "right") {
+          setActivityBarPos("side");
+          setSidebarSide("right");
+        } else if (zone === "top") {
+          setActivityBarPos("top");
+        } else {
+          setActivityBarPos(origPos);
+          setSidebarSide(origSide);
+        }
+      };
+      const onMove = (me: PointerEvent) => {
+        if (!armed) {
+          // Drifting too far before the hold finishes aborts it (not a hold).
+          if (Math.hypot(me.clientX - startX, me.clientY - startY) > 24) cancelHold();
+          return;
+        }
+        preview(me.clientX, me.clientY);
+      };
+      const onUp = () => {
+        cancelHold();
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        if (armed) {
+          setDraggingActivity(false);
+          const swallow = (ce: MouseEvent) => {
+            ce.stopPropagation();
+            ce.preventDefault();
+          };
+          window.addEventListener("click", swallow, { capture: true, once: true });
+        }
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    },
+    [activityBarPos, sidebarSide]
+  );
+
+  // Counter for unique "Untitled-N" names within this window.
+  const untitledCounter = useRef(0);
+
+  /**
+   * Opens a new empty in-memory buffer (File ▸ New File / New Text File). It has
+   * no path on disk until the user saves it (Ctrl+S routes to Save As). Starts
+   * clean so closing an untouched empty buffer doesn't prompt.
+   */
+  const handleNewTextFile = useCallback(() => {
+    untitledCounter.current += 1;
+    const name = `Untitled-${untitledCounter.current}`;
+    const path = `${UNTITLED_PREFIX}${name}`;
+    setOpenFiles((prev) => [
+      ...prev,
+      { path, name, content: "", dirty: false, mode: "text" },
+    ]);
+    setActivePath(path);
+  }, []);
+
   // On launch, reopen the last project folder and the tabs that were open in it
-  // (issue #7). Restore is silent so a folder/file that was moved/deleted doesn't
+  // (issue #7) — unless this is a fresh window (File ▸ New Window → `--new`),
+  // which starts empty. Restore is silent so a moved/deleted folder/file doesn't
   // greet the user with an error dialog. The `restoringSessionRef` guard keeps
   // the session-save effect from overwriting the good session with the partial
   // state produced while tabs are reopening.
@@ -577,6 +939,18 @@ export default function App() {
           setActiveRemote(null);
           setRemoteSession(null);
         }
+        restoringSessionRef.current = false;
+        return;
+      }
+
+      // A fresh window (Arquivo ▸ Nova Janela) starts empty — nothing to restore.
+      let fresh = false;
+      try {
+        fresh = await isFreshWindow();
+      } catch (err) {
+        console.error("Falha ao verificar se a janela é nova:", err);
+      }
+      if (fresh) {
         restoringSessionRef.current = false;
         return;
       }
@@ -1332,11 +1706,25 @@ export default function App() {
    */
   const saveFile = useCallback(
     async (file: OpenFile) => {
+      // Untitled buffers have no path yet — ask where to save (Save As). Throwing
+      // on cancel keeps the close/save-all guards from removing the tab.
+      let targetPath = file.path;
+      if (isUntitled(file.path)) {
+        const dest = await pickSavePath(file.name);
+        if (!dest) throw new Error("Salvamento cancelado");
+        targetPath = dest;
+      }
       try {
-        await writeFile(file.path, file.content);
+        await writeFile(targetPath, file.content);
         setOpenFiles((prev) =>
-          prev.map((f) => (f.path === file.path ? { ...f, dirty: false } : f))
+          prev.map((f) =>
+            f.path === file.path
+              ? { ...f, path: targetPath, name: baseName(targetPath), dirty: false }
+              : f
+          )
         );
+        // If we just gave an untitled buffer a real path, follow it with focus.
+        setActivePath((cur) => (cur === file.path ? targetPath : cur));
       } catch (err) {
         console.error(err);
         alert(`Não foi possível salvar:\n${err}`);
@@ -1537,14 +1925,6 @@ export default function App() {
     });
   }
 
-  /** Persist the active buffer to disk and clear its dirty flag. */
-  const handleSave = useCallback(async () => {
-    const file = openFiles.find((f) => f.path === activePath);
-    if (!file || !file.dirty) return;
-    // saveFile already reports/throws on failure; swallow here (no close to gate).
-    await saveFile(file).catch(() => {});
-  }, [openFiles, activePath, saveFile]);
-
   /** Open a file chosen via the native file picker (File ▸ Open File…). */
   const handleOpenFileDialog = useCallback(async () => {
     const p = await pickFile();
@@ -1575,6 +1955,23 @@ export default function App() {
     }
   }, [openFiles, activePath]);
 
+  /**
+   * Persist the active buffer to disk. Untitled buffers always go through
+   * `saveFile` (which prompts for a path, Save As style); named buffers only
+   * write when dirty.
+   */
+  const handleSave = useCallback(async () => {
+    const file = openFiles.find((f) => f.path === activePath);
+    if (!file) return;
+    if (!file.dirty && !isUntitled(file.path)) return;
+    // saveFile already reports/throws on failure; swallow here (no close to gate).
+    await saveFile(file).catch(() => {});
+    // Refresh real compiler errors for C#/Razor on save (issue #11).
+    if (rootPath && /\.(cs|cshtml|razor)$/i.test(file.name)) {
+      void runBuildDiagnostics(rootPath);
+    }
+  }, [openFiles, activePath, saveFile, rootPath]);
+
   /** Close the current workspace folder, returning to the empty state. */
   const handleCloseFolder = useCallback(async () => {
     // Closing the folder discards the session — guard unsaved buffers first.
@@ -1595,7 +1992,16 @@ export default function App() {
     setRoots([]);
     setOpenFiles([]);
     setActivePath(null);
-  }, [guardDirtySession]);
+    // Clear every workspace-derived bit so no project remnants linger in this
+    // same window (branch, git decorations, diagnostics, search scope, history).
+    // The LSP servers and search index tear down when rootPath becomes null
+    // (useLspManager watches it); forget the folder so it won't reopen on launch.
+    resetWorkspaceState();
+    setSearchScope(null);
+    setHistoryFile(null);
+    setActiveView("explorer");
+    sessionSetLastFolder(null).catch(() => {});
+  }, [guardDirtySession, resetWorkspaceState]);
 
   /** Re-point any open tab(s) when the explorer renames a file or folder. */
   const handlePathRenamed = useCallback(
@@ -1648,6 +2054,57 @@ export default function App() {
       });
     },
     []
+  );
+
+  // Bottom-panel drag-to-reposition — same press-and-hold model as the activity
+  // bar: hold DRAG_HOLD_MS to arm (charging ring + grabbing cursor), then it docks
+  // bottom/right/left in real time; dropping outside snaps back.
+  const [draggingPanel, setDraggingPanel] = useState(false);
+  const [armingPanel, setArmingPanel] = useState(false);
+  const startPanelDrag = useCallback(
+    (e: React.PointerEvent) => {
+      if (e.button !== 0) return;
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const origPos = panelPos;
+      let armed = false;
+
+      setArmingPanel(true);
+      const arm = () => {
+        armed = true;
+        setArmingPanel(false);
+        setDraggingPanel(true);
+      };
+      const holdTimer = window.setTimeout(arm, DRAG_HOLD_MS);
+      const cancelHold = () => {
+        window.clearTimeout(holdTimer);
+        setArmingPanel(false);
+      };
+
+      const onMove = (me: PointerEvent) => {
+        if (!armed) {
+          if (Math.hypot(me.clientX - startX, me.clientY - startY) > 24) cancelHold();
+          return;
+        }
+        setPanelPos(panelZoneAtPoint(me.clientX, me.clientY) ?? origPos);
+      };
+      const onUp = () => {
+        cancelHold();
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        if (armed) {
+          setDraggingPanel(false);
+          const swallow = (ce: MouseEvent) => {
+            ce.stopPropagation();
+            ce.preventDefault();
+          };
+          window.addEventListener("click", swallow, { capture: true, once: true });
+        }
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    },
+    [panelPos]
   );
 
   /** Open/focus the integrated terminal at `cwd` (explorer "Abrir no Terminal"). */
@@ -1730,6 +2187,12 @@ export default function App() {
         handleOpenFileDialog();
         return;
       }
+      // Ctrl+N → New Text File (untitled buffer). Shift is left to the WebView.
+      if (key === "n" && !e.shiftKey) {
+        e.preventDefault();
+        handleNewTextFile();
+        return;
+      }
       // Ctrl+` → toggle terminal panel.
       if (e.key === "`") {
         e.preventDefault();
@@ -1742,8 +2205,8 @@ export default function App() {
         setSidebarOpen((v) => !v);
         return;
       }
-      // Ctrl+Shift+P → Command Palette.
-      if (e.shiftKey && key === "p") {
+      // Ctrl+Shift+P → Command Palette (must come before the plain Ctrl+P).
+      if (key === "p" && e.shiftKey) {
         e.preventDefault();
         setCommandPaletteOpen(true);
         return;
@@ -1766,7 +2229,7 @@ export default function App() {
       window.removeEventListener("keydown", onKeyDown);
       clearChord();
     };
-  }, [handleSave, handleSaveAs, handleOpenFileDialog, handleCloseTab]);
+  }, [handleSave, handleSaveAs, handleOpenFileDialog, handleCloseTab, handleNewTextFile]);
 
   /** Run a configuration: open the terminal panel and (re)spawn a PTY for it. */
   function handleRun(command: string) {
@@ -1783,6 +2246,49 @@ export default function App() {
     );
   }
 
+  /** Opens the bottom panel focused on a specific tab (e.g. Problems). */
+  const showPanelTab = useCallback((tab: PanelTab) => {
+    setPanelTab(tab);
+    setPanelTabNonce((n) => n + 1);
+    setPanelOpen(true);
+  }, []);
+
+  /**
+   * Lets the user pick which TypeScript version the TS/JS server uses — the
+   * project's (recommended when present) or the editor-managed one — then
+   * restarts the server so the choice takes effect (VSCode "Select TS Version").
+   */
+  const handleSelectTsVersion = useCallback(async () => {
+    let current: "project" | "editor" = "project";
+    try {
+      current = localStorage.getItem(TS_PREFER_EDITOR_KEY) === "1" ? "editor" : "project";
+    } catch {
+      /* storage unavailable — assume project */
+    }
+    const choice = await askConfirm(
+      "Versão do TypeScript",
+      "Qual versão do TypeScript usar nas linguagens TS/JS? Recomendamos a do projeto quando houver.",
+      [
+        {
+          label: "Versão do projeto (recomendado)",
+          variant: "primary",
+          value: "project",
+          default: current === "project",
+        },
+        { label: "Versão do editor", variant: "secondary", value: "editor", default: current === "editor" },
+        { label: "Cancelar", variant: "secondary", value: "cancel" },
+      ]
+    );
+    if (choice === "project" || choice === "editor") {
+      try {
+        localStorage.setItem(TS_PREFER_EDITOR_KEY, choice === "editor" ? "1" : "0");
+      } catch {
+        /* storage unavailable — ignore */
+      }
+      restartLsp("typescript");
+    }
+  }, [askConfirm, restartLsp]);
+
   // True when there's an active editor buffer; gates Edit/Selection/Go items.
   const hasEditor = activeFile != null;
 
@@ -1797,9 +2303,18 @@ export default function App() {
     const fileMenu: MenuDef = {
       label: "Arquivo",
       items: [
-        // untitled buffers: recortado p/ v2 (ISSUE-51)
-        { id: "file.newTextFile", label: "Novo Arquivo de Texto", enabled: false },
-        { id: "file.newFile", label: "Novo Arquivo", enabled: false },
+        {
+          id: "file.newTextFile",
+          label: "Novo Arquivo de Texto",
+          accelerator: "Ctrl+N",
+          run: handleNewTextFile,
+        },
+        { id: "file.newFile", label: "Novo Arquivo", run: handleNewTextFile },
+        {
+          id: "file.newWindow",
+          label: "Nova Janela",
+          run: handleNewWindow,
+        },
         { id: "file.sep1", label: "", separator: true },
         {
           id: "file.open",
@@ -1849,6 +2364,12 @@ export default function App() {
           label: "Desconectar do Host Remoto",
           enabled: remoteSession != null,
           run: remoteSession != null ? handleCloseFolder : undefined,
+        },
+        {
+          id: "file.closeWindow",
+          label: "Fechar Janela",
+          accelerator: "Alt+F4",
+          run: () => getCurrentWindow().close(),
         },
         { id: "file.sep5", label: "", separator: true },
         { id: "file.exit", label: "Sair", run: () => getCurrentWindow().close() },
@@ -2024,6 +2545,27 @@ export default function App() {
           run: () => setSidebarOpen((v) => !v),
         },
         {
+          id: "view.moveSidebar",
+          label:
+            sidebarSide === "left"
+              ? "Mover barra lateral para a direita"
+              : "Mover barra lateral para a esquerda",
+          run: () => setSidebarSide((s) => (s === "left" ? "right" : "left")),
+        },
+        {
+          id: "view.activityBarPos",
+          label:
+            activityBarPos === "side"
+              ? "Barra de atividades: no topo"
+              : activityBarPos === "top"
+              ? "Barra de atividades: ocultar"
+              : "Barra de atividades: lateral",
+          run: () =>
+            setActivityBarPos((p) =>
+              p === "side" ? "top" : p === "top" ? "hidden" : "side"
+            ),
+        },
+        {
           id: "view.toggleTerminal",
           label: "Alternar Terminal",
           accelerator: "Ctrl+`",
@@ -2035,12 +2577,6 @@ export default function App() {
           label: "Paleta de Comandos…",
           accelerator: "Ctrl+Shift+P",
           run: () => setCommandPaletteOpen(true),
-        },
-        {
-          id: "view.quickOpen",
-          label: "Ir para Arquivo…",
-          accelerator: "Ctrl+P",
-          run: () => setQuickOpenOpen(true),
         },
         {
           id: "view.quickOpen",
@@ -2147,34 +2683,37 @@ export default function App() {
     handleSaveAs,
     handleCloseTab,
     handleCloseFolder,
+    handleNewWindow,
+    handleNewTextFile,
     runEditorAction,
     openSshFlow,
+    sidebarSide,
+    activityBarPos,
   ]);
 
-  // Flatten the menu bar into a searchable command list (issue #8 · command
-  // palette), plus a few palette-only commands (SSH, Quick Open).
-  const paletteCommands = useMemo<PaletteCommand[]>(() => {
-    const fromMenus: PaletteCommand[] = menus.flatMap((menu) =>
+  // Full command-palette list (issue #12 + #8): the curated commands + the
+  // remote-SSH entry + every runnable menu action, in the palette's shape.
+  const paletteCommands = useMemo<Command[]>(() => {
+    const fromMenus: Command[] = menus.flatMap((menu) =>
       menu.items
         .filter((it) => it.run && !it.separator && it.enabled !== false)
         .map((it) => ({
           id: `menu.${it.id}`,
-          category: menu.label,
-          label: it.label,
+          title: it.label,
+          detail: menu.label,
           run: it.run as () => void,
         }))
     );
-    const extra: PaletteCommand[] = [
+    const ssh: Command[] = [
       {
         id: "ssh.connect",
-        category: "Remoto",
-        label: "Conectar a Host SSH…",
-        icon: "remote",
+        title: "Conectar a Host SSH…",
+        detail: "Remoto",
         run: () => void openSshFlow(),
       },
     ];
-    return [...extra, ...fromMenus];
-  }, [menus, openSshFlow]);
+    return [...commands, ...ssh, ...fromMenus];
+  }, [commands, menus, openSshFlow]);
 
   const titleText = activeFile
     ? `${activeFile.dirty ? "● " : ""}${activeFile.name} — Fluent Coder`
@@ -2271,10 +2810,73 @@ export default function App() {
         menus={menus}
       />
 
-      <div className="body">
-        <ActivityBar activeView={activeView} onViewChange={setActiveView} />
+      <div
+        className={`body${sidebarSide === "right" ? " sidebar-right" : ""}${
+          draggingActivity ? " dragging-activity" : ""
+        }${armingActivity ? " arming-activity" : ""}`}
+      >
+        {/* Activity bar + sidebar form one dock so they can be placed together
+            (activity bar lateral or as a compact horizontal strip atop the
+            sidebar) and slide to either side as a unit. */}
+        <div className={`primary-dock activity-${activityBarPos}`}>
+          {activityBarPos !== "hidden" &&
+            (activityBarPos === "side" || sidebarOpen) && (
+              <ActivityBar
+                activeView={activeView}
+                onViewChange={setActiveView}
+                side={sidebarSide}
+                orientation={activityBarPos === "top" ? "horizontal" : "vertical"}
+                onToggleSide={() =>
+                  setSidebarSide((s) => (s === "left" ? "right" : "left"))
+                }
+                onDragStart={startActivityDrag}
+              />
+            )}
 
-        {sidebarOpen && <aside className="sidebar">{renderSidebar()}</aside>}
+          {sidebarOpen && (
+            <aside
+              className="sidebar"
+              style={{
+                width:
+                  activityBarPos === "top"
+                    ? Math.max(sidebarWidth, SIDEBAR_MIN_TOP)
+                    : sidebarWidth,
+              }}
+            >
+              {renderSidebar()}
+            </aside>
+          )}
+        </div>
+
+        {sidebarOpen && (
+          <div
+            className="sidebar-resize-handle"
+            title="Arraste para redimensionar a barra lateral"
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture(e.pointerId);
+              const startX = e.clientX;
+              // The top activity bar needs a wider floor so the explorer can't
+              // shrink past the icon strip above it.
+              const minW =
+                activityBarPos === "top" ? SIDEBAR_MIN_TOP : SIDEBAR_MIN;
+              const startW = Math.max(sidebarWidth, minW);
+              const onMove = (me: PointerEvent) => {
+                const delta = me.clientX - startX;
+                // Docked right, dragging left widens the sidebar.
+                const signed = sidebarSide === "right" ? -delta : delta;
+                setSidebarWidth(
+                  Math.max(minW, Math.min(startW + signed, window.innerWidth * 0.6))
+                );
+              };
+              const onUp = () => {
+                window.removeEventListener("pointermove", onMove);
+                window.removeEventListener("pointerup", onUp);
+              };
+              window.addEventListener("pointermove", onMove);
+              window.addEventListener("pointerup", onUp);
+            }}
+          />
+        )}
 
         <main className="app-main">
           {activeView === "agents" ? (
@@ -2301,70 +2903,87 @@ export default function App() {
               />
             </>
           )}
-          <div className="editor-host">
-            {activeView === "agents" ? (
-              <AgentWorkspace
-                rootPath={rootPath}
-                store={agentStore}
-                selection={agentSelection}
-                busy={agentBusy}
-                status={agentStatus}
-                error={agentError}
-                mode={agentMode}
-                onModeChange={setAgentMode}
-                onCreate={handleCreateAgent}
-                onSaveAgent={handleSaveAgent}
-                onCancelConfig={() => setAgentSelection(null)}
-                onSendMessage={handleSendAgentMessage}
-                onStop={handleStopAgent}
-                onRevert={handleRevertMessage}
-              />
-            ) : activeFile && activeFile.mode === "image" ? (
-              // Image-mode tab (ISSUE-70): read-only preview, no Monaco.
-              <ImagePreview path={activeFile.path} name={activeFile.name} />
-            ) : activeFile &&
-              (activeFile.mode === "video" || activeFile.mode === "audio") ? (
-              // Media-mode tab: read-only video/audio player (local or remote).
-              <MediaPreview
-                path={activeFile.path}
-                name={activeFile.name}
-                kind={activeFile.mode}
-              />
-            ) : (
-              <EditorPane
-                file={activeFile}
-                rootPath={rootPath}
-                onChange={handleEditorChange}
-                onCursorChange={(l, c) => {
-                  setCursorLine(l);
-                  setCursorCol(c);
-                }}
-                onProblemsChange={setProblems}
-                revealRef={revealRef}
-                pendingReveal={pendingReveal}
-                actionsRef={editorActionsRef}
-                onOpenDefinition={(path, line) =>
-                  handleOpenFile(
-                    { name: baseName(path), path, isDir: false },
-                    line
-                  )
-                }
-              />
-            )}
-          </div>
-          {panelOpen && (
-            <>
+          {/* Editor + bottom panel. The panel can dock bottom (column) or to a
+              side (row); the dock class flips the axis and the handle/orientation. */}
+          <div
+            className={`editor-area panel-${panelPos}${
+              draggingPanel ? " dragging-panel" : ""
+            }${armingPanel ? " arming-panel" : ""}`}
+          >
+            <div className="editor-host">
+              {activeView === "agents" ? (
+                <AgentWorkspace
+                  rootPath={rootPath}
+                  store={agentStore}
+                  selection={agentSelection}
+                  busy={agentBusy}
+                  status={agentStatus}
+                  error={agentError}
+                  mode={agentMode}
+                  onModeChange={setAgentMode}
+                  onCreate={handleCreateAgent}
+                  onSaveAgent={handleSaveAgent}
+                  onCancelConfig={() => setAgentSelection(null)}
+                  onSendMessage={handleSendAgentMessage}
+                  onStop={handleStopAgent}
+                  onRevert={handleRevertMessage}
+                />
+              ) : activeFile && activeFile.mode === "image" ? (
+                // Image-mode tab (ISSUE-70): read-only preview, no Monaco.
+                <ImagePreview path={activeFile.path} name={activeFile.name} />
+              ) : activeFile &&
+                (activeFile.mode === "video" || activeFile.mode === "audio") ? (
+                // Media-mode tab: read-only video/audio player (local or remote).
+                <MediaPreview
+                  path={activeFile.path}
+                  name={activeFile.name}
+                  kind={activeFile.mode}
+                />
+              ) : (
+                <EditorPane
+                  file={activeFile}
+                  rootPath={rootPath}
+                  onChange={handleEditorChange}
+                  onCursorChange={(l, c) => {
+                    setCursorLine(l);
+                    setCursorCol(c);
+                  }}
+                  onProblemsChange={setProblems}
+                  revealRef={revealRef}
+                  pendingReveal={pendingReveal}
+                  actionsRef={editorActionsRef}
+                  onOpenDefinition={(path, line) =>
+                    handleOpenFile(
+                      { name: baseName(path), path, isDir: false },
+                      line
+                    )
+                  }
+                />
+              )}
+            </div>
+            {panelOpen && (
               <div
                 className="panel-resize-handle"
                 onPointerDown={(e) => {
                   e.currentTarget.setPointerCapture(e.pointerId);
+                  const startX = e.clientX;
                   const startY = e.clientY;
                   const startH = panelHeight;
+                  const startW = panelWidth;
                   const onMove = (me: PointerEvent) => {
-                    const delta = startY - me.clientY;
-                    setPanelHeight(
-                      Math.max(80, Math.min(startH + delta, window.innerHeight * 0.7))
-                    );
+                    if (panelPos === "bottom") {
+                      const delta = startY - me.clientY;
+                      setPanelHeight(
+                        Math.max(80, Math.min(startH + delta, window.innerHeight * 0.7))
+                      );
+                    } else {
+                      // Right: drag left widens; left: drag right widens.
+                      const delta =
+                        panelPos === "right" ? startX - me.clientX : me.clientX - startX;
+                      setPanelWidth(
+                        Math.max(180, Math.min(startW + delta, window.innerWidth * 0.7))
+                      );
+                    }
                   };
                   const onUp = () => {
                     window.removeEventListener("pointermove", onMove);
@@ -2374,20 +2993,27 @@ export default function App() {
                   window.addEventListener("pointerup", onUp);
                 }}
               />
-              <TerminalPanel
-                open={panelOpen}
-                height={panelHeight}
-                cwd={rootPath}
-                onClose={() => setPanelOpen(false)}
-                problems={problems}
-                onOpenProblem={handleOpenProblem}
-                runCommand={runCommand}
-                runNonce={runNonce}
-                openCwd={terminalOpenCwd}
-                openNonce={terminalOpenNonce}
-              />
-            </>
-          )}
+            )}
+            {/* Always mounted (hidden when closed) so terminals keep running when
+                the panel is minimized — sessions die only on close or app exit. */}
+            <TerminalPanel
+              open={panelOpen}
+              height={panelHeight}
+              width={panelWidth}
+              pos={panelPos}
+              cwd={rootPath}
+              onClose={() => setPanelOpen(false)}
+              onDragStart={startPanelDrag}
+              problems={allProblems}
+              onOpenProblem={handleOpenProblem}
+              runCommand={runCommand}
+              runNonce={runNonce}
+              openCwd={terminalOpenCwd}
+              openNonce={terminalOpenNonce}
+              focusTab={panelTab}
+              focusNonce={panelTabNonce}
+            />
+          </div>
         </main>
       </div>
 
@@ -2406,9 +3032,12 @@ export default function App() {
         tabSize={TAB_SIZE}
         errorCount={errorCount}
         warningCount={warningCount}
-        lspServers={lspServers}
+        lspServers={activeLspServers}
         onRestartLsp={restartLsp}
+        onShowProblems={() => showPanelTab("problems")}
+        onSelectTsVersion={handleSelectTsVersion}
       />
+
 
       {quickOpenOpen && (
         <QuickOpen

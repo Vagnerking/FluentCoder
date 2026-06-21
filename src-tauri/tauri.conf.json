@@ -21,6 +21,7 @@
         "fullscreen": false,
         "decorations": false,
         "transparent": true,
+        "dragDropEnabled": false,
         "windowEffects": {
           "effects": ["mica"]
         }
