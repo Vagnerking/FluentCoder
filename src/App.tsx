@@ -41,6 +41,7 @@ import {
   writeFile,
 } from "./api";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { samePath } from "./paths";
 import { languageForFile } from "./language";
 import { buildDecorations, decoKey } from "./icon-theme/decorations";
 import { useLspManager } from "./lsp/useLspManager";
@@ -351,9 +352,13 @@ export default function App() {
 
       // Reopen tabs in their saved order, skipping any file that no longer
       // exists (handleOpenFile returns false silently). Re-read content from
-      // disk — only the path + view mode were persisted.
+      // disk — only the path + view mode were persisted. Drop duplicate paths
+      // here too (a stale session may hold the same file twice, e.g. saved with
+      // different drive-letter casing) so the restore never re-creates them and
+      // the healed session below is deduplicated (issue #7).
       const restored: OpenTab[] = [];
       for (const tab of s.openTabs) {
+        if (restored.some((t) => samePath(t.path, tab.path))) continue;
         const node: FileNode = {
           name: baseName(tab.path),
           path: tab.path,
@@ -369,13 +374,16 @@ export default function App() {
         if (ok) restored.push(tab);
       }
 
-      // Focus the tab that was active, if it survived the restore.
+      // Focus the tab that was active, if it survived the restore. Match the
+      // active path against the restored tab (case-insensitively on Windows) so
+      // we focus the path actually stored, not a differently-cased saved one.
+      const activeTab =
+        s.activePath != null
+          ? restored.find((t) => samePath(t.path, s.activePath!))
+          : undefined;
       const activeRestored =
-        s.activePath && restored.some((t) => t.path === s.activePath)
-          ? s.activePath
-          : restored.length > 0
-            ? restored[restored.length - 1].path
-            : null;
+        activeTab?.path ??
+        (restored.length > 0 ? restored[restored.length - 1].path : null);
       if (activeRestored) setActivePath(activeRestored);
 
       restoringSessionRef.current = false;
@@ -704,18 +712,22 @@ export default function App() {
 
       const resolvedMode: OpenMode = mode ?? defaultModeFor(node.path);
 
-      const already = openFiles.find((f) => f.path === node.path);
+      // Compare case-insensitively on Windows: the same file can arrive with a
+      // different drive-letter casing (explorer vs picker vs LSP URI), which
+      // would otherwise open it as a second tab (issue #7). Reuse the existing
+      // tab's stored path so focus/active matching stays consistent.
+      const already = openFiles.find((f) => samePath(f.path, node.path));
       if (already) {
         // Re-opening with a different mode (e.g. via "Open With…") switches the
         // existing tab's view rather than duplicating it.
         if (mode && already.mode !== mode) {
           setOpenFiles((prev) =>
             prev.map((f) =>
-              f.path === node.path ? { ...f, mode: resolvedMode } : f
+              samePath(f.path, node.path) ? { ...f, mode: resolvedMode } : f
             )
           );
         }
-        setActivePath(node.path);
+        setActivePath(already.path);
         if (line != null && resolvedMode === "text") {
           revealRef.current?.(line, selection);
         }
@@ -725,16 +737,25 @@ export default function App() {
       try {
         const content =
           resolvedMode === "image" ? "" : await readFile(node.path);
-        setOpenFiles((prev) => [
-          ...prev,
-          {
-            path: node.path,
-            name: node.name,
-            content,
-            dirty: false,
-            mode: resolvedMode,
-          },
-        ]);
+        // Guard against the closure's `openFiles` being stale between two fast
+        // back-to-back opens (e.g. the launch restore awaits each tab but React
+        // hasn't re-rendered, so the dedup above saw an outdated list). The
+        // functional updater sees the live `prev`, so re-check there and skip
+        // the append if the file already has a tab (issue #7).
+        setOpenFiles((prev) =>
+          prev.some((f) => samePath(f.path, node.path))
+            ? prev
+            : [
+                ...prev,
+                {
+                  path: node.path,
+                  name: node.name,
+                  content,
+                  dirty: false,
+                  mode: resolvedMode,
+                },
+              ]
+        );
         setActivePath(node.path);
         // The editor isn't mounted with this content yet; defer the reveal.
         if (line != null && resolvedMode === "text") {
