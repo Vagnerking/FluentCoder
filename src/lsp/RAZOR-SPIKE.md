@@ -1,5 +1,12 @@
 # ISSUE-32 — Spike: capabilities reais do `rzls` via LSP puro
 
+> **Documento histórico.** A decisão vigente desde 21/06/2026 é implementar uma
+> engine `.cshtml` própria, sem Roslyn/`rzls` para Razor. Consulte
+> [`docs/adr/0001-cshtml-language-service.md`](../../docs/adr/0001-cshtml-language-service.md)
+> e
+> [`docs/context/cshtml-language-service.md`](../../docs/context/cshtml-language-service.md).
+> Os TODOs de aquisição/integração de `rzls` abaixo não devem ser executados.
+
 > **Status do spike:** PARCIAL / ESTÁTICO. O servidor `rzls` **não** foi baixado
 > nem executado neste worktree (restrição explícita da tarefa: não baixar
 > Roslyn/rzls de verdade, não pendurar em downloads grandes). As conclusões
