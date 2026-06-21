@@ -1,4 +1,5 @@
 mod agents;
+pub mod cshtml;
 mod file_index;
 mod fs_commands;
 mod git;
