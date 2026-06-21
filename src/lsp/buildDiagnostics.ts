@@ -47,6 +47,15 @@ async function build(rootPath: string): Promise<void> {
     return;
   }
 
+  // Keep only diagnostics for files INSIDE the workspace. MSBuild also reports
+  // build-system warnings against SDK files (e.g. the EOL-target-framework
+  // warning under C:\Program Files\dotnet\...), which are noise here and whose
+  // paths can't even be opened in the editor.
+  const root = rootPath.replace(/\\/g, "/").toLowerCase();
+  diags = diags.filter((d) =>
+    d.path.replace(/\\/g, "/").toLowerCase().startsWith(root)
+  );
+
   // Group by file URI (matching how Monaco models are keyed).
   const byUri = new Map<string, Problem[]>();
   for (const d of diags) {

@@ -12,6 +12,7 @@
  */
 import type { Monaco } from "@monaco-editor/react";
 import type * as MonacoNS from "monaco-editor";
+import { installRazorHtmlLint } from "../lint/razorHtmlLint";
 // `monaco-editor`'s ESM API does not automatically bundle every basic-language
 // contribution. Register C#'s lazy Monarch loader explicitly; otherwise Roslyn
 // semantic tokens color symbols, but lexical-only tokens such as `if` and
@@ -28,6 +29,7 @@ export function setupMonacoForLsp(monaco: Monaco): void {
   disableBuiltinTsWorker(monaco);
   registerReactLanguages(monaco);
   registerRazorLanguage(monaco);
+  installRazorHtmlLint(monaco);
   ensureCsharpLanguage(monaco);
 }
 
