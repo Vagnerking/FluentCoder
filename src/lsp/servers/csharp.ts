@@ -3,7 +3,7 @@ import { ensureCsharpServer, startLspServer, listProjectFiles } from "../../api"
 import {
   createLanguageClient,
   enableLanguageClientSemanticTokens,
-  refreshLanguageClientSemanticTokens,
+  stabilizeLanguageClientSemanticTokens,
 } from "../client";
 import { toFileUri } from "../uri";
 import { lspLog } from "../debug";
@@ -88,7 +88,11 @@ export async function startCsharpServer(
     // project before asking Monaco to refresh semantic tokens.
     void reopenCsharpDocuments(client).then(() => {
       enableLanguageClientSemanticTokens(client);
-      refreshLanguageClientSemanticTokens(client);
+      // Roslyn serves provisional classifications right after project init and
+      // only later returns the correct ones, without sending its own refresh.
+      // Re-pull on a backoff until they settle so class/enum/struct colors
+      // appear without a manual tab switch (replaces a single one-shot refresh).
+      stabilizeLanguageClientSemanticTokens(client);
       void logCurrentDocumentProjectContexts(client);
     });
   });
