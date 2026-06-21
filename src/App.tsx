@@ -26,6 +26,8 @@ import {
   agentsSave,
   buildSearchIndex,
   gitBranch,
+  gitSnapshotCreate,
+  gitSnapshotRestore,
   gitStatus,
   pickFile,
   pickFolder,
@@ -69,6 +71,7 @@ import type {
   AgentConversation,
   AgentDraft,
   AgentMessage,
+  AgentMode,
   AgentSelection,
   AgentStore,
 } from "./agents/types";
@@ -110,6 +113,9 @@ export default function App() {
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentStatus, setAgentStatus] = useState<string | null>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
+  // Operating mode for the chat composer. Lifted here (not local to AgentChat)
+  // so the choice survives switching conversations, views, or sidebar panels.
+  const [agentMode, setAgentMode] = useState<AgentMode>("ask");
 
   // "Open With…" selector (ISSUE-70): the file + anchor point while it's shown.
   const [openWith, setOpenWith] = useState<
@@ -459,7 +465,7 @@ export default function App() {
     });
   }
 
-  async function handleSendAgentMessage(message: string) {
+  async function handleSendAgentMessage(message: string, mode: AgentMode) {
     if (!rootPath || agentSelection?.kind !== "chat" || agentBusy) return;
     const agent = agentStore.agents.find(
       (candidate) => candidate.id === agentSelection.agentId,
@@ -476,6 +482,11 @@ export default function App() {
     const sendRoot = rootPath;
     const isStaleWorkspace = () => rootPathRef.current !== sendRoot;
 
+    // In write-capable modes, snapshot the working tree first so this request is
+    // individually revertible (no-op/null when the folder isn't a git repo).
+    const revert =
+      mode === "ask" ? null : await gitSnapshotCreate(sendRoot);
+
     const now = new Date().toISOString();
     const userMessage: AgentMessage = {
       id: createLocalId("message"),
@@ -483,6 +494,8 @@ export default function App() {
       content: message,
       createdAt: now,
       status: "done",
+      mode,
+      ...(revert ? { revert } : {}),
     };
     const assistantMessage: AgentMessage = {
       id: createLocalId("message"),
@@ -537,7 +550,7 @@ export default function App() {
     );
 
     try {
-      await acpPrompt(agent.provider, sendRoot, prompt, (event) => {
+      await acpPrompt(agent.provider, sendRoot, prompt, mode, (event) => {
         // Discard events that arrived after a workspace switch.
         if (isStaleWorkspace()) return;
         if (event.type === "status") {
@@ -608,6 +621,44 @@ export default function App() {
       // switch, or the new workspace would stay stuck "busy".
       setAgentBusy(false);
     }
+  }
+
+  /**
+   * Rolls the working tree back to the snapshot taken before `userMessageId`'s
+   * request, undoing everything the agent changed for it. Marks the point as
+   * reverted and refreshes the explorer/git so the UI reflects the restore.
+   */
+  async function handleRevertMessage(
+    conversationId: string,
+    userMessageId: string,
+  ) {
+    if (!rootPath) return;
+    const conversation = agentStore.conversations.find(
+      (candidate) => candidate.id === conversationId,
+    );
+    const target = conversation?.messages.find(
+      (candidate) => candidate.id === userMessageId,
+    );
+    if (!target?.revert || target.revert.reverted) return;
+
+    try {
+      await gitSnapshotRestore(rootPath, target.revert);
+    } catch (error) {
+      setAgentError(`Não foi possível reverter: ${String(error)}`);
+      return;
+    }
+
+    const next = replaceConversation(agentStore, conversationId, (current) => ({
+      ...current,
+      messages: current.messages.map((candidate) =>
+        candidate.id === userMessageId && candidate.revert
+          ? { ...candidate, revert: { ...candidate.revert, reverted: true } }
+          : candidate,
+      ),
+    }));
+    void persistAgentStore(next);
+    await refreshExplorerRoot();
+    setAgentStatus("Alterações revertidas para antes deste pedido.");
   }
 
   /**
@@ -1721,10 +1772,13 @@ export default function App() {
                 busy={agentBusy}
                 status={agentStatus}
                 error={agentError}
+                mode={agentMode}
+                onModeChange={setAgentMode}
                 onCreate={handleCreateAgent}
                 onSaveAgent={handleSaveAgent}
                 onCancelConfig={() => setAgentSelection(null)}
                 onSendMessage={handleSendAgentMessage}
+                onRevert={handleRevertMessage}
               />
             ) : activeFile && activeFile.mode === "image" ? (
               // Image-mode tab (ISSUE-70): read-only preview, no Monaco.

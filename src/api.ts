@@ -12,7 +12,12 @@ import type {
   SearchStreamEvent,
   Session,
 } from "./types";
-import type { AcpEvent, AgentStore } from "./agents/types";
+import type {
+  AcpEvent,
+  AgentMode,
+  AgentStore,
+  RevertPoint,
+} from "./agents/types";
 
 /** Raw shape returned by the Rust `git_status` (snake_case from serde). */
 interface RawGitStatus {
@@ -253,6 +258,38 @@ export function gitBlame(root: string, file: string): Promise<BlameHunk[]> {
   return invoke<BlameHunk[]>("git_blame", { root, file });
 }
 
+interface RawGitSnapshot {
+  snapshot_id: string;
+  head: string;
+}
+
+/**
+ * Captures the working tree at `path` so a later restore can undo what the agent
+ * changes next. Resolves to null when `path` isn't a git repo (revert disabled).
+ */
+export async function gitSnapshotCreate(
+  path: string,
+): Promise<RevertPoint | null> {
+  try {
+    const raw = await invoke<RawGitSnapshot>("git_snapshot_create", { path });
+    return { snapshotId: raw.snapshot_id, head: raw.head };
+  } catch {
+    return null;
+  }
+}
+
+/** Restores the working tree at `path` to a snapshot, discarding agent edits. */
+export function gitSnapshotRestore(
+  path: string,
+  point: RevertPoint,
+): Promise<void> {
+  return invoke("git_snapshot_restore", {
+    path,
+    snapshotId: point.snapshotId,
+    head: point.head,
+  });
+}
+
 export function termCreate(
   id: string,
   cwd: string,
@@ -307,6 +344,7 @@ export function acpPrompt(
   provider: "codex" | "claude",
   workspaceRoot: string,
   prompt: string,
+  mode: AgentMode,
   onEvent: (event: AcpEvent) => void,
 ): Promise<void> {
   const channel = new Channel<AcpEvent>();
@@ -315,6 +353,7 @@ export function acpPrompt(
     provider,
     workspaceRoot,
     prompt,
+    mode,
     onEvent: channel,
   });
 }

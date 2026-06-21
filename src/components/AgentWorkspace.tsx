@@ -6,10 +6,35 @@ import type {
   AgentDefinition,
   AgentDraft,
   AgentMessage,
+  AgentMode,
   AgentSelection,
   AgentStore,
 } from "../agents/types";
+import { AGENT_MODES } from "../agents/types";
 import { Codicon } from "../icons/codicons/Codicon";
+import type { IconAction } from "../icons/codicons/codicon-map";
+
+/** UI metadata for each operating mode, shown in the composer's mode picker. */
+const MODE_META: Record<
+  AgentMode,
+  { label: string; hint: string; icon: IconAction }
+> = {
+  ask: {
+    label: "Ask",
+    hint: "Somente leitura — o agente apenas responde.",
+    icon: "modeAsk",
+  },
+  plan: {
+    label: "Plan",
+    hint: "Investiga e escreve apenas arquivos .md de plano.",
+    icon: "modePlan",
+  },
+  dev: {
+    label: "Dev",
+    hint: "Acesso total: o agente pode criar e editar arquivos.",
+    icon: "modeDev",
+  },
+};
 
 interface AgentWorkspaceProps {
   rootPath: string | null;
@@ -18,10 +43,13 @@ interface AgentWorkspaceProps {
   busy: boolean;
   status: string | null;
   error: string | null;
+  mode: AgentMode;
+  onModeChange: (mode: AgentMode) => void;
   onCreate: () => void;
   onSaveAgent: (draft: AgentDraft) => void;
   onCancelConfig: () => void;
-  onSendMessage: (message: string) => Promise<void>;
+  onSendMessage: (message: string, mode: AgentMode) => Promise<void>;
+  onRevert: (conversationId: string, userMessageId: string) => Promise<void>;
 }
 
 const EMPTY_DRAFT: AgentDraft = {
@@ -38,10 +66,13 @@ export function AgentWorkspace({
   busy,
   status,
   error,
+  mode,
+  onModeChange,
   onCreate,
   onSaveAgent,
   onCancelConfig,
   onSendMessage,
+  onRevert,
 }: AgentWorkspaceProps) {
   if (!rootPath) {
     return (
@@ -76,11 +107,15 @@ export function AgentWorkspace({
       return (
         <AgentChat
           agent={agent}
+          conversationId={conversation.id}
           messages={conversation.messages}
           busy={busy}
           status={status}
           error={error}
+          mode={mode}
+          onModeChange={onModeChange}
           onSend={onSendMessage}
+          onRevert={onRevert}
         />
       );
     }
@@ -251,18 +286,26 @@ function AgentConfiguration({
 
 function AgentChat({
   agent,
+  conversationId,
   messages,
   busy,
   status,
   error,
+  mode,
+  onModeChange,
   onSend,
+  onRevert,
 }: {
   agent: AgentDefinition;
+  conversationId: string;
   messages: AgentStore["conversations"][number]["messages"];
   busy: boolean;
   status: string | null;
   error: string | null;
-  onSend: (message: string) => Promise<void>;
+  mode: AgentMode;
+  onModeChange: (mode: AgentMode) => void;
+  onSend: (message: string, mode: AgentMode) => Promise<void>;
+  onRevert: (conversationId: string, userMessageId: string) => Promise<void>;
 }) {
   const [draft, setDraft] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
@@ -277,7 +320,7 @@ function AgentChat({
     const message = draft.trim();
     if (!message || busy) return;
     setDraft("");
-    await onSend(message);
+    await onSend(message, mode);
   }
 
   return (
@@ -311,9 +354,32 @@ function AgentChat({
               message.status === "error" ? "error" : ""
             }`}
           >
-            <span className="agent-message-role">
-              {message.role === "user" ? "Você" : agent.name}
-            </span>
+            <div className="agent-message-head">
+              <span className="agent-message-role">
+                {message.role === "user" ? "Você" : agent.name}
+              </span>
+              {message.role === "user" && message.mode && (
+                <span className={`agent-message-mode mode-${message.mode}`}>
+                  {MODE_META[message.mode].label}
+                </span>
+              )}
+              {message.role === "user" && message.revert && (
+                <button
+                  type="button"
+                  className="agent-revert-button"
+                  disabled={busy || message.revert.reverted}
+                  onClick={() => onRevert(conversationId, message.id)}
+                  title={
+                    message.revert.reverted
+                      ? "Já revertido para antes deste pedido"
+                      : "Reverter o código para antes deste pedido"
+                  }
+                >
+                  <Codicon name="discard" size={13} />
+                  {message.revert.reverted ? "Revertido" : "Reverter"}
+                </button>
+              )}
+            </div>
             <MessageBody message={message} />
           </article>
         ))}
@@ -333,29 +399,49 @@ function AgentChat({
       </div>
 
       <form className="agent-composer" onSubmit={submit}>
-        <textarea
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              event.currentTarget.form?.requestSubmit();
-            }
-          }}
-          placeholder={`Mensagem para ${agent.name}`}
-          aria-label={`Mensagem para ${agent.name}`}
-          rows={3}
-          disabled={busy}
-        />
-        <button
-          className="agent-send-button"
-          type="submit"
-          disabled={busy || !draft.trim()}
-          aria-label="Enviar mensagem"
-          title="Enviar mensagem (Enter)"
-        >
-          <Codicon name="send" size={18} />
-        </button>
+        <div className="agent-mode-bar" role="radiogroup" aria-label="Modo do agente">
+          {AGENT_MODES.map((id) => (
+            <button
+              key={id}
+              type="button"
+              role="radio"
+              aria-checked={mode === id}
+              className={`agent-mode-option ${mode === id ? "active" : ""}`}
+              onClick={() => onModeChange(id)}
+              disabled={busy}
+              title={MODE_META[id].hint}
+            >
+              <Codicon name={MODE_META[id].icon} size={13} />
+              {MODE_META[id].label}
+            </button>
+          ))}
+          <span className="agent-mode-hint">{MODE_META[mode].hint}</span>
+        </div>
+        <div className="agent-composer-row">
+          <textarea
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+            placeholder={`Mensagem para ${agent.name}`}
+            aria-label={`Mensagem para ${agent.name}`}
+            rows={3}
+            disabled={busy}
+          />
+          <button
+            className="agent-send-button"
+            type="submit"
+            disabled={busy || !draft.trim()}
+            aria-label="Enviar mensagem"
+            title="Enviar mensagem (Enter)"
+          >
+            <Codicon name="send" size={18} />
+          </button>
+        </div>
       </form>
     </div>
   );

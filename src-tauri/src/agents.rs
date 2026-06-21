@@ -3,6 +3,7 @@ use agent_client_protocol::schema::v1::{
     PermissionOptionKind, PromptRequest, ReadTextFileRequest, ReadTextFileResponse,
     RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     SelectedPermissionOutcome, SessionNotification, SessionUpdate, TextContent,
+    WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{AcpAgent, Agent, ConnectionTo};
@@ -20,6 +21,47 @@ pub enum AcpEvent {
     Status { message: String },
     Done { stop_reason: String },
     Error { message: String },
+}
+
+/// What the agent is allowed to do for a given send. Enforced here on the client
+/// side (read/write capability + permission outcomes) so it doesn't rely on each
+/// provider exposing matching native modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentMode {
+    /// Read-only: the agent may answer, never write files.
+    Ask,
+    /// Read-only for code, but may write Markdown (`.md`) plan files.
+    Plan,
+    /// Full read/write; permission requests are auto-approved (bypass).
+    Dev,
+}
+
+impl AgentMode {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "ask" => Ok(Self::Ask),
+            "plan" => Ok(Self::Plan),
+            "dev" => Ok(Self::Dev),
+            other => Err(format!("Modo de agente desconhecido: {other}")),
+        }
+    }
+
+    /// Whether the agent may write any file at all in this mode.
+    fn can_write(self) -> bool {
+        matches!(self, Self::Plan | Self::Dev)
+    }
+
+    /// Whether a write to `path` is allowed under this mode's policy.
+    fn allows_write_to(self, path: &Path) -> bool {
+        match self {
+            Self::Ask => false,
+            // Plan may only produce Markdown plan files.
+            Self::Plan => path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("md")),
+            Self::Dev => true,
+        }
+    }
 }
 
 fn agents_file(root: &str) -> Result<PathBuf, String> {
@@ -62,12 +104,14 @@ pub async fn acp_prompt(
     provider: String,
     workspace_root: String,
     prompt: String,
+    mode: String,
     on_event: Channel<AcpEvent>,
 ) -> Result<(), String> {
     if prompt.trim().is_empty() {
         return Err("Envie uma mensagem antes de iniciar o agente.".into());
     }
 
+    let mode = AgentMode::parse(&mode)?;
     let root = fs::canonicalize(&workspace_root)
         .map_err(|error| format!("Não foi possível validar o workspace: {error}"))?;
     if !root.is_dir() {
@@ -77,6 +121,7 @@ pub async fn acp_prompt(
     let agent = provider_agent(&provider)?;
     let notification_channel = on_event.clone();
     let read_root = root.clone();
+    let write_root = root.clone();
     let permission_channel = on_event.clone();
     let prompt_channel = on_event.clone();
 
@@ -119,21 +164,42 @@ pub async fn acp_prompt(
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
+            async move |request: WriteTextFileRequest, responder, _connection| {
+                // Mode policy gates every write: Ask rejects all, Plan only `.md`,
+                // Dev anything inside the workspace. Path is re-validated here so
+                // the agent can't escape the root regardless of mode.
+                match write_workspace_text(&write_root, &request.path, &request.content, mode) {
+                    Ok(()) => responder.respond(WriteTextFileResponse::default()),
+                    Err(error) => responder.respond_with_internal_error(error),
+                }
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             async move |request: RequestPermissionRequest, responder, _connection| {
-                let _ = permission_channel.send(AcpEvent::Status {
-                    message: format!(
-                        "Operação bloqueada por segurança: {}",
-                        permission_title(&request)
-                    ),
-                });
-                responder.respond(RequestPermissionResponse::new(reject_permission(&request)))
+                match approve_permission(&request, mode) {
+                    Some(outcome) => responder
+                        .respond(RequestPermissionResponse::new(outcome)),
+                    None => {
+                        let _ = permission_channel.send(AcpEvent::Status {
+                            message: format!(
+                                "Operação bloqueada pelo modo {}: {}",
+                                mode_label(mode),
+                                permission_title(&request)
+                            ),
+                        });
+                        responder.respond(RequestPermissionResponse::new(reject_permission(
+                            &request,
+                        )))
+                    }
+                }
             },
             agent_client_protocol::on_receive_request!(),
         )
         .connect_with(agent, |connection: ConnectionTo<Agent>| async move {
             let capabilities = ClientCapabilities::new().fs(FileSystemCapabilities::new()
                 .read_text_file(true)
-                .write_text_file(false));
+                .write_text_file(mode.can_write()));
             let initialize =
                 InitializeRequest::new(ProtocolVersion::V1).client_capabilities(capabilities);
 
@@ -148,10 +214,11 @@ pub async fn acp_prompt(
                 message: "Agente conectado. Processando a mensagem…".into(),
             });
 
+            let directed_prompt = format!("{}\n\n{}", mode_directive(mode), prompt);
             let response = connection
                 .send_request(PromptRequest::new(
                     session.session_id,
-                    vec![ContentBlock::Text(TextContent::new(prompt))],
+                    vec![ContentBlock::Text(TextContent::new(directed_prompt))],
                 ))
                 .block_task()
                 .await?;
@@ -235,6 +302,95 @@ fn reject_permission(request: &RequestPermissionRequest) -> RequestPermissionOut
     rejected.map_or(RequestPermissionOutcome::Cancelled, |option| {
         RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option.option_id.clone()))
     })
+}
+
+/// In Dev mode every permission is auto-approved (bypass); other modes return
+/// `None` so the caller rejects. Returns the "allow" outcome to send back.
+fn approve_permission(
+    request: &RequestPermissionRequest,
+    mode: AgentMode,
+) -> Option<RequestPermissionOutcome> {
+    if mode != AgentMode::Dev {
+        return None;
+    }
+    let allowed = request.options.iter().find(|option| {
+        matches!(
+            option.kind,
+            PermissionOptionKind::AllowOnce | PermissionOptionKind::AllowAlways
+        )
+    })?;
+    Some(RequestPermissionOutcome::Selected(
+        SelectedPermissionOutcome::new(allowed.option_id.clone()),
+    ))
+}
+
+fn mode_label(mode: AgentMode) -> &'static str {
+    match mode {
+        AgentMode::Ask => "Ask",
+        AgentMode::Plan => "Plan",
+        AgentMode::Dev => "Dev",
+    }
+}
+
+/// System directive prepended to the prompt so the agent's behavior matches the
+/// client-enforced policy (and the agent doesn't waste a turn attempting writes
+/// the client will reject).
+fn mode_directive(mode: AgentMode) -> &'static str {
+    match mode {
+        AgentMode::Ask => {
+            "MODO ASK (somente leitura): responda e explique. Você NÃO pode criar, \
+             editar ou apagar arquivos; qualquer tentativa de escrita será rejeitada."
+        }
+        AgentMode::Plan => {
+            "MODO PLAN: investigue e produza um plano. Você só pode escrever arquivos \
+             Markdown (.md) contendo o plano; qualquer outra escrita será rejeitada."
+        }
+        AgentMode::Dev => {
+            "MODO DEV: você pode ler, criar, editar e apagar arquivos do workspace \
+             para implementar o que for pedido."
+        }
+    }
+}
+
+/// Writes `content` to `path` after enforcing the workspace boundary and the
+/// mode's write policy. New files are allowed (only the parent dir must exist
+/// and be inside the workspace).
+fn write_workspace_text(
+    workspace_root: &Path,
+    requested_path: &Path,
+    content: &str,
+    mode: AgentMode,
+) -> Result<(), String> {
+    if !mode.can_write() {
+        return Err(format!(
+            "o modo {} é somente leitura; escrita rejeitada",
+            mode_label(mode)
+        ));
+    }
+    if !mode.allows_write_to(requested_path) {
+        return Err(format!(
+            "o modo {} só permite escrever arquivos .md de plano",
+            mode_label(mode)
+        ));
+    }
+
+    // The file may not exist yet, so validate the parent dir (which must) rather
+    // than the file itself, then rebuild the full target from the canonical dir.
+    let parent = requested_path
+        .parent()
+        .ok_or_else(|| "path de escrita inválido".to_string())?;
+    let file_name = requested_path
+        .file_name()
+        .ok_or_else(|| "path de escrita sem nome de arquivo".to_string())?;
+    let canonical_parent = fs::canonicalize(parent)
+        .map_err(|error| format!("diretório de destino inacessível: {error}"))?;
+    if !canonical_parent.starts_with(workspace_root) {
+        return Err("o path de escrita está fora do workspace aberto".into());
+    }
+
+    let target = canonical_parent.join(file_name);
+    fs::write(&target, content)
+        .map_err(|error| format!("não foi possível escrever o arquivo: {error}"))
 }
 
 fn read_workspace_text(
@@ -345,6 +501,50 @@ mod tests {
 
         assert!(result.unwrap_err().contains("fora do workspace"));
         let _ = fs::remove_file(outside);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ask_mode_rejects_every_write() {
+        let root = fs::canonicalize(temp_workspace()).unwrap();
+        let target = root.join("notes.md");
+        let result = write_workspace_text(&root, &target, "x", AgentMode::Ask);
+        assert!(result.unwrap_err().contains("somente leitura"));
+        assert!(!target.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn plan_mode_allows_only_markdown() {
+        let root = fs::canonicalize(temp_workspace()).unwrap();
+
+        let md = root.join("plano.md");
+        write_workspace_text(&root, &md, "# Plano", AgentMode::Plan).unwrap();
+        assert_eq!(fs::read_to_string(&md).unwrap(), "# Plano");
+
+        let code = root.join("main.rs");
+        let result = write_workspace_text(&root, &code, "fn main() {}", AgentMode::Plan);
+        assert!(result.unwrap_err().contains(".md"));
+        assert!(!code.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dev_mode_writes_any_file_inside_workspace() {
+        let root = fs::canonicalize(temp_workspace()).unwrap();
+        let target = root.join("src.ts");
+        write_workspace_text(&root, &target, "export {}", AgentMode::Dev).unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "export {}");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dev_mode_refuses_writes_outside_workspace() {
+        let root = fs::canonicalize(temp_workspace()).unwrap();
+        let outside = root.parent().unwrap().join("fluent-coder-escape.ts");
+        let result = write_workspace_text(&root, &outside, "x", AgentMode::Dev);
+        assert!(result.unwrap_err().contains("fora do workspace"));
+        assert!(!outside.exists());
         let _ = fs::remove_dir_all(root);
     }
 

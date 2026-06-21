@@ -49,6 +49,8 @@ pub fn run() {
             git::git_log,
             git::git_log_file,
             git::git_blame,
+            git::git_snapshot_create,
+            git::git_snapshot_restore,
             runner::run_configs_load,
             runner::run_configs_save,
             runner::run_configs_detect,
