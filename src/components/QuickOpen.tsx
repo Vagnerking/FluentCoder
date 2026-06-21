@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listProjectFiles } from "../api";
+import { useModalDismiss } from "./useModalDismiss";
 import { rankFiles } from "../quickOpen/fuzzy";
 import type { FileNode, ProjectFile } from "../types";
 import { FileIcon } from "../icon-theme/material/FileIcon";
@@ -122,8 +123,8 @@ export function QuickOpen({ rootPath, onOpenFile, onClose }: QuickOpenProps) {
   }
 
   return (
-    <div className="quick-open-backdrop" onMouseDown={onClose}>
-      <div className="quick-open" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="quick-open-backdrop" {...useModalDismiss(onClose)}>
+      <div className="quick-open">
         <input
           ref={inputRef}
           className="quick-open-input"

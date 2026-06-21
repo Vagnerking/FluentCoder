@@ -22,7 +22,7 @@ export interface RawDirEntry {
  * selector (ISSUE-70) lets the user pick which one, and `OpenFile.mode` records
  * the choice so the App can route the buffer to the right view.
  */
-export type OpenMode = "text" | "image";
+export type OpenMode = "text" | "image" | "video" | "audio";
 
 /** A file currently open in the editor. */
 export interface OpenFile {

@@ -101,7 +101,19 @@ export type IconAction =
   | "selectForCompare"
   | "compareWithSelected"
   | "fileHistory"
-  | "timeline";
+  | "timeline"
+  // Remote (SSH) — issue #8
+  | "remote"
+  | "debugDisconnect"
+  // Media preview (image/video/audio)
+  | "video"
+  | "audio"
+  // Navigation
+  | "arrowUp"
+  | "arrowLeft"
+  // Misc
+  | "bookmark"
+  | "key";
 
 /** action → codicon name (without the `codicon-` prefix). */
 export const CODICON_MAP: Record<IconAction, string> = {
@@ -207,6 +219,22 @@ export const CODICON_MAP: Record<IconAction, string> = {
   compareWithSelected: "diff-multiple",
   fileHistory: "history",
   timeline: "history",
+
+  // Remote (SSH)
+  remote: "remote",
+  debugDisconnect: "debug-disconnect",
+
+  // Media preview
+  video: "device-camera-video",
+  audio: "unmute",
+
+  // Navigation
+  arrowUp: "arrow-up",
+  arrowLeft: "arrow-left",
+
+  // Misc
+  bookmark: "bookmark",
+  key: "key",
 };
 
 /** Codicon names that should spin (loading/sync feedback). */

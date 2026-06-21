@@ -228,14 +228,30 @@ pub fn read_file(path: String) -> Result<String, String> {
 /// WebView can't load arbitrary local paths without the asset protocol, so we
 /// inline the bytes. `mime` is inferred from the extension; unknown types fall
 /// back to `application/octet-stream` (the browser still renders common images).
+/// Upper bound for inlining a file as a base64 `data:` URL. Beyond this, the
+/// memory + string overhead would freeze the WebView, so we refuse instead.
+pub(crate) const MAX_PREVIEW_BYTES: u64 = 256 * 1024 * 1024;
+
 #[tauri::command]
 pub fn read_file_base64(path: String) -> Result<String, String> {
+    let meta = fs::metadata(&path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+    if meta.len() > MAX_PREVIEW_BYTES {
+        return Err(format!(
+            "Arquivo muito grande para pré-visualizar ({} MB).",
+            meta.len() / 1_048_576
+        ));
+    }
     let bytes = fs::read(&path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
-    let mime = mime_for_path(&path);
-    Ok(format!("data:{};base64,{}", mime, base64_encode(&bytes)))
+    Ok(data_url(&path, &bytes))
 }
 
-/// Best-effort MIME type from a file extension (image types we preview).
+/// Builds a `data:` URL (mime inferred from extension) from raw bytes. Shared by
+/// the local image/media preview and the remote (SFTP) one in `ssh.rs`.
+pub(crate) fn data_url(path: &str, bytes: &[u8]) -> String {
+    format!("data:{};base64,{}", mime_for_path(path), base64_encode(bytes))
+}
+
+/// Best-effort MIME type from a file extension (image / video / audio we preview).
 fn mime_for_path(path: &str) -> &'static str {
     let ext = Path::new(path)
         .extension()
@@ -243,6 +259,7 @@ fn mime_for_path(path: &str) -> &'static str {
         .unwrap_or("")
         .to_ascii_lowercase();
     match ext.as_str() {
+        // Images
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
@@ -251,6 +268,21 @@ fn mime_for_path(path: &str) -> &'static str {
         "ico" => "image/x-icon",
         "svg" => "image/svg+xml",
         "avif" => "image/avif",
+        // Video
+        "mp4" | "m4v" => "video/mp4",
+        "webm" => "video/webm",
+        "ogv" => "video/ogg",
+        "mov" => "video/quicktime",
+        "mkv" => "video/x-matroska",
+        "avi" => "video/x-msvideo",
+        // Audio
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" | "oga" => "audio/ogg",
+        "flac" => "audio/flac",
+        "m4a" => "audio/mp4",
+        "aac" => "audio/aac",
+        "opus" => "audio/opus",
         _ => "application/octet-stream",
     }
 }

@@ -50,6 +50,11 @@ which = "6"
 # Official Agent Client Protocol SDK. The editor acts as the ACP client and
 # spawns the registered Codex/Claude adapters over JSON-RPC stdio.
 agent-client-protocol = "0.15"
+# SSH/SFTP remote workspaces (issue #8). Pure-Rust crypto via `ring` instead of
+# the default `aws-lc-rs`, which pulls aws-lc-sys and needs NASM to build on
+# Windows — matching the project's openssl-free (rustls) stance.
+russh = { version = "0.61", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh-sftp = "2.3.0"
 
 [profile.release]
 panic = "abort"

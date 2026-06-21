@@ -22,6 +22,12 @@ interface StatusBarProps {
   branch: string | null;
   /** Opens the branch picker (issue #16). Omitted ⇒ branch isn't clickable. */
   onClickBranch?: () => void;
+  /** `user@host` when attached to a remote SSH host (issue #8), else null. */
+  remoteHost?: string | null;
+  /** Opens the connection-management menu (clicking the SSH chip when remote). */
+  onManageRemote?: () => void;
+  /** Opens a new remote connection (clicking the launcher when local). */
+  onOpenRemote?: () => void;
   /** Editor tab size, reflected from the editor options. */
   tabSize: number;
   /** Live diagnostic counts from Monaco markers. */
@@ -58,6 +64,9 @@ export function StatusBar({
   fileName,
   branch,
   onClickBranch,
+  remoteHost,
+  onManageRemote,
+  onOpenRemote,
   tabSize,
   errorCount,
   warningCount,
@@ -71,6 +80,42 @@ export function StatusBar({
   return (
     <div className="status-bar">
       <div className="status-left">
+        {remoteHost ? (
+          <span
+            className="status-item status-remote"
+            title={`Conectado via SSH a ${remoteHost}.\nClique para gerenciar a conexão.`}
+            role={onManageRemote ? "button" : undefined}
+            tabIndex={onManageRemote ? 0 : undefined}
+            onClick={onManageRemote}
+            onKeyDown={(e) => {
+              if (onManageRemote && (e.key === "Enter" || e.key === " ")) {
+                e.preventDefault();
+                onManageRemote();
+              }
+            }}
+          >
+            <Codicon name="remote" /> SSH: {remoteHost}
+          </span>
+        ) : onOpenRemote ? (
+          // Always-present remote launcher (VS Code's bottom-left `><`): click to
+          // open a remote (SSH) connection. Shows the local/neutral state.
+          <span
+            className="status-item status-remote-local"
+            title="Abrir uma conexão remota (SSH)"
+            aria-label="Abrir uma conexão remota"
+            role="button"
+            tabIndex={0}
+            onClick={onOpenRemote}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onOpenRemote();
+              }
+            }}
+          >
+            <Codicon name="remote" />
+          </span>
+        ) : null}
         {branch && (
           <span
             className="status-item"

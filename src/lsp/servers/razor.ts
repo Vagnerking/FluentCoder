@@ -21,6 +21,7 @@
  */
 import type { MonacoLanguageClient } from "monaco-languageclient";
 import { ensureRazorServer, startLspServer } from "../../api";
+import { getActiveRemote } from "../../remote/host";
 import { createLanguageClient } from "../client";
 
 export const RAZOR_SERVER_ID = "razor";
@@ -39,6 +40,9 @@ function toFileUri(rootPath: string): string {
 export async function startRazorServer(
   rootPath: string
 ): Promise<MonacoLanguageClient> {
+  if (getActiveRemote()) {
+    throw new Error("Razor remoto ainda não é suportado.");
+  }
   // 1. Resolve the rzls executable (errors if not cached — download is stubbed).
   const program = await ensureRazorServer();
 

@@ -6,6 +6,7 @@ import { RunPanel } from "./components/RunPanel";
 import { PlaceholderPanel } from "./components/PlaceholderPanel";
 import { EditorPane } from "./components/EditorPane";
 import { ImagePreview } from "./components/ImagePreview";
+import { MediaPreview } from "./components/MediaPreview";
 import { OpenWithPicker } from "./explorer/OpenWithPicker";
 import { defaultModeFor } from "./explorer/openWith";
 import { TabBar } from "./components/TabBar";
@@ -20,6 +21,12 @@ import { ConfirmDialog } from "./components/ConfirmDialog";
 import { AgentsPanel } from "./components/AgentsPanel";
 import { AgentWorkspace } from "./components/AgentWorkspace";
 import { BranchPicker } from "./components/BranchPicker";
+import { SshConnectDialog } from "./components/SshConnectDialog";
+import { RemoteFolderBrowser } from "./components/RemoteFolderBrowser";
+import { RemoteConnectionMenu } from "./components/RemoteConnectionMenu";
+import { CommandPalette, type PaletteCommand } from "./components/CommandPalette";
+import { QuickPick } from "./components/QuickPick";
+import { QuickInput } from "./components/QuickInput";
 import { Codicon } from "./icons/codicons/Codicon";
 import {
   acpCancel,
@@ -42,8 +49,26 @@ import {
   sessionLoad,
   sessionSetLastFolder,
   sessionSetOpenFiles,
+  sshConnect,
+  sshDisconnect,
+  sshListSavedHosts,
+  clearRemoteTerminals,
+  clearRemoteLspServers,
   writeFile,
 } from "./api";
+import type { SshConnectInput, SavedHost } from "./api";
+import {
+  getActiveRemote,
+  isRemoteActive,
+  setActiveRemote,
+  type RemoteSession,
+} from "./remote/host";
+import { loadLastRemoteTarget, saveLastRemoteTarget } from "./remote/persist";
+import {
+  clearRemoteAttachParam,
+  openRemoteWindow,
+  readRemoteAttach,
+} from "./remote/window";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { languageForFile } from "./language";
 import { buildDecorations, decoKey } from "./icon-theme/decorations";
@@ -118,7 +143,30 @@ export default function App() {
   const [panelHeight, setPanelHeight] = useState(220);
   const [activeView, setActiveView] = useState("explorer");
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [branchPickerOpen, setBranchPickerOpen] = useState(false);
+  // SSH connect flow (VS Code style): a host quick-pick → password prompt / form.
+  const [sshDialogOpen, setSshDialogOpen] = useState(false);
+  const [sshHostsOpen, setSshHostsOpen] = useState(false);
+  const [sshSavedHosts, setSshSavedHosts] = useState<SavedHost[]>([]);
+  const [sshPasswordFor, setSshPasswordFor] = useState<SavedHost | null>(null);
+  const [sshFormInitial, setSshFormInitial] = useState<
+    Partial<SshConnectInput> | undefined
+  >(undefined);
+  // After a successful connect, holds the open connection while the user browses
+  // for a folder. `input` is the credentials for a brand-new connection (cancel
+  // disconnects); null when reusing an already-attached session (cancel keeps it).
+  const [remoteBrowser, setRemoteBrowser] = useState<{
+    connId: string;
+    host: string;
+    user: string;
+    input: SshConnectInput | null;
+  } | null>(null);
+  // Connection-management menu (opened by clicking the status-bar SSH chip).
+  const [manageMenuOpen, setManageMenuOpen] = useState(false);
+  // True while attached to a remote host (drives the status-bar indicator and
+  // read-only guards). Mirrors the ambient `getActiveRemote()` for rendering.
+  const [remoteSession, setRemoteSession] = useState<RemoteSession | null>(null);
   const [agentStore, setAgentStore] = useState<AgentStore>(() => ({
     ...EMPTY_AGENT_STORE,
   }));
@@ -259,19 +307,25 @@ export default function App() {
   const openFolder = useCallback(
     async (folder: string, opts?: { persist?: boolean; silent?: boolean }) => {
       const persist = opts?.persist ?? true;
+      // When attached to a remote host, `readDir` routes over SFTP; git, the
+      // search index and local-session persistence are local-only (later phases),
+      // so they're skipped here. The remote attachment must already be set.
+      const remote = isRemoteActive();
       try {
         const entries = await readDir(folder);
         setRoots(entries);
         setRootName(baseName(folder).toUpperCase());
         setRootPath(folder);
-        // Resolve the git branch for the status bar (null if not a repo).
+        // git routes to the host over SSH when remote, so branch + decorations
+        // work for both local and remote workspaces.
         gitBranch(folder).then(setBranch).catch(() => setBranch(null));
-        // Pull status to decorate the explorer (modified/new/conflict badges).
         gitStatus(folder).then(setGitState).catch(() => setGitState(null));
-        // Warm the search index so the first Ctrl+Shift+F is instant (the walk +
-        // ignore parsing happen now, in the background, not on the first query).
-        buildSearchIndex(folder).catch(() => {});
-        if (persist) sessionSetLastFolder(folder).catch(() => {});
+        if (!remote) {
+          // Warm the search index so the first Ctrl+Shift+F is instant (remote
+          // search uses live `grep`, so it needs no local index).
+          buildSearchIndex(folder).catch(() => {});
+          if (persist) sessionSetLastFolder(folder).catch(() => {});
+        }
       } catch (err) {
         console.error(err);
         if (!opts?.silent) alert(`Não foi possível abrir a pasta:\n${err}`);
@@ -282,10 +336,165 @@ export default function App() {
     []
   );
 
+  /**
+   * Step 1 of opening a remote workspace (issue #8): connect to the host. On
+   * success the connection is held in `remoteBrowser` so the user can navigate
+   * the host's filesystem and pick a folder. Throws on auth/connect failure so
+   * the dialog can surface the message.
+   */
+  const connectRemote = useCallback(async (input: SshConnectInput) => {
+    const connId = await sshConnect(input);
+    setRemoteBrowser({ connId, host: input.host, user: input.user, input });
+    setSshDialogOpen(false);
+    setSshHostsOpen(false);
+    setSshPasswordFor(null);
+  }, []);
+
+  /**
+   * Opens the VS Code-style SSH host quick-pick: the saved `~/.ssh/config` hosts
+   * plus an "add new host" action. This is the entry point for connecting.
+   */
+  const openSshFlow = useCallback(async () => {
+    setSshPasswordFor(null);
+    setSshFormInitial(undefined);
+    try {
+      const hosts = await sshListSavedHosts();
+      const seen = new Set<string>();
+      setSshSavedHosts(
+        hosts.filter((h) => {
+          const k = `${h.label} ${h.host} ${h.user ?? ""} ${h.port ?? ""}`;
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        })
+      );
+    } catch {
+      setSshSavedHosts([]);
+    }
+    setSshHostsOpen(true);
+  }, []);
+
+  /** Routes a chosen saved host: password prompt, or the full form (key/no user). */
+  const pickSavedHost = useCallback((h: SavedHost) => {
+    setSshHostsOpen(false);
+    if (h.identityFile || !h.user) {
+      // Key auth or a host without a user → the form (prefilled) gives full control.
+      setSshFormInitial({
+        host: h.host,
+        port: h.port ?? undefined,
+        user: h.user ?? undefined,
+        keyPath: h.identityFile ?? undefined,
+      });
+      setSshDialogOpen(true);
+    } else {
+      setSshPasswordFor(h);
+    }
+  }, []);
+
+  type RemoteBrowserCtx = {
+    connId: string;
+    host: string;
+    user: string;
+    input: SshConnectInput | null;
+  };
+
+  /**
+   * Step 2: attach the chosen remote folder and open it. Sets the ambient remote
+   * session first so `openFolder`'s `readDir`/git/search route over SSH, then
+   * persists the (secret-free) target for next-launch reconnect.
+   */
+  const finalizeRemoteFolder = useCallback(
+    async (browser: RemoteBrowserCtx, rootPath: string) => {
+      const { connId, host, user, input } = browser;
+      // Persist the (secret-free) target for next-launch prefill — preserving
+      // port/key from the last target when just re-browsing.
+      const last = loadLastRemoteTarget();
+      const sameHost = last?.host === host;
+      saveLastRemoteTarget({
+        host,
+        port: input?.port ?? (sameHost ? last?.port ?? 22 : 22),
+        user,
+        keyPath: input?.keyPath ?? (sameHost ? last?.keyPath : undefined),
+        remotePath: rootPath,
+      });
+
+      // VS Code style: open the remote in its OWN window (ownership handed off —
+      // this window stays local, the new one attaches to the open connection).
+      try {
+        await openRemoteWindow({ connId, host, user, rootPath });
+        setRemoteBrowser(null);
+        return;
+      } catch (err) {
+        console.warn("Nova janela indisponível; anexando na janela atual.", err);
+      }
+
+      // Fallback: attach in-place (the proven single-window path).
+      const session: RemoteSession = {
+        connId,
+        host,
+        user,
+        rootPath,
+        input: input ?? getActiveRemote()?.input,
+      };
+      setActiveRemote(session);
+      try {
+        await openFolder(rootPath, { persist: false });
+      } catch (err) {
+        if (input) {
+          setActiveRemote(null);
+          void sshDisconnect(connId).catch(() => {});
+        }
+        setRemoteBrowser(null);
+        alert(`Não foi possível abrir a pasta remota:\n${err}`);
+        return;
+      }
+      setRemoteSession(session);
+      setRemoteBrowser(null);
+    },
+    [openFolder]
+  );
+
+  /**
+   * Cancels the folder browser. For a brand-new connection this closes it; for a
+   * reused session (opening another folder) the connection is kept.
+   */
+  const cancelRemoteBrowser = useCallback(() => {
+    if (remoteBrowser?.input) void sshDisconnect(remoteBrowser.connId).catch(() => {});
+    setRemoteBrowser(null);
+  }, [remoteBrowser]);
+
+  /**
+   * Re-establishes a dropped connection using the in-memory credentials and
+   * reopens the same folder. Falls back to the connect dialog when there are no
+   * stored credentials (e.g. a session restored without them).
+   */
+  const reconnectRemote = useCallback(async () => {
+    const session = getActiveRemote();
+    if (!session?.input) {
+      setSshDialogOpen(true);
+      return;
+    }
+    void sshDisconnect(session.connId).catch(() => {});
+    clearRemoteTerminals();
+    clearRemoteLspServers();
+    try {
+      const connId = await sshConnect(session.input);
+      const next: RemoteSession = { ...session, connId };
+      setActiveRemote(next);
+      setRemoteSession(next);
+      await openFolder(session.rootPath, { persist: false });
+    } catch (err) {
+      setActiveRemote(null);
+      setRemoteSession(null);
+      alert(`Não foi possível reconectar:\n${err}`);
+    }
+  }, [openFolder]);
+
   const refreshExplorerRoot = useCallback(async () => {
     if (!rootPath) return;
     const entries = await readDir(rootPath);
     setRoots(entries);
+    // git routes over SSH when remote, so decorations refresh either way.
     gitStatus(rootPath).then(setGitState).catch(() => setGitState(null));
   }, [rootPath]);
 
@@ -348,6 +557,30 @@ export default function App() {
   useEffect(() => {
     restoringSessionRef.current = true;
     (async () => {
+      // Multi-window (issue #8): a window opened as a remote attach restores the
+      // remote session (the connection is already open) instead of a local folder.
+      const attach = readRemoteAttach();
+      if (attach) {
+        clearRemoteAttachParam();
+        const session: RemoteSession = {
+          connId: attach.connId,
+          host: attach.host,
+          user: attach.user,
+          rootPath: attach.rootPath,
+        };
+        setActiveRemote(session);
+        setRemoteSession(session);
+        try {
+          await openFolder(attach.rootPath, { persist: false });
+        } catch (err) {
+          console.error("Falha ao anexar a janela remota:", err);
+          setActiveRemote(null);
+          setRemoteSession(null);
+        }
+        restoringSessionRef.current = false;
+        return;
+      }
+
       let s: Awaited<ReturnType<typeof sessionLoad>>;
       try {
         s = await sessionLoad();
@@ -921,8 +1154,10 @@ export default function App() {
       }
 
       try {
+        // Preview modes (image/video/audio) load their own bytes via base64;
+        // only the text editor needs the file contents up front.
         const content =
-          resolvedMode === "image" ? "" : await readFile(node.path);
+          resolvedMode === "text" ? await readFile(node.path) : "";
         setOpenFiles((prev) => [
           ...prev,
           {
@@ -1344,6 +1579,17 @@ export default function App() {
   const handleCloseFolder = useCallback(async () => {
     // Closing the folder discards the session — guard unsaved buffers first.
     if (!(await guardDirtySession())) return;
+    // Detach + close the SSH connection if this was a remote workspace. This is
+    // also the "disconnect / reset window" path: it returns the workbench to the
+    // empty local state.
+    const remote = getActiveRemote();
+    if (remote) {
+      setActiveRemote(null);
+      setRemoteSession(null);
+      clearRemoteTerminals();
+      clearRemoteLspServers();
+      void sshDisconnect(remote.connId).catch(() => {});
+    }
     setRootPath(null);
     setRootName(null);
     setRoots([]);
@@ -1496,8 +1742,14 @@ export default function App() {
         setSidebarOpen((v) => !v);
         return;
       }
+      // Ctrl+Shift+P → Command Palette.
+      if (e.shiftKey && key === "p") {
+        e.preventDefault();
+        setCommandPaletteOpen(true);
+        return;
+      }
       // Ctrl+P → Quick Open (file search by name).
-      if (key === "p") {
+      if (key === "p" && !e.shiftKey) {
         e.preventDefault();
         setQuickOpenOpen(true);
         return;
@@ -1591,6 +1843,12 @@ export default function App() {
           label: "Fechar Pasta",
           enabled: rootPath != null,
           run: rootPath != null ? handleCloseFolder : undefined,
+        },
+        {
+          id: "file.disconnectRemote",
+          label: "Desconectar do Host Remoto",
+          enabled: remoteSession != null,
+          run: remoteSession != null ? handleCloseFolder : undefined,
         },
         { id: "file.sep5", label: "", separator: true },
         { id: "file.exit", label: "Sair", run: () => getCurrentWindow().close() },
@@ -1774,7 +2032,13 @@ export default function App() {
         { id: "view.sep2", label: "", separator: true },
         {
           id: "view.commandPalette",
-          label: "Paleta de Comandos",
+          label: "Paleta de Comandos…",
+          accelerator: "Ctrl+Shift+P",
+          run: () => setCommandPaletteOpen(true),
+        },
+        {
+          id: "view.quickOpen",
+          label: "Ir para Arquivo…",
           accelerator: "Ctrl+P",
           run: () => setQuickOpenOpen(true),
         },
@@ -1875,6 +2139,7 @@ export default function App() {
   }, [
     hasEditor,
     rootPath,
+    remoteSession,
     activePath,
     handleOpenFileDialog,
     handleOpenFolder,
@@ -1883,7 +2148,33 @@ export default function App() {
     handleCloseTab,
     handleCloseFolder,
     runEditorAction,
+    openSshFlow,
   ]);
+
+  // Flatten the menu bar into a searchable command list (issue #8 · command
+  // palette), plus a few palette-only commands (SSH, Quick Open).
+  const paletteCommands = useMemo<PaletteCommand[]>(() => {
+    const fromMenus: PaletteCommand[] = menus.flatMap((menu) =>
+      menu.items
+        .filter((it) => it.run && !it.separator && it.enabled !== false)
+        .map((it) => ({
+          id: `menu.${it.id}`,
+          category: menu.label,
+          label: it.label,
+          run: it.run as () => void,
+        }))
+    );
+    const extra: PaletteCommand[] = [
+      {
+        id: "ssh.connect",
+        category: "Remoto",
+        label: "Conectar a Host SSH…",
+        icon: "remote",
+        run: () => void openSshFlow(),
+      },
+    ];
+    return [...extra, ...fromMenus];
+  }, [menus, openSshFlow]);
 
   const titleText = activeFile
     ? `${activeFile.dirty ? "● " : ""}${activeFile.name} — Fluent Coder`
@@ -2031,6 +2322,14 @@ export default function App() {
             ) : activeFile && activeFile.mode === "image" ? (
               // Image-mode tab (ISSUE-70): read-only preview, no Monaco.
               <ImagePreview path={activeFile.path} name={activeFile.name} />
+            ) : activeFile &&
+              (activeFile.mode === "video" || activeFile.mode === "audio") ? (
+              // Media-mode tab: read-only video/audio player (local or remote).
+              <MediaPreview
+                path={activeFile.path}
+                name={activeFile.name}
+                kind={activeFile.mode}
+              />
             ) : (
               <EditorPane
                 file={activeFile}
@@ -2099,6 +2398,11 @@ export default function App() {
         fileName={activeFile?.name ?? null}
         branch={branch}
         onClickBranch={rootPath ? () => setBranchPickerOpen(true) : undefined}
+        remoteHost={
+          remoteSession ? `${remoteSession.user}@${remoteSession.host}` : null
+        }
+        onManageRemote={remoteSession ? () => setManageMenuOpen(true) : undefined}
+        onOpenRemote={() => void openSshFlow()}
         tabSize={TAB_SIZE}
         errorCount={errorCount}
         warningCount={warningCount}
@@ -2120,6 +2424,120 @@ export default function App() {
           onCheckout={handleCheckoutBranch}
           onCreateBranch={handleCreateBranch}
           onClose={() => setBranchPickerOpen(false)}
+        />
+      )}
+
+      {commandPaletteOpen && (
+        <CommandPalette
+          commands={paletteCommands}
+          onClose={() => setCommandPaletteOpen(false)}
+        />
+      )}
+
+      {sshHostsOpen && (
+        <QuickPick
+          title="Conectar a um host SSH"
+          placeholder="Escolha um host salvo ou adicione um novo…"
+          items={[
+            {
+              id: "__add__",
+              label: "Adicionar novo host SSH…",
+              icon: "add",
+              pinned: true,
+            },
+            ...sshSavedHosts.map((h, i) => ({
+              id: `host-${i}`,
+              label: h.label,
+              detail: `${h.user ? `${h.user}@` : ""}${h.host}${h.port ? `:${h.port}` : ""}`,
+              icon: "remote" as const,
+              keywords: `${h.host} ${h.user ?? ""}`,
+            })),
+          ]}
+          onPick={(it) => {
+            if (it.id === "__add__") {
+              setSshHostsOpen(false);
+              setSshFormInitial(undefined);
+              setSshDialogOpen(true);
+              return;
+            }
+            const idx = Number.parseInt(it.id.replace("host-", ""), 10);
+            const h = sshSavedHosts[idx];
+            if (h) pickSavedHost(h);
+          }}
+          onClose={() => setSshHostsOpen(false)}
+        />
+      )}
+
+      {sshPasswordFor && (
+        <QuickInput
+          title={`Senha de ${sshPasswordFor.user}@${sshPasswordFor.host}`}
+          placeholder="Senha"
+          password
+          prompt="Enter para conectar · Esc para cancelar"
+          onSubmit={async (password) => {
+            const h = sshPasswordFor;
+            await connectRemote({
+              host: h.host,
+              port: h.port ?? 22,
+              user: h.user ?? "",
+              password,
+            });
+          }}
+          onClose={() => setSshPasswordFor(null)}
+        />
+      )}
+
+      {sshDialogOpen && (
+        <SshConnectDialog
+          initial={sshFormInitial}
+          onConnect={connectRemote}
+          onBack={() => {
+            // Cancel returns to the host quick-pick (keeps the flow), not closes.
+            setSshDialogOpen(false);
+            setSshFormInitial(undefined);
+            setSshHostsOpen(true);
+          }}
+          onClose={() => {
+            setSshDialogOpen(false);
+            setSshFormInitial(undefined);
+          }}
+        />
+      )}
+
+      {remoteBrowser && (
+        <RemoteFolderBrowser
+          connId={remoteBrowser.connId}
+          target={`${remoteBrowser.user}@${remoteBrowser.host}`}
+          onPick={(path) => void finalizeRemoteFolder(remoteBrowser, path)}
+          onCancel={cancelRemoteBrowser}
+        />
+      )}
+
+      {manageMenuOpen && remoteSession && (
+        <RemoteConnectionMenu
+          target={`${remoteSession.user}@${remoteSession.host}`}
+          onOpenFolder={() => {
+            setManageMenuOpen(false);
+            setRemoteBrowser({
+              connId: remoteSession.connId,
+              host: remoteSession.host,
+              user: remoteSession.user,
+              input: null,
+            });
+          }}
+          onNewTerminal={() => {
+            setManageMenuOpen(false);
+            handleOpenTerminalAt(remoteSession.rootPath);
+          }}
+          onReconnect={() => {
+            setManageMenuOpen(false);
+            void reconnectRemote();
+          }}
+          onDisconnect={() => {
+            setManageMenuOpen(false);
+            void handleCloseFolder();
+          }}
+          onClose={() => setManageMenuOpen(false)}
         />
       )}
 

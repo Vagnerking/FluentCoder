@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main"],
+  "description": "Capability for the main and remote (SSH) windows",
+  "windows": ["main", "remote-*"],
   "permissions": [
     "core:default",
     "dialog:default",
@@ -11,6 +11,7 @@
     "core:window:allow-close",
     "core:window:allow-destroy",
     "core:window:allow-start-dragging",
-    "core:window:allow-is-maximized"
+    "core:window:allow-is-maximized",
+    "core:webview:allow-create-webview-window"
   ]
 }

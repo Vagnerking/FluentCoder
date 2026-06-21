@@ -64,7 +64,8 @@ pub struct GitFileStatus {
 #[derive(Serialize)]
 pub struct GitStatus {
     /// Current branch, or a short sha when detached. Empty if not a repo.
-    branch: String,
+    /// `pub(crate)` so the remote-git layer can refine a detached HEAD.
+    pub(crate) branch: String,
     /// Commits the local branch is ahead of its upstream.
     ahead: u32,
     /// Commits the local branch is behind its upstream.
@@ -106,24 +107,43 @@ fn run_git(cwd: &str, args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// The empty, non-erroring status returned when a folder isn't a git repo.
+/// Shared by the local and remote (SSH) status commands.
+pub fn empty_status() -> GitStatus {
+    GitStatus {
+        branch: String::new(),
+        ahead: 0,
+        behind: 0,
+        is_repo: false,
+        has_upstream: false,
+        files: Vec::new(),
+    }
+}
+
 /// Collects working-tree status: branch, ahead/behind, and per-file changes.
 #[tauri::command]
 pub fn git_status(path: String) -> Result<GitStatus, String> {
     // Not a repo? Return an empty, non-erroring status so the UI can say so.
     if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
-        return Ok(GitStatus {
-            branch: String::new(),
-            ahead: 0,
-            behind: 0,
-            is_repo: false,
-            has_upstream: false,
-            files: Vec::new(),
-        });
+        return Ok(empty_status());
     }
 
     // --porcelain=v2 --branch gives both branch/ahead/behind headers and files.
     let raw = run_git(&path, &["status", "--porcelain=v2", "--branch"])?;
+    let mut status = parse_status_v2(&raw);
+    if status.branch == "(detached)" {
+        if let Ok(sha) = run_git(&path, &["rev-parse", "--short", "HEAD"]) {
+            status.branch = format!("({}…)", sha.trim());
+        }
+    }
+    Ok(status)
+}
 
+/// Parses `git status --porcelain=v2 --branch` output into a {@link GitStatus}
+/// (always `is_repo = true`; the caller checks repo-ness first). A detached HEAD
+/// is left as `"(detached)"` for the caller to refine with a short sha. Shared by
+/// the local and remote (SSH) status commands.
+pub fn parse_status_v2(raw: &str) -> GitStatus {
     let mut branch = String::new();
     let mut ahead = 0u32;
     let mut behind = 0u32;
@@ -133,12 +153,6 @@ pub fn git_status(path: String) -> Result<GitStatus, String> {
     for line in raw.lines() {
         if let Some(rest) = line.strip_prefix("# branch.head ") {
             branch = rest.trim().to_string();
-            if branch == "(detached)" {
-                // Fall back to a short sha for display.
-                if let Ok(sha) = run_git(&path, &["rev-parse", "--short", "HEAD"]) {
-                    branch = format!("({}…)", sha.trim());
-                }
-            }
         } else if let Some(rest) = line.strip_prefix("# branch.ab ") {
             has_upstream = true;
             // Format: "+<ahead> -<behind>"
@@ -165,14 +179,14 @@ pub fn git_status(path: String) -> Result<GitStatus, String> {
         }
     }
 
-    Ok(GitStatus {
+    GitStatus {
         branch,
         ahead,
         behind,
         is_repo: true,
         has_upstream,
         files,
-    })
+    }
 }
 
 /// Parses the tail of a porcelain v2 "1"/"2" line into a GitFileStatus.
@@ -236,23 +250,29 @@ pub fn git_branches(path: String) -> Result<Vec<GitBranchInfo>, String> {
         return Ok(Vec::new());
     }
 
-    // One ref-record per branch, sorted by commit recency. Fields are joined by
-    // \x1f and the `%(HEAD)` marker ("*" for the current branch, " " otherwise)
-    // lets us flag the checked-out one. `upstream:track,nobracket` yields
-    // "ahead N, behind M" (empty when no upstream).
-    let fmt = "%(HEAD)\x1f%(refname:short)\x1f%(objectname:short)\x1f\
-%(committerdate:relative)\x1f%(authorname)\x1f%(contents:subject)\x1f\
-%(upstream:track,nobracket)";
+    // One ref-record per branch, sorted by commit recency (see BRANCHES_FORMAT:
+    // the `%(HEAD)` marker flags the checked-out branch; `upstream:track` gives
+    // ahead/behind).
     let raw = run_git(
         &path,
         &[
             "for-each-ref",
             "--sort=-committerdate",
             "refs/heads",
-            &format!("--format={fmt}"),
+            &format!("--format={BRANCHES_FORMAT}"),
         ],
     )?;
+    Ok(parse_branches(&raw))
+}
 
+/// The `for-each-ref` format used to list branches (shared local/remote).
+pub const BRANCHES_FORMAT: &str = "%(HEAD)\x1f%(refname:short)\x1f%(objectname:short)\x1f\
+%(committerdate:relative)\x1f%(authorname)\x1f%(contents:subject)\x1f\
+%(upstream:track,nobracket)";
+
+/// Parses the `\x1f`-joined `for-each-ref` output into branch rows. Shared by the
+/// local and remote (SSH) branch listings.
+pub fn parse_branches(raw: &str) -> Vec<GitBranchInfo> {
     let mut branches = Vec::new();
     for line in raw.lines() {
         let fields: Vec<&str> = line.split('\x1f').collect();
@@ -272,7 +292,7 @@ pub fn git_branches(path: String) -> Result<Vec<GitBranchInfo>, String> {
             has_upstream,
         });
     }
-    Ok(branches)
+    branches
 }
 
 /// Parses git's `%(upstream:track,nobracket)` field, e.g. "ahead 2, behind 1",

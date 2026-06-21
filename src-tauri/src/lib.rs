@@ -6,6 +6,7 @@ mod lsp;
 mod runner;
 mod search;
 mod session;
+mod ssh;
 mod terminal;
 mod walk;
 
@@ -19,6 +20,7 @@ pub fn run() {
         .manage(lsp::LspState::new())
         .manage(search::SearchState::new())
         .manage(agents::AcpState::new())
+        .manage(ssh::SshState::new())
         .invoke_handler(tauri::generate_handler![
             agents::agents_load,
             agents::agents_save,
@@ -73,6 +75,39 @@ pub fn run() {
             lsp::lsp_ensure_csharp_server,
             lsp::lsp_ensure_ts_server,
             lsp::razor::lsp_ensure_razor_server,
+            ssh::ssh_connect,
+            ssh::ssh_list_dir,
+            ssh::ssh_read_file,
+            ssh::ssh_read_file_base64,
+            ssh::ssh_disconnect,
+            ssh::ssh_write_file,
+            ssh::ssh_create_file,
+            ssh::ssh_create_folder,
+            ssh::ssh_rename,
+            ssh::ssh_move,
+            ssh::ssh_delete,
+            ssh::ssh_copy,
+            ssh::ssh_term_create,
+            ssh::ssh_term_write,
+            ssh::ssh_term_resize,
+            ssh::ssh_term_close,
+            ssh::ssh_list_saved_hosts,
+            ssh::ssh_search,
+            ssh::ssh_canonicalize,
+            ssh::ssh_git_status,
+            ssh::ssh_git_branch,
+            ssh::ssh_git_branches,
+            ssh::ssh_git_checkout,
+            ssh::ssh_git_create_branch,
+            ssh::ssh_git_stage,
+            ssh::ssh_git_unstage,
+            ssh::ssh_git_stage_all,
+            ssh::ssh_git_commit,
+            ssh::ssh_git_fetch,
+            ssh::ssh_git_pull,
+            ssh::ssh_git_push,
+            ssh::ssh_lsp_start,
+            ssh::ssh_lsp_stop,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -89,10 +124,17 @@ pub fn run() {
                     event: tauri::WindowEvent::Destroyed,
                     ..
                 } => {
-                    eprintln!("[exit] window destroyed — tearing down children");
+                    // With multiple windows (remote SSH windows, issue #8), only
+                    // tear down + exit when the LAST window closes; otherwise the
+                    // remaining windows must keep running.
+                    if !app.webview_windows().is_empty() {
+                        return;
+                    }
+                    eprintln!("[exit] last window destroyed — tearing down children");
                     app.state::<terminal::TerminalState>().shutdown_all();
                     app.state::<agents::AcpState>().shutdown_all();
                     app.state::<lsp::LspState>().shutdown_all();
+                    app.state::<ssh::SshState>().shutdown_all();
                     eprintln!("[exit] teardown done — forcing process exit");
                     std::process::exit(0);
                 }
@@ -101,6 +143,7 @@ pub fn run() {
                     app.state::<terminal::TerminalState>().shutdown_all();
                     app.state::<agents::AcpState>().shutdown_all();
                     app.state::<lsp::LspState>().shutdown_all();
+                    app.state::<ssh::SshState>().shutdown_all();
                     eprintln!("[exit] teardown done — forcing process exit");
                     std::process::exit(0);
                 }

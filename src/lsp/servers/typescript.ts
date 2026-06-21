@@ -8,10 +8,21 @@
  * tsconfig/jsconfig, path aliases, `node_modules` and `@types` are resolved by
  * the server itself from `rootUri` — no extra config needed (ISSUE-35).
  */
-import { ensureTsServer, startLspServer } from "../../api";
+import { ensureTsServer, startLspServer, sshLspStart } from "../../api";
+import { getActiveRemote } from "../../remote/host";
 import { createLanguageClient, type RunningClient } from "../client";
 
 export const TS_SERVER_ID = "typescript";
+
+/**
+ * Remote launch command (issue #8, Phase 6): run the server ON THE HOST. Prefer a
+ * globally-installed `typescript-language-server`; fall back to `npx` (needs npm).
+ * `exec` replaces the shell so a channel close kills the server.
+ */
+const TS_REMOTE_COMMAND =
+  "if command -v typescript-language-server >/dev/null 2>&1; then " +
+  "exec typescript-language-server --stdio; " +
+  "else exec npx --yes typescript-language-server --stdio; fi";
 
 /** file:// URI for a workspace root, Windows-safe (`file:///C:/...`). */
 function toFileUri(rootPath: string): string {
@@ -27,8 +38,14 @@ function toFileUri(rootPath: string): string {
 export async function startTypescriptServer(
   rootPath: string
 ): Promise<RunningClient> {
-  const { program, args } = await ensureTsServer(rootPath);
-  await startLspServer(TS_SERVER_ID, program, args, rootPath);
+  const remote = getActiveRemote();
+  if (remote) {
+    // Run the server on the host; the local WS bridge is identical to local.
+    await sshLspStart(remote.connId, TS_SERVER_ID, TS_REMOTE_COMMAND, rootPath);
+  } else {
+    const { program, args } = await ensureTsServer(rootPath);
+    await startLspServer(TS_SERVER_ID, program, args, rootPath);
+  }
 
   return createLanguageClient({
     serverId: TS_SERVER_ID,
