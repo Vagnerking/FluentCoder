@@ -63,6 +63,9 @@ which = "6"
 # spawns the registered Codex/Claude adapters over JSON-RPC stdio.
 agent-client-protocol = "0.15"
 
+[dev-dependencies]
+tempfile = "3"
+
 [profile.release]
 panic = "abort"
 codegen-units = 1
