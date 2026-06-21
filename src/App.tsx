@@ -897,73 +897,73 @@ export default function App() {
   // inputs the items capture change (handlers are stable; flags are reactive).
   const menus: MenuDef[] = useMemo(() => {
     const fileMenu: MenuDef = {
-      label: "File",
+      label: "Arquivo",
       items: [
         // untitled buffers: recortado p/ v2 (ISSUE-51)
-        { id: "file.newTextFile", label: "New Text File", enabled: false },
-        { id: "file.newFile", label: "New File", enabled: false },
+        { id: "file.newTextFile", label: "Novo Arquivo de Texto", enabled: false },
+        { id: "file.newFile", label: "Novo Arquivo", enabled: false },
         { id: "file.sep1", label: "", separator: true },
         {
           id: "file.open",
-          label: "Open File…",
+          label: "Abrir Arquivo…",
           accelerator: "Ctrl+O",
           run: handleOpenFileDialog,
         },
         {
           id: "file.openFolder",
-          label: "Open Folder…",
+          label: "Abrir Pasta…",
           accelerator: "Ctrl+K Ctrl+O",
           run: handleOpenFolder,
         },
         { id: "file.sep2", label: "", separator: true },
         {
           id: "file.save",
-          label: "Save",
+          label: "Salvar",
           accelerator: "Ctrl+S",
           enabled: hasEditor,
           run: hasEditor ? handleSave : undefined,
         },
         {
           id: "file.saveAs",
-          label: "Save As…",
+          label: "Salvar Como…",
           accelerator: "Ctrl+Shift+S",
           enabled: hasEditor,
           run: hasEditor ? handleSaveAs : undefined,
         },
         { id: "file.sep3", label: "", separator: true },
-        { id: "file.autoSave", label: "Auto Save", enabled: false },
-        { id: "file.revert", label: "Revert File", enabled: false },
+        { id: "file.autoSave", label: "Salvamento Automático", enabled: false },
+        { id: "file.revert", label: "Reverter Arquivo", enabled: false },
         { id: "file.sep4", label: "", separator: true },
         {
           id: "file.closeEditor",
-          label: "Close Editor",
+          label: "Fechar Editor",
           enabled: hasEditor,
           run: hasEditor && activePath ? () => handleCloseTab(activePath) : undefined,
         },
         {
           id: "file.closeFolder",
-          label: "Close Folder",
+          label: "Fechar Pasta",
           enabled: rootPath != null,
           run: rootPath != null ? handleCloseFolder : undefined,
         },
         { id: "file.sep5", label: "", separator: true },
-        { id: "file.exit", label: "Exit", run: () => getCurrentWindow().close() },
+        { id: "file.exit", label: "Sair", run: () => getCurrentWindow().close() },
       ],
     };
 
     const editMenu: MenuDef = {
-      label: "Edit",
+      label: "Editar",
       items: [
         {
           id: "edit.undo",
-          label: "Undo",
+          label: "Desfazer",
           accelerator: "Ctrl+Z",
           enabled: hasEditor,
           run: hasEditor ? () => runEditorAction("undo") : undefined,
         },
         {
           id: "edit.redo",
-          label: "Redo",
+          label: "Refazer",
           accelerator: "Ctrl+Y",
           enabled: hasEditor,
           run: hasEditor ? () => runEditorAction("redo") : undefined,
@@ -971,7 +971,7 @@ export default function App() {
         { id: "edit.sep1", label: "", separator: true },
         {
           id: "edit.cut",
-          label: "Cut",
+          label: "Recortar",
           accelerator: "Ctrl+X",
           enabled: hasEditor,
           run: hasEditor
@@ -980,7 +980,7 @@ export default function App() {
         },
         {
           id: "edit.copy",
-          label: "Copy",
+          label: "Copiar",
           accelerator: "Ctrl+C",
           enabled: hasEditor,
           run: hasEditor
@@ -989,7 +989,7 @@ export default function App() {
         },
         {
           id: "edit.paste",
-          label: "Paste",
+          label: "Colar",
           accelerator: "Ctrl+V",
           enabled: hasEditor,
           run: hasEditor
@@ -999,14 +999,14 @@ export default function App() {
         { id: "edit.sep2", label: "", separator: true },
         {
           id: "edit.find",
-          label: "Find",
+          label: "Localizar",
           accelerator: "Ctrl+F",
           enabled: hasEditor,
           run: hasEditor ? () => runEditorAction("actions.find") : undefined,
         },
         {
           id: "edit.replace",
-          label: "Replace",
+          label: "Substituir",
           accelerator: "Ctrl+H",
           enabled: hasEditor,
           run: hasEditor
@@ -1016,25 +1016,25 @@ export default function App() {
         { id: "edit.sep3", label: "", separator: true },
         {
           id: "edit.findInFiles",
-          label: "Find in Files",
+          label: "Localizar nos Arquivos",
           run: () => setActiveView("search"),
         },
       ],
     };
 
     const selectionMenu: MenuDef = {
-      label: "Selection",
+      label: "Seleção",
       items: [
         {
           id: "selection.selectAll",
-          label: "Select All",
+          label: "Selecionar Tudo",
           accelerator: "Ctrl+A",
           enabled: hasEditor,
           run: hasEditor ? () => runEditorAction("editor.action.selectAll") : undefined,
         },
         {
           id: "selection.expand",
-          label: "Expand Selection",
+          label: "Expandir Seleção",
           enabled: hasEditor,
           run: hasEditor
             ? () => runEditorAction("editor.action.smartSelect.expand")
@@ -1042,7 +1042,7 @@ export default function App() {
         },
         {
           id: "selection.shrink",
-          label: "Shrink Selection",
+          label: "Reduzir Seleção",
           enabled: hasEditor,
           run: hasEditor
             ? () => runEditorAction("editor.action.smartSelect.shrink")
@@ -1051,7 +1051,7 @@ export default function App() {
         { id: "selection.sep1", label: "", separator: true },
         {
           id: "selection.copyLineUp",
-          label: "Copy Line Up",
+          label: "Copiar Linha Acima",
           enabled: hasEditor,
           run: hasEditor
             ? () => runEditorAction("editor.action.copyLinesUpAction")
@@ -1059,7 +1059,7 @@ export default function App() {
         },
         {
           id: "selection.copyLineDown",
-          label: "Copy Line Down",
+          label: "Copiar Linha Abaixo",
           enabled: hasEditor,
           run: hasEditor
             ? () => runEditorAction("editor.action.copyLinesDownAction")
@@ -1067,7 +1067,7 @@ export default function App() {
         },
         {
           id: "selection.moveLineUp",
-          label: "Move Line Up",
+          label: "Mover Linha Acima",
           enabled: hasEditor,
           run: hasEditor
             ? () => runEditorAction("editor.action.moveLinesUpAction")
@@ -1075,7 +1075,7 @@ export default function App() {
         },
         {
           id: "selection.moveLineDown",
-          label: "Move Line Down",
+          label: "Mover Linha Abaixo",
           enabled: hasEditor,
           run: hasEditor
             ? () => runEditorAction("editor.action.moveLinesDownAction")
@@ -1084,7 +1084,7 @@ export default function App() {
         { id: "selection.sep2", label: "", separator: true },
         {
           id: "selection.addCursorAbove",
-          label: "Add Cursor Above",
+          label: "Adicionar Cursor Acima",
           enabled: hasEditor,
           run: hasEditor
             ? () => runEditorAction("editor.action.insertCursorAbove")
@@ -1092,7 +1092,7 @@ export default function App() {
         },
         {
           id: "selection.addCursorBelow",
-          label: "Add Cursor Below",
+          label: "Adicionar Cursor Abaixo",
           enabled: hasEditor,
           run: hasEditor
             ? () => runEditorAction("editor.action.insertCursorBelow")
@@ -1102,39 +1102,39 @@ export default function App() {
     };
 
     const viewMenu: MenuDef = {
-      label: "View",
+      label: "Exibir",
       items: [
-        { id: "view.explorer", label: "Explorer", run: () => setActiveView("explorer") },
-        { id: "view.search", label: "Search", run: () => setActiveView("search") },
+        { id: "view.explorer", label: "Explorador", run: () => setActiveView("explorer") },
+        { id: "view.search", label: "Pesquisar", run: () => setActiveView("search") },
         {
           id: "view.scm",
-          label: "Source Control",
+          label: "Controle do Código-Fonte",
           run: () => setActiveView("git"),
         },
-        { id: "view.run", label: "Run", run: () => setActiveView("debug") },
+        { id: "view.run", label: "Executar", run: () => setActiveView("debug") },
         { id: "view.sep1", label: "", separator: true },
         {
           id: "view.toggleSidebar",
-          label: "Toggle Sidebar",
+          label: "Alternar Barra Lateral",
           accelerator: "Ctrl+B",
           run: () => setSidebarOpen((v) => !v),
         },
         {
           id: "view.toggleTerminal",
-          label: "Toggle Terminal",
+          label: "Alternar Terminal",
           accelerator: "Ctrl+`",
           run: () => setPanelOpen((v) => !v),
         },
         { id: "view.sep2", label: "", separator: true },
         {
           id: "view.commandPalette",
-          label: "Command Palette",
+          label: "Paleta de Comandos",
           accelerator: "Ctrl+P",
           run: () => setQuickOpenOpen(true),
         },
         {
           id: "view.quickOpen",
-          label: "Quick Open",
+          label: "Abertura Rápida",
           accelerator: "Ctrl+P",
           run: () => setQuickOpenOpen(true),
         },
@@ -1142,24 +1142,24 @@ export default function App() {
     };
 
     const goMenu: MenuDef = {
-      label: "Go",
+      label: "Ir",
       items: [
         {
           id: "go.goToFile",
-          label: "Go to File…",
+          label: "Ir para o Arquivo…",
           accelerator: "Ctrl+P",
           run: () => setQuickOpenOpen(true),
         },
         {
           id: "go.goToLine",
-          label: "Go to Line…",
+          label: "Ir para a Linha…",
           accelerator: "Ctrl+G",
           enabled: hasEditor,
           run: hasEditor ? () => runEditorAction("editor.action.gotoLine") : undefined,
         },
         {
           id: "go.goToDefinition",
-          label: "Go to Definition",
+          label: "Ir para a Definição",
           accelerator: "F12",
           enabled: hasEditor,
           run: hasEditor
@@ -1170,14 +1170,14 @@ export default function App() {
     };
 
     const runMenu: MenuDef = {
-      label: "Run",
+      label: "Executar",
       items: [
-        { id: "run.start", label: "Start Debugging", enabled: false },
-        { id: "run.startNoDebug", label: "Run Without Debugging", enabled: false },
+        { id: "run.start", label: "Iniciar Depuração", enabled: false },
+        { id: "run.startNoDebug", label: "Executar Sem Depuração", enabled: false },
         { id: "run.sep1", label: "", separator: true },
         {
           id: "run.openRunView",
-          label: "Abrir Run e Depurar",
+          label: "Abrir Executar e Depurar",
           run: () => setActiveView("debug"),
         },
       ],
@@ -1188,19 +1188,19 @@ export default function App() {
       items: [
         {
           id: "terminal.new",
-          label: "New Terminal",
+          label: "Novo Terminal",
           accelerator: "Ctrl+`",
           run: () => setPanelOpen(true),
         },
-        { id: "terminal.split", label: "Split Terminal", enabled: false },
-        { id: "terminal.kill", label: "Kill Terminal", enabled: false },
+        { id: "terminal.split", label: "Dividir Terminal", enabled: false },
+        { id: "terminal.kill", label: "Encerrar Terminal", enabled: false },
         { id: "terminal.sep1", label: "", separator: true },
-        { id: "terminal.runTask", label: "Run Task…", enabled: false },
+        { id: "terminal.runTask", label: "Executar Tarefa…", enabled: false },
       ],
     };
 
     const helpMenu: MenuDef = {
-      label: "Help",
+      label: "Ajuda",
       items: [
         { id: "help.welcome", label: "Bem-vindo", enabled: false },
         { id: "help.docs", label: "Documentação", enabled: false },
