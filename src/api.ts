@@ -6,6 +6,7 @@ import type {
   GitBranchInfo,
   GitCommit,
   GitStatus,
+  OpenTab,
   ProjectFile,
   RawDirEntry,
   RunConfig,
@@ -362,15 +363,34 @@ export function acpPrompt(
   });
 }
 
-// ---- Session (reopen last project on launch) ----
+// ---- Session (reopen last project + tabs on launch) ----
 
-/** Loads the persisted session (empty on first run). */
-export function sessionLoad(): Promise<Session> {
-  return invoke<Session>("session_load");
+/**
+ * Loads the persisted session (empty on first run). `openTabs`/`activePath` are
+ * normalized to a list/null so callers can treat pre-tabs sessions uniformly.
+ */
+export async function sessionLoad(): Promise<Session> {
+  const s = await invoke<Partial<Session>>("session_load");
+  return {
+    lastFolder: s.lastFolder ?? null,
+    openTabs: s.openTabs ?? [],
+    activePath: s.activePath ?? null,
+  };
 }
 /** Remembers the last opened project folder (pass null to clear). */
 export function sessionSetLastFolder(folder: string | null): Promise<void> {
   return invoke("session_set_last_folder", { folder });
+}
+/**
+ * Persists the open tabs (paths + view mode, in tab-bar order) and the active
+ * tab, leaving the saved folder untouched. The backend re-reads file content
+ * from disk on the next launch, so neither content nor `dirty` is sent.
+ */
+export function sessionSetOpenFiles(
+  tabs: OpenTab[],
+  activePath: string | null
+): Promise<void> {
+  return invoke("session_set_open_files", { tabs, activePath });
 }
 
 // ---- LSP (language servers) ----

@@ -37,6 +37,7 @@ import {
   readFile,
   sessionLoad,
   sessionSetLastFolder,
+  sessionSetOpenFiles,
   writeFile,
 } from "./api";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -52,6 +53,7 @@ import type {
   MenuDef,
   OpenFile,
   OpenMode,
+  OpenTab,
   Problem,
 } from "./types";
 import type { LspServerStatus } from "./components/StatusBar";
@@ -97,6 +99,11 @@ export default function App() {
   const navigationHistoryRef = useRef(createNavigationHistory());
   const historyNavigationTargetRef = useRef<string | null>(null);
   const historyNavigationPendingRef = useRef(false);
+  // True while the launch-time restore is reopening saved tabs. Guards the
+  // session-save effect so the partial state mid-restore never overwrites the
+  // good session on disk (e.g. saving an empty tab list before the first tab
+  // reopens). Cleared once the restore finishes.
+  const restoringSessionRef = useRef(false);
 
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelHeight, setPanelHeight] = useState(220);
@@ -321,15 +328,69 @@ export default function App() {
     await openFolder(folder);
   }
 
-  // On launch, reopen the last project folder (if any). Restore is silent so a
-  // folder that was moved/deleted doesn't greet the user with an error dialog.
+  // On launch, reopen the last project folder and the tabs that were open in it
+  // (issue #7). Restore is silent so a folder/file that was moved/deleted doesn't
+  // greet the user with an error dialog. The `restoringSessionRef` guard keeps
+  // the session-save effect from overwriting the good session with the partial
+  // state produced while tabs are reopening.
   useEffect(() => {
-    sessionLoad()
-      .then((s) => {
-        if (s.lastFolder) openFolder(s.lastFolder, { silent: true });
-      })
-      .catch((err) => console.error("Falha ao restaurar sessão:", err));
-    // openFolder is stable (useCallback []), so this runs exactly once.
+    restoringSessionRef.current = true;
+    (async () => {
+      let s: Awaited<ReturnType<typeof sessionLoad>>;
+      try {
+        s = await sessionLoad();
+      } catch (err) {
+        console.error("Falha ao restaurar sessão:", err);
+        restoringSessionRef.current = false;
+        return;
+      }
+
+      // Open the folder first so the explorer/rootPath are ready before tabs
+      // reopen (handleOpenFile resolves paths against the loaded project).
+      if (s.lastFolder) await openFolder(s.lastFolder, { silent: true });
+
+      // Reopen tabs in their saved order, skipping any file that no longer
+      // exists (handleOpenFile returns false silently). Re-read content from
+      // disk — only the path + view mode were persisted.
+      const restored: OpenTab[] = [];
+      for (const tab of s.openTabs) {
+        const node: FileNode = {
+          name: baseName(tab.path),
+          path: tab.path,
+          isDir: false,
+        };
+        const ok = await handleOpenFileRef.current(
+          node,
+          undefined,
+          tab.mode,
+          undefined,
+          { silent: true }
+        );
+        if (ok) restored.push(tab);
+      }
+
+      // Focus the tab that was active, if it survived the restore.
+      const activeRestored =
+        s.activePath && restored.some((t) => t.path === s.activePath)
+          ? s.activePath
+          : restored.length > 0
+            ? restored[restored.length - 1].path
+            : null;
+      if (activeRestored) setActivePath(activeRestored);
+
+      restoringSessionRef.current = false;
+
+      // If any saved file was skipped (deleted/moved), the on-disk session is now
+      // stale — rewrite it with exactly what was restored so those dead entries
+      // are dropped. No-op when nothing was skipped.
+      if (restored.length !== s.openTabs.length) {
+        sessionSetOpenFiles(restored, activeRestored).catch((err) =>
+          console.error("Falha ao limpar abas inexistentes da sessão:", err)
+        );
+      }
+    })();
+    // openFolder is stable (useCallback []); handleOpenFile is read via ref, so
+    // this effect runs exactly once.
   }, [openFolder]);
 
   // Agent definitions and histories are isolated per workspace.
@@ -626,13 +687,18 @@ export default function App() {
    * `mode` (ISSUE-70) picks the view: omitted ⇒ the file type's default (images
    * preview, everything else text). Image-mode tabs don't read text content —
    * the {@link ImagePreview} loads the bytes itself — so we skip `readFile`.
+   *
+   * `opts.silent` swallows the read-error alert and returns `false` instead —
+   * used by the launch-time tab restore so a since-deleted file is skipped
+   * quietly rather than popping a dialog on startup (issue #7).
    */
   const handleOpenFile = useCallback(
     async (
       node: FileNode,
       line?: number,
       mode?: OpenMode,
-      selection?: MatchSelection
+      selection?: MatchSelection,
+      opts?: { silent?: boolean }
     ): Promise<boolean> => {
       if (node.isDir) return false;
 
@@ -677,7 +743,7 @@ export default function App() {
         return true;
       } catch (err) {
         console.error(err);
-        alert(`Não foi possível abrir o arquivo:\n${err}`);
+        if (!opts?.silent) alert(`Não foi possível abrir o arquivo:\n${err}`);
         return false;
       }
     },
@@ -913,6 +979,29 @@ export default function App() {
   openFilesRef.current = openFiles;
   const activePathRef = useRef<string | null>(activePath);
   activePathRef.current = activePath;
+  // Latest handleOpenFile, so the run-once boot restore can reopen tabs without
+  // listing the (per-keystroke-changing) callback in its dependency array.
+  const handleOpenFileRef = useRef(handleOpenFile);
+  handleOpenFileRef.current = handleOpenFile;
+
+  // Persist the open tabs + active tab whenever they change, debounced so we
+  // don't hit the disk on every keystroke that touches `openFiles` (e.g. the
+  // dirty flag). Skipped while the launch restore is still reopening tabs, so
+  // the partial mid-restore state never clobbers the saved session (issue #7).
+  // Only the path + view mode are sent; content is re-read from disk on reopen.
+  useEffect(() => {
+    if (restoringSessionRef.current) return;
+    const timer = window.setTimeout(() => {
+      const tabs: OpenTab[] = openFiles.map((f) => ({
+        path: f.path,
+        mode: f.mode,
+      }));
+      sessionSetOpenFiles(tabs, activePath).catch((err) =>
+        console.error("Falha ao salvar abas da sessão:", err)
+      );
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [openFiles, activePath]);
 
   /**
    * Batch unsaved-changes guard for actions that drop the whole session at once
