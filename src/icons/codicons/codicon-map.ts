@@ -88,6 +88,9 @@ export type IconAction =
   | "menu"
   | "agents"
   | "send"
+  | "modeAsk"
+  | "modePlan"
+  | "modeDev"
   | "chevronRight"
   | "chevronDown"
   | "close"
@@ -189,6 +192,9 @@ export const CODICON_MAP: Record<IconAction, string> = {
   menu: "menu",
   agents: "hubot",
   send: "send",
+  modeAsk: "comment",
+  modePlan: "checklist",
+  modeDev: "tools",
   chevronRight: "chevron-right",
   chevronDown: "chevron-down",
   close: "close",

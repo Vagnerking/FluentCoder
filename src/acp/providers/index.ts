@@ -14,7 +14,7 @@ export const ACP_PROVIDERS: Record<AgentProviderId, AcpProviderDefinition> = {
   codex: {
     id: "codex",
     label: "Codex",
-    description: "Codex CLI via adaptador ACP oficial do ecossistema.",
+    description: "Codex CLI por conexão oficial persistente.",
   },
   claude: {
     id: "claude",

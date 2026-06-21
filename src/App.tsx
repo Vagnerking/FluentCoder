@@ -40,13 +40,17 @@ import { AgentWorkspace } from "./components/AgentWorkspace";
 import { BranchPicker } from "./components/BranchPicker";
 import { Codicon } from "./icons/codicons/Codicon";
 import {
+  acpCancel,
   acpPrompt,
+  acpStopWorkspace,
   agentsLoad,
   agentsSave,
   buildSearchIndex,
   gitBranch,
   gitCheckout,
   gitCreateBranch,
+  gitSnapshotCreate,
+  gitSnapshotRestore,
   gitStatus,
   isFreshWindow,
   openNewWindow,
@@ -96,6 +100,7 @@ import type {
   AgentConversation,
   AgentDraft,
   AgentMessage,
+  AgentMode,
   AgentSelection,
   AgentStore,
 } from "./agents/types";
@@ -196,6 +201,10 @@ function panelZoneAtPoint(x: number, y: number): PanelPos | null {
 export default function App() {
   const [rootName, setRootName] = useState<string | null>(null);
   const [rootPath, setRootPath] = useState<string | null>(null);
+  // Mirrors rootPath for async callbacks (e.g. ACP streaming) that must detect a
+  // workspace switch mid-flight without capturing a stale closure value.
+  const rootPathRef = useRef(rootPath);
+  rootPathRef.current = rootPath;
   const [roots, setRoots] = useState<FileNode[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // Resizable + side-swappable sidebar (VSCode-style), persisted across sessions.
@@ -249,6 +258,9 @@ export default function App() {
   const [agentBusy, setAgentBusy] = useState(false);
   const [agentStatus, setAgentStatus] = useState<string | null>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
+  // Operating mode for the chat composer. Lifted here (not local to AgentChat)
+  // so the choice survives switching conversations, views, or sidebar panels.
+  const [agentMode, setAgentMode] = useState<AgentMode>("ask");
 
   // "Open With…" selector (ISSUE-70): the file + anchor point while it's shown.
   const [openWith, setOpenWith] = useState<
@@ -774,6 +786,9 @@ export default function App() {
     setAgentSelection(null);
     setAgentError(null);
     setAgentStatus(null);
+    // An in-flight send from the previous workspace will see isStaleWorkspace()
+    // and bail; clear its busy flag here so the new workspace starts unblocked.
+    setAgentBusy(false);
 
     if (!rootPath) {
       setAgentStore({ ...EMPTY_AGENT_STORE });
@@ -795,6 +810,7 @@ export default function App() {
 
     return () => {
       cancelled = true;
+      void acpStopWorkspace(rootPath).catch(() => {});
     };
   }, [rootPath]);
 
@@ -903,16 +919,6 @@ export default function App() {
     });
   }
 
-  function handleRenameAgent(agentId: string, name: string) {
-    const now = new Date().toISOString();
-    void persistAgentStore({
-      ...agentStore,
-      agents: agentStore.agents.map((agent) =>
-        agent.id === agentId ? { ...agent, name, updatedAt: now } : agent,
-      ),
-    });
-  }
-
   function handleDeleteAgent(agentId: string) {
     void persistAgentStore({
       ...agentStore,
@@ -932,7 +938,51 @@ export default function App() {
     });
   }
 
-  async function handleSendAgentMessage(message: string) {
+  function handleRenameConversation(conversationId: string, title: string) {
+    const now = new Date().toISOString();
+    void persistAgentStore({
+      ...agentStore,
+      conversations: agentStore.conversations.map((conversation) =>
+        conversation.id === conversationId
+          ? { ...conversation, title, updatedAt: now }
+          : conversation,
+      ),
+    });
+  }
+
+  function handleDeleteConversation(conversationId: string) {
+    const removed = agentStore.conversations.find(
+      (conversation) => conversation.id === conversationId,
+    );
+    if (!removed) return;
+    void persistAgentStore({
+      ...agentStore,
+      conversations: agentStore.conversations.filter(
+        (conversation) => conversation.id !== conversationId,
+      ),
+    });
+    // If the open conversation was deleted, fall back to the agent's next most
+    // recent conversation; if none remain, drop back to the agent's empty state.
+    if (
+      agentSelection?.kind === "chat" &&
+      agentSelection.conversationId === conversationId
+    ) {
+      const next = agentStore.conversations
+        .filter(
+          (conversation) =>
+            conversation.agentId === removed.agentId &&
+            conversation.id !== conversationId,
+        )
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+      setAgentSelection(
+        next
+          ? { kind: "chat", agentId: removed.agentId, conversationId: next.id }
+          : null,
+      );
+    }
+  }
+
+  async function handleSendAgentMessage(message: string, mode: AgentMode) {
     if (!rootPath || agentSelection?.kind !== "chat" || agentBusy) return;
     const agent = agentStore.agents.find(
       (candidate) => candidate.id === agentSelection.agentId,
@@ -942,6 +992,32 @@ export default function App() {
     );
     if (!agent || !conversation) return;
 
+    // Pin the workspace this send belongs to. If the user switches folders mid
+    // stream, the per-workspace effect resets agentStore to the new workspace;
+    // in-flight events that still reference this root must be dropped so they
+    // can't inject a stale conversation into — or persist over — another store.
+    const sendRoot = rootPath;
+    const isStaleWorkspace = () => rootPathRef.current !== sendRoot;
+
+    // In write-capable modes, snapshot the working tree first so this request is
+    // individually revertible (no-op/null when the folder isn't a git repo).
+    setAgentBusy(true);
+    setAgentError(null);
+    setAgentStatus(
+      mode === "ask"
+        ? "Preparando a conversa…"
+        : "Criando ponto de restauração…",
+    );
+    let revert: AgentMessage["revert"] | null;
+    try {
+      revert = mode === "ask" ? null : await gitSnapshotCreate(sendRoot);
+    } catch (error) {
+      setAgentError(String(error));
+      setAgentStatus(null);
+      setAgentBusy(false);
+      return;
+    }
+
     const now = new Date().toISOString();
     const userMessage: AgentMessage = {
       id: createLocalId("message"),
@@ -949,6 +1025,8 @@ export default function App() {
       content: message,
       createdAt: now,
       status: "done",
+      mode,
+      ...(revert ? { revert } : {}),
     };
     const assistantMessage: AgentMessage = {
       id: createLocalId("message"),
@@ -957,11 +1035,47 @@ export default function App() {
       createdAt: now,
       status: "streaming",
     };
-    const prompt = buildAgentPrompt(agent, conversation.messages, message);
-    let workingStore = replaceConversation(
-      agentStore,
-      conversation.id,
-      (current) => ({
+    const contextPrompt = buildAgentPrompt(
+      agent,
+      conversation.messages,
+      message,
+    );
+
+    // Apply an update by reconciling over the *current* store (functional
+    // update), never a captured snapshot — so concurrent edits (rename/delete/
+    // save in the sidebar) survive instead of being clobbered by streaming. The
+    // reconciled result is captured so we can persist exactly what the UI shows.
+    const applyToConversation = (
+      update: (conversation: AgentConversation) => AgentConversation,
+    ): AgentStore | null => {
+      let reconciled: AgentStore | null = null;
+      setAgentStore((prev) => {
+        // The conversation may have been deleted while the stream was running.
+        if (!prev.conversations.some((c) => c.id === conversation.id)) {
+          return prev;
+        }
+        reconciled = replaceConversation(prev, conversation.id, update);
+        return reconciled;
+      });
+      return reconciled;
+    };
+
+    // Serialize saves so the initial optimistic state can be persisted in the
+    // background without delaying provider startup or racing the final save.
+    let saveQueue = Promise.resolve();
+    const persistForSend = (store: AgentStore | null): Promise<void> => {
+      if (!store || isStaleWorkspace()) return saveQueue;
+      saveQueue = saveQueue
+        .then(() => agentsSave(sendRoot, store))
+        .catch((error) => {
+          setAgentError(String(error));
+        });
+      return saveQueue;
+    };
+
+    setAgentStatus("Conectando ao agente…");
+    void persistForSend(
+      applyToConversation((current) => ({
         ...current,
         title:
           current.messages.length === 0
@@ -969,91 +1083,175 @@ export default function App() {
             : current.title,
         messages: [...current.messages, userMessage, assistantMessage],
         updatedAt: now,
-      }),
+      })),
     );
 
-    setAgentBusy(true);
-    setAgentError(null);
-    setAgentStatus("Conectando ao provedor ACP…");
-    await persistAgentStore(workingStore);
+    // Codex can emit deltas menores que uma palavra. Coalescing them into one
+    // React update per frame avoids re-rendering the full Markdown on every
+    // token while preserving visibly smooth streaming.
+    let pendingAssistantText = "";
+    let textFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushAssistantText = () => {
+      if (textFlushTimer !== null) {
+        clearTimeout(textFlushTimer);
+        textFlushTimer = null;
+      }
+      if (!pendingAssistantText || isStaleWorkspace()) return;
+      const content = pendingAssistantText;
+      pendingAssistantText = "";
+      applyToConversation((current) => ({
+        ...current,
+        messages: current.messages.map((candidate) =>
+          candidate.id === assistantMessage.id
+            ? {
+                ...candidate,
+                content: candidate.content + content,
+                status: "streaming",
+              }
+            : candidate,
+        ),
+        updatedAt: new Date().toISOString(),
+      }));
+    };
+    const appendAssistantText = (content: string) => {
+      pendingAssistantText += content;
+      if (textFlushTimer === null) {
+        textFlushTimer = setTimeout(flushAssistantText, 24);
+      }
+    };
+
+    // Finalization is event-driven so Stop immediately preserves the partial
+    // response. Text deltas remain batched in memory and are flushed once here,
+    // avoiding one disk write and Markdown render per token.
+    let finalizePromise: Promise<void> | null = null;
+    let wasCancelled = false;
+    const finalizeAssistant = (
+      status: "done" | "error",
+      fallback: string,
+    ): Promise<void> => {
+      if (isStaleWorkspace()) return Promise.resolve();
+      if (finalizePromise) return finalizePromise;
+      flushAssistantText();
+      finalizePromise = persistForSend(
+        applyToConversation((current) => ({
+          ...current,
+          messages: current.messages.map((candidate) =>
+            candidate.id === assistantMessage.id
+              ? {
+                  ...candidate,
+                  content: candidate.content || fallback,
+                  status,
+                }
+              : candidate,
+          ),
+          updatedAt: new Date().toISOString(),
+        })),
+      );
+      return finalizePromise;
+    };
 
     try {
-      await acpPrompt(agent.provider, rootPath, prompt, (event) => {
-        if (event.type === "status") {
-          setAgentStatus(event.message);
-          return;
-        }
-        if (event.type === "text") {
-          setAgentStatus("Recebendo resposta…");
-          workingStore = replaceConversation(
-            workingStore,
-            conversation.id,
-            (current) => ({
-              ...current,
-              messages: current.messages.map((candidate) =>
-                candidate.id === assistantMessage.id
-                  ? {
-                      ...candidate,
-                      content: candidate.content + event.content,
-                      status: "streaming",
-                    }
-                  : candidate,
-              ),
-              updatedAt: new Date().toISOString(),
-            }),
-          );
-          setAgentStore(workingStore);
-          return;
-        }
-        if (event.type === "error") setAgentError(event.message);
-      });
+      await acpPrompt(
+        agent.provider,
+        sendRoot,
+        conversation.id,
+        contextPrompt,
+        message,
+        mode,
+        (event) => {
+          // Discard events that arrived after a workspace switch.
+          if (isStaleWorkspace()) return;
+          if (event.type === "status") {
+            setAgentStatus(event.message);
+            return;
+          }
+          if (event.type === "text") {
+            setAgentStatus("Recebendo resposta…");
+            appendAssistantText(event.content);
+            return;
+          }
+          if (event.type === "done") {
+            wasCancelled = event.stopReason.toLowerCase() === "cancelled";
+            void finalizeAssistant(
+              "done",
+              wasCancelled
+                ? "Execução interrompida pelo usuário."
+                : "O agente encerrou a resposta sem conteúdo textual.",
+            );
+            return;
+          }
+          if (event.type === "error") setAgentError(event.message);
+        },
+      );
 
-      workingStore = replaceConversation(
-        workingStore,
-        conversation.id,
-        (current) => ({
-          ...current,
-          messages: current.messages.map((candidate) =>
-            candidate.id === assistantMessage.id
-              ? {
-                  ...candidate,
-                  content:
-                    candidate.content ||
-                    "O agente encerrou a resposta sem conteúdo textual.",
-                  status: "done",
-                }
-              : candidate,
-          ),
-          updatedAt: new Date().toISOString(),
-        }),
+      if (isStaleWorkspace()) return;
+      // Safety net: if no `done` event arrived (older adapter, abrupt close),
+      // finalize now. No-op when `done` already finalized.
+      await finalizeAssistant(
+        "done",
+        "O agente encerrou a resposta sem conteúdo textual.",
       );
-      await persistAgentStore(workingStore);
-      setAgentStatus("Resposta concluída.");
+      setAgentStatus(
+        wasCancelled ? "Execução interrompida." : "Resposta concluída.",
+      );
     } catch (error) {
+      if (isStaleWorkspace()) return;
+      flushAssistantText();
       const messageText = String(error);
-      workingStore = replaceConversation(
-        workingStore,
-        conversation.id,
-        (current) => ({
-          ...current,
-          messages: current.messages.map((candidate) =>
-            candidate.id === assistantMessage.id
-              ? {
-                  ...candidate,
-                  content: candidate.content || messageText,
-                  status: "error",
-                }
-              : candidate,
-          ),
-          updatedAt: new Date().toISOString(),
-        }),
-      );
-      await persistAgentStore(workingStore);
+      await finalizeAssistant("error", messageText);
       setAgentError(messageText);
       setAgentStatus(null);
     } finally {
+      // agentBusy is global UI state — always release it, even after a workspace
+      // switch, or the new workspace would stay stuck "busy".
+      if (textFlushTimer !== null) clearTimeout(textFlushTimer);
       setAgentBusy(false);
     }
+  }
+
+  /** Stops the current turn and preserves the response received so far. */
+  function handleStopAgent() {
+    if (!agentBusy) return;
+    setAgentStatus("Parando o agente…");
+    void acpCancel().catch((error) => setAgentError(String(error)));
+  }
+
+  /**
+   * Rolls the working tree back to the snapshot taken before `userMessageId`'s
+   * request, undoing everything the agent changed for it. Marks the point as
+   * reverted and refreshes the explorer/git so the UI reflects the restore.
+   */
+  async function handleRevertMessage(
+    conversationId: string,
+    userMessageId: string,
+  ) {
+    if (!rootPath) return;
+    const conversation = agentStore.conversations.find(
+      (candidate) => candidate.id === conversationId,
+    );
+    const target = conversation?.messages.find(
+      (candidate) => candidate.id === userMessageId,
+    );
+    if (!target?.revert || target.revert.reverted) return;
+
+    try {
+      await gitSnapshotRestore(rootPath, target.revert);
+    } catch (error) {
+      setAgentError(`Não foi possível reverter: ${String(error)}`);
+      return;
+    }
+
+    const next = replaceConversation(agentStore, conversationId, (current) => ({
+      ...current,
+      messages: current.messages.map((candidate) =>
+        candidate.id === userMessageId && candidate.revert
+          ? { ...candidate, revert: { ...candidate.revert, reverted: true } }
+          : candidate,
+      ),
+    }));
+    void persistAgentStore(next);
+    await refreshExplorerRoot();
+    setAgentStatus("Alterações revertidas para antes deste pedido.");
   }
 
   /**
@@ -2295,10 +2493,11 @@ export default function App() {
             onCreate={handleCreateAgent}
             onSelectAgent={handleSelectAgent}
             onEdit={handleEditAgent}
-            onRename={handleRenameAgent}
             onDelete={handleDeleteAgent}
             onNewConversation={handleNewAgentConversation}
             onOpenConversation={handleOpenAgentConversation}
+            onRenameConversation={handleRenameConversation}
+            onDeleteConversation={handleDeleteConversation}
           />
         );
       case "account":
@@ -2443,10 +2642,14 @@ export default function App() {
                   busy={agentBusy}
                   status={agentStatus}
                   error={agentError}
+                  mode={agentMode}
+                  onModeChange={setAgentMode}
                   onCreate={handleCreateAgent}
                   onSaveAgent={handleSaveAgent}
                   onCancelConfig={() => setAgentSelection(null)}
                   onSendMessage={handleSendAgentMessage}
+                  onStop={handleStopAgent}
+                  onRevert={handleRevertMessage}
                 />
               ) : activeFile && activeFile.mode === "image" ? (
                 // Image-mode tab (ISSUE-70): read-only preview, no Monaco.

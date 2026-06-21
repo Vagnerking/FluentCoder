@@ -12,10 +12,11 @@ interface AgentsPanelProps {
   onCreate: () => void;
   onSelectAgent: (agentId: string) => void;
   onEdit: (agentId: string) => void;
-  onRename: (agentId: string, name: string) => void;
   onDelete: (agentId: string) => void;
   onNewConversation: (agentId: string) => void;
   onOpenConversation: (conversation: AgentConversation) => void;
+  onRenameConversation: (conversationId: string, title: string) => void;
+  onDeleteConversation: (conversationId: string) => void;
 }
 
 export function AgentsPanel({
@@ -25,10 +26,11 @@ export function AgentsPanel({
   onCreate,
   onSelectAgent,
   onEdit,
-  onRename,
   onDelete,
   onNewConversation,
   onOpenConversation,
+  onRenameConversation,
+  onDeleteConversation,
 }: AgentsPanelProps) {
   const selectedAgentId = selection?.agentId ?? null;
   const selectedConversationId =
@@ -98,19 +100,6 @@ export function AgentsPanel({
                     <Codicon name="rename" size={14} />
                   </button>
                   <button
-                    className="agent-icon-button"
-                    title="Renomear"
-                    aria-label={`Renomear ${agent.name}`}
-                    onClick={() => {
-                      const name = window.prompt("Novo nome do agente", agent.name);
-                      if (name?.trim() && name.trim() !== agent.name) {
-                        onRename(agent.id, name.trim());
-                      }
-                    }}
-                  >
-                    <Codicon name="renameSymbol" size={14} />
-                  </button>
-                  <button
                     className="agent-icon-button danger"
                     title="Excluir agente"
                     aria-label={`Excluir ${agent.name}`}
@@ -145,6 +134,8 @@ export function AgentsPanel({
               )}
               selectedId={selectedConversationId}
               onOpen={onOpenConversation}
+              onRename={onRenameConversation}
+              onDelete={onDeleteConversation}
             />
           )}
         </section>
@@ -180,10 +171,14 @@ function ConversationList({
   conversations,
   selectedId,
   onOpen,
+  onRename,
+  onDelete,
 }: {
   conversations: AgentConversation[];
   selectedId: string | null;
   onOpen: (conversation: AgentConversation) => void;
+  onRename: (conversationId: string, title: string) => void;
+  onDelete: (conversationId: string) => void;
 }) {
   if (conversations.length === 0) {
     return <div className="panel-empty">Nenhuma conversa salva.</div>;
@@ -194,16 +189,55 @@ function ConversationList({
       {[...conversations]
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
         .map((conversation) => (
-          <button
+          <div
             key={conversation.id}
             className={`agent-history-row${
               selectedId === conversation.id ? " selected" : ""
             }`}
-            onClick={() => onOpen(conversation)}
           >
-            <Codicon name="timeline" size={14} />
-            <span>{conversation.title}</span>
-          </button>
+            <button
+              className="agent-history-main"
+              onClick={() => onOpen(conversation)}
+              title={`Abrir "${conversation.title}"`}
+            >
+              <Codicon name="timeline" size={14} />
+              <span>{conversation.title}</span>
+            </button>
+            <div className="agent-row-actions">
+              <button
+                className="agent-icon-button"
+                title="Renomear conversa"
+                aria-label={`Renomear conversa "${conversation.title}"`}
+                onClick={() => {
+                  const title = window.prompt(
+                    "Novo nome da conversa",
+                    conversation.title,
+                  );
+                  if (title?.trim() && title.trim() !== conversation.title) {
+                    onRename(conversation.id, title.trim());
+                  }
+                }}
+              >
+                <Codicon name="rename" size={13} />
+              </button>
+              <button
+                className="agent-icon-button danger"
+                title="Excluir conversa"
+                aria-label={`Excluir conversa "${conversation.title}"`}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      `Excluir a conversa "${conversation.title}"?`,
+                    )
+                  ) {
+                    onDelete(conversation.id);
+                  }
+                }}
+              >
+                <Codicon name="delete" size={13} />
+              </button>
+            </div>
+          </div>
         ))}
     </div>
   );

@@ -1,12 +1,40 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { acpProvider, acpProviders } from "../acp/providers";
 import type {
   AgentDefinition,
   AgentDraft,
+  AgentMessage,
+  AgentMode,
   AgentSelection,
   AgentStore,
 } from "../agents/types";
+import { AGENT_MODES } from "../agents/types";
 import { Codicon } from "../icons/codicons/Codicon";
+import type { IconAction } from "../icons/codicons/codicon-map";
+
+/** UI metadata for each operating mode, shown in the composer's mode picker. */
+const MODE_META: Record<
+  AgentMode,
+  { label: string; hint: string; icon: IconAction }
+> = {
+  ask: {
+    label: "Ask",
+    hint: "Somente leitura — o agente apenas responde.",
+    icon: "modeAsk",
+  },
+  plan: {
+    label: "Plan",
+    hint: "Investiga e escreve apenas arquivos .md de plano.",
+    icon: "modePlan",
+  },
+  dev: {
+    label: "Dev",
+    hint: "O agente pode criar e editar arquivos dentro do workspace.",
+    icon: "modeDev",
+  },
+};
 
 interface AgentWorkspaceProps {
   rootPath: string | null;
@@ -15,10 +43,14 @@ interface AgentWorkspaceProps {
   busy: boolean;
   status: string | null;
   error: string | null;
+  mode: AgentMode;
+  onModeChange: (mode: AgentMode) => void;
   onCreate: () => void;
   onSaveAgent: (draft: AgentDraft) => void;
   onCancelConfig: () => void;
-  onSendMessage: (message: string) => Promise<void>;
+  onSendMessage: (message: string, mode: AgentMode) => Promise<void>;
+  onStop: () => void;
+  onRevert: (conversationId: string, userMessageId: string) => Promise<void>;
 }
 
 const EMPTY_DRAFT: AgentDraft = {
@@ -35,10 +67,14 @@ export function AgentWorkspace({
   busy,
   status,
   error,
+  mode,
+  onModeChange,
   onCreate,
   onSaveAgent,
   onCancelConfig,
   onSendMessage,
+  onStop,
+  onRevert,
 }: AgentWorkspaceProps) {
   if (!rootPath) {
     return (
@@ -73,11 +109,16 @@ export function AgentWorkspace({
       return (
         <AgentChat
           agent={agent}
+          conversationId={conversation.id}
           messages={conversation.messages}
           busy={busy}
           status={status}
           error={error}
+          mode={mode}
+          onModeChange={onModeChange}
           onSend={onSendMessage}
+          onStop={onStop}
+          onRevert={onRevert}
         />
       );
     }
@@ -144,7 +185,7 @@ function AgentConfiguration({
       <form className="agent-config-card" onSubmit={submit}>
         <div className="agent-config-heading">
           <div>
-            <span className="agent-eyebrow">Configuração ACP</span>
+            <span className="agent-eyebrow">Configuração do agente</span>
             <h1>{agent ? "Editar agente" : "Novo agente"}</h1>
             <p>
               A configuração e o histórico ficam salvos localmente neste
@@ -199,7 +240,7 @@ function AgentConfiguration({
         </label>
 
         <label className="agent-field">
-          <span>Provedor ACP</span>
+          <span>Provedor</span>
           <select
             value={draft.provider}
             onChange={(event) =>
@@ -248,18 +289,28 @@ function AgentConfiguration({
 
 function AgentChat({
   agent,
+  conversationId,
   messages,
   busy,
   status,
   error,
+  mode,
+  onModeChange,
   onSend,
+  onStop,
+  onRevert,
 }: {
   agent: AgentDefinition;
+  conversationId: string;
   messages: AgentStore["conversations"][number]["messages"];
   busy: boolean;
   status: string | null;
   error: string | null;
-  onSend: (message: string) => Promise<void>;
+  mode: AgentMode;
+  onModeChange: (mode: AgentMode) => void;
+  onSend: (message: string, mode: AgentMode) => Promise<void>;
+  onStop: () => void;
+  onRevert: (conversationId: string, userMessageId: string) => Promise<void>;
 }) {
   const [draft, setDraft] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
@@ -274,7 +325,7 @@ function AgentChat({
     const message = draft.trim();
     if (!message || busy) return;
     setDraft("");
-    await onSend(message);
+    await onSend(message, mode);
   }
 
   return (
@@ -308,13 +359,33 @@ function AgentChat({
               message.status === "error" ? "error" : ""
             }`}
           >
-            <span className="agent-message-role">
-              {message.role === "user" ? "Você" : agent.name}
-            </span>
-            <p>
-              {message.content ||
-                (message.status === "streaming" ? "Pensando…" : "")}
-            </p>
+            <div className="agent-message-head">
+              <span className="agent-message-role">
+                {message.role === "user" ? "Você" : agent.name}
+              </span>
+              {message.role === "user" && message.mode && (
+                <span className={`agent-message-mode mode-${message.mode}`}>
+                  {MODE_META[message.mode].label}
+                </span>
+              )}
+              {message.role === "user" && message.revert && (
+                <button
+                  type="button"
+                  className="agent-revert-button"
+                  disabled={busy || message.revert.reverted}
+                  onClick={() => onRevert(conversationId, message.id)}
+                  title={
+                    message.revert.reverted
+                      ? "Já revertido para antes deste pedido"
+                      : "Reverter o código para antes deste pedido"
+                  }
+                >
+                  <Codicon name="discard" size={13} />
+                  {message.revert.reverted ? "Revertido" : "Reverter"}
+                </button>
+              )}
+            </div>
+            <MessageBody message={message} />
           </article>
         ))}
         {status && busy && (
@@ -333,30 +404,99 @@ function AgentChat({
       </div>
 
       <form className="agent-composer" onSubmit={submit}>
-        <textarea
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              event.currentTarget.form?.requestSubmit();
-            }
-          }}
-          placeholder={`Mensagem para ${agent.name}`}
-          aria-label={`Mensagem para ${agent.name}`}
-          rows={3}
-          disabled={busy}
-        />
-        <button
-          className="agent-send-button"
-          type="submit"
-          disabled={busy || !draft.trim()}
-          aria-label="Enviar mensagem"
-          title="Enviar mensagem (Enter)"
-        >
-          <Codicon name="send" size={18} />
-        </button>
+        <div className="agent-mode-bar" role="radiogroup" aria-label="Modo do agente">
+          {AGENT_MODES.map((id) => (
+            <button
+              key={id}
+              type="button"
+              role="radio"
+              aria-checked={mode === id}
+              className={`agent-mode-option ${mode === id ? "active" : ""}`}
+              onClick={() => onModeChange(id)}
+              disabled={busy}
+              title={MODE_META[id].hint}
+            >
+              <Codicon name={MODE_META[id].icon} size={13} />
+              {MODE_META[id].label}
+            </button>
+          ))}
+          <span className="agent-mode-hint">{MODE_META[mode].hint}</span>
+        </div>
+        <div className="agent-composer-row">
+          <textarea
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                event.currentTarget.form?.requestSubmit();
+              }
+            }}
+            placeholder={`Mensagem para ${agent.name}`}
+            aria-label={`Mensagem para ${agent.name}`}
+            rows={3}
+            disabled={busy}
+          />
+          {busy ? (
+            <button
+              className="agent-send-button stop"
+              type="button"
+              onClick={onStop}
+              aria-label="Parar execução do agente"
+              title="Parar execução do agente"
+            >
+              <Codicon name="stop" size={18} />
+            </button>
+          ) : (
+            <button
+              className="agent-send-button"
+              type="submit"
+              disabled={!draft.trim()}
+              aria-label="Enviar mensagem"
+              title="Enviar mensagem (Enter)"
+            >
+              <Codicon name="send" size={18} />
+            </button>
+          )}
+        </div>
       </form>
+    </div>
+  );
+}
+
+/**
+ * Renders a chat message. Assistant replies come back as Markdown (bold, lists,
+ * code, tables…) so they're rendered with react-markdown + GFM. HTML is NOT
+ * enabled (no rehype-raw): the content is untrusted LLM output, so we keep the
+ * sanitized default to avoid XSS. User messages stay plain text, preserving the
+ * exact whitespace they typed.
+ */
+function MessageBody({ message }: { message: AgentMessage }) {
+  if (!message.content) {
+    return (
+      <p className="agent-message-placeholder">
+        {message.status === "streaming" ? "Pensando…" : ""}
+      </p>
+    );
+  }
+
+  if (message.role === "user") {
+    return <p className="agent-message-text">{message.content}</p>;
+  }
+
+  return (
+    <div className="agent-message-markdown">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          // Open links in the user's browser, never navigate the app shell.
+          a: ({ node: _node, ...props }) => (
+            <a {...props} target="_blank" rel="noreferrer noopener" />
+          ),
+        }}
+      >
+        {message.content}
+      </ReactMarkdown>
     </div>
   );
 }

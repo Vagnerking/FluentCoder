@@ -536,3 +536,78 @@ fn parse_log_records(raw: &str) -> Result<Vec<GitCommit>, String> {
     }
     Ok(commits)
 }
+
+// ---------------------------------------------------------------------------
+// Agent workspace snapshots (used by the chat's "revert" action).
+//
+// This mirrors how the big AI coding tools implement undo: instead of copying
+// files, we capture a lightweight git object of the working tree before a
+// write-capable request, then restore the tree to it on demand. `git stash
+// create` builds a commit holding tracked + staged changes WITHOUT touching the
+// working tree, so taking a snapshot is cheap and side-effect free.
+// ---------------------------------------------------------------------------
+
+/// A captured workspace state the chat can roll back to.
+#[derive(Serialize)]
+pub struct GitSnapshot {
+    /// Git object id of the snapshot commit (from `git stash create`). Empty
+    /// when the tree was clean — restoring then just resets to `head`.
+    snapshot_id: String,
+    /// HEAD commit at capture time.
+    head: String,
+}
+
+/// Captures the current working tree so a later `git_snapshot_restore` can undo
+/// whatever the agent changes next. Errors only when `path` isn't a git repo —
+/// callers should treat that as "revert unavailable" rather than fatal.
+#[tauri::command]
+pub fn git_snapshot_create(path: String) -> Result<GitSnapshot, String> {
+    if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
+        return Err("O workspace não é um repositório git.".into());
+    }
+    let head = run_git(&path, &["rev-parse", "HEAD"])
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+
+    // `stash create` emits the snapshot commit sha on stdout, or nothing when
+    // the tree is clean. It never alters the working tree or the stash list.
+    let snapshot_id = run_git(&path, &["stash", "create", "fluent-coder agent snapshot"])?
+        .trim()
+        .to_string();
+
+    Ok(GitSnapshot { snapshot_id, head })
+}
+
+/// Restores the working tree to a snapshot taken by `git_snapshot_create`,
+/// discarding everything the agent changed since. Tracked files are reset to the
+/// snapshot; files the agent newly created (untracked) are removed.
+#[tauri::command]
+pub fn git_snapshot_restore(
+    path: String,
+    snapshot_id: String,
+    head: String,
+) -> Result<(), String> {
+    if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
+        return Err("O workspace não é um repositório git.".into());
+    }
+
+    // Files created by the agent after the snapshot are untracked; drop them so
+    // the tree matches the snapshot exactly. -d includes new dirs; we never
+    // touch ignored files (no -x) to preserve build output, node_modules, etc.
+    let _ = run_git(&path, &["clean", "-d", "--force"]);
+
+    // The snapshot source: the stash-create commit when the tree was dirty, or
+    // HEAD when it was clean (nothing was captured, so HEAD is the prior state).
+    let source = if snapshot_id.trim().is_empty() {
+        head.trim()
+    } else {
+        snapshot_id.trim()
+    };
+    if source.is_empty() {
+        return Err("Não há um ponto de restauração válido para este pedido.".into());
+    }
+
+    // Reset both the index and the working tree of every path to the snapshot.
+    run_git(&path, &["restore", "--source", source, "--staged", "--worktree", "--", "."])?;
+    Ok(())
+}
