@@ -4,6 +4,7 @@
 /// Public surface: `CshtmlEngine` + domain types in `types`.
 
 pub mod ast;
+pub mod binding;
 pub mod document;
 pub mod engine;
 pub mod harness;
