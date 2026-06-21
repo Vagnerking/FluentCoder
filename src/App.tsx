@@ -1,4 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import {
+  subscribeDiagnostics,
+  diagnosticsVersion,
+  allStoredProblems,
+  clearAllDiagnostics,
+} from "./lsp/diagnosticsStore";
 import { FileExplorer } from "./components/FileExplorer";
 import { SearchPanel } from "./components/SearchPanel";
 import { GitPanel } from "./components/GitPanel";
@@ -291,6 +304,27 @@ export default function App() {
 
   const [problems, setProblems] = useState<Problem[]>([]);
 
+  // Workspace-wide diagnostics (issue #6): the editor markers (`problems`) cover
+  // OPEN files; the LSP store adds diagnostics the servers reported for the rest
+  // of the workspace (e.g. Roslyn's `relatedDocuments`). Merge + de-dupe so the
+  // Problems panel, counts and explorer badges reflect the whole project.
+  const diagVersion = useSyncExternalStore(
+    subscribeDiagnostics,
+    diagnosticsVersion
+  );
+  const allProblems = useMemo(() => {
+    void diagVersion; // re-run when the store changes
+    const seen = new Set<string>();
+    const merged: Problem[] = [];
+    for (const p of [...problems, ...allStoredProblems()]) {
+      const key = `${p.path}|${p.line}|${p.column}|${p.severity}|${p.message}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(p);
+    }
+    return merged;
+  }, [problems, diagVersion]);
+
   // Git status of the open folder, used (with diagnostics) to decorate the
   // explorer/tabs. Refreshed when the folder changes; null when not a repo.
   const [gitState, setGitState] = useState<GitStatus | null>(null);
@@ -298,8 +332,8 @@ export default function App() {
   // path → decoration (label color + git badge), rebuilt only when an input
   // changes. The lookup normalizes separators so callers can pass any path.
   const decorations = useMemo(
-    () => buildDecorations(rootPath, gitState, problems),
-    [rootPath, gitState, problems]
+    () => buildDecorations(rootPath, gitState, allProblems),
+    [rootPath, gitState, allProblems]
   );
   const decorationFor = useCallback(
     (path: string) => decorations.get(decoKey(path)),
@@ -359,8 +393,8 @@ export default function App() {
 
   const activeFile = openFiles.find((f) => f.path === activePath) ?? null;
 
-  const errorCount = problems.filter((p) => p.severity === "error").length;
-  const warningCount = problems.filter((p) => p.severity === "warning").length;
+  const errorCount = allProblems.filter((p) => p.severity === "error").length;
+  const warningCount = allProblems.filter((p) => p.severity === "warning").length;
 
   // Languages currently open in tabs — drives which LSP servers the manager
   // brings up. Recomputed only when the set of open paths changes.
@@ -433,6 +467,7 @@ export default function App() {
     setBranch(null);
     setGitState(null);
     setProblems([]);
+    clearAllDiagnostics();
   }, []);
 
   /**
@@ -2449,7 +2484,7 @@ export default function App() {
               cwd={rootPath}
               onClose={() => setPanelOpen(false)}
               onDragStart={startPanelDrag}
-              problems={problems}
+              problems={allProblems}
               onOpenProblem={handleOpenProblem}
               runCommand={runCommand}
               runNonce={runNonce}

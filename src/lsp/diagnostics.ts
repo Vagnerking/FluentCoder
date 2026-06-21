@@ -1,7 +1,9 @@
 import * as monaco from "monaco-editor";
 import type { MonacoLanguageClient } from "monaco-languageclient";
 import type { DocumentSelector } from "vscode-languageclient";
+import type { Problem } from "../types";
 import { lspLog } from "./debug";
+import { setDiagnostics, clearServerDiagnostics } from "./diagnosticsStore";
 
 /**
  * Diagnostics bridge (issue #10).
@@ -96,15 +98,47 @@ function toMarker(d: LspDiagnostic): monaco.editor.IMarkerData {
   };
 }
 
-/** Applies (or clears, with an empty list) diagnostics on the model for `uri`. */
-function applyMarkers(
+/** Problems-panel severity (only error/warning/info; hint folds into info). */
+function toProblemSeverity(sev?: number): Problem["severity"] {
+  switch (sev) {
+    case 1:
+      return "error";
+    case 2:
+      return "warning";
+    default:
+      return "info";
+  }
+}
+
+/** Converts an LSP diagnostic to a Problems-panel row (path mirrors Monaco's). */
+function toProblem(d: LspDiagnostic, uri: string): Problem {
+  const path = monaco.Uri.parse(uri).path;
+  return {
+    path,
+    name: path.split(/[\\/]/).pop() || path,
+    severity: toProblemSeverity(d.severity),
+    message: d.message,
+    line: d.range.start.line + 1,
+    column: d.range.start.character + 1,
+  };
+}
+
+/**
+ * Records diagnostics for `uri`: applies squiggles when the file is open (a
+ * Monaco model exists) AND feeds the workspace-wide store (issue #6) so the
+ * Problems panel sees them even for files that aren't open. An empty list clears
+ * both. Owned by `serverId`.
+ */
+function recordDiagnostics(
   uri: string,
   serverId: string,
   diagnostics: LspDiagnostic[]
 ): void {
   const model = monaco.editor.getModel(monaco.Uri.parse(uri));
-  if (!model) return; // file not open in the editor — nothing to mark
-  monaco.editor.setModelMarkers(model, serverId, diagnostics.map(toMarker));
+  if (model) {
+    monaco.editor.setModelMarkers(model, serverId, diagnostics.map(toMarker));
+  }
+  setDiagnostics(serverId, uri, diagnostics.map((d) => toProblem(d, uri)));
 }
 
 /** Pulls the languages this client serves out of its document selector. */
@@ -139,7 +173,7 @@ export function installDiagnosticsBridge(
       client.onNotification(
         "textDocument/publishDiagnostics",
         (params: PublishDiagnosticsParams) => {
-          applyMarkers(params.uri, serverId, params.diagnostics ?? []);
+          recordDiagnostics(params.uri, serverId, params.diagnostics ?? []);
         }
       )
     );
@@ -172,7 +206,7 @@ export function installDiagnosticsBridge(
       }
       if (report.resultId) previousResultId.set(uri, report.resultId);
       else previousResultId.delete(uri);
-      applyMarkers(uri, serverId, report.items ?? []);
+      recordDiagnostics(uri, serverId, report.items ?? []);
       // Some servers volunteer diagnostics for related documents in one report.
       if (report.relatedDocuments) {
         for (const [relUri, rel] of Object.entries(report.relatedDocuments)) {
@@ -268,6 +302,10 @@ export function installDiagnosticsBridge(
   } else {
     lspLog("diagnostics bridge: push-only for", serverId);
   }
+
+  // Drop this server's diagnostics from the workspace store when it's torn down
+  // (restart / workspace switch), so the Problems panel doesn't keep stale rows.
+  disposables.push({ dispose: () => clearServerDiagnostics(serverId) });
 
   return disposables;
 }

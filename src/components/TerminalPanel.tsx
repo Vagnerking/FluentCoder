@@ -7,6 +7,7 @@ import {
 } from "react";
 import { TerminalView } from "./TerminalView";
 import { ProblemsPanel } from "./ProblemsPanel";
+import { OutputPanel } from "./OutputPanel";
 import { Codicon } from "../icons/codicons/Codicon";
 import type { Problem } from "../types";
 
@@ -433,9 +434,7 @@ export function TerminalPanel({
         {activeTab === "problems" && (
           <ProblemsPanel problems={problems} onOpenProblem={onOpenProblem} />
         )}
-        {activeTab === "output" && (
-          <div className="panel-empty">Sem saída.</div>
-        )}
+        {activeTab === "output" && <OutputPanel />}
       </div>
     </div>
   );
