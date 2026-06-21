@@ -1,9 +1,15 @@
 import * as monaco from "monaco-editor";
 import type { MonacoLanguageClient } from "monaco-languageclient";
 import type { DocumentSelector } from "vscode-languageclient";
+import { CancellationTokenSource } from "vscode-jsonrpc";
 import type { Problem } from "../types";
 import { lspLog } from "./debug";
+import {
+  shouldUsePullDiagnostics,
+  type DiagnosticMode,
+} from "./diagnosticMode";
 import { setDiagnostics, clearServerDiagnostics } from "./diagnosticsStore";
+import { fromFileUri } from "./uri";
 
 /**
  * Diagnostics bridge (issue #10).
@@ -56,7 +62,7 @@ type DocumentDiagnosticReport =
     }
   | { kind: "unchanged"; resultId: string };
 
-const DEBOUNCE_MS = 400;
+const DEBOUNCE_MS = 250;
 
 function toMonacoSeverity(sev?: number): monaco.MarkerSeverity {
   switch (sev) {
@@ -110,9 +116,12 @@ function toProblemSeverity(sev?: number): Problem["severity"] {
   }
 }
 
-/** Converts an LSP diagnostic to a Problems-panel row (path mirrors Monaco's). */
+/** Converts an LSP diagnostic to a Problems-panel row. */
 function toProblem(d: LspDiagnostic, uri: string): Problem {
-  const path = monaco.Uri.parse(uri).path;
+  // Convert file URI to filesystem path so it matches the paths stored in
+  // OpenFile.path (used by tabs and the explorer). Without this, `file:///c:/...`
+  // (URI) never equals `C:\...` (filesystem path) and decorations never apply.
+  const path = fromFileUri(uri);
   return {
     path,
     name: path.split(/[\\/]/).pop() || path,
@@ -154,15 +163,25 @@ function selectorLanguages(selector: DocumentSelector): Set<string> {
   return langs;
 }
 
+/** What {@link installDiagnosticsBridge} returns: teardown disposables plus a
+ * hook to invalidate cached result ids and pull every tracked document again. */
+export interface DiagnosticsBridge {
+  disposables: monaco.IDisposable[];
+  repull(): void;
+}
+
 export function installDiagnosticsBridge(
   client: MonacoLanguageClient,
   serverId: string,
-  selector: DocumentSelector
-): monaco.IDisposable[] {
+  selector: DocumentSelector,
+  mode: DiagnosticMode = "auto",
+  identifiers?: readonly string[]
+): DiagnosticsBridge {
   const disposables: monaco.IDisposable[] = [];
   const langs = selectorLanguages(selector);
   const matches = (model: monaco.editor.ITextModel): boolean =>
     model.uri.scheme === "file" && langs.has(model.getLanguageId());
+  let repull: (() => void) | undefined;
 
   // ---- PUSH: textDocument/publishDiagnostics ----
   // Replaces the built-in handler (which doesn't reach markers in this setup)
@@ -182,57 +201,185 @@ export function installDiagnosticsBridge(
   }
 
   // ---- PULL: textDocument/diagnostic (Roslyn) ----
-  const diagnosticProvider =
-    client.initializeResult?.capabilities.diagnosticProvider;
-  if (diagnosticProvider) {
+  // Roslyn accepts this request but omits `diagnosticProvider` from initialize.
+  // Its adapter therefore opts into pull explicitly; `auto` remains capability-
+  // based for other servers, while push-only servers install no change listeners.
+  const hasStaticPullCapability = Boolean(
+    client.initializeResult?.capabilities.diagnosticProvider
+  );
+  const usePull = shouldUsePullDiagnostics(mode, hasStaticPullCapability);
+  if (usePull) {
     // One semantic provider per language: drop the compatibility-shim pull
-    // feature so it can't compete with our direct-to-markers pull. The client
-    // already announced the `textDocument.diagnostic` capability at initialize.
+    // feature so it can't compete with our direct-to-markers pull.
     try {
       client.getFeature("textDocument/diagnostic")?.dispose();
     } catch {
       /* feature absent or not disposable — ignore */
     }
 
+    const pullIdentifiers: Array<string | undefined> =
+      identifiers && identifiers.length > 0 ? [...identifiers] : [undefined];
+    const resultKey = (uri: string, identifier?: string): string =>
+      `${uri}\u0000${identifier ?? ""}`;
     const previousResultId = new Map<string, string>();
+    const diagnosticsByIdentifier = new Map<
+      string,
+      Map<string, LspDiagnostic[]>
+    >();
     const requestSeq = new Map<string, number>();
     const debounce = new Map<string, number>();
     const changeSubs = new Map<string, monaco.IDisposable>();
+    interface PullState {
+      model: monaco.editor.ITextModel;
+      running: boolean;
+      queued: boolean;
+      stopped: boolean;
+      cancellation?: CancellationTokenSource;
+    }
+    const pullStates = new Map<string, PullState>();
 
-    const applyReport = (uri: string, report: DocumentDiagnosticReport): void => {
+    const recordMergedDiagnostics = (uri: string): void => {
+      const buckets = diagnosticsByIdentifier.get(uri);
+      if (!buckets) {
+        recordDiagnostics(uri, serverId, []);
+        return;
+      }
+
+      const unique = new Map<string, LspDiagnostic>();
+      for (const diagnostics of buckets.values()) {
+        for (const diagnostic of diagnostics) {
+          const { start, end } = diagnostic.range;
+          const key = [
+            diagnostic.code ?? "",
+            diagnostic.message,
+            start.line,
+            start.character,
+            end.line,
+            end.character,
+          ].join("\u0000");
+          unique.set(key, diagnostic);
+        }
+      }
+      recordDiagnostics(uri, serverId, [...unique.values()]);
+    };
+
+    const applyReport = (
+      uri: string,
+      identifier: string | undefined,
+      report: DocumentDiagnosticReport
+    ): void => {
+      const key = resultKey(uri, identifier);
       if (report.kind === "unchanged") {
-        if (report.resultId) previousResultId.set(uri, report.resultId);
+        if (report.resultId) previousResultId.set(key, report.resultId);
         return; // markers stay as they were
       }
-      if (report.resultId) previousResultId.set(uri, report.resultId);
-      else previousResultId.delete(uri);
-      recordDiagnostics(uri, serverId, report.items ?? []);
+      if (report.resultId) previousResultId.set(key, report.resultId);
+      else previousResultId.delete(key);
+
+      let buckets = diagnosticsByIdentifier.get(uri);
+      if (!buckets) {
+        buckets = new Map();
+        diagnosticsByIdentifier.set(uri, buckets);
+      }
+      buckets.set(identifier ?? "", report.items ?? []);
+      recordMergedDiagnostics(uri);
+
       // Some servers volunteer diagnostics for related documents in one report.
       if (report.relatedDocuments) {
         for (const [relUri, rel] of Object.entries(report.relatedDocuments)) {
-          applyReport(relUri, rel);
+          applyReport(relUri, identifier, rel);
         }
       }
     };
 
-    const pull = async (model: monaco.editor.ITextModel): Promise<void> => {
-      const uri = model.uri.toString();
-      const seq = (requestSeq.get(uri) ?? 0) + 1;
-      requestSeq.set(uri, seq);
+    const drainPulls = async (
+      uri: string,
+      state: PullState
+    ): Promise<void> => {
+      state.running = true;
       try {
-        const report = await client.sendRequest<DocumentDiagnosticReport>(
-          "textDocument/diagnostic",
-          {
-            textDocument: { uri },
-            previousResultId: previousResultId.get(uri),
+        do {
+          state.queued = false;
+          if (state.stopped || state.model.isDisposed()) return;
+
+          const cancellation = new CancellationTokenSource();
+          state.cancellation = cancellation;
+          const seq = (requestSeq.get(uri) ?? 0) + 1;
+          requestSeq.set(uri, seq);
+
+          try {
+            for (const identifier of pullIdentifiers) {
+              const startedAt = performance.now();
+              const key = resultKey(uri, identifier);
+              const report = await client.sendRequest<DocumentDiagnosticReport>(
+                "textDocument/diagnostic",
+                {
+                  textDocument: { uri },
+                  identifier,
+                  previousResultId: previousResultId.get(key),
+                },
+                cancellation.token
+              );
+              // Canceled/stale reports belong to an older buffer snapshot.
+              if (
+                cancellation.token.isCancellationRequested ||
+                requestSeq.get(uri) !== seq ||
+                state.stopped
+              ) {
+                break;
+              }
+              applyReport(uri, identifier, report);
+
+              const elapsedMs = Math.round(performance.now() - startedAt);
+              if (elapsedMs >= 1_000) {
+                lspLog("slow diagnostic pull", serverId, {
+                  identifier: identifier ?? "all",
+                  elapsedMs,
+                  uri,
+                });
+              }
+            }
+          } catch (err) {
+            if (!cancellation.token.isCancellationRequested && !state.stopped) {
+              lspLog("pull diagnostics failed for", serverId, String(err));
+            }
+          } finally {
+            if (state.cancellation === cancellation) {
+              state.cancellation = undefined;
+            }
+            cancellation.dispose();
           }
-        );
-        // A newer pull for this doc started while we waited — drop the stale one.
-        if (requestSeq.get(uri) !== seq) return;
-        applyReport(uri, report);
-      } catch (err) {
-        lspLog("pull diagnostics failed for", serverId, String(err));
+        } while (state.queued && !state.stopped);
+      } finally {
+        state.running = false;
       }
+    };
+
+    const pull = (model: monaco.editor.ITextModel): void => {
+      const uri = model.uri.toString();
+      let state = pullStates.get(uri);
+      if (!state) {
+        state = {
+          model,
+          running: false,
+          queued: false,
+          stopped: false,
+        };
+        pullStates.set(uri, state);
+      } else {
+        state.model = model;
+        state.stopped = false;
+      }
+
+      if (state.running) {
+        // Roslyn may spend seconds on analyzers. Abort the obsolete snapshot and
+        // keep exactly one follow-up pull for the newest document version.
+        state.queued = true;
+        state.cancellation?.cancel();
+        return;
+      }
+
+      void drainPulls(uri, state);
     };
 
     const schedulePull = (model: monaco.editor.ITextModel): void => {
@@ -243,7 +390,7 @@ export function installDiagnosticsBridge(
         uri,
         window.setTimeout(() => {
           debounce.delete(uri);
-          void pull(model);
+          pull(model);
         }, DEBOUNCE_MS)
       );
     };
@@ -254,14 +401,24 @@ export function installDiagnosticsBridge(
       if (!changeSubs.has(uri)) {
         changeSubs.set(uri, model.onDidChangeContent(() => schedulePull(model)));
       }
-      void pull(model); // initial pull for the freshly-tracked document
+      pull(model); // initial pull for the freshly-tracked document
     };
 
     const untrack = (uri: string): void => {
       changeSubs.get(uri)?.dispose();
       changeSubs.delete(uri);
-      previousResultId.delete(uri);
+      for (const identifier of pullIdentifiers) {
+        previousResultId.delete(resultKey(uri, identifier));
+      }
+      diagnosticsByIdentifier.delete(uri);
       requestSeq.delete(uri);
+      const state = pullStates.get(uri);
+      if (state) {
+        state.stopped = true;
+        state.queued = false;
+        state.cancellation?.cancel();
+        pullStates.delete(uri);
+      }
       const t = debounce.get(uri);
       if (t) window.clearTimeout(t);
       debounce.delete(uri);
@@ -273,14 +430,19 @@ export function installDiagnosticsBridge(
       monaco.editor.onWillDisposeModel((model) => untrack(model.uri.toString()))
     );
 
-    // The server asks the client to re-pull everything (e.g. after a build /
+    const pullAll = (resetPreviousResults: boolean): void => {
+      if (resetPreviousResults) previousResultId.clear();
+      for (const model of monaco.editor.getModels()) {
+        if (matches(model)) pull(model);
+      }
+    };
+
+    // The server asks the client to re-pull everything (e.g. after a build or
     // project load changes diagnostics it already reported).
     try {
       disposables.push(
         client.onRequest("workspace/diagnostic/refresh", () => {
-          for (const model of monaco.editor.getModels()) {
-            if (matches(model)) void pull(model);
-          }
+          pullAll(false);
           return null;
         })
       );
@@ -295,12 +457,26 @@ export function installDiagnosticsBridge(
         changeSubs.clear();
         debounce.forEach((t) => window.clearTimeout(t));
         debounce.clear();
+        pullStates.forEach((state) => {
+          state.stopped = true;
+          state.queued = false;
+          state.cancellation?.cancel();
+        });
+        pullStates.clear();
       },
     });
 
-    lspLog("diagnostics bridge: pull enabled for", serverId);
+    // A document rebind changes the Roslyn project context. Discard result ids
+    // from the old snapshot before asking again, and let request sequencing drop
+    // any older response that is still in flight.
+    repull = () => pullAll(true);
+
+    lspLog("diagnostics bridge: pull enabled for", serverId, {
+      mode,
+      staticCapability: hasStaticPullCapability,
+    });
   } else {
-    lspLog("diagnostics bridge: push-only for", serverId);
+    lspLog("diagnostics bridge: push-only for", serverId, { mode });
   }
 
   // On teardown (restart / workspace switch), drop this server's diagnostics from
@@ -315,5 +491,8 @@ export function installDiagnosticsBridge(
     },
   });
 
-  return disposables;
+  return {
+    disposables,
+    repull: () => repull?.(),
+  };
 }

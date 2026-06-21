@@ -12,7 +12,6 @@ pub mod codec;
 pub mod csharp;
 pub mod npm_server;
 pub mod process;
-pub mod razor;
 pub mod system_server;
 pub mod typescript;
 
@@ -161,6 +160,28 @@ pub async fn lsp_ensure_csharp_server(
         .spawn(async move { csharp::roslyn_launch_command(&app, &root).await })
         .await
         .map_err(|e| format!("falha ao preparar o servidor C#: {e}"))??;
+
+    let mut lines = vec![program];
+    lines.extend(args);
+    Ok(lines.join("\n"))
+}
+
+/// Ensures the Roslyn cohosting server (C# extension VSIX) is downloaded/cached.
+///
+/// Returns the launch command as `"<program>\n<arg1>\n<arg2>…"` (program on the
+/// first line). The cohosting build serves Razor (`.cshtml`/`.razor`) files via
+/// the `--extension` flag; C# files are handled by the standalone server started
+/// via `lsp_ensure_csharp_server`.
+#[tauri::command]
+pub async fn lsp_ensure_razor_server(
+    state: State<'_, LspState>,
+    app: AppHandle,
+) -> Result<String, String> {
+    let handle = state.runtime.handle().clone();
+    let (program, args) = handle
+        .spawn(async move { csharp::cohosting_launch_command(&app).await })
+        .await
+        .map_err(|e| format!("falha ao preparar o servidor Razor: {e}"))??;
 
     let mut lines = vec![program];
     lines.extend(args);

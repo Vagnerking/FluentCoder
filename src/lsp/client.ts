@@ -13,6 +13,7 @@ import { lspBridgeInfo } from "../api";
 import { createTransport, type LspTransport } from "./transport";
 import { installReferencesBridge } from "./references";
 import { installDiagnosticsBridge } from "./diagnostics";
+import type { DiagnosticMode } from "./diagnosticMode";
 import { lspLog } from "./debug";
 
 /** Configuration for a single LSP client. Server-agnostic. */
@@ -27,6 +28,19 @@ export interface LspClientConfig {
   rootUri: string;
   /** Server-specific `initialize` options (e.g. Roslyn extension options). */
   initializationOptions?: unknown;
+  /** How diagnostics are delivered. C# explicitly uses pull because Roslyn
+   * accepts `textDocument/diagnostic` without advertising the capability. */
+  diagnosticMode?: DiagnosticMode;
+  /** Optional diagnostic registrations to pull separately. Roslyn exposes
+   * compiler categories this way, avoiding expensive analyzer aggregation. */
+  diagnosticIdentifiers?: readonly string[];
+  /**
+   * When true, semantic tokens start disabled and are enabled only after
+   * `projectInitializationComplete` (via {@link enableLanguageClientSemanticTokens}).
+   * Both Roslyn servers (C# standalone and Razor cohosting) set this flag so
+   * provisional classifications never flash before the project is fully loaded.
+   */
+  deferSemanticTokens?: boolean;
   /** Called when the underlying connection closes (propagated to the manager). */
   onClosed?: () => void;
 }
@@ -46,6 +60,8 @@ type ClientContributions = {
   enableSemanticTokens?: () => void;
   /** Re-pull tokens on a backoff until Roslyn's classification stabilizes. */
   stabilizeSemanticTokens?: () => void;
+  /** Invalidates cached result ids and re-pulls diagnostics for tracked models. */
+  repullDiagnostics?: () => void;
 };
 
 const clientContributions = new WeakMap<
@@ -132,7 +148,8 @@ export async function createLanguageClient(
   installSemanticTokensBridge(
     client,
     config.serverId,
-    config.documentSelector
+    config.documentSelector,
+    config.deferSemanticTokens ?? false
   );
 
   // "Find All References" / "Peek References" (Shift+F12, context menu, and the
@@ -146,10 +163,17 @@ export async function createLanguageClient(
   // Diagnostics → Monaco markers (issue #10): pull for Roslyn
   // (`textDocument/diagnostic`), push for TS/Razor (`publishDiagnostics`). Owned
   // by serverId so markers de-duplicate per server, and feed the Problems panel.
-  addClientContributions(
+  const diagnostics = installDiagnosticsBridge(
     client,
-    installDiagnosticsBridge(client, config.serverId, config.documentSelector)
+    config.serverId,
+    config.documentSelector,
+    config.diagnosticMode,
+    config.diagnosticIdentifiers
   );
+  addClientContributions(client, diagnostics.disposables);
+  mergeClientContributions(client, {
+    repullDiagnostics: diagnostics.repull,
+  });
 
   // Diagnostic: what models exist and what are their scheme/language? The client
   // only sends didOpen for models whose URI scheme + languageId match the
@@ -203,6 +227,23 @@ function addClientContributions(
   }
 }
 
+/**
+ * Merges non-disposable contribution hooks (e.g. diagnostics re-pull)
+ * into a client's entry without touching its disposables. Creates the entry with
+ * an empty disposables list if no bridge has registered one yet.
+ */
+function mergeClientContributions(
+  client: MonacoLanguageClient,
+  extra: Partial<Omit<ClientContributions, "disposables">>
+): void {
+  const existing = clientContributions.get(client);
+  if (existing) {
+    Object.assign(existing, extra);
+  } else {
+    clientContributions.set(client, { disposables: [], ...extra });
+  }
+}
+
 /** Requests Monaco to discard cached semantic tokens and ask Roslyn again. */
 export function refreshLanguageClientSemanticTokens(
   client: MonacoLanguageClient
@@ -231,6 +272,14 @@ export function enableLanguageClientSemanticTokens(
   client: MonacoLanguageClient
 ): void {
   clientContributions.get(client)?.enableSemanticTokens?.();
+}
+
+/**
+ * Invalidates cached diagnostic result ids and pulls every tracked model again.
+ * C# calls this after rebinding documents to the fully loaded solution.
+ */
+export function repullDiagnostics(client: MonacoLanguageClient): void {
+  clientContributions.get(client)?.repullDiagnostics?.();
 }
 
 function workspaceName(rootUri: string): string {
@@ -320,7 +369,8 @@ function createVoidEvent(): {
 function installSemanticTokensBridge(
   client: MonacoLanguageClient,
   serverId: string,
-  selector: DocumentSelector
+  selector: DocumentSelector,
+  deferSemanticTokens: boolean
 ): void {
   const capability = client.initializeResult?.capabilities.semanticTokensProvider;
   // DIAG: dump the exact capability Roslyn announced (full can be bool or
@@ -341,7 +391,7 @@ function installSemanticTokensBridge(
     selector as unknown as monaco.languages.LanguageSelector;
   const contributions: monaco.IDisposable[] = [];
   const refresh = createVoidEvent();
-  let semanticTokensEnabled = serverId !== "csharp";
+  let semanticTokensEnabled = !deferSemanticTokens;
   const latestRequestByModel = new Map<string, number>();
 
   const beginRequest = (model: monaco.editor.ITextModel): number => {

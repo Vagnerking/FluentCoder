@@ -294,15 +294,32 @@ fn csharp_ext_roslyn_dir(app: &AppHandle) -> Option<PathBuf> {
 }
 
 /// Ensures the C# extension (Roslyn + Razor) is cached, downloading the VSIX on
-/// first use. Returns its `.roslyn/` directory.
+/// first use. Returns its `.roslyn/` directory. On any failure, the partial
+/// cache dir is removed so a later attempt starts clean (a half-extracted dir
+/// would otherwise linger and mask the real state).
 async fn ensure_csharp_ext(app: &AppHandle) -> Result<PathBuf, String> {
     if let Some(dir) = csharp_ext_roslyn_dir(app) {
         return Ok(dir);
     }
+    let cache = csharp_ext_cache_dir(app)?;
+    match download_and_extract_csharp_ext(app, &cache).await {
+        Ok(dir) => Ok(dir),
+        Err(e) => {
+            // Best-effort cleanup of the partial/empty dir so the next launch
+            // re-downloads from scratch instead of inspecting a broken cache.
+            let _ = tokio::fs::remove_dir_all(&cache).await;
+            Err(e)
+        }
+    }
+}
+
+async fn download_and_extract_csharp_ext(
+    app: &AppHandle,
+    cache: &Path,
+) -> Result<PathBuf, String> {
     let platform = csharp_ext_target_platform()
         .ok_or_else(|| "sem build da extensão C# para esta plataforma".to_string())?;
-    let cache = csharp_ext_cache_dir(app)?;
-    tokio::fs::create_dir_all(&cache)
+    tokio::fs::create_dir_all(cache)
         .await
         .map_err(|e| format!("failed to create C# ext cache: {e}"))?;
 
@@ -312,6 +329,10 @@ async fn ensure_csharp_ext(app: &AppHandle) -> Result<PathBuf, String> {
         plat = platform
     );
     emit_progress(app, "downloading", "Baixando o servidor C#/Razor (cohosting)…");
+    // The marketplace serves the .vsix with `Content-Encoding: gzip`; reqwest's
+    // `gzip` feature (enabled in Cargo.toml) transparently decompresses it so the
+    // bytes below are the raw ZIP. Without it, extraction fails and Razor silently
+    // regresses to standalone Roslyn.
     let bytes = download_bytes(&url).await.map_err(|e| {
         let m = format!("Não foi possível baixar o servidor C#/Razor. ({e})");
         emit_progress(app, "error", &m);
@@ -319,7 +340,7 @@ async fn ensure_csharp_ext(app: &AppHandle) -> Result<PathBuf, String> {
     })?;
     // Extract on a blocking thread (synchronous zip I/O off the async runtime).
     emit_progress(app, "extracting", "Extraindo o servidor C#/Razor…");
-    let extract_dir = cache.clone();
+    let extract_dir = cache.to_path_buf();
     tokio::task::spawn_blocking(move || extract_zip(&bytes, &extract_dir))
         .await
         .map_err(|e| format!("tarefa de extração falhou: {e}"))?
@@ -341,7 +362,7 @@ async fn ensure_csharp_ext(app: &AppHandle) -> Result<PathBuf, String> {
 /// `--csharpDesignTimePath` at the extension's C# targets. The older
 /// `--razorSourceGenerator`/`--razorDesignTimePath` flags do NOT exist on this
 /// Roslyn (confirmed via `--help`) and would make it exit immediately.
-async fn cohosting_launch_command(
+pub async fn cohosting_launch_command(
     app: &AppHandle,
 ) -> Result<(String, Vec<String>), String> {
     let roslyn_dir = ensure_csharp_ext(app).await?;
@@ -374,28 +395,14 @@ async fn cohosting_launch_command(
     Ok((exe.to_string_lossy().to_string(), args))
 }
 
-/// Resolves the full launch command (program + args) for the Roslyn LSP.
+/// Launch command for the standalone Roslyn 5.0.0 (C# only, no Razor cohosting).
 ///
-/// Prefers the modern cohosting build (one Roslyn for C# AND Razor, issue #11);
-/// falls back to the self-contained Roslyn 5.0.0 (C# only) when the C# extension
-/// can't be acquired — so C# never regresses even when Razor is unavailable.
-///
-/// `Microsoft.CodeAnalysis.LanguageServer --help` marks BOTH `--logLevel` and
-/// `--extensionLogDirectory` as REQUIRED — without the log directory the process
-/// exits immediately. The per-RID `.exe` is self-contained, so we invoke it
-/// directly (no `dotnet exec`). `detect_dotnet` is kept only as a friendly
-/// pre-flight: a .NET runtime is still needed to *analyze* projects.
-pub async fn roslyn_launch_command(
+/// `--logLevel` and `--extensionLogDirectory` are REQUIRED by the server CLI —
+/// the process exits immediately without them. The per-RID exe is self-contained,
+/// so no `dotnet exec` wrapper is needed.
+pub async fn standalone_launch_command(
     app: &AppHandle,
-    _project_root: &Path,
 ) -> Result<(String, Vec<String>), String> {
-    match cohosting_launch_command(app).await {
-        Ok(cmd) => return Ok(cmd),
-        Err(e) => eprintln!(
-            "[lsp/csharp] cohosting indisponível ({e}); usando Roslyn 5.0.0 (C# sem Razor)"
-        ),
-    }
-
     // Don't hard-fail if dotnet is missing — the bundled server still starts;
     // log a hint instead. (detect_dotnet returns Err with an install message.)
     if let Err(hint) = detect_dotnet() {
@@ -419,4 +426,16 @@ pub async fn roslyn_launch_command(
         "--stdio".to_string(),
     ];
     Ok((program, args))
+}
+
+/// Resolves the launch command for the C# Roslyn LSP (standalone, no Razor).
+///
+/// Uses standalone Roslyn 5.0.0 (`Microsoft.CodeAnalysis.LanguageServer`) which
+/// correctly emits `DocumentCompilerSemantic` diagnostics. Razor is served by a
+/// separate cohosting instance started via `lsp_ensure_razor_server`.
+pub async fn roslyn_launch_command(
+    app: &AppHandle,
+    _project_root: &Path,
+) -> Result<(String, Vec<String>), String> {
+    standalone_launch_command(app).await
 }

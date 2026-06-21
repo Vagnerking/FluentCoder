@@ -49,60 +49,156 @@ pub async fn csharp_build_diagnostics(
     Ok(parse_diagnostics(&text))
 }
 
-/// Parses MSBuild lines of the form
-/// `<path>(<line>,<col>): error|warning <CODE>: <message> [<project>]`.
+/// Parses MSBuild diagnostics in two shapes:
+///
+/// 1. Per-source, with location:
+///    `<path>(<line>,<col>): error|warning <CODE>: <message> [<project>]`
+///    — compiler diagnostics (CS…, RZ…) tied to a file line/column.
+/// 2. Top-level, no location:
+///    `<source> : error|warning <CODE>: <message> [<project>]`
+///    — MSBuild/NuGet/SDK errors such as `MSB1003` (no project at root),
+///    `NU1101` (restore failed), `MSB4236` (SDK missing). These have NO
+///    line/column and `<source>` is `MSBUILD`, a `.csproj`/`.sln`, or empty.
+///    Without these the UI showed NOTHING when a build couldn't even start —
+///    `csharp_build_diagnostics` returns `Ok(empty)` on a non-zero exit, so a
+///    restore/SDK failure was silent. We surface them at line/col 1 so they reach
+///    the Problems panel (the frontend keeps only ones inside the workspace).
 fn parse_diagnostics(text: &str) -> Vec<BuildDiagnostic> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
     for line in text.lines() {
-        let (sev, marker) = if line.contains("): error ") {
-            ("error", "): error ")
-        } else if line.contains("): warning ") {
-            ("warning", "): warning ")
-        } else {
-            continue;
-        };
-        let Some(pos) = line.find(marker) else { continue };
+        let parsed = parse_located(line).or_else(|| parse_top_level(line));
+        let Some(diag) = parsed else { continue };
 
-        // Head: "<path>(<line>,<col>".
-        let head = &line[..pos];
-        let Some(paren) = head.rfind('(') else { continue };
-        let path = head[..paren].trim();
-        if path.is_empty() {
-            continue;
-        }
-        let mut loc = head[paren + 1..].split(',');
-        let line_no: u32 = loc.next().and_then(|s| s.trim().parse().ok()).unwrap_or(1);
-        let col_no: u32 = loc.next().and_then(|s| s.trim().parse().ok()).unwrap_or(1);
-
-        // Tail after the marker: "<CODE>: <message> [<project>]".
-        let rest = &line[pos + marker.len()..];
-        let Some(colon) = rest.find(": ") else { continue };
-        let code = rest[..colon].trim().to_string();
-        let mut msg = rest[colon + 2..].trim().to_string();
-        // Strip the trailing " [.../project.csproj]" MSBuild appends.
-        if msg.ends_with(']') {
-            if let Some(b) = msg.rfind(" [") {
-                msg.truncate(b);
-                msg = msg.trim_end().to_string();
-            }
-        }
-
-        let key = format!("{path}|{line_no}|{col_no}|{code}|{msg}");
+        let key = format!(
+            "{}|{}|{}|{}|{}",
+            diag.path, diag.line, diag.column, diag.code, diag.message
+        );
         if seen.insert(key) {
-            out.push(BuildDiagnostic {
-                path: path.to_string(),
-                line: line_no,
-                column: col_no,
-                severity: sev.to_string(),
-                code,
-                message: msg,
-            });
+            out.push(diag);
         }
     }
 
     out
+}
+
+/// Strips the trailing ` [.../project.csproj]` MSBuild appends to a message.
+fn strip_project_suffix(msg: &str) -> String {
+    let msg = msg.trim();
+    if msg.ends_with(']') {
+        if let Some(b) = msg.rfind(" [") {
+            return msg[..b].trim_end().to_string();
+        }
+    }
+    msg.to_string()
+}
+
+/// Parses shape 1: `<path>(<line>,<col>): error|warning <CODE>: <message>`.
+fn parse_located(line: &str) -> Option<BuildDiagnostic> {
+    let (sev, marker) = if line.contains("): error ") {
+        ("error", "): error ")
+    } else if line.contains("): warning ") {
+        ("warning", "): warning ")
+    } else {
+        return None;
+    };
+    let pos = line.find(marker)?;
+
+    // Head: "<path>(<line>,<col>".
+    let head = &line[..pos];
+    let paren = head.rfind('(')?;
+    let path = head[..paren].trim();
+    if path.is_empty() {
+        return None;
+    }
+    let mut loc = head[paren + 1..].split(',');
+    let line_no: u32 = loc.next().and_then(|s| s.trim().parse().ok()).unwrap_or(1);
+    let col_no: u32 = loc.next().and_then(|s| s.trim().parse().ok()).unwrap_or(1);
+
+    // Tail after the marker: "<CODE>: <message> [<project>]".
+    let rest = &line[pos + marker.len()..];
+    let colon = rest.find(": ")?;
+    let code = rest[..colon].trim().to_string();
+    let msg = strip_project_suffix(&rest[colon + 2..]);
+
+    Some(BuildDiagnostic {
+        path: path.to_string(),
+        line: line_no,
+        column: col_no,
+        severity: sev.to_string(),
+        code,
+        message: msg,
+    })
+}
+
+/// Parses shape 2: `<source> : error|warning <CODE>: <message>` (no line/col).
+/// `<source>` is the project/solution path when MSBuild reports one (so the
+/// diagnostic attaches to that file), or a bare token like `MSBUILD` otherwise.
+fn parse_top_level(line: &str) -> Option<BuildDiagnostic> {
+    let (sev, marker) = if line.contains(" : error ") {
+        ("error", " : error ")
+    } else if line.contains(" : warning ") {
+        ("warning", " : warning ")
+    } else {
+        return None;
+    };
+    let pos = line.find(marker)?;
+
+    let source = line[..pos].trim();
+
+    // Tail after the marker: "<CODE>: <message> [<project>]".
+    let rest = &line[pos + marker.len()..];
+    let colon = rest.find(": ")?;
+    let code = rest[..colon].trim().to_string();
+    if code.is_empty() {
+        return None;
+    }
+    let msg = strip_project_suffix(&rest[colon + 2..]);
+
+    // Prefer a real project/solution path as the attach point; otherwise fall
+    // back to the trailing ` [<project>]` MSBuild appends, so the diagnostic
+    // still lands on a file the workspace filter can match. Bare `MSBUILD` with
+    // no project would be filtered out by the frontend (not inside the root),
+    // which is acceptable — those are environment errors, not code errors.
+    let path = if looks_like_project_path(source) {
+        source.to_string()
+    } else {
+        project_from_suffix(&rest[colon + 2..]).unwrap_or_else(|| source.to_string())
+    };
+
+    Some(BuildDiagnostic {
+        path,
+        line: 1,
+        column: 1,
+        severity: sev.to_string(),
+        code,
+        message: msg,
+    })
+}
+
+/// Whether `s` looks like a file path to a project/solution (has a separator and
+/// a known extension), as opposed to a bare token like `MSBUILD`.
+fn looks_like_project_path(s: &str) -> bool {
+    let lower = s.to_ascii_lowercase();
+    (lower.ends_with(".csproj") || lower.ends_with(".sln") || lower.ends_with(".fsproj"))
+        && (s.contains('/') || s.contains('\\'))
+}
+
+/// Extracts the ` [<project>]` path MSBuild appends to a message, if present and
+/// it points at a project/solution file.
+fn project_from_suffix(msg: &str) -> Option<String> {
+    let msg = msg.trim();
+    if !msg.ends_with(']') {
+        return None;
+    }
+    let open = msg.rfind(" [")?;
+    let inner = msg[open + 2..msg.len() - 1].trim();
+    if looks_like_project_path(inner) {
+        Some(inner.to_string())
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -129,5 +225,63 @@ mod tests {
         let d = parse_diagnostics(text);
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].severity, "warning");
+    }
+
+    #[test]
+    fn parses_nuget_restore_error_attached_to_project() {
+        // A NuGet restore failure: top-level, no line/col, project as the source.
+        let text = "C:\\proj\\App.csproj : error NU1101: Unable to find package Foo [C:\\proj\\App.sln]";
+        let d = parse_diagnostics(text);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].path, "C:\\proj\\App.csproj");
+        assert_eq!(d[0].line, 1);
+        assert_eq!(d[0].column, 1);
+        assert_eq!(d[0].severity, "error");
+        assert_eq!(d[0].code, "NU1101");
+        assert_eq!(d[0].message, "Unable to find package Foo");
+    }
+
+    #[test]
+    fn parses_top_level_msbuild_error_attaches_to_project_suffix() {
+        // `MSBUILD` source with a project in the trailing suffix: attach to the
+        // project so the workspace filter can keep it.
+        let text =
+            "MSBUILD : error MSB4236: The SDK 'X' was not found. [C:\\proj\\App.csproj]";
+        let d = parse_diagnostics(text);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].path, "C:\\proj\\App.csproj");
+        assert_eq!(d[0].code, "MSB4236");
+        assert_eq!(d[0].severity, "error");
+        assert!(d[0].message.starts_with("The SDK 'X'"));
+    }
+
+    #[test]
+    fn parses_bare_msbuild_error_without_project() {
+        // No project anywhere (e.g. MSB1003 at a root with no solution). Still
+        // parsed; path is the bare source. The frontend's in-root filter drops
+        // it (not a real workspace file), which is acceptable for env errors.
+        let text = "MSBUILD : error MSB1003: Specify a project or solution file.";
+        let d = parse_diagnostics(text);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].code, "MSB1003");
+        assert_eq!(d[0].path, "MSBUILD");
+    }
+
+    #[test]
+    fn located_form_is_not_double_counted_as_top_level() {
+        // A located line also contains "): error " but NOT " : error " — ensure
+        // it parses once, via the located path, with its line/column intact.
+        let text = "C:\\proj\\a.cs(7,3): error CS0103: The name 'y' does not exist [C:\\proj\\a.csproj]";
+        let d = parse_diagnostics(text);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].line, 7);
+        assert_eq!(d[0].column, 3);
+        assert_eq!(d[0].code, "CS0103");
+    }
+
+    #[test]
+    fn ignores_non_diagnostic_lines() {
+        let text = "Build succeeded.\n    2 Warning(s)\n    0 Error(s)\nTime Elapsed 00:00:10.45";
+        assert!(parse_diagnostics(text).is_empty());
     }
 }

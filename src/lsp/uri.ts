@@ -9,6 +9,7 @@
 import type * as Monaco from "monaco-editor";
 
 const WINDOWS_DRIVE_IN_FILE_URI = /^(file:\/\/\/)([a-z])%3A(?=\/)/i;
+const WINDOWS_DRIVE_URI_KEY = /^(file:\/\/\/)([a-z])(?::|%3A)(?=\/)/i;
 const WINDOWS_FILE_PATH = /^\/[a-z]:\//i;
 const WINDOWS_EXTENDED_UNC_PATH = /^\\\\\?\\UNC\\/i;
 const WINDOWS_EXTENDED_PATH = /^\\\\\?\\/;
@@ -85,6 +86,19 @@ export function toFileUri(p: string): string {
   if (!normalized.startsWith("/")) normalized = `/${normalized}`;
   // encodeURI keeps `/` and `:` intact while escaping spaces etc.
   return `file://${encodeURI(normalized)}`;
+}
+
+/**
+ * Stable key for comparing file URIs produced by native Windows paths and by
+ * Monaco. Monaco lowercases the drive letter; native paths commonly retain an
+ * uppercase drive. Both identify the same file and must share one map key.
+ */
+export function canonicalFileUriKey(uri: string): string {
+  return uri.replace(
+    WINDOWS_DRIVE_URI_KEY,
+    (_match, prefix: string, drive: string) =>
+      `${prefix}${drive.toLocaleLowerCase("en-US")}:`
+  );
 }
 
 /**
