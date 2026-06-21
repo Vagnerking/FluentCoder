@@ -198,6 +198,32 @@ export interface GitCommit {
   subject: string;
 }
 
+/**
+ * One local branch in the branch picker (issue #16), mirroring the Rust
+ * `GitBranchInfo`. Carries the tip's metadata so the picker can render a
+ * VSCode-style row (name, relative date, ahead/behind, author · hash · subject).
+ */
+export interface GitBranchInfo {
+  /** Branch name, e.g. "main", "feat/x". */
+  name: string;
+  /** True for the branch currently checked out. */
+  current: boolean;
+  /** Short hash of the branch tip. */
+  short: string;
+  /** Last-commit date, relative (e.g. "2 hours ago"). */
+  date: string;
+  /** Last-commit author name. */
+  author: string;
+  /** Last-commit subject (first line). */
+  subject: string;
+  /** Commits ahead of the upstream (0 when no upstream). */
+  ahead: number;
+  /** Commits behind the upstream (0 when no upstream). */
+  behind: number;
+  /** True when the branch has a configured upstream (ahead/behind are valid). */
+  hasUpstream: boolean;
+}
+
 /** A run/debug configuration, mirroring the Rust `RunConfig`. */
 export interface RunConfig {
   name: string;
