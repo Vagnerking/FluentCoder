@@ -403,6 +403,19 @@ export default function App() {
   );
 
   /**
+   * Clears every workspace-derived bit of UI state so nothing from the previous
+   * project leaks into the empty state — or into the next project while its git
+   * branch/status and LSP load asynchronously (issue #17). The LSP servers and
+   * their workspace info (C# solution/projects) tear down separately when
+   * `rootPath` changes (see useLspManager).
+   */
+  const resetWorkspaceState = useCallback(() => {
+    setBranch(null);
+    setGitState(null);
+    setProblems([]);
+  }, []);
+
+  /**
    * Loads a project folder into the explorer. Shared by the folder picker and
    * the launch-time restore. When `persist` is true (the normal case), the path
    * is recorded so the next launch reopens it. `silent` swallows the error alert
@@ -411,6 +424,9 @@ export default function App() {
   const openFolder = useCallback(
     async (folder: string, opts?: { persist?: boolean; silent?: boolean }) => {
       const persist = opts?.persist ?? true;
+      // Drop the previous project's branch/git/diagnostics up front so they don't
+      // linger while the new project's git/LSP load asynchronously (issue #17).
+      resetWorkspaceState();
       try {
         const entries = await readDir(folder);
         setRoots(entries);
@@ -431,7 +447,7 @@ export default function App() {
         if (persist) sessionSetLastFolder(null).catch(() => {});
       }
     },
-    []
+    [resetWorkspaceState]
   );
 
   const refreshExplorerRoot = useCallback(async () => {
@@ -1450,14 +1466,12 @@ export default function App() {
     // same window (branch, git decorations, diagnostics, search scope, history).
     // The LSP servers and search index tear down when rootPath becomes null
     // (useLspManager watches it); forget the folder so it won't reopen on launch.
-    setBranch(null);
-    setGitState(null);
-    setProblems([]);
+    resetWorkspaceState();
     setSearchScope(null);
     setHistoryFile(null);
     setActiveView("explorer");
     sessionSetLastFolder(null).catch(() => {});
-  }, [guardDirtySession]);
+  }, [guardDirtySession, resetWorkspaceState]);
 
   /** Re-point any open tab(s) when the explorer renames a file or folder. */
   const handlePathRenamed = useCallback(

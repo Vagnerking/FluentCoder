@@ -113,6 +113,10 @@ export function useLspManager(
     // stop the session we just started.
     if (lastRootRef.current !== null && lastRootRef.current !== rootPath) {
       void manager.stopAll();
+      // Drop the previous workspace's LSP status/errors/solution info so the
+      // status bar doesn't keep showing stale servers/projects during the switch
+      // (issue #17) — the new project repopulates it as its servers start.
+      setState({ status: new Map(), errors: new Map(), workspaces: new Map() });
     }
     lastRootRef.current = rootPath;
 
