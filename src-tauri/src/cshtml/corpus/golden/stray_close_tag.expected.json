@@ -1,0 +1,13 @@
+{
+  "source_file": "invalid/stray_close_tag.cshtml",
+  "diagnostics": [
+    {
+      "message_contains": "sem tag de abertura",
+      "severity": "Error",
+      "range": {
+        "start": { "line": 4, "character": 4 },
+        "end": { "line": 4, "character": 11 }
+      }
+    }
+  ]
+}
