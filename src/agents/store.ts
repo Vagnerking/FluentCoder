@@ -27,9 +27,19 @@ export function normalizeAgentStore(value: unknown): AgentStore {
       ? candidate.agents.filter(isAgentDefinition)
       : [],
     conversations: Array.isArray(candidate.conversations)
-      ? candidate.conversations.filter(isConversation)
+      ? candidate.conversations.filter(isConversation).map(normalizeConversation)
       : [],
   };
+}
+
+/** Drops malformed messages so a single corrupt entry can't break the conversation. */
+function normalizeConversation(
+  conversation: AgentConversation,
+): AgentConversation {
+  const messages = conversation.messages.filter(isMessage);
+  return messages.length === conversation.messages.length
+    ? conversation
+    : { ...conversation, messages };
 }
 
 export function buildAgentPrompt(
@@ -92,5 +102,15 @@ function isConversation(value: unknown): value is AgentConversation {
     typeof conversation.agentId === "string" &&
     typeof conversation.title === "string" &&
     Array.isArray(conversation.messages)
+  );
+}
+
+function isMessage(value: unknown): value is AgentMessage {
+  if (!value || typeof value !== "object") return false;
+  const message = value as AgentMessage;
+  return (
+    typeof message.id === "string" &&
+    (message.role === "user" || message.role === "assistant") &&
+    typeof message.content === "string"
   );
 }

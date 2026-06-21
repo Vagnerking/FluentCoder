@@ -24,6 +24,41 @@ test("normaliza um arquivo de agentes inválido sem quebrar a UI", () => {
   assert.deepEqual(normalizeAgentStore({ agents: "x" }), EMPTY_AGENT_STORE);
 });
 
+test("descarta mensagens malformadas sem perder a conversa", () => {
+  const store = normalizeAgentStore({
+    version: 1,
+    agents: [agent],
+    conversations: [
+      {
+        id: "conversation-1",
+        agentId: agent.id,
+        title: "Com lixo",
+        messages: [
+          {}, // malformada: sem id/role/content
+          {
+            id: "message-1",
+            role: "user",
+            content: "Mensagem válida.",
+            createdAt: agent.createdAt,
+          },
+        ],
+        createdAt: agent.createdAt,
+        updatedAt: agent.updatedAt,
+      },
+    ],
+  });
+
+  const conversation = store.conversations[0];
+  assert.equal(store.conversations.length, 1);
+  assert.equal(conversation?.messages.length, 1);
+  assert.equal(conversation?.messages[0]?.content, "Mensagem válida.");
+
+  // O prompt não deve lançar TypeError em message.content.trim().
+  assert.doesNotThrow(() =>
+    buildAgentPrompt(agent, conversation!.messages, "Continue."),
+  );
+});
+
 test("o prompt inclui contexto, histórico e a fronteira do workspace", () => {
   const prompt = buildAgentPrompt(
     agent,

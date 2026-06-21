@@ -9,6 +9,7 @@ use agent_client_protocol::{AcpAgent, Agent, ConnectionTo};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use tauri::ipc::Channel;
 
@@ -102,10 +103,18 @@ pub async fn acp_prompt(
         )
         .on_receive_request(
             async move |request: ReadTextFileRequest, responder, _connection| {
-                let content =
-                    read_workspace_text(&read_root, &request.path, request.line, request.limit)
-                        .unwrap_or_else(|error| format!("[Acesso negado pelo editor: {error}]"));
-                responder.respond(ReadTextFileResponse::new(content))
+                // Reads that fail (outside the workspace, missing, non-UTF8…) must
+                // surface as a protocol error — never as fabricated file content,
+                // which would mask the denial and feed the agent garbage.
+                match read_workspace_text(
+                    &read_root,
+                    &request.path,
+                    request.line,
+                    request.limit,
+                ) {
+                    Ok(content) => responder.respond(ReadTextFileResponse::new(content)),
+                    Err(error) => responder.respond_with_internal_error(error),
+                }
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -243,23 +252,43 @@ fn read_workspace_text(
         return Err("o path solicitado não é um arquivo".into());
     }
 
-    let content = fs::read_to_string(&target)
-        .map_err(|error| format!("não foi possível ler o arquivo: {error}"))?;
-    Ok(slice_lines(&content, line, limit))
+    let file =
+        fs::File::open(&target).map_err(|error| format!("não foi possível ler o arquivo: {error}"))?;
+    read_lines(BufReader::new(file), line, limit)
 }
 
-fn slice_lines(content: &str, line: Option<u32>, limit: Option<u32>) -> String {
-    if line.is_none() && limit.is_none() {
-        return content.to_string();
-    }
+/// Streams the requested line window without materializing the whole file, so an
+/// agent reading one line of a huge log/artifact can't OOM the editor. Non-UTF8
+/// content is reported as an error instead of being lossily coerced.
+fn read_lines<R: BufRead>(
+    reader: R,
+    line: Option<u32>,
+    limit: Option<u32>,
+) -> Result<String, String> {
     let start = line.unwrap_or(1).saturating_sub(1) as usize;
-    let max = limit.unwrap_or(u32::MAX) as usize;
-    content
-        .lines()
-        .skip(start)
-        .take(max)
-        .collect::<Vec<_>>()
-        .join("\n")
+    let max = limit.map_or(usize::MAX, |value| value as usize);
+
+    let mut selected = Vec::new();
+    for (index, entry) in reader.lines().enumerate() {
+        if index < start {
+            // Still surface a read/decoding failure even while skipping ahead.
+            entry.map_err(decode_error)?;
+            continue;
+        }
+        if selected.len() >= max {
+            break;
+        }
+        selected.push(entry.map_err(decode_error)?);
+    }
+    Ok(selected.join("\n"))
+}
+
+fn decode_error(error: std::io::Error) -> String {
+    if error.kind() == std::io::ErrorKind::InvalidData {
+        "o arquivo não está em UTF-8 e não pode ser lido como texto".into()
+    } else {
+        format!("não foi possível ler o arquivo: {error}")
+    }
 }
 
 fn empty_store() -> Value {
@@ -294,7 +323,16 @@ mod tests {
 
     #[test]
     fn slices_requested_file_lines() {
-        assert_eq!(slice_lines("a\nb\nc\nd", Some(2), Some(2)), "b\nc");
+        let reader = BufReader::new("a\nb\nc\nd".as_bytes());
+        assert_eq!(read_lines(reader, Some(2), Some(2)).unwrap(), "b\nc");
+    }
+
+    #[test]
+    fn reports_non_utf8_content_as_error() {
+        // 0xFF is never valid in a UTF-8 stream.
+        let reader = BufReader::new(&[0xFFu8, 0xFE, b'\n'][..]);
+        let error = read_lines(reader, None, None).unwrap_err();
+        assert!(error.contains("UTF-8"));
     }
 
     #[test]

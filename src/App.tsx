@@ -85,6 +85,10 @@ const TAB_SIZE = 2;
 export default function App() {
   const [rootName, setRootName] = useState<string | null>(null);
   const [rootPath, setRootPath] = useState<string | null>(null);
+  // Mirrors rootPath for async callbacks (e.g. ACP streaming) that must detect a
+  // workspace switch mid-flight without capturing a stale closure value.
+  const rootPathRef = useRef(rootPath);
+  rootPathRef.current = rootPath;
   const [roots, setRoots] = useState<FileNode[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [branch, setBranch] = useState<string | null>(null);
@@ -294,6 +298,9 @@ export default function App() {
     setAgentSelection(null);
     setAgentError(null);
     setAgentStatus(null);
+    // An in-flight send from the previous workspace will see isStaleWorkspace()
+    // and bail; clear its busy flag here so the new workspace starts unblocked.
+    setAgentBusy(false);
 
     if (!rootPath) {
       setAgentStore({ ...EMPTY_AGENT_STORE });
@@ -462,6 +469,13 @@ export default function App() {
     );
     if (!agent || !conversation) return;
 
+    // Pin the workspace this send belongs to. If the user switches folders mid
+    // stream, the per-workspace effect resets agentStore to the new workspace;
+    // in-flight events that still reference this root must be dropped so they
+    // can't inject a stale conversation into — or persist over — another store.
+    const sendRoot = rootPath;
+    const isStaleWorkspace = () => rootPathRef.current !== sendRoot;
+
     const now = new Date().toISOString();
     const userMessage: AgentMessage = {
       id: createLocalId("message"),
@@ -478,10 +492,40 @@ export default function App() {
       status: "streaming",
     };
     const prompt = buildAgentPrompt(agent, conversation.messages, message);
-    let workingStore = replaceConversation(
-      agentStore,
-      conversation.id,
-      (current) => ({
+
+    // Apply an update by reconciling over the *current* store (functional
+    // update), never a captured snapshot — so concurrent edits (rename/delete/
+    // save in the sidebar) survive instead of being clobbered by streaming. The
+    // reconciled result is captured so we can persist exactly what the UI shows.
+    const applyToConversation = (
+      update: (conversation: AgentConversation) => AgentConversation,
+    ): AgentStore | null => {
+      let reconciled: AgentStore | null = null;
+      setAgentStore((prev) => {
+        // The conversation may have been deleted while the stream was running.
+        if (!prev.conversations.some((c) => c.id === conversation.id)) {
+          return prev;
+        }
+        reconciled = replaceConversation(prev, conversation.id, update);
+        return reconciled;
+      });
+      return reconciled;
+    };
+
+    const persistForSend = async (store: AgentStore | null) => {
+      if (!store || isStaleWorkspace()) return;
+      try {
+        await agentsSave(sendRoot, store);
+      } catch (error) {
+        setAgentError(String(error));
+      }
+    };
+
+    setAgentBusy(true);
+    setAgentError(null);
+    setAgentStatus("Conectando ao provedor ACP…");
+    await persistForSend(
+      applyToConversation((current) => ({
         ...current,
         title:
           current.messages.length === 0
@@ -489,49 +533,40 @@ export default function App() {
             : current.title,
         messages: [...current.messages, userMessage, assistantMessage],
         updatedAt: now,
-      }),
+      })),
     );
 
-    setAgentBusy(true);
-    setAgentError(null);
-    setAgentStatus("Conectando ao provedor ACP…");
-    await persistAgentStore(workingStore);
-
     try {
-      await acpPrompt(agent.provider, rootPath, prompt, (event) => {
+      await acpPrompt(agent.provider, sendRoot, prompt, (event) => {
+        // Discard events that arrived after a workspace switch.
+        if (isStaleWorkspace()) return;
         if (event.type === "status") {
           setAgentStatus(event.message);
           return;
         }
         if (event.type === "text") {
           setAgentStatus("Recebendo resposta…");
-          workingStore = replaceConversation(
-            workingStore,
-            conversation.id,
-            (current) => ({
-              ...current,
-              messages: current.messages.map((candidate) =>
-                candidate.id === assistantMessage.id
-                  ? {
-                      ...candidate,
-                      content: candidate.content + event.content,
-                      status: "streaming",
-                    }
-                  : candidate,
-              ),
-              updatedAt: new Date().toISOString(),
-            }),
-          );
-          setAgentStore(workingStore);
+          applyToConversation((current) => ({
+            ...current,
+            messages: current.messages.map((candidate) =>
+              candidate.id === assistantMessage.id
+                ? {
+                    ...candidate,
+                    content: candidate.content + event.content,
+                    status: "streaming",
+                  }
+                : candidate,
+            ),
+            updatedAt: new Date().toISOString(),
+          }));
           return;
         }
         if (event.type === "error") setAgentError(event.message);
       });
 
-      workingStore = replaceConversation(
-        workingStore,
-        conversation.id,
-        (current) => ({
+      if (isStaleWorkspace()) return;
+      await persistForSend(
+        applyToConversation((current) => ({
           ...current,
           messages: current.messages.map((candidate) =>
             candidate.id === assistantMessage.id
@@ -545,16 +580,14 @@ export default function App() {
               : candidate,
           ),
           updatedAt: new Date().toISOString(),
-        }),
+        })),
       );
-      await persistAgentStore(workingStore);
       setAgentStatus("Resposta concluída.");
     } catch (error) {
+      if (isStaleWorkspace()) return;
       const messageText = String(error);
-      workingStore = replaceConversation(
-        workingStore,
-        conversation.id,
-        (current) => ({
+      await persistForSend(
+        applyToConversation((current) => ({
           ...current,
           messages: current.messages.map((candidate) =>
             candidate.id === assistantMessage.id
@@ -566,12 +599,13 @@ export default function App() {
               : candidate,
           ),
           updatedAt: new Date().toISOString(),
-        }),
+        })),
       );
-      await persistAgentStore(workingStore);
       setAgentError(messageText);
       setAgentStatus(null);
     } finally {
+      // agentBusy is global UI state — always release it, even after a workspace
+      // switch, or the new workspace would stay stuck "busy".
       setAgentBusy(false);
     }
   }
