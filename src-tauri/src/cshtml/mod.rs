@@ -7,6 +7,7 @@ pub mod ast;
 pub mod binding;
 pub mod document;
 pub mod engine;
+pub mod hardening;
 pub mod harness;
 pub mod intellisense;
 pub mod lint;
