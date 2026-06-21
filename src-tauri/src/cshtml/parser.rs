@@ -302,6 +302,34 @@ impl ParseCtx {
             return self.parse_directive(start, kw);
         }
 
+        // Heuristic: if the @word is the first non-whitespace token on its line
+        // and is followed by a space (not '.' / '(' / '['), it looks like an
+        // unknown directive (e.g. `@bogusDirective Foo`). Emit RazorDirective
+        // so the linter can flag it with FCRZ0003.
+        // We only apply this when the '@' is column-0 (or after only whitespace)
+        // to avoid treating inline variables like `@count items` as directives.
+        let at_line_start = {
+            // Walk backwards through chars to see if only whitespace precedes
+            // this '@' on the same line.
+            let at_pos = start; // position of '@'
+            let mut col = at_pos;
+            let mut only_ws = true;
+            while col > 0 {
+                col -= 1;
+                let c = self.chars[col];
+                if c == '\n' { break; }
+                if !c.is_whitespace() { only_ws = false; break; }
+            }
+            only_ws
+        };
+        let looks_like_directive = at_line_start
+            && kw.chars().next().map(|c| c.is_lowercase()).unwrap_or(false)
+            && matches!(self.peek(), None | Some('\n') | Some('\r') | Some(' ') | Some('\t'));
+
+        if looks_like_directive {
+            return self.parse_directive(start, kw);
+        }
+
         // Implicit expression: @identifier(.…)*
         self.parse_implicit_expr_tail(start)
     }

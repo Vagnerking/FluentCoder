@@ -7,6 +7,7 @@ pub mod ast;
 pub mod document;
 pub mod engine;
 pub mod harness;
+pub mod lint;
 pub mod parser;
 pub mod projection;
 pub mod types;
