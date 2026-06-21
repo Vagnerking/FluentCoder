@@ -8,7 +8,9 @@ pub mod document;
 pub mod engine;
 pub mod harness;
 pub mod parser;
+pub mod projection;
 pub mod types;
 
 pub use engine::CshtmlEngine;
 pub use parser::parse;
+pub use projection::{project, ProjectionMap};
