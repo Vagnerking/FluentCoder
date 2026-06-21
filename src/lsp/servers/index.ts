@@ -10,6 +10,9 @@
 import type { MonacoLanguageClient } from "monaco-languageclient";
 import { CSHARP_SERVER_ID, startCsharpServer } from "./csharp";
 import { RAZOR_SERVER_ID, startRazorServer } from "./razor";
+// cshtml server (fluent-cshtml) is intentionally not registered here yet.
+// The engine will be wired in issue #38; until then, .cshtml files use the
+// Monarch tokenizer and the razorHtmlLint static marker pass without an LSP client.
 import { TS_SERVER_ID, startTypescriptServer } from "./typescript";
 import { NPM_SERVERS, makeNpmServerStarter } from "./npm";
 import { SYSTEM_SERVERS, makeSystemServerStarter } from "./system";

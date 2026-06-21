@@ -25,7 +25,7 @@ const EXT_TO_LANG: Record<string, string> = {
   hpp: "cpp",
   dart: "dart",
   cs: "csharp",
-  cshtml: "aspnetcorerazor",
+  cshtml: "cshtml",
   razor: "aspnetcorerazor",
   php: "php",
   rb: "ruby",

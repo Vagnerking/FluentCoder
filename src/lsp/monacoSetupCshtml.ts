@@ -1,172 +1,41 @@
 /**
- * One-time Monaco setup for LSP-driven TS/JS IntelliSense.
+ * Monaco registration for the `cshtml` language id (issue #32).
  *
- * ISSUE-33: disable Monaco's BUILT-IN TypeScript/JavaScript worker so the real
- * `typescript-language-server` is the single source of IntelliSense. Without
- * this, the user would see duplicated/conflicting diagnostics and completions.
- *
- * ISSUE-36: register the `typescriptreact` / `javascriptreact` language ids so
- * `.tsx`/`.jsx` files get proper JSX IntelliSense from tsserver.
- *
- * IMPORTANT: must run in `beforeMount` (before any editor/model is created).
+ * `.cshtml` (Razor MVC views) is registered under its own language id so it
+ * can evolve independently from `.razor` (Razor components, `aspnetcorerazor`).
+ * The tokenizer/config is a copy of the Razor Monarch grammar — same syntax,
+ * distinct id — so the CSHTML engine can later replace it without touching the
+ * Razor path.
  */
 import type { Monaco } from "@monaco-editor/react";
 import type * as MonacoNS from "monaco-editor";
-import { installRazorHtmlLint } from "../lint/razorHtmlLint";
-import { registerCshtmlLanguage } from "./monacoSetupCshtml";
-// `monaco-editor`'s ESM API does not automatically bundle every basic-language
-// contribution. Register C#'s lazy Monarch loader explicitly; otherwise Roslyn
-// semantic tokens color symbols, but lexical-only tokens such as `if` and
-// `return` remain plain foreground text.
-import "monaco-editor/esm/vs/basic-languages/csharp/csharp.contribution.js";
 
-let didSetup = false;
+/** Monaco language id for `.cshtml` MVC views. */
+export const CSHTML_LANGUAGE_ID = "cshtml";
 
-/** Idempotently configures Monaco for the LSP pipeline. */
-export function setupMonacoForLsp(monaco: Monaco): void {
-  if (didSetup) return;
-  didSetup = true;
+/** Owner string for Monaco markers produced by the CSHTML engine. */
+export const CSHTML_MARKER_OWNER = "fluent-cshtml";
 
-  disableBuiltinTsWorker(monaco);
-  registerReactLanguages(monaco);
-  registerRazorLanguage(monaco);
-  registerCshtmlLanguage(monaco);
-  installRazorHtmlLint(monaco);
-  ensureCsharpLanguage(monaco);
-}
+let cshtmlRegistered = false;
 
-/**
- * Makes sure Monaco knows the `csharp` language id is bound to `.cs`. The
- * C#'s basic-language contribution is imported above so its Monarch tokenizer
- * can be loaded lazily. This fallback registration still protects against a
- * contribution-loading failure: the model remains `csharp`, allowing the LSP
- * document selector to match even if syntax highlighting is unavailable.
- */
-function ensureCsharpLanguage(monaco: Monaco): void {
-  const has = monaco.languages.getLanguages().some((l) => l.id === "csharp");
-  if (!has) {
-    monaco.languages.register({
-      id: "csharp",
-      extensions: [".cs", ".csx", ".cake"],
-      aliases: ["C#", "csharp"],
-      mimetypes: ["text/x-csharp"],
-    });
-  }
-}
-
-/**
- * Turns OFF the embedded TS/JS worker's diagnostics, suggestions, and
- * completion provider. Syntax highlighting (Monarch tokenizer) stays intact.
- */
-function disableBuiltinTsWorker(monaco: Monaco): void {
-  const ts = monaco.languages.typescript;
-  if (!ts) return; // defensive: TS contribution might be tree-shaken out
-
-  const off = {
-    noSemanticValidation: true,
-    noSyntaxValidation: true,
-    noSuggestionDiagnostics: true,
-  };
-  ts.typescriptDefaults.setDiagnosticsOptions(off);
-  ts.javascriptDefaults.setDiagnosticsOptions(off);
-
-  // Stop the worker from eagerly type-acquiring and from offering completions.
-  // `onlyVisible: true` keeps the worker idle for non-visible models.
-  ts.typescriptDefaults.setEagerModelSync(false);
-  ts.javascriptDefaults.setEagerModelSync(false);
-
-  // Disable the built-in completion/hover/etc. providers: setting the compiler
-  // option `noLib` + clearing extra libs is not enough, but Monaco honors the
-  // diagnostics flags above for markers. For completions we rely on the LSP
-  // provider winning by registration order; additionally we wipe extra libs so
-  // the built-in worker has no project knowledge to suggest from.
-  ts.typescriptDefaults.setExtraLibs([]);
-  ts.javascriptDefaults.setExtraLibs([]);
-}
-
-/**
- * Ensures `typescriptreact` and `javascriptreact` exist as Monaco languages,
- * reusing the TS/JS tokenizer/config so highlighting is unchanged. tsserver
- * distinguishes these ids from plain `typescript`/`javascript` for JSX.
- */
-function registerReactLanguages(monaco: Monaco): void {
-  const known = new Set(monaco.languages.getLanguages().map((l) => l.id));
-
-  // The standalone Monaco bundle registers basic languages with a lazy
-  // `loader()` that returns the Monarch tokenizer + language config. The public
-  // type omits `loader`, so we read it through a narrow cast.
-  type LazyLang = {
-    id: string;
-    loader?: () => Promise<{ language?: unknown; conf?: unknown }>;
-  };
-
-  const ensure = (id: string, baseId: string, extensions: string[]) => {
-    if (known.has(id)) return;
-    monaco.languages.register({ id, extensions, aliases: [id] });
-    // Reuse the base language's tokenizer + config so highlighting matches.
-    const base = (monaco.languages.getLanguages() as unknown as LazyLang[]).find(
-      (l) => l.id === baseId
-    );
-    void base?.loader?.()
-      .then((mod) => {
-        if (mod?.language) {
-          monaco.languages.setMonarchTokensProvider(
-            id,
-            mod.language as Parameters<
-              typeof monaco.languages.setMonarchTokensProvider
-            >[1]
-          );
-        }
-        if (mod?.conf) {
-          monaco.languages.setLanguageConfiguration(
-            id,
-            mod.conf as Parameters<
-              typeof monaco.languages.setLanguageConfiguration
-            >[1]
-          );
-        }
-      })
-      .catch(() => {
-        /* highlighting fallback: base tokenizer not loadable — non-fatal */
-      });
-  };
-
-  ensure("typescriptreact", "typescript", [".tsx"]);
-  ensure("javascriptreact", "javascript", [".jsx"]);
-}
-
-/** Monaco language id for `.razor` components. Matches `language.ts`.
- * Uses the VS Code id `aspnetcorerazor` so the Roslyn Razor cohost recognizes
- * the documents we open — it keys Razor handling off this exact language id.
- * `.cshtml` uses a separate `cshtml` id (see monacoSetupCshtml.ts). */
-export const RAZOR_LANGUAGE_ID = "aspnetcorerazor";
-
-let razorRegistered = false;
-
-/**
- * Registers the `razor` language + Monarch tokenizer (ISSUE-29). Monaco ships no
- * Razor grammar, so `.cshtml`/`.razor` would otherwise fall back to plaintext.
- *
- * Scope: syntax highlight only — Razor transitions/directives, C# code blocks,
- * Razor comments, and basic HTML markup. NOT a full TextMate grammar with
- * embedded-language projection (out of scope per the epic). Idempotent.
- */
-export function registerRazorLanguage(monaco: Monaco): void {
-  if (razorRegistered) return;
+/** Registers the `cshtml` language with its Monarch tokenizer. Idempotent. */
+export function registerCshtmlLanguage(monaco: Monaco): void {
+  if (cshtmlRegistered) return;
 
   const known = monaco.languages
     .getLanguages()
-    .some((l) => l.id === RAZOR_LANGUAGE_ID);
+    .some((l) => l.id === CSHTML_LANGUAGE_ID);
+
   if (!known) {
     monaco.languages.register({
-      id: RAZOR_LANGUAGE_ID,
-      extensions: [".razor"],
-      aliases: ["Razor"],
-      mimetypes: ["text/x-razor"],
+      id: CSHTML_LANGUAGE_ID,
+      extensions: [".cshtml"],
+      aliases: ["CSHTML", "Razor MVC"],
+      mimetypes: ["text/x-cshtml"],
     });
   }
 
-  monaco.languages.setLanguageConfiguration(RAZOR_LANGUAGE_ID, {
+  monaco.languages.setLanguageConfiguration(CSHTML_LANGUAGE_ID, {
     comments: { blockComment: ["@*", "*@"] },
     brackets: [
       ["{", "}"],
@@ -192,15 +61,18 @@ export function registerRazorLanguage(monaco: Monaco): void {
     ],
   });
 
-  monaco.languages.setMonarchTokensProvider(RAZOR_LANGUAGE_ID, razorMonarch());
-  razorRegistered = true;
+  monaco.languages.setMonarchTokensProvider(
+    CSHTML_LANGUAGE_ID,
+    cshtmlMonarch()
+  );
+
+  cshtmlRegistered = true;
 }
 
-/** Minimal Monarch grammar for Razor (`@`-transitions, C# blocks, HTML). */
-function razorMonarch(): MonacoNS.languages.IMonarchLanguage {
+function cshtmlMonarch(): MonacoNS.languages.IMonarchLanguage {
   return {
     defaultToken: "",
-    tokenPostfix: ".razor",
+    tokenPostfix: ".cshtml",
 
     razorDirectives: [
       "model", "using", "inject", "page", "namespace", "inherits",

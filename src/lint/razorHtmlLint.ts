@@ -160,17 +160,18 @@ function toMarkers(
   });
 }
 
+const LINTED_LANGUAGES = new Set(["aspnetcorerazor", "cshtml"]);
+
 /**
- * Installs the live linter: lints every `aspnetcorerazor` model on open and on
- * (debounced) edit, applying the findings as Monaco markers owned by `OWNER`.
- * Idempotent at the call site (guarded by setupMonacoForLsp).
+ * Installs the live linter for `.razor` (`aspnetcorerazor`) and `.cshtml`
+ * (`cshtml`) models. Both share the same Razor syntax so the same scan logic
+ * applies. Idempotent at the call site (guarded by setupMonacoForLsp).
  */
 export function installRazorHtmlLint(monaco: typeof MonacoNs): void {
-  const RAZOR = "aspnetcorerazor";
   const timers = new Map<string, number>();
 
   const lint = (model: MonacoNs.editor.ITextModel) => {
-    if (model.isDisposed() || model.getLanguageId() !== RAZOR) return;
+    if (model.isDisposed() || !LINTED_LANGUAGES.has(model.getLanguageId())) return;
     monaco.editor.setModelMarkers(
       model,
       OWNER,
@@ -192,14 +193,13 @@ export function installRazorHtmlLint(monaco: typeof MonacoNs): void {
   };
 
   const attach = (model: MonacoNs.editor.ITextModel) => {
-    if (model.getLanguageId() !== RAZOR) return;
+    if (!LINTED_LANGUAGES.has(model.getLanguageId())) return;
     lint(model);
     model.onDidChangeContent(() => schedule(model));
   };
 
   for (const model of monaco.editor.getModels()) attach(model);
   monaco.editor.onDidCreateModel(attach);
-  // A file can switch into the Razor language after creation.
   monaco.editor.onWillDisposeModel((model) => {
     const key = model.uri.toString();
     const t = timers.get(key);
