@@ -14,7 +14,12 @@ import type {
   SearchStreamEvent,
   Session,
 } from "./types";
-import type { AcpEvent, AgentStore } from "./agents/types";
+import type {
+  AcpEvent,
+  AgentMode,
+  AgentStore,
+  RevertPoint,
+} from "./agents/types";
 
 /** Raw shape returned by the Rust `git_status` (snake_case from serde). */
 interface RawGitStatus {
@@ -297,6 +302,38 @@ export function gitBlame(root: string, file: string): Promise<BlameHunk[]> {
   return invoke<BlameHunk[]>("git_blame", { root, file });
 }
 
+interface RawGitSnapshot {
+  snapshot_id: string;
+  head: string;
+}
+
+/**
+ * Captures the working tree at `path` so a later restore can undo what the agent
+ * changes next. Resolves to null when `path` isn't a git repo (revert disabled).
+ */
+export async function gitSnapshotCreate(
+  path: string,
+): Promise<RevertPoint | null> {
+  try {
+    const raw = await invoke<RawGitSnapshot>("git_snapshot_create", { path });
+    return { snapshotId: raw.snapshot_id, head: raw.head };
+  } catch {
+    return null;
+  }
+}
+
+/** Restores the working tree at `path` to a snapshot, discarding agent edits. */
+export function gitSnapshotRestore(
+  path: string,
+  point: RevertPoint,
+): Promise<void> {
+  return invoke("git_snapshot_restore", {
+    path,
+    snapshotId: point.snapshotId,
+    head: point.head,
+  });
+}
+
 export function termCreate(
   id: string,
   cwd: string,
@@ -331,7 +368,7 @@ export function runConfigsDetect(root: string): Promise<RunConfig[]> {
   return invoke<RunConfig[]>("run_configs_detect", { root });
 }
 
-// ---- ACP agents ----
+// ---- Local CLI agents ----
 
 /** Loads agents and conversation history from `<root>/.project/agents.json`. */
 export function agentsLoad(root: string): Promise<AgentStore> {
@@ -344,13 +381,16 @@ export function agentsSave(root: string, store: AgentStore): Promise<void> {
 }
 
 /**
- * Runs one ACP prompt against the selected provider. Text and lifecycle updates
- * are streamed through a request-scoped Tauri channel.
+ * Runs one prompt against the selected local CLI provider. Text and lifecycle
+ * updates are streamed through a request-scoped Tauri channel.
  */
 export function acpPrompt(
   provider: "codex" | "claude",
   workspaceRoot: string,
+  conversationId: string,
+  contextPrompt: string,
   prompt: string,
+  mode: AgentMode,
   onEvent: (event: AcpEvent) => void,
 ): Promise<void> {
   const channel = new Channel<AcpEvent>();
@@ -358,9 +398,22 @@ export function acpPrompt(
   return invoke("acp_prompt", {
     provider,
     workspaceRoot,
+    conversationId,
+    contextPrompt,
     prompt,
+    mode,
     onEvent: channel,
   });
+}
+
+/** Interrupts the in-flight turn while preserving any streamed response. */
+export function acpCancel(): Promise<void> {
+  return invoke("acp_cancel");
+}
+
+/** Stops cached provider processes and sessions associated with a workspace. */
+export function acpStopWorkspace(workspaceRoot: string): Promise<void> {
+  return invoke("acp_stop_workspace", { workspaceRoot });
 }
 
 // ---- Session (reopen last project + tabs on launch) ----
