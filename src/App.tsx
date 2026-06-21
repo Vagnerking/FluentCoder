@@ -23,6 +23,7 @@ import { Codicon } from "./icons/codicons/Codicon";
 import {
   acpCancel,
   acpPrompt,
+  acpStopWorkspace,
   agentsLoad,
   agentsSave,
   buildSearchIndex,
@@ -329,6 +330,7 @@ export default function App() {
 
     return () => {
       cancelled = true;
+      void acpStopWorkspace(rootPath).catch(() => {});
     };
   }, [rootPath]);
 
@@ -519,8 +521,22 @@ export default function App() {
 
     // In write-capable modes, snapshot the working tree first so this request is
     // individually revertible (no-op/null when the folder isn't a git repo).
-    const revert =
-      mode === "ask" ? null : await gitSnapshotCreate(sendRoot);
+    setAgentBusy(true);
+    setAgentError(null);
+    setAgentStatus(
+      mode === "ask"
+        ? "Preparando a conversa…"
+        : "Criando ponto de restauração…",
+    );
+    let revert: AgentMessage["revert"] | null;
+    try {
+      revert = mode === "ask" ? null : await gitSnapshotCreate(sendRoot);
+    } catch (error) {
+      setAgentError(String(error));
+      setAgentStatus(null);
+      setAgentBusy(false);
+      return;
+    }
 
     const now = new Date().toISOString();
     const userMessage: AgentMessage = {
@@ -539,7 +555,11 @@ export default function App() {
       createdAt: now,
       status: "streaming",
     };
-    const prompt = buildAgentPrompt(agent, conversation.messages, message);
+    const contextPrompt = buildAgentPrompt(
+      agent,
+      conversation.messages,
+      message,
+    );
 
     // Apply an update by reconciling over the *current* store (functional
     // update), never a captured snapshot — so concurrent edits (rename/delete/
@@ -560,31 +580,79 @@ export default function App() {
       return reconciled;
     };
 
-    const persistForSend = async (store: AgentStore | null) => {
-      if (!store || isStaleWorkspace()) return;
-      try {
-        await agentsSave(sendRoot, store);
-      } catch (error) {
-        setAgentError(String(error));
+    // Serialize saves so the initial optimistic state can be persisted in the
+    // background without delaying provider startup or racing the final save.
+    let saveQueue = Promise.resolve();
+    const persistForSend = (store: AgentStore | null): Promise<void> => {
+      if (!store || isStaleWorkspace()) return saveQueue;
+      saveQueue = saveQueue
+        .then(() => agentsSave(sendRoot, store))
+        .catch((error) => {
+          setAgentError(String(error));
+        });
+      return saveQueue;
+    };
+
+    setAgentStatus("Conectando ao agente…");
+    void persistForSend(
+      applyToConversation((current) => ({
+        ...current,
+        title:
+          current.messages.length === 0
+            ? message.slice(0, 52) || "Nova conversa"
+            : current.title,
+        messages: [...current.messages, userMessage, assistantMessage],
+        updatedAt: now,
+      })),
+    );
+
+    // Codex can emit deltas menores que uma palavra. Coalescing them into one
+    // React update per frame avoids re-rendering the full Markdown on every
+    // token while preserving visibly smooth streaming.
+    let pendingAssistantText = "";
+    let textFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushAssistantText = () => {
+      if (textFlushTimer !== null) {
+        clearTimeout(textFlushTimer);
+        textFlushTimer = null;
+      }
+      if (!pendingAssistantText || isStaleWorkspace()) return;
+      const content = pendingAssistantText;
+      pendingAssistantText = "";
+      applyToConversation((current) => ({
+        ...current,
+        messages: current.messages.map((candidate) =>
+          candidate.id === assistantMessage.id
+            ? {
+                ...candidate,
+                content: candidate.content + content,
+                status: "streaming",
+              }
+            : candidate,
+        ),
+        updatedAt: new Date().toISOString(),
+      }));
+    };
+    const appendAssistantText = (content: string) => {
+      pendingAssistantText += content;
+      if (textFlushTimer === null) {
+        textFlushTimer = setTimeout(flushAssistantText, 24);
       }
     };
 
-    // Marks the assistant message done/error and persists the conversation.
-    // Persistence must not wait for `acpPrompt` to resolve: some adapters (e.g.
-    // Codex's) keep their stdio subprocess alive after the reply, so the promise
-    // settles late or only when the process finally exits. Finalizing on the
-    // `done` event — and incrementally while streaming — makes the reply durable
-    // the moment it's shown, and lets Stop keep whatever already arrived.
-    // Idempotent: the first finalize wins, later calls (the post-await safety
-    // net, a `done` racing the resolve) are ignored.
-    let finalized = false;
-    const finalizeAssistant = async (
+    // Finalization is event-driven so Stop immediately preserves the partial
+    // response. Text deltas remain batched in memory and are flushed once here,
+    // avoiding one disk write and Markdown render per token.
+    let finalizePromise: Promise<void> | null = null;
+    let wasCancelled = false;
+    const finalizeAssistant = (
       status: "done" | "error",
       fallback: string,
-    ) => {
-      if (finalized || isStaleWorkspace()) return;
-      finalized = true;
-      await persistForSend(
+    ): Promise<void> => {
+      if (isStaleWorkspace()) return Promise.resolve();
+      if (finalizePromise) return finalizePromise;
+      flushAssistantText();
+      finalizePromise = persistForSend(
         applyToConversation((current) => ({
           ...current,
           messages: current.messages.map((candidate) =>
@@ -599,61 +667,42 @@ export default function App() {
           updatedAt: new Date().toISOString(),
         })),
       );
+      return finalizePromise;
     };
 
-    setAgentBusy(true);
-    setAgentError(null);
-    setAgentStatus("Conectando ao provedor ACP…");
-    await persistForSend(
-      applyToConversation((current) => ({
-        ...current,
-        title:
-          current.messages.length === 0
-            ? message.slice(0, 52) || "Nova conversa"
-            : current.title,
-        messages: [...current.messages, userMessage, assistantMessage],
-        updatedAt: now,
-      })),
-    );
-
     try {
-      await acpPrompt(agent.provider, sendRoot, prompt, mode, (event) => {
-        // Discard events that arrived after a workspace switch.
-        if (isStaleWorkspace()) return;
-        if (event.type === "status") {
-          setAgentStatus(event.message);
-          return;
-        }
-        if (event.type === "text") {
-          setAgentStatus("Recebendo resposta…");
-          const updated = applyToConversation((current) => ({
-            ...current,
-            messages: current.messages.map((candidate) =>
-              candidate.id === assistantMessage.id
-                ? {
-                    ...candidate,
-                    content: candidate.content + event.content,
-                    status: "streaming",
-                  }
-                : candidate,
-            ),
-            updatedAt: new Date().toISOString(),
-          }));
-          // Persist each streamed chunk so a crash/quit/Stop mid-stream keeps
-          // what already arrived. Fire-and-forget: the handler stays responsive
-          // and the final finalize still writes the authoritative copy.
-          void persistForSend(updated);
-          return;
-        }
-        if (event.type === "done") {
-          void finalizeAssistant(
-            "done",
-            "O agente encerrou a resposta sem conteúdo textual.",
-          );
-          return;
-        }
-        if (event.type === "error") setAgentError(event.message);
-      });
+      await acpPrompt(
+        agent.provider,
+        sendRoot,
+        conversation.id,
+        contextPrompt,
+        message,
+        mode,
+        (event) => {
+          // Discard events that arrived after a workspace switch.
+          if (isStaleWorkspace()) return;
+          if (event.type === "status") {
+            setAgentStatus(event.message);
+            return;
+          }
+          if (event.type === "text") {
+            setAgentStatus("Recebendo resposta…");
+            appendAssistantText(event.content);
+            return;
+          }
+          if (event.type === "done") {
+            wasCancelled = event.stopReason.toLowerCase() === "cancelled";
+            void finalizeAssistant(
+              "done",
+              wasCancelled
+                ? "Execução interrompida pelo usuário."
+                : "O agente encerrou a resposta sem conteúdo textual.",
+            );
+            return;
+          }
+          if (event.type === "error") setAgentError(event.message);
+        },
+      );
 
       if (isStaleWorkspace()) return;
       // Safety net: if no `done` event arrived (older adapter, abrupt close),
@@ -662,9 +711,12 @@ export default function App() {
         "done",
         "O agente encerrou a resposta sem conteúdo textual.",
       );
-      setAgentStatus("Resposta concluída.");
+      setAgentStatus(
+        wasCancelled ? "Execução interrompida." : "Resposta concluída.",
+      );
     } catch (error) {
       if (isStaleWorkspace()) return;
+      flushAssistantText();
       const messageText = String(error);
       await finalizeAssistant("error", messageText);
       setAgentError(messageText);
@@ -672,15 +724,12 @@ export default function App() {
     } finally {
       // agentBusy is global UI state — always release it, even after a workspace
       // switch, or the new workspace would stay stuck "busy".
+      if (textFlushTimer !== null) clearTimeout(textFlushTimer);
       setAgentBusy(false);
     }
   }
 
-  /**
-   * Stops the in-flight agent prompt. Kills the adapter subprocess on the Rust
-   * side; the partial reply already streamed is preserved (persisted on each
-   * chunk), and the backend emits a `Cancelled` Done that finalizes the message.
-   */
+  /** Stops the current turn and preserves the response received so far. */
   function handleStopAgent() {
     if (!agentBusy) return;
     setAgentStatus("Parando o agente…");

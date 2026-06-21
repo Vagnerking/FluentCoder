@@ -18,7 +18,7 @@ export type AgentMessageRole = "user" | "assistant";
  * provider's native modes:
  * - `ask`:  read-only. The agent may only answer; no file writes.
  * - `plan`: read-only for code, but may write `.md` plan files.
- * - `dev`:  full read/write. Permissions are auto-approved (bypass).
+ * - `dev`:  read/write inside the workspace; native provider sandbox stays on.
  */
 export type AgentMode = "ask" | "plan" | "dev";
 

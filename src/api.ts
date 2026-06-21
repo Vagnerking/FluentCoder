@@ -324,7 +324,7 @@ export function runConfigsDetect(root: string): Promise<RunConfig[]> {
   return invoke<RunConfig[]>("run_configs_detect", { root });
 }
 
-// ---- ACP agents ----
+// ---- Local CLI agents ----
 
 /** Loads agents and conversation history from `<root>/.project/agents.json`. */
 export function agentsLoad(root: string): Promise<AgentStore> {
@@ -337,12 +337,14 @@ export function agentsSave(root: string, store: AgentStore): Promise<void> {
 }
 
 /**
- * Runs one ACP prompt against the selected provider. Text and lifecycle updates
- * are streamed through a request-scoped Tauri channel.
+ * Runs one prompt against the selected local CLI provider. Text and lifecycle
+ * updates are streamed through a request-scoped Tauri channel.
  */
 export function acpPrompt(
   provider: "codex" | "claude",
   workspaceRoot: string,
+  conversationId: string,
+  contextPrompt: string,
   prompt: string,
   mode: AgentMode,
   onEvent: (event: AcpEvent) => void,
@@ -352,18 +354,22 @@ export function acpPrompt(
   return invoke("acp_prompt", {
     provider,
     workspaceRoot,
+    conversationId,
+    contextPrompt,
     prompt,
     mode,
     onEvent: channel,
   });
 }
 
-/**
- * Cancels the in-flight ACP prompt, if any. Kills the adapter subprocess so the
- * agent stops working in the background; a no-op when nothing is running.
- */
+/** Interrupts the in-flight turn while preserving any streamed response. */
 export function acpCancel(): Promise<void> {
   return invoke("acp_cancel");
+}
+
+/** Stops cached provider processes and sessions associated with a workspace. */
+export function acpStopWorkspace(workspaceRoot: string): Promise<void> {
+  return invoke("acp_stop_workspace", { workspaceRoot });
 }
 
 // ---- Session (reopen last project on launch) ----
