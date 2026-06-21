@@ -72,8 +72,28 @@ export function StatusBar({
   onShowProblems,
   onSelectTsVersion,
 }: StatusBarProps) {
+  // Friendly language names (VSCode-style) so the status bar reads nicely —
+  // e.g. "ASP.NET Razor" instead of the raw id "aspnetcorerazor".
+  const LANGUAGE_LABELS: Record<string, string> = {
+    aspnetcorerazor: "ASP.NET Razor",
+    csharp: "C#",
+    typescript: "TypeScript",
+    typescriptreact: "TypeScript JSX",
+    javascript: "JavaScript",
+    javascriptreact: "JavaScript JSX",
+    cpp: "C++",
+    css: "CSS",
+    scss: "SCSS",
+    less: "Less",
+    html: "HTML",
+    json: "JSON",
+    yaml: "YAML",
+    dockerfile: "Dockerfile",
+    shell: "Shell Script",
+  };
   const langDisplay = language
-    ? language.charAt(0).toUpperCase() + language.slice(1)
+    ? (LANGUAGE_LABELS[language] ??
+        language.charAt(0).toUpperCase() + language.slice(1))
     : "";
 
   // The LSP actions menu (Restart, …) anchored above the clicked server item.
