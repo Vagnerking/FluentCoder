@@ -1,3 +1,4 @@
+mod agents;
 mod file_index;
 mod fs_commands;
 mod git;
@@ -19,6 +20,9 @@ pub fn run() {
         .manage(lsp::LspState::new())
         .manage(search::SearchState::new())
         .invoke_handler(tauri::generate_handler![
+            agents::agents_load,
+            agents::agents_save,
+            agents::acp_prompt,
             fs_commands::read_dir,
             fs_commands::read_file,
             fs_commands::read_file_base64,
@@ -35,6 +39,9 @@ pub fn run() {
             search::build_search_index,
             file_index::list_project_files,
             git::git_branch,
+            git::git_branches,
+            git::git_checkout,
+            git::git_create_branch,
             git::git_status,
             git::git_stage,
             git::git_unstage,
@@ -51,6 +58,7 @@ pub fn run() {
             runner::run_configs_detect,
             session::session_load,
             session::session_set_last_folder,
+            session::session_set_open_files,
             window::open_new_window,
             window::is_fresh_window,
             terminal::term_create,

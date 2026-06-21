@@ -17,9 +17,18 @@ import { TerminalPanel, type PanelTab } from "./components/TerminalPanel";
 import { QuickOpen } from "./components/QuickOpen";
 import { AboutDialog } from "./components/AboutDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
+import { AgentsPanel } from "./components/AgentsPanel";
+import { AgentWorkspace } from "./components/AgentWorkspace";
+import { BranchPicker } from "./components/BranchPicker";
+import { Codicon } from "./icons/codicons/Codicon";
 import {
+  acpPrompt,
+  agentsLoad,
+  agentsSave,
   buildSearchIndex,
   gitBranch,
+  gitCheckout,
+  gitCreateBranch,
   gitStatus,
   isFreshWindow,
   openNewWindow,
@@ -30,6 +39,7 @@ import {
   readFile,
   sessionLoad,
   sessionSetLastFolder,
+  sessionSetOpenFiles,
   writeFile,
 } from "./api";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -47,6 +57,7 @@ import type {
   MenuDef,
   OpenFile,
   OpenMode,
+  OpenTab,
   Problem,
 } from "./types";
 import type { LspServerStatus } from "./components/StatusBar";
@@ -56,6 +67,20 @@ import {
   navigationTarget,
   recordNavigation,
 } from "./navigationHistory";
+import {
+  buildAgentPrompt,
+  createLocalId,
+  EMPTY_AGENT_STORE,
+  normalizeAgentStore,
+  replaceConversation,
+} from "./agents/store";
+import type {
+  AgentConversation,
+  AgentDraft,
+  AgentMessage,
+  AgentSelection,
+  AgentStore,
+} from "./agents/types";
 
 /** Returns the last path segment, handling both Windows and POSIX separators. */
 function baseName(path: string): string {
@@ -173,6 +198,11 @@ export default function App() {
   const navigationHistoryRef = useRef(createNavigationHistory());
   const historyNavigationTargetRef = useRef<string | null>(null);
   const historyNavigationPendingRef = useRef(false);
+  // True while the launch-time restore is reopening saved tabs. Guards the
+  // session-save effect so the partial state mid-restore never overwrites the
+  // good session on disk (e.g. saving an empty tab list before the first tab
+  // reopens). Cleared once the restore finishes.
+  const restoringSessionRef = useRef(false);
 
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelHeight, setPanelHeight] = useState(() =>
@@ -192,6 +222,14 @@ export default function App() {
   const [panelTabNonce, setPanelTabNonce] = useState(0);
   const [activeView, setActiveView] = useState("explorer");
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
+  const [branchPickerOpen, setBranchPickerOpen] = useState(false);
+  const [agentStore, setAgentStore] = useState<AgentStore>(() => ({
+    ...EMPTY_AGENT_STORE,
+  }));
+  const [agentSelection, setAgentSelection] = useState<AgentSelection>(null);
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [agentStatus, setAgentStatus] = useState<string | null>(null);
+  const [agentError, setAgentError] = useState<string | null>(null);
 
   // "Open With…" selector (ISSUE-70): the file + anchor point while it's shown.
   const [openWith, setOpenWith] = useState<
@@ -403,6 +441,46 @@ export default function App() {
     gitStatus(rootPath).then(setGitState).catch(() => setGitState(null));
   }, [rootPath]);
 
+  /**
+   * Re-syncs everything that a branch switch changes (issue #16): the status-bar
+   * branch, the git decorations, and the explorer tree (files differ between
+   * branches). Shared by checkout and create-branch.
+   */
+  const refreshAfterCheckout = useCallback(async () => {
+    if (!rootPath) return;
+    gitBranch(rootPath).then(setBranch).catch(() => setBranch(null));
+    await refreshExplorerRoot();
+  }, [rootPath, refreshExplorerRoot]);
+
+  /** Checks out an existing branch, then re-syncs branch/status/tree. */
+  const handleCheckoutBranch = useCallback(
+    async (branchName: string) => {
+      if (!rootPath) return;
+      try {
+        await gitCheckout(rootPath, branchName);
+        await refreshAfterCheckout();
+      } catch (err) {
+        console.error(err);
+        alert(`Não foi possível trocar de branch:\n${err}`);
+      }
+    },
+    [rootPath, refreshAfterCheckout]
+  );
+
+  /** Prompts for a name, creates a branch from HEAD, then re-syncs. */
+  const handleCreateBranch = useCallback(async () => {
+    if (!rootPath) return;
+    const name = window.prompt("Nome da nova branch:")?.trim();
+    if (!name) return;
+    try {
+      await gitCreateBranch(rootPath, name);
+      await refreshAfterCheckout();
+    } catch (err) {
+      console.error(err);
+      alert(`Não foi possível criar a branch:\n${err}`);
+    }
+  }, [rootPath, refreshAfterCheckout]);
+
   /** Native folder picker → load top-level entries into the explorer. */
   async function handleOpenFolder() {
     const folder = await pickFolder();
@@ -513,20 +591,371 @@ export default function App() {
     setActivePath(path);
   }, []);
 
-  // On launch, reopen the last project folder (if any). Restore is silent so a
-  // folder that was moved/deleted doesn't greet the user with an error dialog. A
-  // window launched fresh (File ▸ New Window → `--new`) starts empty instead.
+  // On launch, reopen the last project folder and the tabs that were open in it
+  // (issue #7) — unless this is a fresh window (File ▸ New Window → `--new`),
+  // which starts empty. Restore is silent so a moved/deleted folder/file doesn't
+  // greet the user with an error dialog. The `restoringSessionRef` guard keeps
+  // the session-save effect from overwriting the good session with the partial
+  // state produced while tabs are reopening.
   useEffect(() => {
-    isFreshWindow()
-      .then((fresh) => {
-        if (fresh) return;
-        return sessionLoad().then((s) => {
-          if (s.lastFolder) openFolder(s.lastFolder, { silent: true });
-        });
-      })
-      .catch((err) => console.error("Falha ao restaurar sessão:", err));
-    // openFolder is stable (useCallback []), so this runs exactly once.
+    restoringSessionRef.current = true;
+    (async () => {
+      let fresh = false;
+      try {
+        fresh = await isFreshWindow();
+      } catch (err) {
+        console.error("Falha ao verificar se a janela é nova:", err);
+      }
+      if (fresh) {
+        // A fresh window starts empty — nothing to restore, and saves are allowed.
+        restoringSessionRef.current = false;
+        return;
+      }
+
+      let s: Awaited<ReturnType<typeof sessionLoad>>;
+      try {
+        s = await sessionLoad();
+      } catch (err) {
+        console.error("Falha ao restaurar sessão:", err);
+        restoringSessionRef.current = false;
+        return;
+      }
+
+      // Open the folder first so the explorer/rootPath are ready before tabs
+      // reopen (handleOpenFile resolves paths against the loaded project).
+      if (s.lastFolder) await openFolder(s.lastFolder, { silent: true });
+
+      // Reopen tabs in their saved order, skipping any file that no longer
+      // exists (handleOpenFile returns false silently). Re-read content from
+      // disk — only the path + view mode were persisted.
+      const restored: OpenTab[] = [];
+      for (const tab of s.openTabs) {
+        const node: FileNode = {
+          name: baseName(tab.path),
+          path: tab.path,
+          isDir: false,
+        };
+        const ok = await handleOpenFileRef.current(
+          node,
+          undefined,
+          tab.mode,
+          undefined,
+          { silent: true }
+        );
+        if (ok) restored.push(tab);
+      }
+
+      // Focus the tab that was active, if it survived the restore.
+      const activeRestored =
+        s.activePath && restored.some((t) => t.path === s.activePath)
+          ? s.activePath
+          : restored.length > 0
+            ? restored[restored.length - 1].path
+            : null;
+      if (activeRestored) setActivePath(activeRestored);
+
+      restoringSessionRef.current = false;
+
+      // If any saved file was skipped (deleted/moved), the on-disk session is now
+      // stale — rewrite it with exactly what was restored so those dead entries
+      // are dropped. No-op when nothing was skipped.
+      if (restored.length !== s.openTabs.length) {
+        sessionSetOpenFiles(restored, activeRestored).catch((err) =>
+          console.error("Falha ao limpar abas inexistentes da sessão:", err)
+        );
+      }
+    })();
+    // openFolder is stable (useCallback []); handleOpenFile is read via ref, so
+    // this effect runs exactly once.
   }, [openFolder]);
+
+  // Agent definitions and histories are isolated per workspace.
+  useEffect(() => {
+    let cancelled = false;
+    setAgentSelection(null);
+    setAgentError(null);
+    setAgentStatus(null);
+
+    if (!rootPath) {
+      setAgentStore({ ...EMPTY_AGENT_STORE });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    agentsLoad(rootPath)
+      .then((store) => {
+        if (!cancelled) setAgentStore(normalizeAgentStore(store));
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setAgentStore({ ...EMPTY_AGENT_STORE });
+          setAgentError(String(error));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [rootPath]);
+
+  const persistAgentStore = useCallback(
+    async (next: AgentStore) => {
+      setAgentStore(next);
+      if (!rootPath) return;
+      try {
+        await agentsSave(rootPath, next);
+      } catch (error) {
+        setAgentError(String(error));
+      }
+    },
+    [rootPath],
+  );
+
+  function createAgentConversation(agentId: string): AgentConversation {
+    const now = new Date().toISOString();
+    return {
+      id: createLocalId("conversation"),
+      agentId,
+      title: "Nova conversa",
+      messages: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  function handleCreateAgent() {
+    if (!rootPath) return;
+    setActiveView("agents");
+    setAgentSelection({ kind: "config", agentId: null });
+    setAgentError(null);
+  }
+
+  function handleEditAgent(agentId: string) {
+    setActiveView("agents");
+    setAgentSelection({ kind: "config", agentId });
+    setAgentError(null);
+  }
+
+  function handleSaveAgent(draft: AgentDraft) {
+    if (!rootPath) return;
+    const now = new Date().toISOString();
+    const existing = draft.id
+      ? agentStore.agents.find((agent) => agent.id === draft.id)
+      : undefined;
+    const agentId = existing?.id ?? createLocalId("agent");
+    const definition = {
+      id: agentId,
+      name: draft.name,
+      color: draft.color,
+      initialPrompt: draft.initialPrompt,
+      provider: draft.provider,
+      workspacePath: rootPath,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+    const agents = existing
+      ? agentStore.agents.map((agent) =>
+          agent.id === agentId ? definition : agent,
+        )
+      : [...agentStore.agents, definition];
+    const latest = [...agentStore.conversations]
+      .filter((conversation) => conversation.agentId === agentId)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    const conversation = latest ?? createAgentConversation(agentId);
+    const conversations = latest
+      ? agentStore.conversations
+      : [...agentStore.conversations, conversation];
+    const next = { ...agentStore, agents, conversations };
+    void persistAgentStore(next);
+    setAgentSelection({
+      kind: "chat",
+      agentId,
+      conversationId: conversation.id,
+    });
+  }
+
+  function handleSelectAgent(agentId: string) {
+    const latest = [...agentStore.conversations]
+      .filter((conversation) => conversation.agentId === agentId)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    if (latest) {
+      setAgentSelection({
+        kind: "chat",
+        agentId,
+        conversationId: latest.id,
+      });
+      return;
+    }
+    handleNewAgentConversation(agentId);
+  }
+
+  function handleNewAgentConversation(agentId: string) {
+    const conversation = createAgentConversation(agentId);
+    const next = {
+      ...agentStore,
+      conversations: [...agentStore.conversations, conversation],
+    };
+    void persistAgentStore(next);
+    setAgentSelection({
+      kind: "chat",
+      agentId,
+      conversationId: conversation.id,
+    });
+  }
+
+  function handleRenameAgent(agentId: string, name: string) {
+    const now = new Date().toISOString();
+    void persistAgentStore({
+      ...agentStore,
+      agents: agentStore.agents.map((agent) =>
+        agent.id === agentId ? { ...agent, name, updatedAt: now } : agent,
+      ),
+    });
+  }
+
+  function handleDeleteAgent(agentId: string) {
+    void persistAgentStore({
+      ...agentStore,
+      agents: agentStore.agents.filter((agent) => agent.id !== agentId),
+      conversations: agentStore.conversations.filter(
+        (conversation) => conversation.agentId !== agentId,
+      ),
+    });
+    if (agentSelection?.agentId === agentId) setAgentSelection(null);
+  }
+
+  function handleOpenAgentConversation(conversation: AgentConversation) {
+    setAgentSelection({
+      kind: "chat",
+      agentId: conversation.agentId,
+      conversationId: conversation.id,
+    });
+  }
+
+  async function handleSendAgentMessage(message: string) {
+    if (!rootPath || agentSelection?.kind !== "chat" || agentBusy) return;
+    const agent = agentStore.agents.find(
+      (candidate) => candidate.id === agentSelection.agentId,
+    );
+    const conversation = agentStore.conversations.find(
+      (candidate) => candidate.id === agentSelection.conversationId,
+    );
+    if (!agent || !conversation) return;
+
+    const now = new Date().toISOString();
+    const userMessage: AgentMessage = {
+      id: createLocalId("message"),
+      role: "user",
+      content: message,
+      createdAt: now,
+      status: "done",
+    };
+    const assistantMessage: AgentMessage = {
+      id: createLocalId("message"),
+      role: "assistant",
+      content: "",
+      createdAt: now,
+      status: "streaming",
+    };
+    const prompt = buildAgentPrompt(agent, conversation.messages, message);
+    let workingStore = replaceConversation(
+      agentStore,
+      conversation.id,
+      (current) => ({
+        ...current,
+        title:
+          current.messages.length === 0
+            ? message.slice(0, 52) || "Nova conversa"
+            : current.title,
+        messages: [...current.messages, userMessage, assistantMessage],
+        updatedAt: now,
+      }),
+    );
+
+    setAgentBusy(true);
+    setAgentError(null);
+    setAgentStatus("Conectando ao provedor ACP…");
+    await persistAgentStore(workingStore);
+
+    try {
+      await acpPrompt(agent.provider, rootPath, prompt, (event) => {
+        if (event.type === "status") {
+          setAgentStatus(event.message);
+          return;
+        }
+        if (event.type === "text") {
+          setAgentStatus("Recebendo resposta…");
+          workingStore = replaceConversation(
+            workingStore,
+            conversation.id,
+            (current) => ({
+              ...current,
+              messages: current.messages.map((candidate) =>
+                candidate.id === assistantMessage.id
+                  ? {
+                      ...candidate,
+                      content: candidate.content + event.content,
+                      status: "streaming",
+                    }
+                  : candidate,
+              ),
+              updatedAt: new Date().toISOString(),
+            }),
+          );
+          setAgentStore(workingStore);
+          return;
+        }
+        if (event.type === "error") setAgentError(event.message);
+      });
+
+      workingStore = replaceConversation(
+        workingStore,
+        conversation.id,
+        (current) => ({
+          ...current,
+          messages: current.messages.map((candidate) =>
+            candidate.id === assistantMessage.id
+              ? {
+                  ...candidate,
+                  content:
+                    candidate.content ||
+                    "O agente encerrou a resposta sem conteúdo textual.",
+                  status: "done",
+                }
+              : candidate,
+          ),
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      await persistAgentStore(workingStore);
+      setAgentStatus("Resposta concluída.");
+    } catch (error) {
+      const messageText = String(error);
+      workingStore = replaceConversation(
+        workingStore,
+        conversation.id,
+        (current) => ({
+          ...current,
+          messages: current.messages.map((candidate) =>
+            candidate.id === assistantMessage.id
+              ? {
+                  ...candidate,
+                  content: candidate.content || messageText,
+                  status: "error",
+                }
+              : candidate,
+          ),
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      await persistAgentStore(workingStore);
+      setAgentError(messageText);
+      setAgentStatus(null);
+    } finally {
+      setAgentBusy(false);
+    }
+  }
 
   /**
    * Open a file in a tab (or focus it if already open), optionally at a line.
@@ -534,13 +963,18 @@ export default function App() {
    * `mode` (ISSUE-70) picks the view: omitted ⇒ the file type's default (images
    * preview, everything else text). Image-mode tabs don't read text content —
    * the {@link ImagePreview} loads the bytes itself — so we skip `readFile`.
+   *
+   * `opts.silent` swallows the read-error alert and returns `false` instead —
+   * used by the launch-time tab restore so a since-deleted file is skipped
+   * quietly rather than popping a dialog on startup (issue #7).
    */
   const handleOpenFile = useCallback(
     async (
       node: FileNode,
       line?: number,
       mode?: OpenMode,
-      selection?: MatchSelection
+      selection?: MatchSelection,
+      opts?: { silent?: boolean }
     ): Promise<boolean> => {
       if (node.isDir) return false;
 
@@ -585,7 +1019,7 @@ export default function App() {
         return true;
       } catch (err) {
         console.error(err);
-        alert(`Não foi possível abrir o arquivo:\n${err}`);
+        if (!opts?.silent) alert(`Não foi possível abrir o arquivo:\n${err}`);
         return false;
       }
     },
@@ -835,6 +1269,29 @@ export default function App() {
   openFilesRef.current = openFiles;
   const activePathRef = useRef<string | null>(activePath);
   activePathRef.current = activePath;
+  // Latest handleOpenFile, so the run-once boot restore can reopen tabs without
+  // listing the (per-keystroke-changing) callback in its dependency array.
+  const handleOpenFileRef = useRef(handleOpenFile);
+  handleOpenFileRef.current = handleOpenFile;
+
+  // Persist the open tabs + active tab whenever they change, debounced so we
+  // don't hit the disk on every keystroke that touches `openFiles` (e.g. the
+  // dirty flag). Skipped while the launch restore is still reopening tabs, so
+  // the partial mid-restore state never clobbers the saved session (issue #7).
+  // Only the path + view mode are sent; content is re-read from disk on reopen.
+  useEffect(() => {
+    if (restoringSessionRef.current) return;
+    const timer = window.setTimeout(() => {
+      const tabs: OpenTab[] = openFiles.map((f) => ({
+        path: f.path,
+        mode: f.mode,
+      }));
+      sessionSetOpenFiles(tabs, activePath).catch((err) =>
+        console.error("Falha ao salvar abas da sessão:", err)
+      );
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [openFiles, activePath]);
 
   /**
    * Batch unsaved-changes guard for actions that drop the whole session at once
@@ -1294,61 +1751,61 @@ export default function App() {
   // inputs the items capture change (handlers are stable; flags are reactive).
   const menus: MenuDef[] = useMemo(() => {
     const fileMenu: MenuDef = {
-      label: "File",
+      label: "Arquivo",
       items: [
         {
           id: "file.newTextFile",
-          label: "New Text File",
+          label: "Novo Arquivo de Texto",
           accelerator: "Ctrl+N",
           run: handleNewTextFile,
         },
-        { id: "file.newFile", label: "New File", run: handleNewTextFile },
+        { id: "file.newFile", label: "Novo Arquivo", run: handleNewTextFile },
         {
           id: "file.newWindow",
-          label: "New Window",
+          label: "Nova Janela",
           run: handleNewWindow,
         },
         { id: "file.sep1", label: "", separator: true },
         {
           id: "file.open",
-          label: "Open File…",
+          label: "Abrir Arquivo…",
           accelerator: "Ctrl+O",
           run: handleOpenFileDialog,
         },
         {
           id: "file.openFolder",
-          label: "Open Folder…",
+          label: "Abrir Pasta…",
           accelerator: "Ctrl+K Ctrl+O",
           run: handleOpenFolder,
         },
         { id: "file.sep2", label: "", separator: true },
         {
           id: "file.save",
-          label: "Save",
+          label: "Salvar",
           accelerator: "Ctrl+S",
           enabled: hasEditor,
           run: hasEditor ? handleSave : undefined,
         },
         {
           id: "file.saveAs",
-          label: "Save As…",
+          label: "Salvar Como…",
           accelerator: "Ctrl+Shift+S",
           enabled: hasEditor,
           run: hasEditor ? handleSaveAs : undefined,
         },
         { id: "file.sep3", label: "", separator: true },
-        { id: "file.autoSave", label: "Auto Save", enabled: false },
-        { id: "file.revert", label: "Revert File", enabled: false },
+        { id: "file.autoSave", label: "Salvamento Automático", enabled: false },
+        { id: "file.revert", label: "Reverter Arquivo", enabled: false },
         { id: "file.sep4", label: "", separator: true },
         {
           id: "file.closeEditor",
-          label: "Close Editor",
+          label: "Fechar Editor",
           enabled: hasEditor,
           run: hasEditor && activePath ? () => handleCloseTab(activePath) : undefined,
         },
         {
           id: "file.closeFolder",
-          label: "Close Folder",
+          label: "Fechar Pasta",
           enabled: rootPath != null,
           run: rootPath != null ? handleCloseFolder : undefined,
         },
@@ -1359,23 +1816,23 @@ export default function App() {
           run: () => getCurrentWindow().close(),
         },
         { id: "file.sep5", label: "", separator: true },
-        { id: "file.exit", label: "Exit", run: () => getCurrentWindow().close() },
+        { id: "file.exit", label: "Sair", run: () => getCurrentWindow().close() },
       ],
     };
 
     const editMenu: MenuDef = {
-      label: "Edit",
+      label: "Editar",
       items: [
         {
           id: "edit.undo",
-          label: "Undo",
+          label: "Desfazer",
           accelerator: "Ctrl+Z",
           enabled: hasEditor,
           run: hasEditor ? () => runEditorAction("undo") : undefined,
         },
         {
           id: "edit.redo",
-          label: "Redo",
+          label: "Refazer",
           accelerator: "Ctrl+Y",
           enabled: hasEditor,
           run: hasEditor ? () => runEditorAction("redo") : undefined,
@@ -1383,7 +1840,7 @@ export default function App() {
         { id: "edit.sep1", label: "", separator: true },
         {
           id: "edit.cut",
-          label: "Cut",
+          label: "Recortar",
           accelerator: "Ctrl+X",
           enabled: hasEditor,
           run: hasEditor
@@ -1392,7 +1849,7 @@ export default function App() {
         },
         {
           id: "edit.copy",
-          label: "Copy",
+          label: "Copiar",
           accelerator: "Ctrl+C",
           enabled: hasEditor,
           run: hasEditor
@@ -1401,7 +1858,7 @@ export default function App() {
         },
         {
           id: "edit.paste",
-          label: "Paste",
+          label: "Colar",
           accelerator: "Ctrl+V",
           enabled: hasEditor,
           run: hasEditor
@@ -1411,14 +1868,14 @@ export default function App() {
         { id: "edit.sep2", label: "", separator: true },
         {
           id: "edit.find",
-          label: "Find",
+          label: "Localizar",
           accelerator: "Ctrl+F",
           enabled: hasEditor,
           run: hasEditor ? () => runEditorAction("actions.find") : undefined,
         },
         {
           id: "edit.replace",
-          label: "Replace",
+          label: "Substituir",
           accelerator: "Ctrl+H",
           enabled: hasEditor,
           run: hasEditor
@@ -1428,25 +1885,25 @@ export default function App() {
         { id: "edit.sep3", label: "", separator: true },
         {
           id: "edit.findInFiles",
-          label: "Find in Files",
+          label: "Localizar nos Arquivos",
           run: () => setActiveView("search"),
         },
       ],
     };
 
     const selectionMenu: MenuDef = {
-      label: "Selection",
+      label: "Seleção",
       items: [
         {
           id: "selection.selectAll",
-          label: "Select All",
+          label: "Selecionar Tudo",
           accelerator: "Ctrl+A",
           enabled: hasEditor,
           run: hasEditor ? () => runEditorAction("editor.action.selectAll") : undefined,
         },
         {
           id: "selection.expand",
-          label: "Expand Selection",
+          label: "Expandir Seleção",
           enabled: hasEditor,
           run: hasEditor
             ? () => runEditorAction("editor.action.smartSelect.expand")
@@ -1454,7 +1911,7 @@ export default function App() {
         },
         {
           id: "selection.shrink",
-          label: "Shrink Selection",
+          label: "Reduzir Seleção",
           enabled: hasEditor,
           run: hasEditor
             ? () => runEditorAction("editor.action.smartSelect.shrink")
@@ -1463,7 +1920,7 @@ export default function App() {
         { id: "selection.sep1", label: "", separator: true },
         {
           id: "selection.copyLineUp",
-          label: "Copy Line Up",
+          label: "Copiar Linha Acima",
           enabled: hasEditor,
           run: hasEditor
             ? () => runEditorAction("editor.action.copyLinesUpAction")
@@ -1471,7 +1928,7 @@ export default function App() {
         },
         {
           id: "selection.copyLineDown",
-          label: "Copy Line Down",
+          label: "Copiar Linha Abaixo",
           enabled: hasEditor,
           run: hasEditor
             ? () => runEditorAction("editor.action.copyLinesDownAction")
@@ -1479,7 +1936,7 @@ export default function App() {
         },
         {
           id: "selection.moveLineUp",
-          label: "Move Line Up",
+          label: "Mover Linha Acima",
           enabled: hasEditor,
           run: hasEditor
             ? () => runEditorAction("editor.action.moveLinesUpAction")
@@ -1487,7 +1944,7 @@ export default function App() {
         },
         {
           id: "selection.moveLineDown",
-          label: "Move Line Down",
+          label: "Mover Linha Abaixo",
           enabled: hasEditor,
           run: hasEditor
             ? () => runEditorAction("editor.action.moveLinesDownAction")
@@ -1496,7 +1953,7 @@ export default function App() {
         { id: "selection.sep2", label: "", separator: true },
         {
           id: "selection.addCursorAbove",
-          label: "Add Cursor Above",
+          label: "Adicionar Cursor Acima",
           enabled: hasEditor,
           run: hasEditor
             ? () => runEditorAction("editor.action.insertCursorAbove")
@@ -1504,7 +1961,7 @@ export default function App() {
         },
         {
           id: "selection.addCursorBelow",
-          label: "Add Cursor Below",
+          label: "Adicionar Cursor Abaixo",
           enabled: hasEditor,
           run: hasEditor
             ? () => runEditorAction("editor.action.insertCursorBelow")
@@ -1514,20 +1971,20 @@ export default function App() {
     };
 
     const viewMenu: MenuDef = {
-      label: "View",
+      label: "Exibir",
       items: [
-        { id: "view.explorer", label: "Explorer", run: () => setActiveView("explorer") },
-        { id: "view.search", label: "Search", run: () => setActiveView("search") },
+        { id: "view.explorer", label: "Explorador", run: () => setActiveView("explorer") },
+        { id: "view.search", label: "Pesquisar", run: () => setActiveView("search") },
         {
           id: "view.scm",
-          label: "Source Control",
+          label: "Controle do Código-Fonte",
           run: () => setActiveView("git"),
         },
-        { id: "view.run", label: "Run", run: () => setActiveView("debug") },
+        { id: "view.run", label: "Executar", run: () => setActiveView("debug") },
         { id: "view.sep1", label: "", separator: true },
         {
           id: "view.toggleSidebar",
-          label: "Toggle Sidebar",
+          label: "Alternar Barra Lateral",
           accelerator: "Ctrl+B",
           run: () => setSidebarOpen((v) => !v),
         },
@@ -1554,20 +2011,20 @@ export default function App() {
         },
         {
           id: "view.toggleTerminal",
-          label: "Toggle Terminal",
+          label: "Alternar Terminal",
           accelerator: "Ctrl+`",
           run: () => setPanelOpen((v) => !v),
         },
         { id: "view.sep2", label: "", separator: true },
         {
           id: "view.commandPalette",
-          label: "Command Palette",
+          label: "Paleta de Comandos",
           accelerator: "Ctrl+P",
           run: () => setQuickOpenOpen(true),
         },
         {
           id: "view.quickOpen",
-          label: "Quick Open",
+          label: "Abertura Rápida",
           accelerator: "Ctrl+P",
           run: () => setQuickOpenOpen(true),
         },
@@ -1575,24 +2032,24 @@ export default function App() {
     };
 
     const goMenu: MenuDef = {
-      label: "Go",
+      label: "Ir",
       items: [
         {
           id: "go.goToFile",
-          label: "Go to File…",
+          label: "Ir para o Arquivo…",
           accelerator: "Ctrl+P",
           run: () => setQuickOpenOpen(true),
         },
         {
           id: "go.goToLine",
-          label: "Go to Line…",
+          label: "Ir para a Linha…",
           accelerator: "Ctrl+G",
           enabled: hasEditor,
           run: hasEditor ? () => runEditorAction("editor.action.gotoLine") : undefined,
         },
         {
           id: "go.goToDefinition",
-          label: "Go to Definition",
+          label: "Ir para a Definição",
           accelerator: "F12",
           enabled: hasEditor,
           run: hasEditor
@@ -1603,14 +2060,14 @@ export default function App() {
     };
 
     const runMenu: MenuDef = {
-      label: "Run",
+      label: "Executar",
       items: [
-        { id: "run.start", label: "Start Debugging", enabled: false },
-        { id: "run.startNoDebug", label: "Run Without Debugging", enabled: false },
+        { id: "run.start", label: "Iniciar Depuração", enabled: false },
+        { id: "run.startNoDebug", label: "Executar Sem Depuração", enabled: false },
         { id: "run.sep1", label: "", separator: true },
         {
           id: "run.openRunView",
-          label: "Abrir Run e Depurar",
+          label: "Abrir Executar e Depurar",
           run: () => setActiveView("debug"),
         },
       ],
@@ -1621,19 +2078,19 @@ export default function App() {
       items: [
         {
           id: "terminal.new",
-          label: "New Terminal",
+          label: "Novo Terminal",
           accelerator: "Ctrl+`",
           run: () => setPanelOpen(true),
         },
-        { id: "terminal.split", label: "Split Terminal", enabled: false },
-        { id: "terminal.kill", label: "Kill Terminal", enabled: false },
+        { id: "terminal.split", label: "Dividir Terminal", enabled: false },
+        { id: "terminal.kill", label: "Encerrar Terminal", enabled: false },
         { id: "terminal.sep1", label: "", separator: true },
-        { id: "terminal.runTask", label: "Run Task…", enabled: false },
+        { id: "terminal.runTask", label: "Executar Tarefa…", enabled: false },
       ],
     };
 
     const helpMenu: MenuDef = {
-      label: "Help",
+      label: "Ajuda",
       items: [
         { id: "help.welcome", label: "Bem-vindo", enabled: false },
         { id: "help.docs", label: "Documentação", enabled: false },
@@ -1722,6 +2179,21 @@ export default function App() {
         );
       case "debug":
         return <RunPanel rootPath={rootPath} onRun={handleRun} />;
+      case "agents":
+        return (
+          <AgentsPanel
+            rootPath={rootPath}
+            store={agentStore}
+            selection={agentSelection}
+            onCreate={handleCreateAgent}
+            onSelectAgent={handleSelectAgent}
+            onEdit={handleEditAgent}
+            onRename={handleRenameAgent}
+            onDelete={handleDeleteAgent}
+            onNewConversation={handleNewAgentConversation}
+            onOpenConversation={handleOpenAgentConversation}
+          />
+        );
       case "account":
         return <PlaceholderPanel title="CONTAS" />;
       case "settings":
@@ -1824,18 +2296,30 @@ export default function App() {
         )}
 
         <main className="app-main">
-          <Breadcrumbs filePath={activePath} rootPath={rootPath} />
-          <TabBar
-            files={openFiles}
-            activePath={activePath}
-            onSelect={setActivePath}
-            onClose={handleCloseTab}
-            onCloseAll={handleCloseAll}
-            onCloseOthers={handleCloseOthers}
-            onCloseLeft={handleCloseLeft}
-            onCloseRight={handleCloseRight}
-            decorationFor={decorationFor}
-          />
+          {activeView === "agents" ? (
+            <div className="agent-center-bar">
+              <Codicon name="agents" size={15} />
+              <span>Agentes</span>
+              <span className="agent-center-workspace">
+                {rootPath ?? "Nenhum workspace aberto"}
+              </span>
+            </div>
+          ) : (
+            <>
+              <Breadcrumbs filePath={activePath} rootPath={rootPath} />
+              <TabBar
+                files={openFiles}
+                activePath={activePath}
+                onSelect={setActivePath}
+                onClose={handleCloseTab}
+                onCloseAll={handleCloseAll}
+                onCloseOthers={handleCloseOthers}
+                onCloseLeft={handleCloseLeft}
+                onCloseRight={handleCloseRight}
+                decorationFor={decorationFor}
+              />
+            </>
+          )}
           {/* Editor + bottom panel. The panel can dock bottom (column) or to a
               side (row); the dock class flips the axis and the handle/orientation. */}
           <div
@@ -1844,7 +2328,20 @@ export default function App() {
             }${armingPanel ? " arming-panel" : ""}`}
           >
             <div className="editor-host">
-              {activeFile && activeFile.mode === "image" ? (
+              {activeView === "agents" ? (
+                <AgentWorkspace
+                  rootPath={rootPath}
+                  store={agentStore}
+                  selection={agentSelection}
+                  busy={agentBusy}
+                  status={agentStatus}
+                  error={agentError}
+                  onCreate={handleCreateAgent}
+                  onSaveAgent={handleSaveAgent}
+                  onCancelConfig={() => setAgentSelection(null)}
+                  onSendMessage={handleSendAgentMessage}
+                />
+              ) : activeFile && activeFile.mode === "image" ? (
                 // Image-mode tab (ISSUE-70): read-only preview, no Monaco.
                 <ImagePreview path={activeFile.path} name={activeFile.name} />
               ) : (
@@ -1931,6 +2428,7 @@ export default function App() {
         column={cursorCol}
         fileName={activeFile?.name ?? null}
         branch={branch}
+        onClickBranch={rootPath ? () => setBranchPickerOpen(true) : undefined}
         tabSize={TAB_SIZE}
         errorCount={errorCount}
         warningCount={warningCount}
@@ -1946,6 +2444,15 @@ export default function App() {
           rootPath={rootPath}
           onOpenFile={handleOpenFile}
           onClose={() => setQuickOpenOpen(false)}
+        />
+      )}
+
+      {branchPickerOpen && (
+        <BranchPicker
+          rootPath={rootPath}
+          onCheckout={handleCheckoutBranch}
+          onCreateBranch={handleCreateBranch}
+          onClose={() => setBranchPickerOpen(false)}
         />
       )}
 

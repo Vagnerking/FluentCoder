@@ -3,8 +3,10 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   BlameHunk,
   FileNode,
+  GitBranchInfo,
   GitCommit,
   GitStatus,
+  OpenTab,
   ProjectFile,
   RawDirEntry,
   RunConfig,
@@ -12,6 +14,7 @@ import type {
   SearchStreamEvent,
   Session,
 } from "./types";
+import type { AcpEvent, AgentStore } from "./agents/types";
 
 /** Raw shape returned by the Rust `git_status` (snake_case from serde). */
 interface RawGitStatus {
@@ -196,6 +199,48 @@ export function gitBranch(path: string): Promise<string | null> {
   return invoke<string | null>("git_branch", { path });
 }
 
+/** Raw shape returned by the Rust `git_branches` (snake_case from serde). */
+interface RawGitBranchInfo {
+  name: string;
+  current: boolean;
+  short: string;
+  date: string;
+  author: string;
+  subject: string;
+  ahead: number;
+  behind: number;
+  has_upstream: boolean;
+}
+
+/**
+ * Lists local branches for the picker (issue #16), most-recently-committed
+ * first. Empty when `path` isn't a git repo.
+ */
+export async function gitBranches(path: string): Promise<GitBranchInfo[]> {
+  const raw = await invoke<RawGitBranchInfo[]>("git_branches", { path });
+  return raw.map((b) => ({
+    name: b.name,
+    current: b.current,
+    short: b.short,
+    date: b.date,
+    author: b.author,
+    subject: b.subject,
+    ahead: b.ahead,
+    behind: b.behind,
+    hasUpstream: b.has_upstream,
+  }));
+}
+
+/** Checks out an existing local branch. Rejects with git's message on failure. */
+export function gitCheckout(path: string, branch: string): Promise<void> {
+  return invoke("git_checkout", { path, branch });
+}
+
+/** Creates a new branch from HEAD and checks it out (`git checkout -b`). */
+export function gitCreateBranch(path: string, name: string): Promise<void> {
+  return invoke("git_create_branch", { path, name });
+}
+
 /** Working-tree status: branch, ahead/behind, and changed files. */
 export async function gitStatus(path: string): Promise<GitStatus> {
   const raw = await invoke<RawGitStatus>("git_status", { path });
@@ -286,15 +331,66 @@ export function runConfigsDetect(root: string): Promise<RunConfig[]> {
   return invoke<RunConfig[]>("run_configs_detect", { root });
 }
 
-// ---- Session (reopen last project on launch) ----
+// ---- ACP agents ----
 
-/** Loads the persisted session (empty on first run). */
-export function sessionLoad(): Promise<Session> {
-  return invoke<Session>("session_load");
+/** Loads agents and conversation history from `<root>/.project/agents.json`. */
+export function agentsLoad(root: string): Promise<AgentStore> {
+  return invoke<AgentStore>("agents_load", { root });
+}
+
+/** Persists agents and conversation history inside the current workspace. */
+export function agentsSave(root: string, store: AgentStore): Promise<void> {
+  return invoke("agents_save", { root, store });
+}
+
+/**
+ * Runs one ACP prompt against the selected provider. Text and lifecycle updates
+ * are streamed through a request-scoped Tauri channel.
+ */
+export function acpPrompt(
+  provider: "codex" | "claude",
+  workspaceRoot: string,
+  prompt: string,
+  onEvent: (event: AcpEvent) => void,
+): Promise<void> {
+  const channel = new Channel<AcpEvent>();
+  channel.onmessage = onEvent;
+  return invoke("acp_prompt", {
+    provider,
+    workspaceRoot,
+    prompt,
+    onEvent: channel,
+  });
+}
+
+// ---- Session (reopen last project + tabs on launch) ----
+
+/**
+ * Loads the persisted session (empty on first run). `openTabs`/`activePath` are
+ * normalized to a list/null so callers can treat pre-tabs sessions uniformly.
+ */
+export async function sessionLoad(): Promise<Session> {
+  const s = await invoke<Partial<Session>>("session_load");
+  return {
+    lastFolder: s.lastFolder ?? null,
+    openTabs: s.openTabs ?? [],
+    activePath: s.activePath ?? null,
+  };
 }
 /** Remembers the last opened project folder (pass null to clear). */
 export function sessionSetLastFolder(folder: string | null): Promise<void> {
   return invoke("session_set_last_folder", { folder });
+}
+/**
+ * Persists the open tabs (paths + view mode, in tab-bar order) and the active
+ * tab, leaving the saved folder untouched. The backend re-reads file content
+ * from disk on the next launch, so neither content nor `dirty` is sent.
+ */
+export function sessionSetOpenFiles(
+  tabs: OpenTab[],
+  activePath: string | null
+): Promise<void> {
+  return invoke("session_set_open_files", { tabs, activePath });
 }
 
 // ---- Windows ----

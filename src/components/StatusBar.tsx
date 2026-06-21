@@ -22,6 +22,8 @@ interface StatusBarProps {
   fileName: string | null;
   /** Current git branch of the open folder, or null when not a repo. */
   branch: string | null;
+  /** Opens the branch picker (issue #16). Omitted ⇒ branch isn't clickable. */
+  onClickBranch?: () => void;
   /** Editor tab size, reflected from the editor options. */
   tabSize: number;
   /** Live diagnostic counts from Monaco markers. */
@@ -61,6 +63,7 @@ export function StatusBar({
   column,
   fileName,
   branch,
+  onClickBranch,
   tabSize,
   errorCount,
   warningCount,
@@ -84,7 +87,12 @@ export function StatusBar({
     <div className="status-bar">
       <div className="status-left">
         {branch && (
-          <span className="status-item">
+          <span
+            className="status-item"
+            onClick={onClickBranch}
+            title={onClickBranch ? "Trocar de branch" : undefined}
+            role={onClickBranch ? "button" : undefined}
+          >
             <Codicon name="gitBranch" /> {branch}
           </span>
         )}

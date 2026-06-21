@@ -83,10 +83,26 @@ export interface ContextMenuItem {
   icon?: import("./icons/codicons/codicon-map").IconAction;
 }
 
+/**
+ * One open editor tab to restore on launch, mirroring the Rust `OpenTab`. Only
+ * the path and view mode are persisted — the content is re-read from disk on
+ * reopen, so the buffer text and `dirty` flag are never saved.
+ */
+export interface OpenTab {
+  /** Absolute path of the file backing this tab. */
+  path: string;
+  /** Persisted view; omitted ⇒ let `defaultModeFor` decide on reopen. */
+  mode?: OpenMode;
+}
+
 /** Persisted UI session, mirroring the Rust `Session`. */
 export interface Session {
   /** Absolute path of the last opened project folder, or null. */
   lastFolder: string | null;
+  /** Tabs open in that folder, in tab-bar order. Empty for old sessions. */
+  openTabs: OpenTab[];
+  /** Absolute path of the tab that was active, or null. */
+  activePath: string | null;
 }
 
 /** Search toggles + glob filters, mirroring the Rust `SearchOptions`. */
@@ -180,6 +196,32 @@ export interface GitCommit {
   author: string;
   date: string;
   subject: string;
+}
+
+/**
+ * One local branch in the branch picker (issue #16), mirroring the Rust
+ * `GitBranchInfo`. Carries the tip's metadata so the picker can render a
+ * VSCode-style row (name, relative date, ahead/behind, author · hash · subject).
+ */
+export interface GitBranchInfo {
+  /** Branch name, e.g. "main", "feat/x". */
+  name: string;
+  /** True for the branch currently checked out. */
+  current: boolean;
+  /** Short hash of the branch tip. */
+  short: string;
+  /** Last-commit date, relative (e.g. "2 hours ago"). */
+  date: string;
+  /** Last-commit author name. */
+  author: string;
+  /** Last-commit subject (first line). */
+  subject: string;
+  /** Commits ahead of the upstream (0 when no upstream). */
+  ahead: number;
+  /** Commits behind the upstream (0 when no upstream). */
+  behind: number;
+  /** True when the branch has a configured upstream (ahead/behind are valid). */
+  hasUpstream: boolean;
 }
 
 /** A run/debug configuration, mirroring the Rust `RunConfig`. */

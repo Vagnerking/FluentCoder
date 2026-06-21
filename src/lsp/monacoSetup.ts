@@ -323,7 +323,7 @@ function razorMonarch(): MonacoNS.languages.IMonarchLanguage {
 
       htmlComment: [
         [/[^-]+/, "comment.html"],
-        [/-->/, { token: "comment.html", next: "@pop" }],
+        [/--!?>/, { token: "comment.html", next: "@pop" }],
         [/-/, "comment.html"],
       ],
 

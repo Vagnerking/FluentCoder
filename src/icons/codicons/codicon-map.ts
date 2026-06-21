@@ -86,6 +86,8 @@ export type IconAction =
   | "settings"
   | "commandPalette"
   | "menu"
+  | "agents"
+  | "send"
   | "chevronRight"
   | "chevronDown"
   | "close"
@@ -185,6 +187,8 @@ export const CODICON_MAP: Record<IconAction, string> = {
   settings: "settings-gear",
   commandPalette: "symbol-color",
   menu: "menu",
+  agents: "hubot",
+  send: "send",
   chevronRight: "chevron-right",
   chevronDown: "chevron-down",
   close: "close",
