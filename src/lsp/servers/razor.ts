@@ -1,61 +1,66 @@
 /**
- * Razor (`rzls`) server wiring (ISSUE-31).
+ * Razor language server wiring — Roslyn cohosting build.
  *
- * Best-effort per the ISSUE-32 spike (see `../RAZOR-SPIKE.md`): this starts rzls
- * via the SAME generic bridge + client factory the C#/TS servers use, and enables
- * exactly the LSP features that work over the *plain* protocol. Document-projection
- * features (synthetic C#/HTML buffers with request forwarding) are OUT OF SCOPE.
+ * Uses the `Microsoft.CodeAnalysis.LanguageServer` from the C# extension VSIX,
+ * started with `--extension Microsoft.VisualStudioCode.RazorExtension.dll`. This
+ * cohosting build speaks the same extended Roslyn LSP dialect as the standalone
+ * server (C#), so the startup choreography is shared via `wireRoslynStartup`.
  *
- * What this delivers:
- *   - Syntax highlight (ISSUE-29 tokenizer in `../monacoSetup`; independent of rzls).
- *   - rzls process lifecycle (acquisition, bridge, initialize).
- *   - Diagnostics -> Problems panel + editor markers, IF rzls publishes them over
- *     plain LSP (the spike flags this as the most likely working feature).
- *
- * What is NOT enabled (requires projection — future milestone):
- *   - Completions / hover / go-to-definition inside markup-projected C# regions.
- *
- * NOTE: rzls acquisition is currently stubbed on the Rust side; on a fresh
- * machine `ensureRazorServer` rejects and the manager surfaces an error status
- * rather than crashing.
+ * Why cohosting for Razor, standalone for C#:
+ *   - The standalone 5.0.0 correctly emits `DocumentCompilerSemantic` diagnostics
+ *     but does not include the Razor extension — C# squiggles work, Razor does not.
+ *   - The cohosting build bundles the Razor extension and serves `.cshtml`/`.razor`,
+ *     but always returns `items:[]` for `DocumentCompilerSemantic` — Razor works,
+ *     C# squiggles do not.
+ *   - Two separate servers, two separate LSP sessions keyed by `serverId`, gives us
+ *     both without compromise.
  */
 import type { MonacoLanguageClient } from "monaco-languageclient";
 import { ensureRazorServer, startLspServer } from "../../api";
 import { createLanguageClient } from "../client";
+import { toFileUri } from "../uri";
+import { wireRoslynStartup } from "./roslynShared";
+import { ROSLYN_INIT_OPTIONS } from "./csharp";
+import type { ServerStartContext } from ".";
 
 export const RAZOR_SERVER_ID = "razor";
 
-/** file:// URI for a workspace root, Windows-safe (`file:///C:/...`). */
-function toFileUri(rootPath: string): string {
-  let p = rootPath.replace(/\\/g, "/");
-  if (!p.startsWith("/")) p = "/" + p; // drive paths -> /C:/...
-  return "file://" + encodeURI(p);
-}
-
 /**
- * Acquires rzls, spawns it through the Rust bridge, and connects a language
- * client scoped to `language: razor`.
+ * Brings up the Razor (Roslyn cohosting) language server for the given workspace.
+ *
+ * Semantic tokens are deferred until `projectInitializationComplete` (same as C#)
+ * so provisional classifications never flash as the wrong color before the project
+ * finishes loading.
  */
 export async function startRazorServer(
-  rootPath: string
+  rootPath: string,
+  context?: ServerStartContext
 ): Promise<MonacoLanguageClient> {
-  // 1. Resolve the rzls executable (errors if not cached — download is stubbed).
-  const program = await ensureRazorServer();
+  const command = await ensureRazorServer();
+  const [program, ...args] = command.split("\n").filter((s) => s.length > 0);
+  if (!program) {
+    throw new Error("Razor server launch command was empty");
+  }
 
-  // 2. Spawn rzls + bridge. Args are best-effort (see razor.rs / RAZOR-SPIKE.md);
-  //    rzls speaks LSP over stdio.
-  await startLspServer(RAZOR_SERVER_ID, program, ["--logLevel", "Information"], rootPath);
+  await startLspServer(RAZOR_SERVER_ID, program, args, rootPath);
 
-  // 3. Connect the generic client. initializationOptions are conservative; the
-  //    spike documents which (if any) rzls actually honors over plain LSP.
-  return createLanguageClient({
+  const client = await createLanguageClient({
     serverId: RAZOR_SERVER_ID,
     name: "Razor Language Server",
-    documentSelector: [{ scheme: "file", language: "razor" }],
+    documentSelector: [{ scheme: "file", language: "aspnetcorerazor" }],
     rootUri: toFileUri(rootPath),
-    initializationOptions: {
-      "razor.format.enable": true,
-      "razor.completion.commitElementsWithSpace": false,
-    },
+    initializationOptions: ROSLYN_INIT_OPTIONS,
+    diagnosticMode: "pull",
+    diagnosticIdentifiers: ["syntax", "DocumentCompilerSemantic"],
+    deferSemanticTokens: true,
   });
+
+  wireRoslynStartup(client, {
+    serverId: RAZOR_SERVER_ID,
+    reopenLanguages: ["aspnetcorerazor"],
+    rootPath,
+    context,
+  });
+
+  return client;
 }

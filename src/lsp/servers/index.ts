@@ -9,6 +9,7 @@
  */
 import type { MonacoLanguageClient } from "monaco-languageclient";
 import { CSHARP_SERVER_ID, startCsharpServer } from "./csharp";
+import { RAZOR_SERVER_ID, startRazorServer } from "./razor";
 import { TS_SERVER_ID, startTypescriptServer } from "./typescript";
 import { NPM_SERVERS, makeNpmServerStarter } from "./npm";
 import { SYSTEM_SERVERS, makeSystemServerStarter } from "./system";
@@ -46,10 +47,10 @@ const BASE_REGISTRY: Record<string, ServerEntry> = {
   javascript: { serverId: TS_SERVER_ID, start: startTypescriptServer },
   typescriptreact: { serverId: TS_SERVER_ID, start: startTypescriptServer },
   javascriptreact: { serverId: TS_SERVER_ID, start: startTypescriptServer },
-  // Razor (.cshtml) is served by the SAME Roslyn as C# via cohosting (issue #11):
-  // route it to the csharp server so one Roslyn handles both. The id is
-  // `aspnetcorerazor` (VS Code's) so the Roslyn Razor cohost recognizes the docs.
-  aspnetcorerazor: { serverId: CSHARP_SERVER_ID, start: startCsharpServer },
+  // Razor (.cshtml/.razor) is served by the Roslyn cohosting build (C# extension
+  // VSIX) started as a separate LSP session. The standalone C# server (above) does
+  // not include the Razor extension; the cohosting build does. Two servers, two ids.
+  aspnetcorerazor: { serverId: RAZOR_SERVER_ID, start: startRazorServer },
 };
 
 // Generate one registry entry per language each npm-based server handles, so

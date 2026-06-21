@@ -135,3 +135,46 @@ Quando houver regressão:
 
 Não corrigir problemas de classificação de tipos apenas alterando cores. A cor
 deve refletir a categoria correta fornecida pelo Roslyn.
+
+## C# / Roslyn: dois servidores (standalone C# + cohosting Razor)
+
+O app roda **dois processos Roslyn distintos**:
+
+| Servidor | Build | `serverId` | Arquivos | Por quê |
+|---|---|---|---|---|
+| Standalone | `Microsoft.CodeAnalysis.LanguageServer` 5.0.0 | `"csharp"` | `.cs` | Emite `DocumentCompilerSemantic` corretamente → squiggles de erro semântico funcionam |
+| Cohosting | Roslyn do VSIX da extensão C# (com `--extension`) | `"razor"` | `.cshtml`, `.razor` | O cohosting inclui a extensão Razor; o standalone não |
+
+**Regras obrigatórias:**
+
+- Nunca rotear `.cs` para o servidor `"razor"` nem `.cshtml`/`.razor` para o `"csharp"`. Os seletores de documento são disjuntos.
+- Ambos os servidores fazem `solution/open` com a mesma `.sln`. Isso é correto — cada processo carrega o workspace de forma independente.
+- Ambos adiaram tokens semânticos (`deferSemanticTokens: true`) até `projectInitializationComplete`. A mesma lógica de provisório → definitivo se aplica ao Razor.
+- O id Monaco de arquivo Razor é `aspnetcorerazor` (não `"razor"`). O seletor do cliente Razor deve usar `language: "aspnetcorerazor"`.
+- O startup compartilhado (`wireRoslynStartup` em `roslynShared.ts`) é a fonte de verdade para a ordem: `workspace/configuration` handler + nudge → `projectInitializationComplete` handler → `solution/open`.
+- Não adicionar fallback de cohosting ao servidor C# standalone. Se o cohosting não estiver disponível, o Razor não funciona; o C# continua.
+
+## C# / Roslyn: diagnósticos
+
+O Roslyn usado pelo app aceita `textDocument/diagnostic`, mas pode omitir
+`diagnosticProvider` na resposta de `initialize`. Portanto:
+
+- o adaptador C# deve habilitar pull diagnostics explicitamente;
+- não condicionar o pull C# apenas à capability estática;
+- no caminho interativo, solicitar separadamente `syntax` e
+  `DocumentCompilerSemantic`; não usar o relatório agregado sem `identifier`,
+  pois ele inclui analisadores de estilo mais caros;
+- manter o escopo de análise em background como `openFiles`; a verificação da
+  solução inteira pertence ao comando explícito de recompilação;
+- não executar `dotnet build` automaticamente ao abrir ou salvar um arquivo;
+- solicitar diagnósticos ao abrir e ao alterar um modelo, com debounce;
+- manter no máximo uma solicitação ativa por documento; quando o conteúdo
+  mudar novamente, cancelar o snapshot obsoleto e coalescer as alterações em
+  uma única solicitação para a versão mais recente;
+- após o rebind `didClose`/`didOpen`, descartar `previousResultId` e solicitar
+  novamente para não reutilizar o snapshot de `Miscellaneous Files`;
+- descartar respostas antigas quando uma solicitação mais recente já tiver sido
+  iniciada para o mesmo documento;
+- ao associar diagnósticos de `dotnet build` a modelos Monaco no Windows,
+  comparar URIs com drive canônico, pois `file:///C:/...` e `file:///c:/...`
+  representam o mesmo arquivo.

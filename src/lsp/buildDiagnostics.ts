@@ -1,6 +1,6 @@
 import * as monaco from "monaco-editor";
 import { csharpBuildDiagnostics } from "../api";
-import { toFileUri } from "./uri";
+import { canonicalFileUriKey, toFileUri } from "./uri";
 import { setDiagnostics, clearServerDiagnostics } from "./diagnosticsStore";
 import type { Problem } from "../types";
 
@@ -60,7 +60,8 @@ async function build(rootPath: string): Promise<void> {
   const byUri = new Map<string, Problem[]>();
   for (const d of diags) {
     const uri = toFileUri(d.path);
-    const list = byUri.get(uri) ?? [];
+    const key = canonicalFileUriKey(uri);
+    const list = byUri.get(key) ?? [];
     list.push({
       path: monaco.Uri.parse(uri).path,
       name: d.path.split(/[\\/]/).pop() || d.path,
@@ -69,7 +70,7 @@ async function build(rootPath: string): Promise<void> {
       line: d.line,
       column: d.column,
     });
-    byUri.set(uri, list);
+    byUri.set(key, list);
   }
 
   // Refresh the workspace store: drop the previous build's rows, set the new.
@@ -78,7 +79,8 @@ async function build(rootPath: string): Promise<void> {
 
   // Squiggles on every open model (set, or clear when a file is now clean).
   for (const model of monaco.editor.getModels()) {
-    const problems = byUri.get(model.uri.toString()) ?? [];
+    const problems =
+      byUri.get(canonicalFileUriKey(model.uri.toString())) ?? [];
     monaco.editor.setModelMarkers(
       model,
       OWNER,

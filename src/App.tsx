@@ -488,28 +488,13 @@ export default function App() {
    * their workspace info (C# solution/projects) tear down separately when
    * `rootPath` changes (see useLspManager).
    */
-  // Tracks the workspace we already ran an initial compiler build for (#11).
-  const builtForRootRef = useRef<string | null>(null);
-
   const resetWorkspaceState = useCallback(() => {
     setBranch(null);
     setGitState(null);
     setProblems([]);
     clearAllDiagnostics();
     clearBuildDiagnostics();
-    builtForRootRef.current = null;
   }, []);
-
-  // Run the real compiler (dotnet build) once when a C#/Razor file first opens in
-  // a workspace, so its errors show on open — not only on save (issue #11).
-  useEffect(() => {
-    const isNet =
-      openedLanguages.has("csharp") || openedLanguages.has("aspnetcorerazor");
-    if (isNet && rootPath && builtForRootRef.current !== rootPath) {
-      builtForRootRef.current = rootPath;
-      void runBuildDiagnostics(rootPath);
-    }
-  }, [openedLanguages, rootPath]);
 
   /**
    * Loads a project folder into the explorer. Shared by the folder picker and
@@ -1754,11 +1739,7 @@ export default function App() {
     if (!file.dirty && !isUntitled(file.path)) return;
     // saveFile already reports/throws on failure; swallow here (no close to gate).
     await saveFile(file).catch(() => {});
-    // Refresh real compiler errors for C#/Razor on save (issue #11).
-    if (rootPath && /\.(cs|cshtml|razor)$/i.test(file.name)) {
-      void runBuildDiagnostics(rootPath);
-    }
-  }, [openFiles, activePath, saveFile, rootPath]);
+  }, [openFiles, activePath, saveFile]);
 
   /** Close the current workspace folder, returning to the empty state. */
   const handleCloseFolder = useCallback(async () => {

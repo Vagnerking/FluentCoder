@@ -534,7 +534,10 @@ export function ensureTsServer(
   return invoke<LspLaunchInfo>("lsp_ensure_ts_server", { rootPath, preferEditor });
 }
 
-/** Resolves the rzls executable path (rejects if not cached — download stubbed). */
+/**
+ * Ensures the Roslyn cohosting server (C# extension VSIX) is downloaded/cached.
+ * Returns the launch command as `"<program>\n<arg1>\n…"` (program on first line).
+ */
 export function ensureRazorServer(): Promise<string> {
   return invoke<string>("lsp_ensure_razor_server");
 }

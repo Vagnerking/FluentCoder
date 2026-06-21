@@ -71,7 +71,10 @@ export function buildDecorations(
   return map;
 }
 
-/** Normalizes a path for decoration lookup (separators + drive case agnostic). */
+/** Normalizes a path for decoration lookup (separators + Windows drive case agnostic). */
 export function decoKey(path: string): string {
-  return path.replace(/\\/g, "/");
+  let p = path.replace(/\\/g, "/");
+  // Lowercase the drive letter so `C:/foo` and `c:/foo` map to the same key.
+  if (/^[a-zA-Z]:\//.test(p)) p = p.charAt(0).toLowerCase() + p.slice(1);
+  return p;
 }

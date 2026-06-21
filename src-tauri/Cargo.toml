@@ -42,7 +42,12 @@ tokio-tungstenite = "0.24"
 futures-util = "0.3"
 uuid = { version = "1", features = ["v4"] }
 # Roslyn/rzls acquisition (download + verify + extract).
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# `gzip`: the VS Marketplace `vspackage` endpoint serves the C# extension VSIX
+# with `Content-Encoding: gzip` (verified). Without this feature reqwest returns
+# the raw gzip bytes, the .vsix fails to parse as a ZIP, and Razor cohosting
+# silently falls back to standalone Roslyn (no Razor). nuget.org serves the
+# Roslyn .nupkg uncompressed, so that path is unaffected.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
 # Locate node / typescript-language-server / npm on PATH.

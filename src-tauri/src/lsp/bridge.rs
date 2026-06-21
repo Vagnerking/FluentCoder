@@ -78,24 +78,30 @@ pub async fn start_bridge(process: LspProcess) -> std::io::Result<BridgeHandle> 
     tokio::spawn(async move {
         // Reached the accept loop — unblock start_bridge's return.
         let _ = ready_tx.send(());
-        tokio::select! {
-            _ = shutdown_rx => {
+        let mut shutdown_rx = shutdown_rx;
+        let stream = tokio::select! {
+            _ = &mut shutdown_rx => {
                 eprintln!("[lsp:bridge] shutdown before connection");
                 process.kill().await;
+                return;
             }
             accepted = listener.accept() => {
                 match accepted {
-                    Ok((stream, _addr)) => {
-                        if let Err(e) = serve_connection(stream, &task_token, process).await {
-                            eprintln!("[lsp:bridge] connection error: {e}");
-                        }
-                    }
+                    Ok((stream, _addr)) => stream,
                     Err(e) => {
                         eprintln!("[lsp:bridge] accept error: {e}");
                         process.kill().await;
+                        return;
                     }
                 }
             }
+        };
+
+        // Keep observing the same shutdown signal after the WebSocket connects.
+        // Previously it was only part of the accept select, so replacing/stopping
+        // a live session left its Roslyn process and bridge orphaned.
+        if let Err(e) = serve_connection(stream, &task_token, process, shutdown_rx).await {
+            eprintln!("[lsp:bridge] connection error: {e}");
         }
     });
 
@@ -116,6 +122,7 @@ async fn serve_connection(
     stream: TcpStream,
     expected_token: &str,
     process: LspProcess,
+    shutdown: oneshot::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut authorized = false;
 
@@ -156,14 +163,18 @@ async fn serve_connection(
     }
 
     eprintln!("[lsp:bridge] connection authorized");
-    proxy(ws, process).await;
+    proxy(ws, process, shutdown).await;
     Ok(())
 }
 
 /// Bidirectional proxy: WS → stdin (frame each text message) and stdout → WS
 /// (read each frame, send as text). Either side closing tears down the other and
 /// kills the LSP process.
-async fn proxy(ws: tokio_tungstenite::WebSocketStream<TcpStream>, process: LspProcess) {
+async fn proxy(
+    ws: tokio_tungstenite::WebSocketStream<TcpStream>,
+    process: LspProcess,
+    shutdown: oneshot::Receiver<()>,
+) {
     let LspProcess {
         child,
         mut stdin,
@@ -194,7 +205,7 @@ async fn proxy(ws: tokio_tungstenite::WebSocketStream<TcpStream>, process: LspPr
                         break;
                     }
                 }
-                Ok(None) => break,  // server closed stdout
+                Ok(None) => break, // server closed stdout
                 Err(e) => {
                     eprintln!("[lsp:bridge] stdout read error: {e}");
                     break;
@@ -236,6 +247,7 @@ async fn proxy(ws: tokio_tungstenite::WebSocketStream<TcpStream>, process: LspPr
     tokio::select! {
         _ = to_ws => { eprintln!("[lsp:bridge] server stdout closed (to_ws ended)"); }
         _ = to_stdin => { eprintln!("[lsp:bridge] client ws closed (to_stdin ended)"); }
+        _ = shutdown => { eprintln!("[lsp:bridge] session shutdown requested"); }
     }
 
     eprintln!("[lsp:bridge] connection ended; killing LSP process");
