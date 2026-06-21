@@ -189,8 +189,8 @@ body {
 }
 
 .sidebar {
-  width: 260px;
-  min-width: 260px;
+  /* Width is driven inline (resizable); keep it from shrinking under flex. */
+  flex-shrink: 0;
   background:
     linear-gradient(145deg, var(--acrylic-luminosity), transparent 42%),
     var(--acrylic-tint);
@@ -223,6 +223,111 @@ body {
   backdrop-filter: blur(28px) saturate(120%);
   -webkit-backdrop-filter: blur(28px) saturate(120%);
   overflow: hidden;
+}
+
+/* ---- Sidebar resize handle (drag to resize the sidebar width) ---- */
+.sidebar-resize-handle {
+  flex: 0 0 6px;
+  align-self: stretch;
+  /* Negative margins absorb the body's gap so the handle sits in the seam
+     between the sidebar and the editor without widening the layout. */
+  margin: 0 -8px;
+  z-index: 3;
+  cursor: ew-resize;
+  border-radius: 4px;
+  background: transparent;
+  transition: background 120ms ease;
+}
+.sidebar-resize-handle:hover,
+.sidebar-resize-handle:active {
+  background: var(--accent);
+}
+
+/* ---- Primary dock: activity bar + sidebar grouped, placed together ---- */
+.primary-dock {
+  display: flex;
+  flex-shrink: 0;
+  min-height: 0;
+  min-width: 0;
+  gap: 10px;
+  transition: gap 200ms ease;
+}
+/* Lateral activity bar: side by side with the sidebar. */
+.primary-dock.activity-side { flex-direction: row; }
+/* Top activity bar: a compact horizontal strip above the sidebar. */
+.primary-dock.activity-top { flex-direction: column; gap: 8px; min-height: 0; }
+/* Top activity bar keeps its height; the sidebar takes the rest and scrolls
+   inside — without this it overflows past the status bar. */
+.primary-dock.activity-top .activity-bar { flex: 0 0 auto; }
+.primary-dock.activity-top .sidebar { flex: 1 1 auto; min-height: 0; }
+.primary-dock.activity-hidden { flex-direction: row; }
+/* When the sidebar is docked right, the lateral activity bar hugs the outer
+   (right) edge — so the seam stays between the sidebar and the editor. */
+.body.sidebar-right .primary-dock.activity-side { flex-direction: row-reverse; }
+
+/* ---- Sidebar docked on the right: reorder the body's flex children ---- */
+.body.sidebar-right .app-main { order: 0; }
+.body.sidebar-right .sidebar-resize-handle { order: 1; }
+.body.sidebar-right .primary-dock { order: 2; }
+
+/* ---- Horizontal (top) activity bar ---- */
+.activity-bar {
+  /* Smooth morph between lateral and top placements. */
+  transition: width 200ms ease, height 200ms ease;
+}
+.activity-bar.activity-horizontal {
+  width: auto;
+  min-width: 0;
+  height: 44px;
+  min-height: 44px;
+  flex-direction: row;
+  align-items: center;
+}
+.activity-bar.activity-horizontal .activity-items {
+  flex-direction: row;
+}
+.activity-bar.activity-horizontal .activity-items-bottom {
+  flex-direction: row;
+  margin-top: 0;
+  margin-left: auto;
+}
+.activity-bar.activity-horizontal .activity-item {
+  width: 40px;
+  height: 36px;
+  flex: 0 0 40px;
+}
+/* Horizontal bar: the active indicator sits along the bottom edge. */
+.activity-bar.activity-horizontal .activity-indicator {
+  top: auto;
+  bottom: 0;
+  left: 0;
+  width: 20px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+}
+
+/* ---- Drag-to-reposition (press-and-hold, live preview) ----
+   Hold a draggable chrome element ~1.5s to pick it up. The drag highlight only
+   appears once the hold COMPLETES (it actually becomes draggable) — never during
+   the press itself: only then does the cursor close and the element get the accent
+   outline. While armed, moving previews the new placement live (width/height/dock
+   transitions animate the morph); release keeps it, dropping outside snaps back. */
+
+/* Hover hint: the bar and the panel header read as grabbable (open hand). The
+   press-and-hold stage shows no highlight; only the text-selection freeze. */
+.activity-bar { cursor: grab; }
+.activity-item { cursor: pointer; } /* the icons stay clickable buttons */
+.body.arming-activity, .body.dragging-activity,
+.editor-area.arming-panel, .editor-area.dragging-panel { user-select: none; }
+
+/* Armed (the hold finished → actually dragging): the cursor closes and the moved
+   element lifts with a solid accent outline. */
+.body.dragging-activity, .body.dragging-activity *,
+.editor-area.dragging-panel, .editor-area.dragging-panel * { cursor: grabbing !important; }
+.body.dragging-activity .activity-bar,
+.editor-area.dragging-panel .terminal-panel {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 
 /* ---- Explorer ---- */
@@ -903,8 +1008,19 @@ body {
 .editor-host {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   background: var(--editor-bg); /* opaque — keeps code readable over Mica */
 }
+
+/* ---- Editor + bottom panel area (panel docks bottom / right / left) ---- */
+.editor-area { display: flex; flex: 1; min-height: 0; min-width: 0; }
+.editor-area.panel-bottom { flex-direction: column; }
+.editor-area.panel-right,
+.editor-area.panel-left { flex-direction: row; }
+/* Left dock: panel | handle | editor (reorder, keeping the handle in the seam). */
+.editor-area.panel-left .terminal-panel { order: 1; }
+.editor-area.panel-left .panel-resize-handle { order: 2; }
+.editor-area.panel-left .editor-host { order: 3; }
 
 .editor-empty {
   display: flex;
@@ -971,7 +1087,37 @@ button:focus-visible,
 .activity-item { position: relative; width: 100%; height: 48px; flex: 0 0 48px; display: flex; align-items: center; justify-content: center; background: transparent; border: none; color: rgba(255,255,255,0.54); cursor: pointer; border-radius: 6px; }
 .activity-item:hover { color: rgba(255,255,255,0.88); background: var(--acrylic-control-hover); }
 .activity-item.active { color: #fff; }
+/* Drag-to-reorder: an accent delimiter marks where the icon will drop — on the
+   leading edge for "before", the trailing edge for "after". Vertical bar → a
+   horizontal line (top/bottom); horizontal (top) bar → a vertical line
+   (left/right) — like VSCode. */
+.activity-item.drop-before::before,
+.activity-item.drop-after::before {
+  content: "";
+  position: absolute;
+  background: var(--accent);
+  border-radius: 2px;
+  z-index: 2;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+}
+.activity-item.drop-before::before { top: -1px; }
+.activity-item.drop-after::before { bottom: -1px; }
+.activity-bar.activity-horizontal .activity-item.drop-before::before,
+.activity-bar.activity-horizontal .activity-item.drop-after::before {
+  top: 6px;
+  bottom: 6px;
+  left: auto;
+  right: auto;
+  width: 2px;
+  height: auto;
+}
+.activity-bar.activity-horizontal .activity-item.drop-before::before { left: -1px; }
+.activity-bar.activity-horizontal .activity-item.drop-after::before { right: -1px; }
 .activity-indicator { position: absolute; z-index: 1; left: 0; top: 0; width: 2px; height: 20px; pointer-events: none; background: #60cdff; border-radius: 0 2px 2px 0; transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 100ms ease; }
+/* Docked right: the active indicator hugs the right edge of the activity bar. */
+.activity-bar.side-right .activity-indicator { left: auto; right: 0; border-radius: 2px 0 0 2px; }
 
 /* ---- Breadcrumbs ---- */
 .breadcrumbs { height: 26px; min-height: 26px; display: flex; align-items: center; padding: 0 12px; gap: 0; background: rgba(34,42,53,0.7); border-bottom: 1px solid var(--acrylic-border); font-size: 12px; overflow: hidden; white-space: nowrap; backdrop-filter: blur(20px) saturate(120%); -webkit-backdrop-filter: blur(20px) saturate(120%); }
@@ -985,16 +1131,82 @@ button:focus-visible,
 .status-right { margin-left: auto; }
 .status-item { padding: 0 8px; height: 20px; display: flex; align-items: center; cursor: pointer; white-space: nowrap; border-radius: 5px; }
 .status-item:hover { background: var(--acrylic-control-hover); color: var(--text-secondary); }
+/* Diagnostics: breathing room between the error and warning groups, and between
+   each icon and its count (they used to read as one glued-together number). */
+.status-diagnostics { gap: 10px; }
+.status-diag { display: inline-flex; align-items: center; gap: 5px; font-variant-numeric: tabular-nums; }
+.status-clickable { cursor: pointer; }
+
+/* ---- LSP actions menu (pops above the clicked status-bar server item) ---- */
+.lsp-menu-overlay { position: fixed; inset: 0; z-index: 50; }
+.lsp-menu {
+  position: fixed;
+  transform: translateY(-100%);
+  margin-top: -6px;
+  z-index: 51;
+  min-width: 210px;
+  padding: 4px;
+  background: #202734;
+  border: 1px solid var(--acrylic-border-strong);
+  border-radius: var(--radius-card);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+.lsp-menu-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+}
+.lsp-menu-error {
+  padding: 0 8px 6px;
+  max-width: 300px;
+  font-size: 11px;
+  color: #ffb4ab;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.lsp-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+.lsp-menu-item:hover { background: var(--fill-subtle-hover); color: var(--text); }
 .status-workspace { color: var(--text-secondary); }
 .status-workspace .codicon { margin-right: 5px; color: var(--accent); }
 
 /* ---- Panel Resize ---- */
-.panel-resize-handle { height: 4px; min-height: 4px; cursor: ns-resize; background: rgba(210,228,242,0.06); }
+.panel-resize-handle { flex-shrink: 0; height: 4px; min-height: 4px; cursor: ns-resize; background: rgba(210,228,242,0.06); }
 .panel-resize-handle:hover { background: rgba(96,205,255,0.3); }
+/* Side-docked panel: the handle is a vertical seam (resize horizontally). */
+.editor-area.panel-right .panel-resize-handle,
+.editor-area.panel-left .panel-resize-handle {
+  height: auto;
+  min-height: 0;
+  width: 4px;
+  min-width: 4px;
+  cursor: ew-resize;
+}
 
 /* ---- Terminal Panel ---- */
-.terminal-panel { display: flex; flex-direction: column; background: var(--editor-bg); overflow: hidden; }
-.terminal-header { height: 36px; min-height: 36px; display: flex; align-items: center; border-top: 1px solid var(--acrylic-border); background: rgba(34,42,53,0.82); padding: 0 8px; backdrop-filter: blur(20px) saturate(120%); -webkit-backdrop-filter: blur(20px) saturate(120%); }
+.terminal-panel { flex-shrink: 0; display: flex; flex-direction: column; background: var(--editor-bg); overflow: hidden; }
+.terminal-panel.panel-right,
+.terminal-panel.panel-left { height: 100%; }
+.terminal-header { height: 36px; min-height: 36px; display: flex; align-items: center; border-top: 1px solid var(--acrylic-border); background: rgba(34,42,53,0.82); padding: 0 8px; backdrop-filter: blur(20px) saturate(120%); -webkit-backdrop-filter: blur(20px) saturate(120%); cursor: grab; }
+.terminal-tabs, .terminal-actions { cursor: default; }
 .terminal-tabs { display: flex; align-items: center; gap: 2px; flex: 1; }
 .terminal-tab {
   appearance: none;
@@ -1014,7 +1226,14 @@ button:focus-visible,
 .terminal-tab:hover { background: var(--fill-subtle-hover); color: var(--text-secondary); }
 .terminal-tab:active { background: var(--fill-subtle-active); }
 .terminal-tab.active { color: var(--text); background: var(--acrylic-control); border-color: var(--acrylic-border); }
-.terminal-body { flex: 1; min-height: 0; overflow: hidden; padding: 4px; }
+/* Drop delimiter while reordering: an accent line on the target's leading (left)
+   or trailing (right) edge, depending on which half the pointer is over. */
+.terminal-tab.drop-before { box-shadow: inset 2px 0 0 var(--accent); }
+.terminal-tab.drop-after { box-shadow: inset -2px 0 0 var(--accent); }
+.terminal-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding: 4px; }
+/* Whichever tab content shows fills the panel height (responsive to resizing).
+   The hidden terminal pane (display:none) drops out of the flex flow. */
+.terminal-body > * { flex: 1 1 0; min-height: 0; min-width: 0; }
 .terminal-close {
   appearance: none;
   -webkit-appearance: none;
@@ -1031,6 +1250,84 @@ button:focus-visible,
   border-radius: var(--radius-control);
 }
 .terminal-close:hover { background: var(--fill-subtle-hover); color: var(--text); }
+
+/* Header actions (new terminal / kill terminal) sit left of the panel close. */
+.terminal-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.terminal-action {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  border-radius: var(--radius-control);
+}
+.terminal-action:hover:not(:disabled) { background: var(--fill-subtle-hover); color: var(--text); }
+.terminal-action:disabled { opacity: 0.4; cursor: default; }
+
+/* ---- Multiple terminals: views area + right-rail list ---- */
+/* The terminal pane stays mounted (display toggled) while other tabs show, so
+   switching tabs never tears down a running shell. Flex chain (not height:100%)
+   so the views + terminal list always fill the panel as it's resized. */
+.terminal-pane { display: flex; flex-direction: column; }
+.terminal-split { flex: 1; min-height: 0; display: flex; gap: 6px; }
+.terminal-views { position: relative; flex: 1; min-width: 0; min-height: 0; }
+/* All views are stacked; only the active one is visible (kept mounted so the
+   shell keeps running). visibility (not display:none) preserves its size so
+   xterm's fit addon measures correctly. */
+.terminal-view-host { position: absolute; inset: 0; }
+.terminal-view-host.inactive { visibility: hidden; pointer-events: none; }
+
+.terminal-list {
+  flex: 0 0 150px;
+  overflow-y: auto;
+  padding: 2px;
+  border-left: 1px solid var(--acrylic-border);
+}
+.terminal-list-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 4px 0 8px;
+  margin: 1px 0;
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+.terminal-list-item:hover { background: var(--fill-subtle-hover); color: var(--text-secondary); }
+.terminal-list-item.active { background: var(--fill-selected); color: var(--text); }
+/* Drag-to-reorder delimiter: an accent line on the top (before) or bottom (after)
+   edge of the drop target, depending on which half the pointer is over. */
+.terminal-list-item.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+.terminal-list-item.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
+.terminal-list-icon { flex-shrink: 0; }
+.terminal-list-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-list-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0;
+}
+.terminal-list-item:hover .terminal-list-close,
+.terminal-list-item.active .terminal-list-close { opacity: 0.7; }
+.terminal-list-close:hover { background: var(--fill-subtle-active); opacity: 1; }
 
 .xterm-container { width: 100%; height: 100%; }
 .xterm-container .xterm { height: 100%; }
@@ -1211,10 +1508,6 @@ button:focus-visible,
   /* SVGs already carry their own colors from the Material theme. */
   pointer-events: none;
 }
-/* Dimmed icon for git-ignored files (decoration state). */
-.tree-label.deco-ignored ~ .file-icon,
-.file-icon.deco-ignored { opacity: 0.5; }
-
 /* ---- Codicons: align the web-font glyphs with adjacent text ---- */
 .codicon {
   vertical-align: middle;
@@ -1236,7 +1529,6 @@ button .codicon { pointer-events: none; }
 .deco-untracked { color: #73c991; }   /* new / untracked (green) */
 .deco-deleted   { color: #c74e39; }   /* deleted (red) */
 .deco-conflict  { color: #e4676b; }   /* merge conflict */
-.deco-ignored   { color: var(--text-disabled); }
 .deco-error     { color: #f14c4c; }   /* has error diagnostic */
 .deco-warning   { color: #cca700; }   /* has warning diagnostic */
 
