@@ -347,7 +347,7 @@ body {
   font-family: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   font-size: 14px;
   font-weight: 450;
-  line-height: 1;
+  line-height: 20px;
 }
 
 .tree-row:hover {
@@ -2010,6 +2010,23 @@ button:focus-visible,
 .quick-open-name { font-size: 13px; color: var(--text); white-space: nowrap; flex-shrink: 0; }
 .quick-open-match { color: var(--accent); font-weight: 600; }
 .quick-open-path { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- Branch picker (issue #16): VSCode-style branch Quick Pick ---- */
+.branch-picker-action { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius-control); cursor: pointer; color: var(--text-secondary); }
+.branch-picker-action.selected { background: var(--fill-selected); }
+.branch-picker-action.disabled { color: var(--text-disabled); cursor: default; }
+.branch-picker-action-label { font-size: 13px; white-space: nowrap; }
+.branch-picker-item { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border-radius: var(--radius-control); cursor: pointer; overflow: hidden; }
+.branch-picker-item.selected { background: var(--fill-selected); }
+.branch-picker-item .quick-open-icon { margin-top: 2px; flex-shrink: 0; }
+.branch-picker-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.branch-picker-primary { display: flex; align-items: center; gap: 6px; }
+.branch-picker-name { font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.branch-picker-current { color: var(--accent); font-size: 12px; flex-shrink: 0; }
+.branch-picker-track { display: inline-flex; align-items: center; gap: 2px; font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+.branch-picker-track .codicon { font-size: 12px; }
+.branch-picker-date { margin-left: auto; font-size: 11px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; padding-left: 8px; }
+.branch-picker-secondary { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---- About / Keyboard Shortcuts dialog (Help menu) ---- */
 .about-backdrop { position: fixed; inset: 0; z-index: 100; display: flex; justify-content: center; align-items: center; background: rgba(0,0,0,0.32); }

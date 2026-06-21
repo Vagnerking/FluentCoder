@@ -202,6 +202,126 @@ fn push_v2_entry(rest: &str, files: &mut Vec<GitFileStatus>) {
     });
 }
 
+/// One local branch in the branch picker (issue #16), with the metadata needed
+/// to render a VSCode-style Quick Pick row.
+#[derive(Serialize)]
+pub struct GitBranchInfo {
+    /// Branch name (e.g. "main", "feat/x").
+    name: String,
+    /// True for the branch currently checked out.
+    current: bool,
+    /// Short hash of the branch tip.
+    short: String,
+    /// Last-commit date, relative (e.g. "2 hours ago").
+    date: String,
+    /// Last-commit author name.
+    author: String,
+    /// Last-commit subject (first line).
+    subject: String,
+    /// Commits ahead of the upstream, if any tracking branch is set.
+    ahead: u32,
+    /// Commits behind the upstream, if any tracking branch is set.
+    behind: u32,
+    /// True when the branch has a configured upstream (ahead/behind are valid).
+    has_upstream: bool,
+}
+
+/// Lists local branches, most-recently-committed first (like VSCode's branch
+/// Quick Pick). Each row carries the tip's short hash, relative date, author and
+/// subject, plus ahead/behind vs. its upstream. Returns an empty list when not a
+/// git repo.
+#[tauri::command]
+pub fn git_branches(path: String) -> Result<Vec<GitBranchInfo>, String> {
+    if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
+        return Ok(Vec::new());
+    }
+
+    // One ref-record per branch, sorted by commit recency. Fields are joined by
+    // \x1f and the `%(HEAD)` marker ("*" for the current branch, " " otherwise)
+    // lets us flag the checked-out one. `upstream:track,nobracket` yields
+    // "ahead N, behind M" (empty when no upstream).
+    let fmt = "%(HEAD)\x1f%(refname:short)\x1f%(objectname:short)\x1f\
+%(committerdate:relative)\x1f%(authorname)\x1f%(contents:subject)\x1f\
+%(upstream:track,nobracket)";
+    let raw = run_git(
+        &path,
+        &[
+            "for-each-ref",
+            "--sort=-committerdate",
+            "refs/heads",
+            &format!("--format={fmt}"),
+        ],
+    )?;
+
+    let mut branches = Vec::new();
+    for line in raw.lines() {
+        let fields: Vec<&str> = line.split('\x1f').collect();
+        if fields.len() < 7 {
+            continue;
+        }
+        let (ahead, behind, has_upstream) = parse_track(fields[6]);
+        branches.push(GitBranchInfo {
+            current: fields[0] == "*",
+            name: fields[1].to_string(),
+            short: fields[2].to_string(),
+            date: fields[3].to_string(),
+            author: fields[4].to_string(),
+            subject: fields[5].to_string(),
+            ahead,
+            behind,
+            has_upstream,
+        });
+    }
+    Ok(branches)
+}
+
+/// Parses git's `%(upstream:track,nobracket)` field, e.g. "ahead 2, behind 1",
+/// "ahead 3", "behind 1", "gone", or "" (no upstream). Returns
+/// `(ahead, behind, has_upstream)`.
+fn parse_track(track: &str) -> (u32, u32, bool) {
+    let track = track.trim();
+    if track.is_empty() {
+        return (0, 0, false);
+    }
+    // "gone" means the upstream was deleted — treat as tracked but 0/0.
+    if track == "gone" {
+        return (0, 0, true);
+    }
+    let mut ahead = 0u32;
+    let mut behind = 0u32;
+    for part in track.split(',') {
+        let part = part.trim();
+        if let Some(n) = part.strip_prefix("ahead ") {
+            ahead = n.trim().parse().unwrap_or(0);
+        } else if let Some(n) = part.strip_prefix("behind ") {
+            behind = n.trim().parse().unwrap_or(0);
+        }
+    }
+    (ahead, behind, true)
+}
+
+/// Checks out an existing local branch (`git checkout <branch>`). The error
+/// string is surfaced to the UI, e.g. when the working tree has conflicting
+/// local changes git refuses to discard.
+#[tauri::command]
+pub fn git_checkout(path: String, branch: String) -> Result<(), String> {
+    if branch.trim().is_empty() {
+        return Err("Nome de branch vazio.".to_string());
+    }
+    run_git(&path, &["checkout", &branch]).map(|_| ())
+}
+
+/// Creates a new branch from the current HEAD and checks it out
+/// (`git checkout -b <name>`). Fails if the name already exists or is invalid.
+#[tauri::command]
+pub fn git_create_branch(path: String, name: String) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Nome de branch vazio.".to_string());
+    }
+    run_git(&path, &["checkout", "-b", name]).map(|_| ())
+}
+
 /// Stages a single path (`git add -- <path>`).
 #[tauri::command]
 pub fn git_stage(path: String, file: String) -> Result<(), String> {

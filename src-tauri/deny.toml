@@ -1,0 +1,42 @@
+# cargo-deny configuration — security advisory policy for the Rust crates.
+#
+# Run with: cargo deny check advisories
+#
+# This file exists primarily to record advisories that we have reviewed and
+# consciously accepted because no actionable fix is available to us. Each ignore
+# entry MUST carry a justification.
+
+[advisories]
+# Deny everything by default; only the explicitly listed advisories below are tolerated.
+yanked = "warn"
+ignore = [
+    # RUSTSEC-2024-0429 — "Unsoundness in `Iterator`/`DoubleEndedIterator` impls
+    # for `glib::VariantStrIter`" (severity: Unsound / INFO).
+    #
+    # Why ignored:
+    #   * The advisory is patched only in glib >= 0.20.0. Our `glib 0.18.5` is
+    #     transitively pinned by `gtk 0.18.2`, which is locked by the latest
+    #     available `tauri 2.11.3`. There is no glib 0.18.x patch release, and
+    #     moving to glib 0.20 would require a gtk-rs/wry/tao/tauri stack that the
+    #     current Tauri 2.x line does not yet provide. So no fix is reachable
+    #     without a breaking ecosystem upgrade that is not available to us.
+    #   * `glib` is a Linux-only dependency (compiled only via gtk/gdk/webkit2gtk).
+    #     Fluent Coder targets Windows (WebView2 via wry), where this code path is
+    #     not built. The issue is a soundness bug, not a remotely exploitable vuln.
+    #
+    # Revisit when a Tauri 2.x release adopts gtk-rs 0.20 (glib >= 0.20.0); then
+    # bump the stack and remove this entry.
+    "RUSTSEC-2024-0429",
+]
+
+[bans]
+multiple-versions = "allow"
+
+[licenses]
+# Keep license checking permissive here; this config is scoped to advisories.
+allow = []
+confidence-threshold = 0.8
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
