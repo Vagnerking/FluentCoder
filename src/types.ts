@@ -216,7 +216,6 @@ export interface FileDecoration {
     | "added"
     | "deleted"
     | "untracked"
-    | "ignored"
     | "conflict"
     | "error"
     | "warning";
