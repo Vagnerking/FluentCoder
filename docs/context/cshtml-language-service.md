@@ -23,20 +23,35 @@ O id transitório `aspnetcorerazor` não deve ser usado em código novo.
 
 ## Limites de módulos
 
-Estrutura alvo:
+Estrutura implementada (estado atual da milestone #1):
 
 ```text
 src-tauri/src/cshtml/
-├── core/                 # domínio: texto, AST, símbolos, diagnósticos
-├── application/          # casos de uso e portas
-├── infrastructure/       # parsers, filesystem, projetos e metadata
-└── adapters/
-    └── lsp/              # LSP 3.17/JSON-RPC
+├── ast.rs          # nós da AST: NodeKind, Node, ParseTree
+├── binding.rs      # binding @model/@inject/escopos → BindingContext
+├── document.rs     # DocumentStore, Snapshot, StoreError
+├── engine.rs       # CshtmlEngine — API pública incremental
+├── hardening.rs    # CancelToken, BoundedCache, DiagMetrics, WorkspaceSession
+├── harness.rs      # corpus de conformidade e golden tests
+├── intellisense.rs # completion, hover, definition, semantic tokens
+├── lint.rs         # CshtmlLinter, regras FCRZ0001–0009, DiagnosticProvider
+├── metadata.rs     # leitor ECMA-335 sem Roslyn, MetadataCache
+├── mod.rs
+├── parser.rs       # parser Razor incremental com recuperação de erro
+├── projection.rs   # projeção HTML/C# e source maps
+├── semantics.rs    # SymbolIndex, parse_csharp_symbols
+├── types.rs        # Snapshot, TextRange, TextPosition, DiagnosticKind
+├── views.rs        # ViewGraph, TagHelperIndex, validate_sections
+└── workspace.rs    # ProjectContext, DocumentContext, WorkspaceCache
 
-src/lsp/cshtml/
-├── client.ts             # start/stop e transporte
-├── monaco.ts             # providers, markers e conversões
-└── protocol.ts           # DTOs da borda, se necessários
+src-tauri/src/bin/
+└── fluent_cshtml_lsp.rs  # servidor LSP 3.17 stdio (processo isolado)
+
+src-tauri/src/lsp/
+└── fluent_cshtml.rs      # resolve_launch() para o binário CSHTML
+
+src/lsp/servers/
+└── cshtml.ts             # startCshtmlServer(), CSHTML_SERVER_ID
 ```
 
 Os nomes podem mudar, mas a direção de dependência definida no ADR não pode.
