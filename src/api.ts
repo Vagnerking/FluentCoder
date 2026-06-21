@@ -358,6 +358,14 @@ export function acpPrompt(
   });
 }
 
+/**
+ * Cancels the in-flight ACP prompt, if any. Kills the adapter subprocess so the
+ * agent stops working in the background; a no-op when nothing is running.
+ */
+export function acpCancel(): Promise<void> {
+  return invoke("acp_cancel");
+}
+
 // ---- Session (reopen last project on launch) ----
 
 /** Loads the persisted session (empty on first run). */

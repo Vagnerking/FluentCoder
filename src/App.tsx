@@ -21,6 +21,7 @@ import { AgentsPanel } from "./components/AgentsPanel";
 import { AgentWorkspace } from "./components/AgentWorkspace";
 import { Codicon } from "./icons/codicons/Codicon";
 import {
+  acpCancel,
   acpPrompt,
   agentsLoad,
   agentsSave,
@@ -436,16 +437,6 @@ export default function App() {
     });
   }
 
-  function handleRenameAgent(agentId: string, name: string) {
-    const now = new Date().toISOString();
-    void persistAgentStore({
-      ...agentStore,
-      agents: agentStore.agents.map((agent) =>
-        agent.id === agentId ? { ...agent, name, updatedAt: now } : agent,
-      ),
-    });
-  }
-
   function handleDeleteAgent(agentId: string) {
     void persistAgentStore({
       ...agentStore,
@@ -463,6 +454,50 @@ export default function App() {
       agentId: conversation.agentId,
       conversationId: conversation.id,
     });
+  }
+
+  function handleRenameConversation(conversationId: string, title: string) {
+    const now = new Date().toISOString();
+    void persistAgentStore({
+      ...agentStore,
+      conversations: agentStore.conversations.map((conversation) =>
+        conversation.id === conversationId
+          ? { ...conversation, title, updatedAt: now }
+          : conversation,
+      ),
+    });
+  }
+
+  function handleDeleteConversation(conversationId: string) {
+    const removed = agentStore.conversations.find(
+      (conversation) => conversation.id === conversationId,
+    );
+    if (!removed) return;
+    void persistAgentStore({
+      ...agentStore,
+      conversations: agentStore.conversations.filter(
+        (conversation) => conversation.id !== conversationId,
+      ),
+    });
+    // If the open conversation was deleted, fall back to the agent's next most
+    // recent conversation; if none remain, drop back to the agent's empty state.
+    if (
+      agentSelection?.kind === "chat" &&
+      agentSelection.conversationId === conversationId
+    ) {
+      const next = agentStore.conversations
+        .filter(
+          (conversation) =>
+            conversation.agentId === removed.agentId &&
+            conversation.id !== conversationId,
+        )
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+      setAgentSelection(
+        next
+          ? { kind: "chat", agentId: removed.agentId, conversationId: next.id }
+          : null,
+      );
+    }
   }
 
   async function handleSendAgentMessage(message: string, mode: AgentMode) {
@@ -534,6 +569,38 @@ export default function App() {
       }
     };
 
+    // Marks the assistant message done/error and persists the conversation.
+    // Persistence must not wait for `acpPrompt` to resolve: some adapters (e.g.
+    // Codex's) keep their stdio subprocess alive after the reply, so the promise
+    // settles late or only when the process finally exits. Finalizing on the
+    // `done` event — and incrementally while streaming — makes the reply durable
+    // the moment it's shown, and lets Stop keep whatever already arrived.
+    // Idempotent: the first finalize wins, later calls (the post-await safety
+    // net, a `done` racing the resolve) are ignored.
+    let finalized = false;
+    const finalizeAssistant = async (
+      status: "done" | "error",
+      fallback: string,
+    ) => {
+      if (finalized || isStaleWorkspace()) return;
+      finalized = true;
+      await persistForSend(
+        applyToConversation((current) => ({
+          ...current,
+          messages: current.messages.map((candidate) =>
+            candidate.id === assistantMessage.id
+              ? {
+                  ...candidate,
+                  content: candidate.content || fallback,
+                  status,
+                }
+              : candidate,
+          ),
+          updatedAt: new Date().toISOString(),
+        })),
+      );
+    };
+
     setAgentBusy(true);
     setAgentError(null);
     setAgentStatus("Conectando ao provedor ACP…");
@@ -559,7 +626,7 @@ export default function App() {
         }
         if (event.type === "text") {
           setAgentStatus("Recebendo resposta…");
-          applyToConversation((current) => ({
+          const updated = applyToConversation((current) => ({
             ...current,
             messages: current.messages.map((candidate) =>
               candidate.id === assistantMessage.id
@@ -572,48 +639,34 @@ export default function App() {
             ),
             updatedAt: new Date().toISOString(),
           }));
+          // Persist each streamed chunk so a crash/quit/Stop mid-stream keeps
+          // what already arrived. Fire-and-forget: the handler stays responsive
+          // and the final finalize still writes the authoritative copy.
+          void persistForSend(updated);
+          return;
+        }
+        if (event.type === "done") {
+          void finalizeAssistant(
+            "done",
+            "O agente encerrou a resposta sem conteúdo textual.",
+          );
           return;
         }
         if (event.type === "error") setAgentError(event.message);
       });
 
       if (isStaleWorkspace()) return;
-      await persistForSend(
-        applyToConversation((current) => ({
-          ...current,
-          messages: current.messages.map((candidate) =>
-            candidate.id === assistantMessage.id
-              ? {
-                  ...candidate,
-                  content:
-                    candidate.content ||
-                    "O agente encerrou a resposta sem conteúdo textual.",
-                  status: "done",
-                }
-              : candidate,
-          ),
-          updatedAt: new Date().toISOString(),
-        })),
+      // Safety net: if no `done` event arrived (older adapter, abrupt close),
+      // finalize now. No-op when `done` already finalized.
+      await finalizeAssistant(
+        "done",
+        "O agente encerrou a resposta sem conteúdo textual.",
       );
       setAgentStatus("Resposta concluída.");
     } catch (error) {
       if (isStaleWorkspace()) return;
       const messageText = String(error);
-      await persistForSend(
-        applyToConversation((current) => ({
-          ...current,
-          messages: current.messages.map((candidate) =>
-            candidate.id === assistantMessage.id
-              ? {
-                  ...candidate,
-                  content: candidate.content || messageText,
-                  status: "error",
-                }
-              : candidate,
-          ),
-          updatedAt: new Date().toISOString(),
-        })),
-      );
+      await finalizeAssistant("error", messageText);
       setAgentError(messageText);
       setAgentStatus(null);
     } finally {
@@ -621,6 +674,17 @@ export default function App() {
       // switch, or the new workspace would stay stuck "busy".
       setAgentBusy(false);
     }
+  }
+
+  /**
+   * Stops the in-flight agent prompt. Kills the adapter subprocess on the Rust
+   * side; the partial reply already streamed is preserved (persisted on each
+   * chunk), and the backend emits a `Cancelled` Done that finalizes the message.
+   */
+  function handleStopAgent() {
+    if (!agentBusy) return;
+    setAgentStatus("Parando o agente…");
+    void acpCancel().catch((error) => setAgentError(String(error)));
   }
 
   /**
@@ -1694,10 +1758,11 @@ export default function App() {
             onCreate={handleCreateAgent}
             onSelectAgent={handleSelectAgent}
             onEdit={handleEditAgent}
-            onRename={handleRenameAgent}
             onDelete={handleDeleteAgent}
             onNewConversation={handleNewAgentConversation}
             onOpenConversation={handleOpenAgentConversation}
+            onRenameConversation={handleRenameConversation}
+            onDeleteConversation={handleDeleteConversation}
           />
         );
       case "account":
@@ -1778,6 +1843,7 @@ export default function App() {
                 onSaveAgent={handleSaveAgent}
                 onCancelConfig={() => setAgentSelection(null)}
                 onSendMessage={handleSendAgentMessage}
+                onStop={handleStopAgent}
                 onRevert={handleRevertMessage}
               />
             ) : activeFile && activeFile.mode === "image" ? (

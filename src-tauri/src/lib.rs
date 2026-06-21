@@ -18,10 +18,12 @@ pub fn run() {
         .manage(terminal::TerminalState::new())
         .manage(lsp::LspState::new())
         .manage(search::SearchState::new())
+        .manage(agents::AcpState::new())
         .invoke_handler(tauri::generate_handler![
             agents::agents_load,
             agents::agents_save,
             agents::acp_prompt,
+            agents::acp_cancel,
             fs_commands::read_dir,
             fs_commands::read_file,
             fs_commands::read_file_base64,

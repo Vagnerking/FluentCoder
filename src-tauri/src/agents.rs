@@ -12,7 +12,10 @@ use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tauri::ipc::Channel;
+use tauri::State;
+use tokio::sync::Notify;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -21,6 +24,32 @@ pub enum AcpEvent {
     Status { message: String },
     Done { stop_reason: String },
     Error { message: String },
+}
+
+/// Cancellation handle for the in-flight ACP prompt. The UI's `agentBusy` is
+/// global — only one prompt runs at a time — so a single shared `Notify` is
+/// enough: `acp_prompt` races the connect future against `cancel.notified()`,
+/// and `acp_cancel` wakes that waiter. When the cancel branch wins, the connect
+/// future is dropped, and the SDK's `ChildGuard` kills the adapter subprocess on
+/// drop. This is provider-independent: it works even for adapters (like Codex's)
+/// that keep their stdio process alive after sending `Done`, or that ignore the
+/// protocol-level `$/cancel_request`.
+pub struct AcpState {
+    cancel: Arc<Notify>,
+}
+
+impl AcpState {
+    pub fn new() -> Self {
+        Self {
+            cancel: Arc::new(Notify::new()),
+        }
+    }
+}
+
+impl Default for AcpState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// What the agent is allowed to do for a given send. Enforced here on the client
@@ -106,10 +135,18 @@ pub async fn acp_prompt(
     prompt: String,
     mode: String,
     on_event: Channel<AcpEvent>,
+    state: State<'_, AcpState>,
 ) -> Result<(), String> {
     if prompt.trim().is_empty() {
         return Err("Envie uma mensagem antes de iniciar o agente.".into());
     }
+
+    // Arm cancellation before any work starts. Creating the `Notified` future up
+    // front means a cancel that races in right after this point is still caught
+    // by the `select!` below, rather than being missed.
+    let cancel = Arc::clone(&state.cancel);
+    let cancelled = cancel.notified();
+    tokio::pin!(cancelled);
 
     let mode = AgentMode::parse(&mode)?;
     let root = fs::canonicalize(&workspace_root)
@@ -133,7 +170,7 @@ pub async fn acp_prompt(
         },
     });
 
-    let result = agent_client_protocol::Client
+    let run = agent_client_protocol::Client
         .builder()
         .on_receive_notification(
             async move |notification: SessionNotification, _connection| {
@@ -227,16 +264,34 @@ pub async fn acp_prompt(
                 stop_reason: format!("{:?}", response.stop_reason),
             });
             Ok(())
-        })
-        .await;
-
-    result.map_err(|error| {
-        let message = format_acp_error(&provider, error.to_string());
-        let _ = on_event.send(AcpEvent::Error {
-            message: message.clone(),
         });
-        message
-    })
+
+    // Race the agent run against a cancel signal. If cancel wins, `run` is
+    // dropped here — tearing down the connection and killing the adapter
+    // subprocess — and we report a clean stop instead of an error.
+    tokio::select! {
+        result = run => result.map_err(|error| {
+            let message = format_acp_error(&provider, error.to_string());
+            let _ = on_event.send(AcpEvent::Error {
+                message: message.clone(),
+            });
+            message
+        }),
+        _ = &mut cancelled => {
+            let _ = on_event.send(AcpEvent::Done {
+                stop_reason: "Cancelled".to_string(),
+            });
+            Ok(())
+        }
+    }
+}
+
+/// Cancels the in-flight ACP prompt, if any. Waking the `Notify` makes the
+/// `select!` in `acp_prompt` drop the agent future, which kills the adapter
+/// subprocess. A no-op when nothing is running (no waiter to notify).
+#[tauri::command]
+pub fn acp_cancel(state: State<'_, AcpState>) {
+    state.cancel.notify_waiters();
 }
 
 fn provider_agent(provider: &str) -> Result<AcpAgent, String> {
