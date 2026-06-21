@@ -6,7 +6,9 @@
 import { writeFile } from "../api";
 
 let buffer = "";
-const LOG_PATH = "C:\\Users\\Vagner\\lsp-debug.log";
+// Temp file we can read from the shell to diagnose LSP startup/diagnostics. The
+// previous path was hardcoded to another machine, so nothing was ever written.
+const LOG_PATH = "C:\\Users\\rafae\\AppData\\Local\\Temp\\fc-lsp-debug.log";
 
 export function lspLog(...args: unknown[]): void {
   const line =

@@ -143,12 +143,20 @@ export function useLspManager(
     return () => window.removeEventListener("beforeunload", onUnload);
   }, [manager]);
 
-  /** Re-attempts starting a failed server (used by the StatusBar error action). */
+  /**
+   * Restarts a server by id (StatusBar action / TS version switch). A serverId
+   * isn't necessarily a Monaco language id (one server can cover several, e.g.
+   * css/scss/less → "css"), so map it back to a language it serves before
+   * starting — `manager.start` is keyed by language.
+   */
   const restart = useCallback(
     async (serverId: string) => {
       if (!rootPath) return;
       await manager.stop(serverId);
-      await startLanguage(serverId, rootPath);
+      const language = lspLanguageIds().find(
+        (lang) => serverIdForLanguage(lang)?.serverId === serverId
+      );
+      if (language) await startLanguage(language, rootPath);
     },
     [manager, rootPath, startLanguage]
   );

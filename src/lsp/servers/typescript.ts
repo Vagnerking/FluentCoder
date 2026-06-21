@@ -13,6 +13,18 @@ import { createLanguageClient, type RunningClient } from "../client";
 
 export const TS_SERVER_ID = "typescript";
 
+/** localStorage key for the TS version preference (project vs editor). */
+export const TS_PREFER_EDITOR_KEY = "lsp.ts.preferEditor";
+
+/** Whether the user picked the editor-managed TypeScript over the project's. */
+function preferEditorVersion(): boolean {
+  try {
+    return localStorage.getItem(TS_PREFER_EDITOR_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 /** file:// URI for a workspace root, Windows-safe (`file:///C:/...`). */
 function toFileUri(rootPath: string): string {
   let p = rootPath.replace(/\\/g, "/");
@@ -27,7 +39,7 @@ function toFileUri(rootPath: string): string {
 export async function startTypescriptServer(
   rootPath: string
 ): Promise<RunningClient> {
-  const { program, args } = await ensureTsServer(rootPath);
+  const { program, args } = await ensureTsServer(rootPath, preferEditorVersion());
   await startLspServer(TS_SERVER_ID, program, args, rootPath);
 
   return createLanguageClient({
