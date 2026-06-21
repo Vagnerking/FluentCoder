@@ -11,6 +11,7 @@ pub mod lint;
 pub mod parser;
 pub mod projection;
 pub mod types;
+pub mod semantics;
 pub mod workspace;
 
 pub use engine::CshtmlEngine;
