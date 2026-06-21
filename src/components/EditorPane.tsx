@@ -9,22 +9,15 @@ import type {
   Problem,
 } from "../types";
 import { languageForFile } from "../language";
-import { gitBlame, writeFile } from "../api";
+import { gitBlame } from "../api";
 import { toFileUri, fromFileUri } from "../lsp/uri";
 import { setupMonacoForLsp } from "../lsp/monacoSetup";
 
-// --- TEMP: log de diagnóstico do Git Lens em arquivo, para depuração ---
-let _glBuffer = "";
+// Console-only debug logging. (It used to mirror to a hardcoded path on another
+// machine and fire an IPC file write — with an ever-growing buffer — on EVERY
+// cursor move, which wasted resources and hurt editor responsiveness.)
 function glLog(...args: unknown[]) {
-  const line =
-    "[GitLens] " +
-    args
-      .map((a) => (typeof a === "string" ? a : JSON.stringify(a)))
-      .join(" ");
-  console.log(line);
-  _glBuffer += line + "\n";
-  // Best-effort flush; ignore errors.
-  writeFile("C:\\Users\\Vagner\\gitlens-debug.log", _glBuffer).catch(() => {});
+  console.debug("[GitLens]", ...args);
 }
 
 interface EditorPaneProps {
@@ -183,6 +176,8 @@ export function EditorPane({
     const ed = editorRef.current;
     glLog("loadBlame", { hasEditor: !!ed, rootPath, filePath: file?.path });
     if (!ed || !rootPath || !file) return;
+    // Untitled buffers aren't on disk — no git blame to fetch.
+    if (file.path.startsWith("untitled:")) return;
 
     try {
       const hunks = await gitBlame(rootPath, file.path);
@@ -457,6 +452,13 @@ export function EditorPane({
     );
   }
 
+  // Untitled buffers have no on-disk path; use their synthetic `untitled:` URI
+  // directly so Monaco doesn't mangle it through `file://` (LSP/blame stay off —
+  // they're plaintext until saved).
+  const modelPath = file.path.startsWith("untitled:")
+    ? file.path
+    : toFileUri(file.path);
+
   return (
     <Editor
       height="100%"
@@ -464,7 +466,7 @@ export function EditorPane({
       // The model URI must use the `file://` scheme so LSP clients whose
       // documentSelector is `{ scheme: "file" }` attach to it. Passing the raw
       // Windows path would make Monaco treat the drive letter as the URI scheme.
-      path={toFileUri(file.path)}
+      path={modelPath}
       language={languageForFile(file.name)}
       value={file.content}
       onChange={(value) => onChange(value ?? "")}
@@ -476,6 +478,13 @@ export function EditorPane({
         scrollBeyondLastLine: false,
         automaticLayout: true,
         tabSize: 2,
+        // Indentation: keep Monaco's smartest auto-indent on, detect the file's
+        // own tabs/spaces, and let the language server format on type/paste so
+        // code stays properly indented (VSCode-like) across languages.
+        autoIndent: "full",
+        detectIndentation: true,
+        formatOnType: true,
+        formatOnPaste: true,
         padding: { top: 12 },
         mouseWheelZoom: true,
         // Suggest (IntelliSense) widget sizing. Monaco derives each row's

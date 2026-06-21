@@ -8,6 +8,7 @@ mod search;
 mod session;
 mod terminal;
 mod walk;
+mod window;
 
 use tauri::Manager;
 
@@ -63,6 +64,8 @@ pub fn run() {
             session::session_load,
             session::session_set_last_folder,
             session::session_set_open_files,
+            window::open_new_window,
+            window::is_fresh_window,
             terminal::term_create,
             terminal::term_write,
             terminal::term_resize,
@@ -71,7 +74,10 @@ pub fn run() {
             lsp::lsp_stop_server,
             lsp::lsp_bridge_info,
             lsp::lsp_ensure_csharp_server,
+            lsp::build::csharp_build_diagnostics,
             lsp::lsp_ensure_ts_server,
+            lsp::lsp_ensure_npm_server,
+            lsp::lsp_ensure_system_server,
             lsp::razor::lsp_ensure_razor_server,
         ])
         .build(tauri::generate_context!())

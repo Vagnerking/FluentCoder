@@ -446,6 +446,18 @@ export function sessionSetOpenFiles(
   return invoke("session_set_open_files", { tabs, activePath });
 }
 
+// ---- Windows ----
+
+/** Opens a new, isolated editor window (a separate OS process), starting empty. */
+export function openNewWindow(): Promise<void> {
+  return invoke("open_new_window");
+}
+
+/** Whether this window was launched fresh (`--new`) and should start empty. */
+export function isFreshWindow(): Promise<boolean> {
+  return invoke<boolean>("is_fresh_window");
+}
+
 // ---- LSP (language servers) ----
 
 /** Bridge connection info returned by the backend (`{ port, token }`). */
@@ -491,12 +503,56 @@ export function ensureCsharpServer(rootPath: string): Promise<string> {
   return invoke<string>("lsp_ensure_csharp_server", { rootPath });
 }
 
-/** Resolves the `typescript-language-server` launch command for a project. */
-export function ensureTsServer(rootPath: string): Promise<LspLaunchInfo> {
-  return invoke<LspLaunchInfo>("lsp_ensure_ts_server", { rootPath });
+/** One diagnostic parsed from `dotnet build`, mirroring the Rust `BuildDiagnostic`. */
+export interface BuildDiagnostic {
+  path: string;
+  line: number;
+  column: number;
+  severity: "error" | "warning";
+  code: string;
+  message: string;
+}
+
+/**
+ * Runs the real compiler (`dotnet build`) over the workspace and returns its
+ * errors/warnings (issue #11) — pragmatic ground-truth diagnostics for C# and
+ * Razor (.cshtml), with file/line/column, independent of the LSP.
+ */
+export function csharpBuildDiagnostics(rootPath: string): Promise<BuildDiagnostic[]> {
+  return invoke<BuildDiagnostic[]>("csharp_build_diagnostics", { rootPath });
+}
+
+/**
+ * Resolves the `typescript-language-server` launch command for a project,
+ * auto-installing it into the app cache when missing. `preferEditor` forces the
+ * editor-managed (cached) TypeScript version instead of the project's.
+ */
+export function ensureTsServer(
+  rootPath: string,
+  preferEditor: boolean
+): Promise<LspLaunchInfo> {
+  return invoke<LspLaunchInfo>("lsp_ensure_ts_server", { rootPath, preferEditor });
 }
 
 /** Resolves the rzls executable path (rejects if not cached — download stubbed). */
 export function ensureRazorServer(): Promise<string> {
   return invoke<string>("lsp_ensure_razor_server");
+}
+
+/**
+ * Resolves the launch command for an npm-distributed language server (Python,
+ * YAML, JSON/HTML/CSS, Bash, Dockerfile, …) by its `serverId`, auto-installing it
+ * into the app cache on first use. Progress arrives via `lsp-download-progress`.
+ */
+export function ensureNpmLspServer(serverId: string): Promise<LspLaunchInfo> {
+  return invoke<LspLaunchInfo>("lsp_ensure_npm_server", { serverId });
+}
+
+/**
+ * Resolves the launch command for an SDK-provided language server (Dart, Go, …)
+ * from the user's PATH — no download. Rejects with an install hint when the
+ * SDK's server isn't found.
+ */
+export function ensureSystemLspServer(serverId: string): Promise<LspLaunchInfo> {
+  return invoke<LspLaunchInfo>("lsp_ensure_system_server", { serverId });
 }

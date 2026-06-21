@@ -155,13 +155,18 @@ pub async fn ensure_roslyn_server(app: &AppHandle) -> Result<PathBuf, String> {
         }
     }
 
-    // --- Extract (the .nupkg is a ZIP) ---
+    // --- Extract (the .nupkg is a ZIP) — on a blocking thread so the synchronous
+    //     std::fs/zip I/O doesn't stall the async runtime (CodeRabbit). ---
     emit_progress(app, "extracting", "Extraindo o servidor C#…");
-    extract_zip(&bytes, &cache_dir).map_err(|e| {
-        let msg = format!("Falha ao extrair o servidor C#: {e}");
-        emit_progress(app, "error", &msg);
-        msg
-    })?;
+    let extract_dir = cache_dir.clone();
+    tokio::task::spawn_blocking(move || extract_zip(&bytes, &extract_dir))
+        .await
+        .map_err(|e| format!("tarefa de extração falhou: {e}"))?
+        .map_err(|e| {
+            let msg = format!("Falha ao extrair o servidor C#: {e}");
+            emit_progress(app, "error", &msg);
+            msg
+        })?;
 
     let exe = find_executable(&cache_dir).ok_or_else(|| {
         let msg = "Executável do servidor C# não encontrado após a extração.".to_string();
@@ -233,7 +238,147 @@ pub fn detect_dotnet() -> Result<String, String> {
     }
 }
 
+// ---- Razor cohosting via the C# extension's bundled Roslyn (issue #11) ----
+//
+// The standalone `rzls` is dead (deprecated 2020). The modern path is the Roslyn
+// LSP itself serving Razor ("cohosting"). The C# extension's Roslyn build
+// supports it, so we acquire the C# extension VSIX — it bundles a *matched*
+// Roslyn LSP + the Razor extension under `extension/.roslyn/` — and launch Roslyn
+// with the Razor cohosting args. One server then handles both C# and `.cshtml`.
+// `--razorDesignTimePath` points at the installed .NET SDK's Razor targets.
+
+/// Pinned C# extension version whose bundled Roslyn supports Razor cohosting.
+const CSHARP_EXT_VERSION: &str = "2.144.9";
+
+/// VS Marketplace target-platform tag for the current OS/arch (None if unknown).
+fn csharp_ext_target_platform() -> Option<&'static str> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "x86_64") => Some("win32-x64"),
+        ("windows", "aarch64") => Some("win32-arm64"),
+        ("linux", "x86_64") => Some("linux-x64"),
+        ("linux", "aarch64") => Some("linux-arm64"),
+        ("macos", "aarch64") => Some("darwin-arm64"),
+        ("macos", "x86_64") => Some("darwin-x64"),
+        _ => None,
+    }
+}
+
+fn csharp_ext_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("failed to resolve app data dir: {e}"))?;
+    Ok(base.join("lsp").join("csharp-ext").join(CSHARP_EXT_VERSION))
+}
+
+/// The bundled Roslyn apphost file name inside the VSIX's `.roslyn/` folder.
+fn roslyn_apphost_name() -> &'static str {
+    if cfg!(windows) {
+        "Microsoft.CodeAnalysis.LanguageServer.exe"
+    } else {
+        "Microsoft.CodeAnalysis.LanguageServer"
+    }
+}
+
+/// The cached `.roslyn/` dir from the C# extension, if its apphost is present.
+fn csharp_ext_roslyn_dir(app: &AppHandle) -> Option<PathBuf> {
+    let dir = csharp_ext_cache_dir(app)
+        .ok()?
+        .join("extension")
+        .join(".roslyn");
+    if dir.join(roslyn_apphost_name()).is_file() {
+        Some(dir)
+    } else {
+        None
+    }
+}
+
+/// Ensures the C# extension (Roslyn + Razor) is cached, downloading the VSIX on
+/// first use. Returns its `.roslyn/` directory.
+async fn ensure_csharp_ext(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Some(dir) = csharp_ext_roslyn_dir(app) {
+        return Ok(dir);
+    }
+    let platform = csharp_ext_target_platform()
+        .ok_or_else(|| "sem build da extensão C# para esta plataforma".to_string())?;
+    let cache = csharp_ext_cache_dir(app)?;
+    tokio::fs::create_dir_all(&cache)
+        .await
+        .map_err(|e| format!("failed to create C# ext cache: {e}"))?;
+
+    let url = format!(
+        "https://marketplace.visualstudio.com/_apis/public/gallery/publishers/ms-dotnettools/vsextensions/csharp/{ver}/vspackage?targetPlatform={plat}",
+        ver = CSHARP_EXT_VERSION,
+        plat = platform
+    );
+    emit_progress(app, "downloading", "Baixando o servidor C#/Razor (cohosting)…");
+    let bytes = download_bytes(&url).await.map_err(|e| {
+        let m = format!("Não foi possível baixar o servidor C#/Razor. ({e})");
+        emit_progress(app, "error", &m);
+        m
+    })?;
+    // Extract on a blocking thread (synchronous zip I/O off the async runtime).
+    emit_progress(app, "extracting", "Extraindo o servidor C#/Razor…");
+    let extract_dir = cache.clone();
+    tokio::task::spawn_blocking(move || extract_zip(&bytes, &extract_dir))
+        .await
+        .map_err(|e| format!("tarefa de extração falhou: {e}"))?
+        .map_err(|e| {
+            let m = format!("Falha ao extrair o servidor C#/Razor: {e}");
+            emit_progress(app, "error", &m);
+            m
+        })?;
+    csharp_ext_roslyn_dir(app)
+        .ok_or_else(|| "Roslyn não encontrado após extrair a extensão C#.".to_string())
+}
+
+/// Builds the Roslyn launch command with Razor cohosting enabled (issue #11) —
+/// one Roslyn server handling both C# and `.cshtml`. The arg shape mirrors what
+/// the C# extension uses in *standalone* mode (reverse-engineered from the bundled
+/// `extension.js` and verified against the server's `--help`): load the Razor
+/// extension assembly via `--extension` — which turns on cohosting (default in
+/// this build) and finds its own bundled Razor design-time targets — and point
+/// `--csharpDesignTimePath` at the extension's C# targets. The older
+/// `--razorSourceGenerator`/`--razorDesignTimePath` flags do NOT exist on this
+/// Roslyn (confirmed via `--help`) and would make it exit immediately.
+async fn cohosting_launch_command(
+    app: &AppHandle,
+) -> Result<(String, Vec<String>), String> {
+    let roslyn_dir = ensure_csharp_ext(app).await?;
+    let exe = roslyn_dir.join(roslyn_apphost_name());
+    let razor_extension = roslyn_dir.join("Microsoft.VisualStudioCode.RazorExtension.dll");
+    if !razor_extension.is_file() {
+        return Err("RazorExtension.dll ausente no pacote da extensão C#.".to_string());
+    }
+    let csharp_designtime = roslyn_dir
+        .join("Targets")
+        .join("Microsoft.CSharpExtension.DesignTime.targets");
+
+    let log_dir = roslyn_dir.join("logs");
+    let _ = tokio::fs::create_dir_all(&log_dir).await;
+
+    let mut args = vec![
+        "--logLevel".to_string(),
+        "Information".to_string(),
+        "--extensionLogDirectory".to_string(),
+        log_dir.to_string_lossy().to_string(),
+        "--stdio".to_string(),
+        "--extension".to_string(),
+        razor_extension.to_string_lossy().to_string(),
+    ];
+    if csharp_designtime.is_file() {
+        args.push("--csharpDesignTimePath".to_string());
+        args.push(csharp_designtime.to_string_lossy().to_string());
+    }
+    emit_progress(app, "ready", "Servidor C#/Razor pronto.");
+    Ok((exe.to_string_lossy().to_string(), args))
+}
+
 /// Resolves the full launch command (program + args) for the Roslyn LSP.
+///
+/// Prefers the modern cohosting build (one Roslyn for C# AND Razor, issue #11);
+/// falls back to the self-contained Roslyn 5.0.0 (C# only) when the C# extension
+/// can't be acquired — so C# never regresses even when Razor is unavailable.
 ///
 /// `Microsoft.CodeAnalysis.LanguageServer --help` marks BOTH `--logLevel` and
 /// `--extensionLogDirectory` as REQUIRED — without the log directory the process
@@ -244,6 +389,13 @@ pub async fn roslyn_launch_command(
     app: &AppHandle,
     _project_root: &Path,
 ) -> Result<(String, Vec<String>), String> {
+    match cohosting_launch_command(app).await {
+        Ok(cmd) => return Ok(cmd),
+        Err(e) => eprintln!(
+            "[lsp/csharp] cohosting indisponível ({e}); usando Roslyn 5.0.0 (C# sem Razor)"
+        ),
+    }
+
     // Don't hard-fail if dotnet is missing — the bundled server still starts;
     // log a hint instead. (detect_dotnet returns Err with an install message.)
     if let Err(hint) = detect_dotnet() {

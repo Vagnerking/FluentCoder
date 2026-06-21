@@ -1,10 +1,13 @@
 //! Locating and launching `typescript-language-server` (a Node.js process).
 //!
-//! Strategy: prefer the project's local `node_modules/.bin` install (respects
-//! the project's TypeScript version), fall back to a global npm install. No
-//! auto-download — emit a clear, actionable error if anything is missing.
+//! Strategy: prefer the project's local `node_modules` install (respects the
+//! project's TypeScript version), fall back to a global npm install, and finally
+//! auto-install into an app-managed cache (`app_data_dir/lsp/typescript`) with
+//! `npm` so the user never has to set it up by hand. Progress is reported via the
+//! `lsp-download-progress` event, like the Roslyn (C#) acquisition.
 
 use std::path::{Path, PathBuf};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// `{ program, args }` the frontend forwards to `lsp_start_server`.
 #[derive(serde::Serialize, Clone, Debug)]
@@ -83,21 +86,34 @@ pub fn detect_tsserver(project_root: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Builds the launch command for the TS language server.
+/// Resolves the launch command for the TS language server, auto-installing it
+/// into the app cache when it isn't found in the project or globally.
 ///
 /// Returns `(node_path, [cli.mjs, "--stdio", "--tsserver-path", <tsserver.js>])`.
-pub fn ts_launch_command(project_root: &Path) -> Result<LaunchInfo, String> {
+pub async fn resolve_ts_launch(
+    app: &AppHandle,
+    project_root: &Path,
+    prefer_editor: bool,
+) -> Result<LaunchInfo, String> {
     let node = detect_node()?;
-    let server = detect_ts_language_server(project_root)?;
+    // Project-local / global install wins (honors the project's TS version);
+    // otherwise fall back to the auto-installed cache.
+    let server = match detect_ts_language_server(project_root) {
+        Ok(server) => server,
+        Err(_) => ensure_ts_cached(app).await?,
+    };
 
-    let mut args = vec![
-        server.to_string_lossy().to_string(),
-        "--stdio".to_string(),
-    ];
+    let mut args = vec![server.to_string_lossy().to_string(), "--stdio".to_string()];
 
-    if let Some(tsserver) = detect_tsserver(project_root) {
-        // typescript-language-server expects the directory containing tsserver,
-        // i.e. node_modules/typescript/lib.
+    // tsserver = the TypeScript version. By default we prefer the project's (the
+    // recommended choice); the user can force the editor-managed (cached) one.
+    let tsserver = if prefer_editor {
+        let _ = ensure_ts_cached(app).await; // make sure the cached TS exists
+        cached_tsserver(app)
+    } else {
+        detect_tsserver(project_root).or_else(|| cached_tsserver(app))
+    };
+    if let Some(tsserver) = tsserver {
         if let Some(lib_dir) = tsserver.parent() {
             args.push("--tsserver-path".to_string());
             args.push(lib_dir.to_string_lossy().to_string());
@@ -108,6 +124,107 @@ pub fn ts_launch_command(project_root: &Path) -> Result<LaunchInfo, String> {
         program: node.to_string_lossy().to_string(),
         args,
     })
+}
+
+/// Cache directory for the auto-installed TypeScript language server.
+fn ts_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("failed to resolve app data dir: {e}"))?;
+    Ok(base.join("lsp").join("typescript"))
+}
+
+/// Emits a download-progress event for the TypeScript server (mirrors C#).
+fn emit_progress(app: &AppHandle, state: &str, message: &str) {
+    let _ = app.emit(
+        "lsp-download-progress",
+        serde_json::json!({ "server": "typescript", "state": state, "message": message }),
+    );
+}
+
+/// `cli.mjs` of the cached language server, if it's installed.
+fn cached_ts_language_server(app: &AppHandle) -> Option<PathBuf> {
+    let cli = ts_cache_dir(app)
+        .ok()?
+        .join("node_modules")
+        .join("typescript-language-server")
+        .join("lib")
+        .join("cli.mjs");
+    cli.is_file().then_some(cli)
+}
+
+/// `tsserver.js` from the cached `typescript` package, if present.
+fn cached_tsserver(app: &AppHandle) -> Option<PathBuf> {
+    let server = ts_cache_dir(app)
+        .ok()?
+        .join("node_modules")
+        .join("typescript")
+        .join("lib")
+        .join("tsserver.js");
+    server.is_file().then_some(server)
+}
+
+/// Ensures the TypeScript language server is installed in the app cache,
+/// installing it with `npm` on first use. Returns the path to `cli.mjs`.
+pub async fn ensure_ts_cached(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Some(cli) = cached_ts_language_server(app) {
+        return Ok(cli);
+    }
+
+    let npm = which::which("npm").map_err(|_| {
+        "npm não encontrado no PATH. Instale o Node.js (https://nodejs.org) para o editor \
+         baixar o servidor de TypeScript automaticamente."
+            .to_string()
+    })?;
+    let cache = ts_cache_dir(app)?;
+    std::fs::create_dir_all(&cache)
+        .map_err(|e| format!("não foi possível criar o cache do TypeScript: {e}"))?;
+
+    emit_progress(app, "downloading", "Baixando o servidor de TypeScript…");
+
+    // npm install is blocking and slow; run it off the async runtime.
+    let cache_arg = cache.to_string_lossy().to_string();
+    let output = tokio::task::spawn_blocking(move || {
+        let mut cmd = std::process::Command::new(npm);
+        cmd.args([
+            "install",
+            "--prefix",
+            &cache_arg,
+            "typescript-language-server",
+            "typescript",
+            "--no-audit",
+            "--no-fund",
+            "--loglevel",
+            "error",
+        ]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        cmd.output()
+    })
+    .await
+    .map_err(|e| format!("falha ao iniciar o npm: {e}"))?
+    .map_err(|e| format!("falha ao executar o npm: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        emit_progress(app, "error", "Falha ao baixar o servidor de TypeScript");
+        return Err(format!("npm install falhou: {stderr}"));
+    }
+
+    match cached_ts_language_server(app) {
+        Some(cli) => {
+            emit_progress(app, "ready", "Servidor de TypeScript pronto");
+            Ok(cli)
+        }
+        None => {
+            emit_progress(app, "error", "Servidor não encontrado após a instalação");
+            Err("typescript-language-server não encontrado após o npm install".to_string())
+        }
+    }
 }
 
 /// Returns the global npm modules root (`npm root -g`), if resolvable.

@@ -7,10 +7,13 @@
 //! tokio lives **only** here — `terminal.rs` stays synchronous.
 
 pub mod bridge;
+pub mod build;
 pub mod codec;
 pub mod csharp;
+pub mod npm_server;
 pub mod process;
 pub mod razor;
+pub mod system_server;
 pub mod typescript;
 
 use bridge::{start_bridge, BridgeHandle, BridgeInfo};
@@ -135,20 +138,29 @@ pub fn lsp_bridge_info(id: String, state: State<'_, LspState>) -> Result<BridgeI
         .ok_or_else(|| format!("no active LSP session for id '{id}'"))
 }
 
+// NOTE: these acquisition commands are `async fn` ON PURPOSE. A sync (`fn`)
+// Tauri command runs on the UI thread; doing a `block_on` of a slow download /
+// `npm install` there froze the whole interface. As async commands they run off
+// the UI thread, and we run the actual work on the LSP runtime's dedicated pool
+// (where the inner `spawn_blocking`/reqwest already expect a tokio runtime), so
+// downloads never block the UI — failures just surface as a rejected promise.
+
 /// Ensures the Roslyn C# server is downloaded/cached and `dotnet` is present.
 ///
 /// Returns the launch command as `"<program>\n<arg1>\n<arg2>…"` (program on the
 /// first line). The frontend splits this and feeds it to `lsp_start_server`.
 #[tauri::command]
-pub fn lsp_ensure_csharp_server(
+pub async fn lsp_ensure_csharp_server(
     root_path: String,
     state: State<'_, LspState>,
     app: AppHandle,
 ) -> Result<String, String> {
     let root = PathBuf::from(&root_path);
-    let (program, args) = state
-        .runtime
-        .block_on(async move { csharp::roslyn_launch_command(&app, &root).await })?;
+    let handle = state.runtime.handle().clone();
+    let (program, args) = handle
+        .spawn(async move { csharp::roslyn_launch_command(&app, &root).await })
+        .await
+        .map_err(|e| format!("falha ao preparar o servidor C#: {e}"))??;
 
     let mut lines = vec![program];
     lines.extend(args);
@@ -158,9 +170,48 @@ pub fn lsp_ensure_csharp_server(
 /// Resolves the launch command for `typescript-language-server` in a project.
 ///
 /// Returns `{ program, args }`; the frontend forwards it to `lsp_start_server`.
-/// Errors with an actionable message if Node or the server isn't installed.
+/// Auto-installs the server into the app cache (via npm) when it isn't found in
+/// the project or globally, reporting progress through `lsp-download-progress`.
 #[tauri::command]
-pub fn lsp_ensure_ts_server(root_path: String) -> Result<typescript::LaunchInfo, String> {
+pub async fn lsp_ensure_ts_server(
+    root_path: String,
+    prefer_editor: bool,
+    state: State<'_, LspState>,
+    app: AppHandle,
+) -> Result<typescript::LaunchInfo, String> {
     let root = PathBuf::from(root_path);
-    typescript::ts_launch_command(&root)
+    let handle = state.runtime.handle().clone();
+    handle
+        .spawn(async move { typescript::resolve_ts_launch(&app, &root, prefer_editor).await })
+        .await
+        .map_err(|e| format!("falha ao preparar o servidor TypeScript: {e}"))?
+}
+
+/// Resolves the launch command for an npm-distributed language server (Python,
+/// YAML, JSON/HTML/CSS, Bash, Dockerfile, …), installing it into the app cache on
+/// first use. The frontend forwards `{ program, args }` to `lsp_start_server`.
+#[tauri::command]
+pub async fn lsp_ensure_npm_server(
+    server_id: String,
+    state: State<'_, LspState>,
+    app: AppHandle,
+) -> Result<npm_server::LaunchInfo, String> {
+    let spec = npm_server::spec_for(&server_id)
+        .ok_or_else(|| format!("servidor LSP desconhecido: {server_id}"))?;
+    let handle = state.runtime.handle().clone();
+    handle
+        .spawn(async move { npm_server::ensure_npm_server(&app, &spec).await })
+        .await
+        .map_err(|e| format!("falha ao preparar o servidor de linguagem: {e}"))?
+}
+
+/// Resolves the launch command for an SDK-provided language server (Dart, Go, …)
+/// from the user's PATH — no download. Errors with an install hint if missing.
+#[tauri::command]
+pub fn lsp_ensure_system_server(
+    server_id: String,
+) -> Result<system_server::LaunchInfo, String> {
+    let spec = system_server::spec_for(&server_id)
+        .ok_or_else(|| format!("servidor LSP desconhecido: {server_id}"))?;
+    system_server::resolve_system_server(&spec)
 }

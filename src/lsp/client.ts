@@ -12,6 +12,7 @@ import {
 import { lspBridgeInfo } from "../api";
 import { createTransport, type LspTransport } from "./transport";
 import { installReferencesBridge } from "./references";
+import { installDiagnosticsBridge } from "./diagnostics";
 import { lspLog } from "./debug";
 
 /** Configuration for a single LSP client. Server-agnostic. */
@@ -138,6 +139,14 @@ export async function createLanguageClient(
   addClientContributions(
     client,
     installReferencesBridge(client, config.serverId, config.documentSelector)
+  );
+
+  // Diagnostics → Monaco markers (issue #10): pull for Roslyn
+  // (`textDocument/diagnostic`), push for TS/Razor (`publishDiagnostics`). Owned
+  // by serverId so markers de-duplicate per server, and feed the Problems panel.
+  addClientContributions(
+    client,
+    installDiagnosticsBridge(client, config.serverId, config.documentSelector)
   );
 
   // Diagnostic: what models exist and what are their scheme/language? The client

@@ -113,6 +113,10 @@ export function useLspManager(
     // stop the session we just started.
     if (lastRootRef.current !== null && lastRootRef.current !== rootPath) {
       void manager.stopAll();
+      // Drop the previous workspace's LSP status/errors/solution info so the
+      // status bar doesn't keep showing stale servers/projects during the switch
+      // (issue #17) — the new project repopulates it as its servers start.
+      setState({ status: new Map(), errors: new Map(), workspaces: new Map() });
     }
     lastRootRef.current = rootPath;
 
@@ -143,20 +147,51 @@ export function useLspManager(
     return () => window.removeEventListener("beforeunload", onUnload);
   }, [manager]);
 
-  /** Re-attempts starting a failed server (used by the StatusBar error action). */
+  /**
+   * Restarts a server by id (StatusBar action / TS version switch). A serverId
+   * isn't necessarily a Monaco language id (one server can cover several, e.g.
+   * css/scss/less → "css"), so map it back to a language it serves before
+   * starting — `manager.start` is keyed by language.
+   */
   const restart = useCallback(
     async (serverId: string) => {
       if (!rootPath) return;
       await manager.stop(serverId);
-      await startLanguage(serverId, rootPath);
+      const language = lspLanguageIds().find(
+        (lang) => serverIdForLanguage(lang)?.serverId === serverId
+      );
+      if (language) await startLanguage(language, rootPath);
     },
     [manager, rootPath, startLanguage]
   );
+
+  /**
+   * Resets EVERY running code server: stops them all, clears the status/errors/
+   * workspace state, then (re)starts the servers for the currently-open
+   * languages. Backs the Command Palette's "Resetar Servidores de Código"
+   * (issue #12) — the escape hatch when a server stops responding.
+   *
+   * Coverage is automatic: `manager.stopAll()` tears down every server the
+   * manager started, and `openedLanguages` (derived from the open tabs) covers
+   * every language whose server should come back. Any NEW language server is
+   * reset for free — provided it's started through the LspManager registry, not
+   * ad-hoc. See docs/context/command-palette.md.
+   */
+  const restartAll = useCallback(async () => {
+    if (!rootPath) return;
+    await manager.stopAll();
+    setState({ status: new Map(), errors: new Map(), workspaces: new Map() });
+    const supported = new Set(lspLanguageIds());
+    for (const language of openedLanguages) {
+      if (supported.has(language)) void startLanguage(language, rootPath);
+    }
+  }, [manager, rootPath, openedLanguages, startLanguage]);
 
   return {
     status: state.status,
     errors: state.errors,
     workspaces: state.workspaces,
     restart,
+    restartAll,
   };
 }

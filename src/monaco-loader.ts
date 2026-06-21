@@ -44,6 +44,7 @@ self.MonacoEnvironment = {
       case "html":
       case "handlebars":
       case "razor":
+      case "aspnetcorerazor":
         return new htmlWorker();
       case "typescript":
       case "javascript":
