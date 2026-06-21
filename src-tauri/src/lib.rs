@@ -69,6 +69,7 @@ pub fn run() {
             lsp::lsp_stop_server,
             lsp::lsp_bridge_info,
             lsp::lsp_ensure_csharp_server,
+            lsp::build::csharp_build_diagnostics,
             lsp::lsp_ensure_ts_server,
             lsp::lsp_ensure_npm_server,
             lsp::lsp_ensure_system_server,

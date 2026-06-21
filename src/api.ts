@@ -450,6 +450,25 @@ export function ensureCsharpServer(rootPath: string): Promise<string> {
   return invoke<string>("lsp_ensure_csharp_server", { rootPath });
 }
 
+/** One diagnostic parsed from `dotnet build`, mirroring the Rust `BuildDiagnostic`. */
+export interface BuildDiagnostic {
+  path: string;
+  line: number;
+  column: number;
+  severity: "error" | "warning";
+  code: string;
+  message: string;
+}
+
+/**
+ * Runs the real compiler (`dotnet build`) over the workspace and returns its
+ * errors/warnings (issue #11) — pragmatic ground-truth diagnostics for C# and
+ * Razor (.cshtml), with file/line/column, independent of the LSP.
+ */
+export function csharpBuildDiagnostics(rootPath: string): Promise<BuildDiagnostic[]> {
+  return invoke<BuildDiagnostic[]>("csharp_build_diagnostics", { rootPath });
+}
+
 /**
  * Resolves the `typescript-language-server` launch command for a project,
  * auto-installing it into the app cache when missing. `preferEditor` forces the

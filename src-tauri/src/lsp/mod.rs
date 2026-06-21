@@ -7,6 +7,7 @@
 //! tokio lives **only** here — `terminal.rs` stays synchronous.
 
 pub mod bridge;
+pub mod build;
 pub mod codec;
 pub mod csharp;
 pub mod npm_server;
