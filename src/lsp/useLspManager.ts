@@ -165,10 +165,33 @@ export function useLspManager(
     [manager, rootPath, startLanguage]
   );
 
+  /**
+   * Resets EVERY running code server: stops them all, clears the status/errors/
+   * workspace state, then (re)starts the servers for the currently-open
+   * languages. Backs the Command Palette's "Resetar Servidores de Código"
+   * (issue #12) — the escape hatch when a server stops responding.
+   *
+   * Coverage is automatic: `manager.stopAll()` tears down every server the
+   * manager started, and `openedLanguages` (derived from the open tabs) covers
+   * every language whose server should come back. Any NEW language server is
+   * reset for free — provided it's started through the LspManager registry, not
+   * ad-hoc. See docs/context/command-palette.md.
+   */
+  const restartAll = useCallback(async () => {
+    if (!rootPath) return;
+    await manager.stopAll();
+    setState({ status: new Map(), errors: new Map(), workspaces: new Map() });
+    const supported = new Set(lspLanguageIds());
+    for (const language of openedLanguages) {
+      if (supported.has(language)) void startLanguage(language, rootPath);
+    }
+  }, [manager, rootPath, openedLanguages, startLanguage]);
+
   return {
     status: state.status,
     errors: state.errors,
     workspaces: state.workspaces,
     restart,
+    restartAll,
   };
 }

@@ -15,6 +15,7 @@ import { Breadcrumbs } from "./components/Breadcrumbs";
 import { StatusBar } from "./components/StatusBar";
 import { TerminalPanel, type PanelTab } from "./components/TerminalPanel";
 import { QuickOpen } from "./components/QuickOpen";
+import { CommandPalette, type Command } from "./components/CommandPalette";
 import { AboutDialog } from "./components/AboutDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { AgentsPanel } from "./components/AgentsPanel";
@@ -222,6 +223,7 @@ export default function App() {
   const [panelTabNonce, setPanelTabNonce] = useState(0);
   const [activeView, setActiveView] = useState("explorer");
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [branchPickerOpen, setBranchPickerOpen] = useState(false);
   const [agentStore, setAgentStore] = useState<AgentStore>(() => ({
     ...EMPTY_AGENT_STORE,
@@ -376,6 +378,7 @@ export default function App() {
     errors: lspErrors,
     workspaces: lspWorkspaces,
     restart: restartLsp,
+    restartAll: restartAllLsp,
   } = useLspManager(rootPath, openedLanguages);
 
   const lspServers: LspServerStatus[] = useMemo(
@@ -400,6 +403,23 @@ export default function App() {
     () =>
       activeServerId ? lspServers.filter((s) => s.id === activeServerId) : [],
     [lspServers, activeServerId]
+  );
+
+  // Command Palette registry (Ctrl+Shift+P, issue #12). Extensible: add a command
+  // by pushing another entry. The status bar already reflects the LSP restart
+  // (servers flip to "starting" → "ready"), so resetting gives visible feedback.
+  const commands = useMemo<Command[]>(
+    () => [
+      {
+        id: "lsp.resetServers",
+        title: "Resetar Servidores de Código",
+        detail: "LSP",
+        run: () => {
+          void restartAllLsp();
+        },
+      },
+    ],
+    [restartAllLsp]
   );
 
   /**
@@ -1675,8 +1695,14 @@ export default function App() {
         setSidebarOpen((v) => !v);
         return;
       }
+      // Ctrl+Shift+P → Command Palette (must come before the plain Ctrl+P).
+      if (key === "p" && e.shiftKey) {
+        e.preventDefault();
+        setCommandPaletteOpen(true);
+        return;
+      }
       // Ctrl+P → Quick Open (file search by name).
-      if (key === "p") {
+      if (key === "p" && !e.shiftKey) {
         e.preventDefault();
         setQuickOpenOpen(true);
         return;
@@ -2033,8 +2059,8 @@ export default function App() {
         {
           id: "view.commandPalette",
           label: "Paleta de Comandos",
-          accelerator: "Ctrl+P",
-          run: () => setQuickOpenOpen(true),
+          accelerator: "Ctrl+Shift+P",
+          run: () => setCommandPaletteOpen(true),
         },
         {
           id: "view.quickOpen",
@@ -2458,6 +2484,13 @@ export default function App() {
           rootPath={rootPath}
           onOpenFile={handleOpenFile}
           onClose={() => setQuickOpenOpen(false)}
+        />
+      )}
+
+      {commandPaletteOpen && (
+        <CommandPalette
+          commands={commands}
+          onClose={() => setCommandPaletteOpen(false)}
         />
       )}
 
