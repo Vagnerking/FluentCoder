@@ -18,10 +18,12 @@ pub fn run() {
         .manage(terminal::TerminalState::new())
         .manage(lsp::LspState::new())
         .manage(search::SearchState::new())
+        .manage(agents::AcpState::new())
         .invoke_handler(tauri::generate_handler![
             agents::agents_load,
             agents::agents_save,
             agents::acp_prompt,
+            agents::acp_stop_workspace,
             fs_commands::read_dir,
             fs_commands::read_file,
             fs_commands::read_file_base64,
@@ -84,6 +86,7 @@ pub fn run() {
                 } => {
                     eprintln!("[exit] window destroyed — tearing down children");
                     app.state::<terminal::TerminalState>().shutdown_all();
+                    app.state::<agents::AcpState>().shutdown_all();
                     app.state::<lsp::LspState>().shutdown_all();
                     eprintln!("[exit] teardown done — forcing process exit");
                     std::process::exit(0);
@@ -91,6 +94,7 @@ pub fn run() {
                 tauri::RunEvent::ExitRequested { .. } => {
                     eprintln!("[exit] ExitRequested — tearing down children");
                     app.state::<terminal::TerminalState>().shutdown_all();
+                    app.state::<agents::AcpState>().shutdown_all();
                     app.state::<lsp::LspState>().shutdown_all();
                     eprintln!("[exit] teardown done — forcing process exit");
                     std::process::exit(0);

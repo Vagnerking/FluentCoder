@@ -31,7 +31,7 @@ const MODE_META: Record<
   },
   dev: {
     label: "Dev",
-    hint: "Acesso total: o agente pode criar e editar arquivos.",
+    hint: "O agente pode criar e editar arquivos dentro do workspace.",
     icon: "modeDev",
   },
 };
@@ -182,7 +182,7 @@ function AgentConfiguration({
       <form className="agent-config-card" onSubmit={submit}>
         <div className="agent-config-heading">
           <div>
-            <span className="agent-eyebrow">Configuração ACP</span>
+            <span className="agent-eyebrow">Configuração do agente</span>
             <h1>{agent ? "Editar agente" : "Novo agente"}</h1>
             <p>
               A configuração e o histórico ficam salvos localmente neste
@@ -237,7 +237,7 @@ function AgentConfiguration({
         </label>
 
         <label className="agent-field">
-          <span>Provedor ACP</span>
+          <span>Provedor</span>
           <select
             value={draft.provider}
             onChange={(event) =>

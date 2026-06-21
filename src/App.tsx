@@ -22,6 +22,7 @@ import { AgentWorkspace } from "./components/AgentWorkspace";
 import { Codicon } from "./icons/codicons/Codicon";
 import {
   acpPrompt,
+  acpStopWorkspace,
   agentsLoad,
   agentsSave,
   buildSearchIndex,
@@ -328,6 +329,7 @@ export default function App() {
 
     return () => {
       cancelled = true;
+      void acpStopWorkspace(rootPath).catch(() => {});
     };
   }, [rootPath]);
 
@@ -484,8 +486,22 @@ export default function App() {
 
     // In write-capable modes, snapshot the working tree first so this request is
     // individually revertible (no-op/null when the folder isn't a git repo).
-    const revert =
-      mode === "ask" ? null : await gitSnapshotCreate(sendRoot);
+    setAgentBusy(true);
+    setAgentError(null);
+    setAgentStatus(
+      mode === "ask"
+        ? "Preparando a conversa…"
+        : "Criando ponto de restauração…",
+    );
+    let revert: AgentMessage["revert"] | null;
+    try {
+      revert = mode === "ask" ? null : await gitSnapshotCreate(sendRoot);
+    } catch (error) {
+      setAgentError(String(error));
+      setAgentStatus(null);
+      setAgentBusy(false);
+      return;
+    }
 
     const now = new Date().toISOString();
     const userMessage: AgentMessage = {
@@ -504,7 +520,11 @@ export default function App() {
       createdAt: now,
       status: "streaming",
     };
-    const prompt = buildAgentPrompt(agent, conversation.messages, message);
+    const contextPrompt = buildAgentPrompt(
+      agent,
+      conversation.messages,
+      message,
+    );
 
     // Apply an update by reconciling over the *current* store (functional
     // update), never a captured snapshot — so concurrent edits (rename/delete/
@@ -525,19 +545,21 @@ export default function App() {
       return reconciled;
     };
 
-    const persistForSend = async (store: AgentStore | null) => {
-      if (!store || isStaleWorkspace()) return;
-      try {
-        await agentsSave(sendRoot, store);
-      } catch (error) {
-        setAgentError(String(error));
-      }
+    // Serialize saves so the initial optimistic state can be persisted in the
+    // background without delaying provider startup or racing the final save.
+    let saveQueue = Promise.resolve();
+    const persistForSend = (store: AgentStore | null): Promise<void> => {
+      if (!store || isStaleWorkspace()) return saveQueue;
+      saveQueue = saveQueue
+        .then(() => agentsSave(sendRoot, store))
+        .catch((error) => {
+          setAgentError(String(error));
+        });
+      return saveQueue;
     };
 
-    setAgentBusy(true);
-    setAgentError(null);
-    setAgentStatus("Conectando ao provedor ACP…");
-    await persistForSend(
+    setAgentStatus("Conectando ao agente…");
+    void persistForSend(
       applyToConversation((current) => ({
         ...current,
         title:
@@ -549,35 +571,66 @@ export default function App() {
       })),
     );
 
+    // Codex can emit deltas menores que uma palavra. Coalescing them into one
+    // React update per frame avoids re-rendering the full Markdown on every
+    // token while preserving visibly smooth streaming.
+    let pendingAssistantText = "";
+    let textFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushAssistantText = () => {
+      if (textFlushTimer !== null) {
+        clearTimeout(textFlushTimer);
+        textFlushTimer = null;
+      }
+      if (!pendingAssistantText || isStaleWorkspace()) return;
+      const content = pendingAssistantText;
+      pendingAssistantText = "";
+      applyToConversation((current) => ({
+        ...current,
+        messages: current.messages.map((candidate) =>
+          candidate.id === assistantMessage.id
+            ? {
+                ...candidate,
+                content: candidate.content + content,
+                status: "streaming",
+              }
+            : candidate,
+        ),
+        updatedAt: new Date().toISOString(),
+      }));
+    };
+    const appendAssistantText = (content: string) => {
+      pendingAssistantText += content;
+      if (textFlushTimer === null) {
+        textFlushTimer = setTimeout(flushAssistantText, 24);
+      }
+    };
+
     try {
-      await acpPrompt(agent.provider, sendRoot, prompt, mode, (event) => {
-        // Discard events that arrived after a workspace switch.
-        if (isStaleWorkspace()) return;
-        if (event.type === "status") {
-          setAgentStatus(event.message);
-          return;
-        }
-        if (event.type === "text") {
-          setAgentStatus("Recebendo resposta…");
-          applyToConversation((current) => ({
-            ...current,
-            messages: current.messages.map((candidate) =>
-              candidate.id === assistantMessage.id
-                ? {
-                    ...candidate,
-                    content: candidate.content + event.content,
-                    status: "streaming",
-                  }
-                : candidate,
-            ),
-            updatedAt: new Date().toISOString(),
-          }));
-          return;
-        }
-        if (event.type === "error") setAgentError(event.message);
-      });
+      await acpPrompt(
+        agent.provider,
+        sendRoot,
+        conversation.id,
+        contextPrompt,
+        message,
+        mode,
+        (event) => {
+          // Discard events that arrived after a workspace switch.
+          if (isStaleWorkspace()) return;
+          if (event.type === "status") {
+            setAgentStatus(event.message);
+            return;
+          }
+          if (event.type === "text") {
+            setAgentStatus("Recebendo resposta…");
+            appendAssistantText(event.content);
+            return;
+          }
+          if (event.type === "error") setAgentError(event.message);
+        },
+      );
 
       if (isStaleWorkspace()) return;
+      flushAssistantText();
       await persistForSend(
         applyToConversation((current) => ({
           ...current,
@@ -598,6 +651,7 @@ export default function App() {
       setAgentStatus("Resposta concluída.");
     } catch (error) {
       if (isStaleWorkspace()) return;
+      flushAssistantText();
       const messageText = String(error);
       await persistForSend(
         applyToConversation((current) => ({
@@ -619,6 +673,7 @@ export default function App() {
     } finally {
       // agentBusy is global UI state — always release it, even after a workspace
       // switch, or the new workspace would stay stuck "busy".
+      if (textFlushTimer !== null) clearTimeout(textFlushTimer);
       setAgentBusy(false);
     }
   }
