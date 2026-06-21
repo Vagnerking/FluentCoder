@@ -15,6 +15,7 @@ pub mod projection;
 pub mod types;
 pub mod metadata;
 pub mod semantics;
+pub mod views;
 pub mod workspace;
 
 pub use engine::CshtmlEngine;

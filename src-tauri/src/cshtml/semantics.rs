@@ -709,6 +709,9 @@ impl SymbolIndex {
 
     pub fn file_count(&self) -> usize { self.by_file.len() }
     pub fn symbol_count(&self) -> usize { self.by_id.len() }
+    pub fn all_symbols(&self) -> impl Iterator<Item = &CSharpSymbol> {
+        self.by_id.values()
+    }
 }
 
 impl Default for SymbolIndex {
