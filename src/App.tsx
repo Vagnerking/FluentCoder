@@ -519,11 +519,12 @@ export default function App() {
   const openFolder = useCallback(
     async (folder: string, opts?: { persist?: boolean; silent?: boolean }) => {
       const persist = opts?.persist ?? true;
-      // Drop the previous project's branch/git/diagnostics up front so they don't
-      // linger while the new project's git/LSP load asynchronously (issue #17).
-      resetWorkspaceState();
       try {
         const entries = await readDir(folder);
+        // Now that the folder is confirmed to open, drop the previous project's
+        // branch/git/diagnostics before the new git/LSP load (issue #17) — a
+        // failed open must NOT leave the UI half-cleared (CodeRabbit).
+        resetWorkspaceState();
         setRoots(entries);
         setRootName(baseName(folder).toUpperCase());
         setRootPath(folder);

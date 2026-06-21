@@ -303,9 +303,17 @@ export function installDiagnosticsBridge(
     lspLog("diagnostics bridge: push-only for", serverId);
   }
 
-  // Drop this server's diagnostics from the workspace store when it's torn down
-  // (restart / workspace switch), so the Problems panel doesn't keep stale rows.
-  disposables.push({ dispose: () => clearServerDiagnostics(serverId) });
+  // On teardown (restart / workspace switch), drop this server's diagnostics from
+  // the workspace store AND clear its editor markers, so neither the Problems
+  // panel nor the squiggles keep stale rows (CodeRabbit).
+  disposables.push({
+    dispose: () => {
+      clearServerDiagnostics(serverId);
+      for (const model of monaco.editor.getModels()) {
+        monaco.editor.setModelMarkers(model, serverId, []);
+      }
+    },
+  });
 
   return disposables;
 }

@@ -2243,7 +2243,7 @@ button:focus-visible,
   cursor: pointer;
 }
 .output-lines { flex: 1; min-height: 0; overflow: auto; padding: 4px 8px; font-family: var(--font-mono, ui-monospace, "Cascadia Code", "Consolas", monospace); font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
-.output-line { white-space: pre-wrap; word-break: break-word; }
+.output-line { white-space: pre-wrap; overflow-wrap: break-word; }
 
 /* ---- Git / Source control panel ---- */
 .git-panel { display: flex; flex-direction: column; height: 100%; }
@@ -2262,7 +2262,7 @@ button:focus-visible,
 .git-commit-btn:hover:not(:disabled) { filter: brightness(1.08); }
 .git-commit-btn:disabled { opacity: 0.4; cursor: default; }
 
-.git-error { margin: 0 12px 8px; padding: 6px 8px; font-size: 11px; color: #ffb4ab; background: rgba(196,43,28,0.18); border: 1px solid rgba(196,43,28,0.4); border-radius: var(--radius-control); white-space: pre-wrap; word-break: break-word; }
+.git-error { margin: 0 12px 8px; padding: 6px 8px; font-size: 11px; color: #ffb4ab; background: rgba(196,43,28,0.18); border: 1px solid rgba(196,43,28,0.4); border-radius: var(--radius-control); white-space: pre-wrap; overflow-wrap: break-word; }
 
 .git-lists { flex: 1; overflow-y: auto; padding-bottom: 12px; }
 .git-group { margin-top: 4px; }

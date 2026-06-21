@@ -155,13 +155,18 @@ pub async fn ensure_roslyn_server(app: &AppHandle) -> Result<PathBuf, String> {
         }
     }
 
-    // --- Extract (the .nupkg is a ZIP) ---
+    // --- Extract (the .nupkg is a ZIP) — on a blocking thread so the synchronous
+    //     std::fs/zip I/O doesn't stall the async runtime (CodeRabbit). ---
     emit_progress(app, "extracting", "Extraindo o servidor C#…");
-    extract_zip(&bytes, &cache_dir).map_err(|e| {
-        let msg = format!("Falha ao extrair o servidor C#: {e}");
-        emit_progress(app, "error", &msg);
-        msg
-    })?;
+    let extract_dir = cache_dir.clone();
+    tokio::task::spawn_blocking(move || extract_zip(&bytes, &extract_dir))
+        .await
+        .map_err(|e| format!("tarefa de extração falhou: {e}"))?
+        .map_err(|e| {
+            let msg = format!("Falha ao extrair o servidor C#: {e}");
+            emit_progress(app, "error", &msg);
+            msg
+        })?;
 
     let exe = find_executable(&cache_dir).ok_or_else(|| {
         let msg = "Executável do servidor C# não encontrado após a extração.".to_string();
@@ -312,12 +317,17 @@ async fn ensure_csharp_ext(app: &AppHandle) -> Result<PathBuf, String> {
         emit_progress(app, "error", &m);
         m
     })?;
+    // Extract on a blocking thread (synchronous zip I/O off the async runtime).
     emit_progress(app, "extracting", "Extraindo o servidor C#/Razor…");
-    extract_zip(&bytes, &cache).map_err(|e| {
-        let m = format!("Falha ao extrair o servidor C#/Razor: {e}");
-        emit_progress(app, "error", &m);
-        m
-    })?;
+    let extract_dir = cache.clone();
+    tokio::task::spawn_blocking(move || extract_zip(&bytes, &extract_dir))
+        .await
+        .map_err(|e| format!("tarefa de extração falhou: {e}"))?
+        .map_err(|e| {
+            let m = format!("Falha ao extrair o servidor C#/Razor: {e}");
+            emit_progress(app, "error", &m);
+            m
+        })?;
     csharp_ext_roslyn_dir(app)
         .ok_or_else(|| "Roslyn não encontrado após extrair a extensão C#.".to_string())
 }

@@ -137,6 +137,12 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
           placeholder="Digite o nome de um comando…"
           value={query}
           aria-label="Paleta de Comandos: pesquisar comandos"
+          role="combobox"
+          aria-expanded={ranked.length > 0}
+          aria-controls="command-palette-list"
+          aria-activedescendant={
+            ranked[selected] ? `cmd-opt-${ranked[selected].command.id}` : undefined
+          }
           onChange={(e) => {
             setQuery(e.target.value);
             setSelected(0);
@@ -144,13 +150,19 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
           onKeyDown={onKeyDown}
         />
 
-        <div className="quick-open-list" role="listbox" ref={listRef}>
+        <div
+          className="quick-open-list"
+          role="listbox"
+          id="command-palette-list"
+          ref={listRef}
+        >
           {ranked.length === 0 ? (
             <div className="quick-open-empty">Nenhum comando encontrado.</div>
           ) : (
             ranked.map((hit, i) => (
               <div
                 key={hit.command.id}
+                id={`cmd-opt-${hit.command.id}`}
                 role="option"
                 aria-selected={i === selected}
                 className={"quick-open-item" + (i === selected ? " selected" : "")}
