@@ -80,6 +80,7 @@ pub fn run() {
             lsp::lsp_ensure_npm_server,
             lsp::lsp_ensure_system_server,
             lsp::lsp_ensure_razor_server,
+            lsp::lsp_ensure_fluent_cshtml_server,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -15,6 +15,13 @@ license = "GPL-3.0-only"
 name = "fluent_coder_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# Standalone LSP server for .cshtml files — spawned by the Tauri host as a child
+# process and communicated with via stdio (LSP Content-Length framing).
+# Intentionally free of Tauri, Monaco and Roslyn.
+[[bin]]
+name = "fluent-cshtml-lsp"
+path = "src/bin/fluent_cshtml_lsp.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
