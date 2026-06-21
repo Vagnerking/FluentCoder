@@ -362,6 +362,11 @@ export function acpPrompt(
   });
 }
 
+/** Interrupts the in-flight turn while preserving any streamed response. */
+export function acpCancel(): Promise<void> {
+  return invoke("acp_cancel");
+}
+
 /** Stops cached provider processes and sessions associated with a workspace. */
 export function acpStopWorkspace(workspaceRoot: string): Promise<void> {
   return invoke("acp_stop_workspace", { workspaceRoot });

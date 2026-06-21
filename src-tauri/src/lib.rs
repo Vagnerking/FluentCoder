@@ -23,6 +23,7 @@ pub fn run() {
             agents::agents_load,
             agents::agents_save,
             agents::acp_prompt,
+            agents::acp_cancel,
             agents::acp_stop_workspace,
             fs_commands::read_dir,
             fs_commands::read_file,

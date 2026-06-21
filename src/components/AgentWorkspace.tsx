@@ -49,6 +49,7 @@ interface AgentWorkspaceProps {
   onSaveAgent: (draft: AgentDraft) => void;
   onCancelConfig: () => void;
   onSendMessage: (message: string, mode: AgentMode) => Promise<void>;
+  onStop: () => void;
   onRevert: (conversationId: string, userMessageId: string) => Promise<void>;
 }
 
@@ -72,6 +73,7 @@ export function AgentWorkspace({
   onSaveAgent,
   onCancelConfig,
   onSendMessage,
+  onStop,
   onRevert,
 }: AgentWorkspaceProps) {
   if (!rootPath) {
@@ -115,6 +117,7 @@ export function AgentWorkspace({
           mode={mode}
           onModeChange={onModeChange}
           onSend={onSendMessage}
+          onStop={onStop}
           onRevert={onRevert}
         />
       );
@@ -294,6 +297,7 @@ function AgentChat({
   mode,
   onModeChange,
   onSend,
+  onStop,
   onRevert,
 }: {
   agent: AgentDefinition;
@@ -305,6 +309,7 @@ function AgentChat({
   mode: AgentMode;
   onModeChange: (mode: AgentMode) => void;
   onSend: (message: string, mode: AgentMode) => Promise<void>;
+  onStop: () => void;
   onRevert: (conversationId: string, userMessageId: string) => Promise<void>;
 }) {
   const [draft, setDraft] = useState("");
@@ -432,15 +437,27 @@ function AgentChat({
             rows={3}
             disabled={busy}
           />
-          <button
-            className="agent-send-button"
-            type="submit"
-            disabled={busy || !draft.trim()}
-            aria-label="Enviar mensagem"
-            title="Enviar mensagem (Enter)"
-          >
-            <Codicon name="send" size={18} />
-          </button>
+          {busy ? (
+            <button
+              className="agent-send-button stop"
+              type="button"
+              onClick={onStop}
+              aria-label="Parar execução do agente"
+              title="Parar execução do agente"
+            >
+              <Codicon name="stop" size={18} />
+            </button>
+          ) : (
+            <button
+              className="agent-send-button"
+              type="submit"
+              disabled={!draft.trim()}
+              aria-label="Enviar mensagem"
+              title="Enviar mensagem (Enter)"
+            >
+              <Codicon name="send" size={18} />
+            </button>
+          )}
         </div>
       </form>
     </div>

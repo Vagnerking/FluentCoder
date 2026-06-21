@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{ipc::Channel, State};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as AsyncBufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Notify};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -39,12 +39,14 @@ struct WorkerKey {
 /// official app-server; Claude keeps the ACP adapter.
 pub struct AcpState {
     workers: Mutex<HashMap<WorkerKey, mpsc::UnboundedSender<PromptJob>>>,
+    cancel: Arc<Notify>,
 }
 
 impl AcpState {
     pub fn new() -> Self {
         Self {
             workers: Mutex::new(HashMap::new()),
+            cancel: Arc::new(Notify::new()),
         }
     }
 
@@ -100,12 +102,19 @@ impl AcpState {
     }
 }
 
+impl Default for AcpState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 struct PromptJob {
     conversation_id: String,
     context_prompt: String,
     prompt: String,
     mode: AgentMode,
     on_event: Channel<AcpEvent>,
+    cancel: Arc<Notify>,
     done: oneshot::Sender<Result<(), String>>,
 }
 
@@ -242,6 +251,7 @@ pub async fn acp_prompt(
         prompt,
         mode,
         on_event: on_event.clone(),
+        cancel: Arc::clone(&state.cancel),
         done,
     };
     if let Err(error) = worker.send(job) {
@@ -277,6 +287,16 @@ pub fn acp_stop_workspace(
     let root = fs::canonicalize(&workspace_root)
         .map_err(|error| format!("Não foi possível validar o workspace: {error}"))?;
     state.stop_workspace(&root)
+}
+
+/// Cancels the single in-flight prompt. Codex interrupts only the current turn
+/// and keeps its app-server/session alive; ACP providers stop their worker and
+/// are recreated on the next message.
+#[tauri::command]
+pub fn acp_cancel(state: State<'_, AcpState>) {
+    // `notify_one` stores a permit when cancellation races worker startup, so a
+    // click immediately after Send cannot be lost.
+    state.cancel.notify_one();
 }
 
 async fn run_worker(
@@ -450,6 +470,21 @@ impl CodexAppServer {
             .ok_or_else(|| "O Codex não retornou o identificador da conversa.".into())
     }
 
+    async fn interrupt_turn(&mut self, thread_id: &str, turn_id: &str) -> Result<u64, String> {
+        let id = self.next_request_id;
+        self.next_request_id += 1;
+        self.send(json!({
+            "id": id,
+            "method": "turn/interrupt",
+            "params": {
+                "threadId": thread_id,
+                "turnId": turn_id
+            }
+        }))
+        .await?;
+        Ok(id)
+    }
+
     async fn run_turn(
         &mut self,
         thread_id: &str,
@@ -457,6 +492,7 @@ impl CodexAppServer {
         mode: AgentMode,
         prompt: String,
         on_event: &Channel<AcpEvent>,
+        cancel: &Notify,
     ) -> Result<String, String> {
         let id = self.next_request_id;
         self.next_request_id += 1;
@@ -478,11 +514,46 @@ impl CodexAppServer {
 
         let mut acknowledged = false;
         let mut completion: Option<Result<String, String>> = None;
+        let mut turn_id: Option<String> = None;
+        let mut cancel_requested = false;
+        let mut interrupt_request_id: Option<u64> = None;
+        let cancelled = cancel.notified();
+        tokio::pin!(cancelled);
+
         loop {
-            let message = self.next_message().await?;
+            let message = tokio::select! {
+                _ = &mut cancelled, if !cancel_requested => {
+                    cancel_requested = true;
+                    let _ = on_event.send(AcpEvent::Status {
+                        message: "Interrompendo o Codex…".into(),
+                    });
+                    if let Some(active_turn_id) = turn_id.as_deref() {
+                        interrupt_request_id =
+                            Some(self.interrupt_turn(thread_id, active_turn_id).await?);
+                    }
+                    continue;
+                }
+                message = self.next_message() => message?,
+            };
+
             if message.get("id").and_then(Value::as_u64) == Some(id) {
-                ensure_rpc_success(&message, "iniciar a resposta do Codex")?;
+                let result = ensure_rpc_success(&message, "iniciar a resposta do Codex")?;
+                turn_id = result
+                    .pointer("/turn/id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
                 acknowledged = true;
+                if cancel_requested && interrupt_request_id.is_none() {
+                    let active_turn_id = turn_id.as_deref().ok_or_else(|| {
+                        "O Codex não retornou o turno ativo para cancelamento.".to_string()
+                    })?;
+                    interrupt_request_id =
+                        Some(self.interrupt_turn(thread_id, active_turn_id).await?);
+                }
+            } else if interrupt_request_id.is_some_and(|interrupt_id| {
+                message.get("id").and_then(Value::as_u64) == Some(interrupt_id)
+            }) {
+                ensure_rpc_success(&message, "interromper a resposta do Codex")?;
             } else if let Some(method) = message.get("method").and_then(Value::as_str) {
                 match method {
                     "item/agentMessage/delta" => {
@@ -502,7 +573,11 @@ impl CodexAppServer {
                         if message.pointer("/params/threadId").and_then(Value::as_str)
                             == Some(thread_id)
                         {
-                            completion = Some(codex_turn_result(&message));
+                            completion = Some(if cancel_requested {
+                                Ok("Cancelled".into())
+                            } else {
+                                codex_turn_result(&message)
+                            });
                         }
                     }
                     "error" => {
@@ -644,7 +719,14 @@ async fn run_codex_worker(
             let prompt = prompt_for_session(is_new_session, &job.context_prompt, &job.prompt);
             let directed_prompt = format!("{}\n\n{}", mode_directive(job.mode), prompt);
             let stop_reason = server
-                .run_turn(&thread_id, &root, job.mode, directed_prompt, &job.on_event)
+                .run_turn(
+                    &thread_id,
+                    &root,
+                    job.mode,
+                    directed_prompt,
+                    &job.on_event,
+                    &job.cancel,
+                )
                 .await?;
             let _ = job.on_event.send(AcpEvent::Done { stop_reason });
             Ok(())
@@ -785,9 +867,25 @@ async fn run_acp_worker(
                     }),
                 );
 
-                let result = process_job(&connection, &root, &mut sessions, &job)
-                    .await
-                    .map_err(|error| format_acp_error(&worker_provider, error.to_string()));
+                let cancelled = job.cancel.notified();
+                tokio::pin!(cancelled);
+                let result = tokio::select! {
+                    result = process_job(&connection, &root, &mut sessions, &job) => {
+                        result.map_err(|error| {
+                            format_acp_error(&worker_provider, error.to_string())
+                        })
+                    }
+                    _ = &mut cancelled => {
+                        let _ = job.on_event.send(AcpEvent::Done {
+                            stop_reason: "Cancelled".into(),
+                        });
+                        let _ = job.done.send(Ok(()));
+                        set_current_request(&active_request, None);
+                        // Dropping the ACP connection terminates this adapter.
+                        // The cached sender closes and the next send recreates it.
+                        return Ok(());
+                    }
+                };
 
                 if let Err(message) = &result {
                     let _ = job.on_event.send(AcpEvent::Error {

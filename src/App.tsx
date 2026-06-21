@@ -21,6 +21,7 @@ import { AgentsPanel } from "./components/AgentsPanel";
 import { AgentWorkspace } from "./components/AgentWorkspace";
 import { Codicon } from "./icons/codicons/Codicon";
 import {
+  acpCancel,
   acpPrompt,
   acpStopWorkspace,
   agentsLoad,
@@ -438,16 +439,6 @@ export default function App() {
     });
   }
 
-  function handleRenameAgent(agentId: string, name: string) {
-    const now = new Date().toISOString();
-    void persistAgentStore({
-      ...agentStore,
-      agents: agentStore.agents.map((agent) =>
-        agent.id === agentId ? { ...agent, name, updatedAt: now } : agent,
-      ),
-    });
-  }
-
   function handleDeleteAgent(agentId: string) {
     void persistAgentStore({
       ...agentStore,
@@ -465,6 +456,50 @@ export default function App() {
       agentId: conversation.agentId,
       conversationId: conversation.id,
     });
+  }
+
+  function handleRenameConversation(conversationId: string, title: string) {
+    const now = new Date().toISOString();
+    void persistAgentStore({
+      ...agentStore,
+      conversations: agentStore.conversations.map((conversation) =>
+        conversation.id === conversationId
+          ? { ...conversation, title, updatedAt: now }
+          : conversation,
+      ),
+    });
+  }
+
+  function handleDeleteConversation(conversationId: string) {
+    const removed = agentStore.conversations.find(
+      (conversation) => conversation.id === conversationId,
+    );
+    if (!removed) return;
+    void persistAgentStore({
+      ...agentStore,
+      conversations: agentStore.conversations.filter(
+        (conversation) => conversation.id !== conversationId,
+      ),
+    });
+    // If the open conversation was deleted, fall back to the agent's next most
+    // recent conversation; if none remain, drop back to the agent's empty state.
+    if (
+      agentSelection?.kind === "chat" &&
+      agentSelection.conversationId === conversationId
+    ) {
+      const next = agentStore.conversations
+        .filter(
+          (conversation) =>
+            conversation.agentId === removed.agentId &&
+            conversation.id !== conversationId,
+        )
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+      setAgentSelection(
+        next
+          ? { kind: "chat", agentId: removed.agentId, conversationId: next.id }
+          : null,
+      );
+    }
   }
 
   async function handleSendAgentMessage(message: string, mode: AgentMode) {
@@ -605,6 +640,36 @@ export default function App() {
       }
     };
 
+    // Finalization is event-driven so Stop immediately preserves the partial
+    // response. Text deltas remain batched in memory and are flushed once here,
+    // avoiding one disk write and Markdown render per token.
+    let finalizePromise: Promise<void> | null = null;
+    let wasCancelled = false;
+    const finalizeAssistant = (
+      status: "done" | "error",
+      fallback: string,
+    ): Promise<void> => {
+      if (isStaleWorkspace()) return Promise.resolve();
+      if (finalizePromise) return finalizePromise;
+      flushAssistantText();
+      finalizePromise = persistForSend(
+        applyToConversation((current) => ({
+          ...current,
+          messages: current.messages.map((candidate) =>
+            candidate.id === assistantMessage.id
+              ? {
+                  ...candidate,
+                  content: candidate.content || fallback,
+                  status,
+                }
+              : candidate,
+          ),
+          updatedAt: new Date().toISOString(),
+        })),
+      );
+      return finalizePromise;
+    };
+
     try {
       await acpPrompt(
         agent.provider,
@@ -625,49 +690,35 @@ export default function App() {
             appendAssistantText(event.content);
             return;
           }
+          if (event.type === "done") {
+            wasCancelled = event.stopReason.toLowerCase() === "cancelled";
+            void finalizeAssistant(
+              "done",
+              wasCancelled
+                ? "Execução interrompida pelo usuário."
+                : "O agente encerrou a resposta sem conteúdo textual.",
+            );
+            return;
+          }
           if (event.type === "error") setAgentError(event.message);
         },
       );
 
       if (isStaleWorkspace()) return;
-      flushAssistantText();
-      await persistForSend(
-        applyToConversation((current) => ({
-          ...current,
-          messages: current.messages.map((candidate) =>
-            candidate.id === assistantMessage.id
-              ? {
-                  ...candidate,
-                  content:
-                    candidate.content ||
-                    "O agente encerrou a resposta sem conteúdo textual.",
-                  status: "done",
-                }
-              : candidate,
-          ),
-          updatedAt: new Date().toISOString(),
-        })),
+      // Safety net: if no `done` event arrived (older adapter, abrupt close),
+      // finalize now. No-op when `done` already finalized.
+      await finalizeAssistant(
+        "done",
+        "O agente encerrou a resposta sem conteúdo textual.",
       );
-      setAgentStatus("Resposta concluída.");
+      setAgentStatus(
+        wasCancelled ? "Execução interrompida." : "Resposta concluída.",
+      );
     } catch (error) {
       if (isStaleWorkspace()) return;
       flushAssistantText();
       const messageText = String(error);
-      await persistForSend(
-        applyToConversation((current) => ({
-          ...current,
-          messages: current.messages.map((candidate) =>
-            candidate.id === assistantMessage.id
-              ? {
-                  ...candidate,
-                  content: candidate.content || messageText,
-                  status: "error",
-                }
-              : candidate,
-          ),
-          updatedAt: new Date().toISOString(),
-        })),
-      );
+      await finalizeAssistant("error", messageText);
       setAgentError(messageText);
       setAgentStatus(null);
     } finally {
@@ -676,6 +727,13 @@ export default function App() {
       if (textFlushTimer !== null) clearTimeout(textFlushTimer);
       setAgentBusy(false);
     }
+  }
+
+  /** Stops the current turn and preserves the response received so far. */
+  function handleStopAgent() {
+    if (!agentBusy) return;
+    setAgentStatus("Parando o agente…");
+    void acpCancel().catch((error) => setAgentError(String(error)));
   }
 
   /**
@@ -1749,10 +1807,11 @@ export default function App() {
             onCreate={handleCreateAgent}
             onSelectAgent={handleSelectAgent}
             onEdit={handleEditAgent}
-            onRename={handleRenameAgent}
             onDelete={handleDeleteAgent}
             onNewConversation={handleNewAgentConversation}
             onOpenConversation={handleOpenAgentConversation}
+            onRenameConversation={handleRenameConversation}
+            onDeleteConversation={handleDeleteConversation}
           />
         );
       case "account":
@@ -1833,6 +1892,7 @@ export default function App() {
                 onSaveAgent={handleSaveAgent}
                 onCancelConfig={() => setAgentSelection(null)}
                 onSendMessage={handleSendAgentMessage}
+                onStop={handleStopAgent}
                 onRevert={handleRevertMessage}
               />
             ) : activeFile && activeFile.mode === "image" ? (
