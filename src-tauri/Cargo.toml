@@ -16,6 +16,13 @@ default-run = "fluent-coder"
 name = "fluent_coder_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# Standalone LSP server for .cshtml files — spawned by the Tauri host as a child
+# process and communicated with via stdio (LSP Content-Length framing).
+# Intentionally free of Tauri, Monaco and Roslyn.
+[[bin]]
+name = "fluent-cshtml-lsp"
+path = "src/bin/fluent_cshtml_lsp.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -56,6 +63,9 @@ which = "6"
 # Official Agent Client Protocol SDK. The editor acts as the ACP client and
 # spawns the registered Codex/Claude adapters over JSON-RPC stdio.
 agent-client-protocol = "0.15"
+
+[dev-dependencies]
+tempfile = "3"
 
 [profile.release]
 panic = "abort"

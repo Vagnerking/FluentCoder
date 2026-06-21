@@ -20,37 +20,39 @@ pelas issues vinculadas.
 
 Legenda:
 
+- **implementado:** código merged e com testes na main (ou PR aberto nesta milestone);
 - **MVP:** necessária para validar a engine no editor;
 - **planejada:** pertence à milestone, mas depende das fases anteriores;
 - **posterior:** exige ADR/issue própria antes da implementação.
 
-| Funcionalidade | Estado alvo | Fase/issue | Fonte de verdade | Fallback seguro |
+| Funcionalidade | Estado alvo | Fase/issue | Módulo Rust | Fallback seguro |
 |---|---|---|---|---|
-| Language id `.cshtml` separado | MVP | #32 | registry do editor | highlight léxico |
-| Snapshots e edits incrementais | MVP | #33 | `CshtmlEngine` | sincronização full text |
-| Corpus/golden tests | MVP | #34 | fixtures versionadas | bloquear avanço do parser |
-| Parser Razor tolerante a erro | MVP | #35 | AST própria | texto/markup desconhecido |
-| Projeção HTML/C# | MVP | #36 | source maps da engine | região sem semântica |
-| Diagnósticos Razor | MVP | #37 | regras `FCRZ1xxx` | nenhum falso positivo |
-| Diagnósticos HTML seguros | MVP | #37 | regras `FCRZ2xxx` | omitir quando ambíguo |
-| Diagnósticos de sintaxe C# | MVP | #37 | parser C# projetado | omitir trecho não mapeável |
-| LSP 3.17 stdio | MVP | #38 | adapter LSP | engine testável sem LSP |
-| Markers/painel Problemas | MVP | #39 | owner `fluent-cshtml` | limpar ao falhar |
+| Language id `.cshtml` separado | implementado | #32 | `cshtml/mod.rs` | highlight léxico |
+| Snapshots e edits incrementais | implementado | #33 | `cshtml/document.rs`, `cshtml/engine.rs` | sincronização full text |
+| Corpus/golden tests | implementado | #34 | `cshtml/harness.rs` | bloquear avanço do parser |
+| Parser Razor tolerante a erro | implementado | #35 | `cshtml/parser.rs`, `cshtml/ast.rs` | texto/markup desconhecido |
+| Projeção HTML/C# | implementado | #36 | `cshtml/projection.rs` | região sem semântica |
+| Diagnósticos Razor `FCRZ0001–0009` | implementado | #37 | `cshtml/lint.rs` | nenhum falso positivo |
+| LSP 3.17 stdio | implementado | #38 | `bin/fluent_cshtml_lsp.rs`, `lsp/fluent_cshtml.rs` | engine testável sem LSP |
+| Markers/painel Problemas (adapter) | MVP | #39 | `src/lsp/servers/cshtml.ts` | limpar ao falhar |
 | Folding/document symbols | MVP | #38/#39 | AST | retornar vazio |
-| Projeto associado ao documento | planejada | #40 | workspace próprio | contexto desconhecido |
-| `_ViewImports.cshtml` | planejada | #40 | hierarquia de diretórios | somente diretivas locais |
-| Índice de source C# | planejada | #41 | `SymbolIndex` | símbolo `unknown` |
-| Metadata ECMA-335 | planejada | #42 | `MetadataIndex` | somente source |
-| Binding de `@model` | planejada | #43 | binder da engine | `Model` desconhecido |
-| `@inject` e escopos | planejada | #43 | binder da engine | sem diagnóstico semântico |
-| Completion de diretivas | planejada | #44 | tabela/AST Razor | nenhuma suggestion |
-| Completion HTML | planejada | #44 | contexto markup | nenhuma suggestion |
-| Completion `Model.` | planejada | #44 | binder + índices | nenhuma suggestion |
-| Hover e signature help | planejada | #44 | símbolos resolvidos | `null` |
-| Go to definition | planejada | #44 | localização do símbolo | lista vazia |
-| Semantic tokens | planejada | #44 | AST + binder | Monarch lexical |
-| Partials e layouts | planejada | #45 | `ViewGraph` | sem navegação |
-| Tag Helpers | planejada | #45 | `TagHelperIndex` | tratar como HTML |
+| Projeto associado ao documento | implementado | #40 | `cshtml/workspace.rs` | contexto desconhecido |
+| `_ViewImports.cshtml` | implementado | #40 | `cshtml/workspace.rs` | somente diretivas locais |
+| Índice de source C# | implementado | #41 | `cshtml/semantics.rs` | símbolo `unknown` |
+| Metadata ECMA-335 | implementado | #42 | `cshtml/metadata.rs` | somente source |
+| Binding de `@model` | implementado | #43 | `cshtml/binding.rs` | `Model` desconhecido |
+| `@inject` e escopos | implementado | #43 | `cshtml/binding.rs` | sem diagnóstico semântico |
+| Completion de diretivas | implementado | #44 | `cshtml/intellisense.rs` | nenhuma suggestion |
+| Completion HTML | implementado | #44 | `cshtml/intellisense.rs` | nenhuma suggestion |
+| Completion `Model.` | implementado | #44 | `cshtml/intellisense.rs` | nenhuma suggestion |
+| Hover e signature help | implementado | #44 | `cshtml/intellisense.rs` | `null` |
+| Go to definition | implementado | #44 | `cshtml/intellisense.rs` | lista vazia |
+| Semantic tokens | implementado | #44 | `cshtml/intellisense.rs` | Monarch lexical |
+| Partials e layouts | implementado | #45 | `cshtml/views.rs` | sem navegação |
+| Tag Helpers (builtins + source) | implementado | #45 | `cshtml/views.rs` | tratar como HTML |
+| Cancelamento cooperativo | implementado | #46 | `cshtml/hardening.rs` | timeout por resultado |
+| Cache com invalidação | implementado | #46 | `cshtml/hardening.rs` | sem cache |
+| Métricas e log estruturado | implementado | #46 | `cshtml/hardening.rs` | silencioso |
 | Formatação de documento | posterior | issue/ADR futuro | AST + edits seguros | desabilitada |
 | Rename | posterior | issue/ADR futuro | referências confiáveis | desabilitado |
 | Code actions | posterior | issue futura | diagnósticos estáveis | lista vazia |
@@ -94,11 +96,26 @@ Legenda:
 
 ## Definition of Done da milestone
 
-- erro Razor/C# sintático aparece e desaparece sem restart;
-- `Model.` oferece membros conhecidos sem Roslyn para `.cshtml`;
-- hover e definition funcionam para símbolos suportados;
-- `_ViewImports`, partials, layouts e Tag Helpers atendem às issues respectivas;
-- providers, markers e processos não vazam entre sessões/workspaces;
-- falha do serviço CSHTML não interrompe C#, TS/JS ou o editor;
-- o caminho legado não é mais iniciado para `.cshtml`;
-- métricas e limites de performance da #46 estão validados.
+Itens implementados (PRs #53–#64):
+
+- [x] Engine `CshtmlEngine` com documento incremental e snapshots
+- [x] Parser Razor com AST própria e recuperação de erro
+- [x] Corpus de conformidade e harness de regressão
+- [x] Projeções HTML/C# e source maps
+- [x] Diagnósticos `FCRZ0001–0009` com regras de lint Razor
+- [x] Servidor LSP 3.17 standalone em processo isolado (`fluent-cshtml-lsp`)
+- [x] Adapter frontend (`src/lsp/servers/cshtml.ts`) com `startCshtmlServer`
+- [x] Workspace SDK-style: `_ViewImports`, `ProjectContext`, `DocumentContext`
+- [x] Índice de source C# sem Roslyn (`SymbolIndex`)
+- [x] Leitor de metadata ECMA-335 (`MetadataCache`)
+- [x] Binding: `@model`, `@inject`, escopos, símbolos implícitos Razor
+- [x] IntelliSense: completion, hover, definition, semantic tokens
+- [x] Views: `ViewGraph`, `TagHelperIndex` (14 builtins), `validate_sections`
+- [x] Hardening: `CancelToken`, `BoundedCache`, `DiagMetrics`, `WorkspaceSession`
+
+Pendentes antes de fechar Gate D (remoção do cohosting):
+
+- [ ] Adapter Monaco `#39` completo (markers, providers, reset command)
+- [ ] Testes de não regressão C#/Roslyn e TS/JS verdes em produção
+- [ ] Feature flag de migração validada
+- [ ] Documentação de rollback

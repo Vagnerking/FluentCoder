@@ -559,3 +559,12 @@ export function ensureNpmLspServer(serverId: string): Promise<LspLaunchInfo> {
 export function ensureSystemLspServer(serverId: string): Promise<LspLaunchInfo> {
   return invoke<LspLaunchInfo>("lsp_ensure_system_server", { serverId });
 }
+
+/**
+ * Resolves the launch command for the built-in `fluent-cshtml-lsp` server.
+ * The binary ships alongside the app; no download or npm step is needed.
+ * Returns the launch command as `"<program>"` (single line, no args).
+ */
+export function ensureFluentCshtmlServer(): Promise<string> {
+  return invoke<string>("lsp_ensure_fluent_cshtml_server");
+}
