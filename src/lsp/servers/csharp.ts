@@ -60,7 +60,7 @@ export async function startCsharpServer(
     // selector covers both languages and the client sends didOpen for each.
     documentSelector: [
       { scheme: "file", language: "csharp" },
-      { scheme: "file", language: "razor" },
+      { scheme: "file", language: "aspnetcorerazor" },
     ],
     rootUri: toFileUri(rootPath),
     initializationOptions: ROSLYN_INIT_OPTIONS,
@@ -172,7 +172,7 @@ async function reopenCsharpDocuments(
   const models = monaco.editor
     .getModels()
     .filter((model) =>
-      ["csharp", "razor"].includes(model.getLanguageId())
+      ["csharp", "aspnetcorerazor"].includes(model.getLanguageId())
     );
 
   for (const model of models) {

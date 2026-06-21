@@ -47,8 +47,9 @@ const BASE_REGISTRY: Record<string, ServerEntry> = {
   typescriptreact: { serverId: TS_SERVER_ID, start: startTypescriptServer },
   javascriptreact: { serverId: TS_SERVER_ID, start: startTypescriptServer },
   // Razor (.cshtml) is served by the SAME Roslyn as C# via cohosting (issue #11):
-  // route it to the csharp server so one Roslyn handles both.
-  razor: { serverId: CSHARP_SERVER_ID, start: startCsharpServer },
+  // route it to the csharp server so one Roslyn handles both. The id is
+  // `aspnetcorerazor` (VS Code's) so the Roslyn Razor cohost recognizes the docs.
+  aspnetcorerazor: { serverId: CSHARP_SERVER_ID, start: startCsharpServer },
 };
 
 // Generate one registry entry per language each npm-based server handles, so
