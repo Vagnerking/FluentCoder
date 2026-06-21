@@ -3,6 +3,11 @@
 Este documento registra decisões obrigatórias do editor. Alterações no Monaco,
 nos clientes LSP ou no Roslyn devem preservar estes contratos.
 
+O language service próprio de `.cshtml` possui contratos adicionais em
+[`cshtml-language-service.md`](cshtml-language-service.md). Em particular,
+CSHTML não pode ser implementado adicionando `.cshtml` ao selector/processo
+Roslyn nem alterando a ordem de inicialização C# descrita abaixo.
+
 ## C# / Roslyn: carregamento do projeto e tokens semânticos
 
 ### Problema que esta regra evita
