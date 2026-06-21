@@ -14,5 +14,11 @@
     "@wdio/spec-reporter": "^9.0.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.2"
+  },
+  "comments": {
+    "overrides": "serialize-javascript@<7.0.6 (pulled transitively by mocha) is vulnerable to RCE via RegExp.flags and CPU-exhaustion DoS. Pin to the patched 7.0.6 to clear the Dependabot alerts; serialize-javascript is API-compatible across this bump."
+  },
+  "overrides": {
+    "serialize-javascript": "^7.0.6"
   }
 }
