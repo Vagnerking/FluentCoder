@@ -37,6 +37,7 @@ import { languageForFile } from "./language";
 import { buildDecorations, decoKey } from "./icon-theme/decorations";
 import { useLspManager } from "./lsp/useLspManager";
 import { serverIdForLanguage } from "./lsp/servers";
+import { TS_PREFER_EDITOR_KEY } from "./lsp/servers/typescript";
 import type {
   ConfirmButton,
   EditorActionsApi,
@@ -1253,7 +1254,7 @@ export default function App() {
   const handleSelectTsVersion = useCallback(async () => {
     let current: "project" | "editor" = "project";
     try {
-      current = localStorage.getItem("lsp.ts.preferEditor") === "1" ? "editor" : "project";
+      current = localStorage.getItem(TS_PREFER_EDITOR_KEY) === "1" ? "editor" : "project";
     } catch {
       /* storage unavailable — assume project */
     }
@@ -1273,7 +1274,7 @@ export default function App() {
     );
     if (choice === "project" || choice === "editor") {
       try {
-        localStorage.setItem("lsp.ts.preferEditor", choice === "editor" ? "1" : "0");
+        localStorage.setItem(TS_PREFER_EDITOR_KEY, choice === "editor" ? "1" : "0");
       } catch {
         /* storage unavailable — ignore */
       }

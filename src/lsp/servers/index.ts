@@ -74,12 +74,29 @@ for (const config of SYSTEM_SERVERS) {
   for (const language of config.languages) SYSTEM_REGISTRY[language] = entry;
 }
 
-/** Monaco language id -> server entry. */
-export const SERVER_REGISTRY: Record<string, ServerEntry> = {
-  ...BASE_REGISTRY,
-  ...NPM_REGISTRY,
-  ...SYSTEM_REGISTRY,
-};
+/** Monaco language id -> server entry. The three registries shouldn't claim the
+ * same language; if they do, the later one wins (system > npm > base) — same as a
+ * spread — but we warn so an accidental collision isn't silently masked. */
+export const SERVER_REGISTRY: Record<string, ServerEntry> = (() => {
+  const merged: Record<string, ServerEntry> = {};
+  const sources: [string, Record<string, ServerEntry>][] = [
+    ["base", BASE_REGISTRY],
+    ["npm", NPM_REGISTRY],
+    ["system", SYSTEM_REGISTRY],
+  ];
+  for (const [source, registry] of sources) {
+    for (const [language, entry] of Object.entries(registry)) {
+      if (merged[language]) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[lsp] linguagem "${language}" registrada em mais de um registry (${source} sobrescreve o anterior)`
+        );
+      }
+      merged[language] = entry;
+    }
+  }
+  return merged;
+})();
 
 /** Languages that have a registered LSP server. */
 export function lspLanguageIds(): string[] {

@@ -94,7 +94,18 @@ export function StatusBar({
           }`}
           title={onShowProblems ? "Mostrar Problemas" : undefined}
           role={onShowProblems ? "button" : undefined}
+          tabIndex={onShowProblems ? 0 : undefined}
           onClick={onShowProblems}
+          onKeyDown={
+            onShowProblems
+              ? (e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onShowProblems();
+                  }
+                }
+              : undefined
+          }
         >
           <span className="status-diag status-diag-error">
             <Codicon name="error" />
@@ -111,9 +122,17 @@ export function StatusBar({
             className={`status-item status-lsp status-lsp-${s.status} status-clickable`}
             title={`${s.id}: ${LSP_LABEL[s.status]} (clique para ações)`}
             role="button"
+            tabIndex={0}
             onClick={(e) => {
               const rect = e.currentTarget.getBoundingClientRect();
               setLspMenu({ server: s, x: rect.left, y: rect.top });
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                const rect = e.currentTarget.getBoundingClientRect();
+                setLspMenu({ server: s, x: rect.left, y: rect.top });
+              }
             }}
           >
             <Codicon name={LSP_ICON[s.status]} /> {s.id}

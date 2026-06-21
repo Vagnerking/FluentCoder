@@ -356,6 +356,7 @@ export function TerminalPanel({
                       key={t.id}
                       role="tab"
                       aria-selected={t.id === activeTermId}
+                      tabIndex={0}
                       draggable
                       className={`terminal-list-item${
                         t.id === activeTermId ? " active" : ""
@@ -367,6 +368,12 @@ export function TerminalPanel({
                           : ""
                       }`}
                       onClick={() => setActiveTermId(t.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setActiveTermId(t.id);
+                        }
+                      }}
                       title={t.title}
                       onDragStart={(e) => {
                         dragTermRef.current = t.id;
