@@ -1,8 +1,11 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { acpProvider, acpProviders } from "../acp/providers";
 import type {
   AgentDefinition,
   AgentDraft,
+  AgentMessage,
   AgentSelection,
   AgentStore,
 } from "../agents/types";
@@ -311,10 +314,7 @@ function AgentChat({
             <span className="agent-message-role">
               {message.role === "user" ? "Você" : agent.name}
             </span>
-            <p>
-              {message.content ||
-                (message.status === "streaming" ? "Pensando…" : "")}
-            </p>
+            <MessageBody message={message} />
           </article>
         ))}
         {status && busy && (
@@ -357,6 +357,43 @@ function AgentChat({
           <Codicon name="send" size={18} />
         </button>
       </form>
+    </div>
+  );
+}
+
+/**
+ * Renders a chat message. Assistant replies come back as Markdown (bold, lists,
+ * code, tables…) so they're rendered with react-markdown + GFM. HTML is NOT
+ * enabled (no rehype-raw): the content is untrusted LLM output, so we keep the
+ * sanitized default to avoid XSS. User messages stay plain text, preserving the
+ * exact whitespace they typed.
+ */
+function MessageBody({ message }: { message: AgentMessage }) {
+  if (!message.content) {
+    return (
+      <p className="agent-message-placeholder">
+        {message.status === "streaming" ? "Pensando…" : ""}
+      </p>
+    );
+  }
+
+  if (message.role === "user") {
+    return <p className="agent-message-text">{message.content}</p>;
+  }
+
+  return (
+    <div className="agent-message-markdown">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          // Open links in the user's browser, never navigate the app shell.
+          a: ({ node: _node, ...props }) => (
+            <a {...props} target="_blank" rel="noreferrer noopener" />
+          ),
+        }}
+      >
+        {message.content}
+      </ReactMarkdown>
     </div>
   );
 }
