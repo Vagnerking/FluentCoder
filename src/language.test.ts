@@ -11,8 +11,18 @@ function remote(connId: string, host: string): RemoteSession {
   return { connId, host, user: "dev", rootPath: "/workspace" };
 }
 
-test("language overrides are isolated between local and remote workspaces", () => {
+test("language overrides are isolated between local and remote workspaces", (t) => {
   const path = "/workspace/component.ts";
+  t.after(() => {
+    setActiveRemote(null);
+    setLanguageOverride(path, null);
+    setActiveRemote(remote("ssh-1", "host-a"));
+    setLanguageOverride(path, null);
+    setActiveRemote(remote("ssh-2", "host-b"));
+    setLanguageOverride(path, null);
+    setActiveRemote(null);
+  });
+
   setActiveRemote(null);
   setLanguageOverride(path, "typescriptreact");
   assert.equal(getLanguageOverride(path), "typescriptreact");
@@ -27,8 +37,4 @@ test("language overrides are isolated between local and remote workspaces", () =
 
   setActiveRemote(null);
   assert.equal(getLanguageOverride(path), "typescriptreact");
-  setLanguageOverride(path, null);
-  setActiveRemote(remote("ssh-1", "host-a"));
-  setLanguageOverride(path, null);
-  setActiveRemote(null);
 });
