@@ -15,9 +15,10 @@ import { createLanguageClient, type RunningClient } from "../client";
 export const TS_SERVER_ID = "typescript";
 
 /**
- * Remote launch command (issue #8, Phase 6): run the server ON THE HOST. Prefer a
- * globally-installed `typescript-language-server`; fall back to `npx` (needs npm).
- * `exec` replaces the shell so a channel close kills the server.
+ * Remote launch command (issue #8, Phase 6): run the server ON THE POSIX HOST.
+ * Prefer a globally-installed `typescript-language-server`; fall back to `npx`
+ * (needs npm). `exec` replaces the shell so a channel close kills the server.
+ * Windows SSH hosts are intentionally unsupported until shell detection exists.
  */
 const TS_REMOTE_COMMAND =
   "if command -v typescript-language-server >/dev/null 2>&1; then " +

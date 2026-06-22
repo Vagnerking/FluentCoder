@@ -6,7 +6,7 @@ import { ImagePreview } from "./ImagePreview";
 import { MediaPreview } from "./MediaPreview";
 import { TabBar } from "./TabBar";
 import { Codicon } from "../icons/codicons/Codicon";
-import { writeFile } from "../api";
+import { pickSavePath, writeFile } from "../api";
 import { useSnapLayout } from "../snap/useSnapLayout";
 import { reorderFiles } from "../tabOrder";
 import { setActiveRemote } from "../remote/host";
@@ -25,6 +25,12 @@ import {
 } from "../detach/editorWindow";
 import { dropTargetAt } from "../detach/dropTarget";
 import type { OpenFile } from "../types";
+
+const UNTITLED_PREFIX = "untitled:";
+
+function fileName(path: string): string {
+  return path.replace(/\\/g, "/").split("/").pop() ?? path;
+}
 
 /**
  * A detached editor window (tear-off) — a full editor GROUP with its own tabs.
@@ -56,6 +62,7 @@ export function DetachedEditor({ token }: { token: string }) {
   const remoteRef = useRef(remote);
   remoteRef.current = remote;
   const lastHintRef = useRef<string | null>(null);
+  const confirmedClose = useRef(false);
 
   // Load the group state.
   useEffect(() => {
@@ -146,10 +153,21 @@ export function DetachedEditor({ token }: { token: string }) {
   const save = useCallback(async () => {
     if (!active) return;
     try {
-      await writeFile(active.path, active.content);
+      let targetPath = active.path;
+      if (targetPath.startsWith(UNTITLED_PREFIX)) {
+        const picked = await pickSavePath(active.name);
+        if (!picked) return;
+        targetPath = picked;
+      }
+      await writeFile(targetPath, active.content);
       setFiles((prev) =>
-        prev.map((f) => (f.path === active.path ? { ...f, dirty: false } : f))
+        prev.map((f) =>
+          f.path === active.path
+            ? { ...f, path: targetPath, name: fileName(targetPath), dirty: false }
+            : f
+        )
       );
+      if (targetPath !== active.path) setActivePath(targetPath);
     } catch (err) {
       alert(`Não foi possível salvar:\n${err}`);
     }
@@ -166,26 +184,51 @@ export function DetachedEditor({ token }: { token: string }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [save]);
 
-  const closeWindow = useCallback(() => {
+  const closeWindow = useCallback((skipConfirm = false) => {
+    const dirty = filesRef.current.filter((file) => file.dirty);
+    if (
+      !skipConfirm &&
+      dirty.length > 0 &&
+      !window.confirm(
+        dirty.length === 1
+          ? `Há alterações não salvas em ${dirty[0].name}. Fechar mesmo assim?`
+          : `Há alterações não salvas em ${dirty.length} arquivos. Fechar mesmo assim?`
+      )
+    ) {
+      return;
+    }
+    confirmedClose.current = true;
     // Hand "active" back to main so the next open never targets this dead label.
     void clearActiveEditor();
     void editorRelease(token).finally(() => void win.close());
   }, [token, win]);
 
+  useEffect(() => {
+    const unlisten = win.onCloseRequested((event) => {
+      if (confirmedClose.current) return;
+      event.preventDefault();
+      closeWindow();
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [win, closeWindow]);
+
   // Close a tab; closing the last one closes the window.
   const closeTab = useCallback(
     (path: string) => {
-      setFiles((prev) => {
-        const next = prev.filter((f) => f.path !== path);
-        if (next.length === 0) {
-          closeWindow();
-          return prev;
-        }
-        setActivePath((cur) =>
-          cur === path ? next[next.length - 1].path : cur
-        );
-        return next;
-      });
+      const current = filesRef.current;
+      const closing = current.find((file) => file.path === path);
+      if (closing?.dirty && !window.confirm(`Descartar alterações em ${closing.name}?`)) return;
+      const next = current.filter((file) => file.path !== path);
+      if (next.length === 0) {
+        closeWindow(true);
+        return;
+      }
+      setFiles(next);
+      setActivePath((activePath) =>
+        activePath === path ? next[next.length - 1].path : activePath
+      );
     },
     [closeWindow]
   );
@@ -419,7 +462,7 @@ export function DetachedEditor({ token }: { token: string }) {
             className="caption-btn caption-close"
             title="Fechar"
             aria-label="Fechar"
-            onClick={closeWindow}
+            onClick={() => closeWindow()}
           >
             <svg width="10" height="10" viewBox="0 0 10 10">
               <path d="M0 0 L10 10 M10 0 L0 10" stroke="currentColor" strokeWidth="1" />

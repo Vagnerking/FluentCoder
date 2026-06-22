@@ -255,3 +255,15 @@ test("isDropMeaningful matches splitWithFile's actual no-op behaviour", () => {
   assert.equal(isDropMeaningful("right", "g1", 2, "g1"), true);
   assert.notEqual(splitWithFile(many, "g1", "g1", "a", "right", "g2"), many);
 });
+
+test("splitWithFile refuses a target group outside the layout tree", () => {
+  const layout = base();
+  assert.equal(splitWithFile(layout, "missing", "g1", "a", "right", "g9"), layout);
+  assert.equal(layout.groups["g9"], undefined);
+});
+
+test("splitGroupWith refuses a target group outside the layout tree", () => {
+  const layout = base();
+  assert.equal(splitGroupWith(layout, "missing", file("a"), "right", "g9"), layout);
+  assert.equal(layout.groups["g9"], undefined);
+});

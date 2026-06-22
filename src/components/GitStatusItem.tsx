@@ -89,6 +89,11 @@ export function GitStatusItem(props: GitStatusItemProps) {
           title={props.onClickBranch ? `Branch: ${branch}\nClique para trocar de branch` : undefined}
           role={props.onClickBranch ? "button" : undefined}
           tabIndex={props.onClickBranch ? 0 : undefined}
+          onKeyDown={(event) => {
+            if (!props.onClickBranch || (event.key !== "Enter" && event.key !== " ")) return;
+            event.preventDefault();
+            props.onClickBranch();
+          }}
         >
           <Codicon name="gitBranch" /> {branch}
           {conflicted > 0 && (

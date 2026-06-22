@@ -280,6 +280,7 @@ export function TabBar({
               <div
                 key={f.path}
                 role="tab"
+                tabIndex={f.path === activePath ? 0 : -1}
                 data-path={f.path}
                 aria-selected={f.path === activePath}
                 className={
@@ -289,6 +290,15 @@ export function TabBar({
                 }
                 draggable={!!onReorder}
                 onClick={() => onSelect(f.path)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelect(f.path);
+                  } else if (event.key === "Delete") {
+                    event.preventDefault();
+                    onClose(f.path);
+                  }
+                }}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   setContextMenu({ x: e.clientX, y: e.clientY, path: f.path });
@@ -388,9 +398,12 @@ export function TabBar({
                 >
                   {f.name}
                 </span>
-                <span
+                <button
+                  type="button"
                   className={`tab-close${f.dirty ? " dirty" : ""}`}
                   title={f.dirty ? "Não salvo" : "Fechar"}
+                  aria-label={`Fechar ${f.name}`}
+                  tabIndex={-1}
                   onClick={(e) => {
                     e.stopPropagation();
                     onClose(f.path);
@@ -401,7 +414,7 @@ export function TabBar({
                   ) : (
                     <Codicon name="close" size={14} />
                   )}
-                </span>
+                </button>
               </div>
             );
           })}

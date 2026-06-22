@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Codicon } from "../icons/codicons/Codicon";
 import type { IconAction } from "../icons/codicons/codicon-map";
 import { FileIcon } from "../icon-theme/material/FileIcon";
@@ -54,6 +54,7 @@ export function QuickPick({
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -101,15 +102,25 @@ export function QuickPick({
 
   return (
     <div className="quick-open-backdrop" {...useModalDismiss(onClose)}>
-      <div className="quick-open quick-pick">
-        {title && <div className="quick-pick-title">{title}</div>}
+      <div
+        className="quick-open quick-pick"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={title ? titleId : undefined}
+        aria-label={title ? undefined : "Seleção rápida"}
+      >
+        {title && (
+          <div id={titleId} className="quick-pick-title">
+            {title}
+          </div>
+        )}
         <input
           ref={inputRef}
           className="quick-open-input"
           type="text"
           placeholder={placeholder}
           value={query}
-          aria-label={title ?? placeholder}
+          aria-label={title ?? placeholder ?? "Seleção rápida"}
           onChange={(e) => {
             setQuery(e.target.value);
             setSelected(0);

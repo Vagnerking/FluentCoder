@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Codicon } from "../icons/codicons/Codicon";
 import { useModalDismiss } from "./useModalDismiss";
 
@@ -34,6 +34,7 @@ export function QuickInput({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const titleId = useId();
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -63,8 +64,18 @@ export function QuickInput({
 
   return (
     <div className="quick-open-backdrop" {...useModalDismiss(onClose)}>
-      <div className="quick-open quick-input">
-        {title && <div className="quick-pick-title">{title}</div>}
+      <div
+        className="quick-open quick-input"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={title ? titleId : undefined}
+        aria-label={title ? undefined : "Entrada rápida"}
+      >
+        {title && (
+          <div id={titleId} className="quick-pick-title">
+            {title}
+          </div>
+        )}
         <input
           ref={inputRef}
           className="quick-open-input"
@@ -72,7 +83,7 @@ export function QuickInput({
           placeholder={placeholder}
           value={value}
           disabled={busy}
-          aria-label={title ?? placeholder}
+          aria-label={title ?? placeholder ?? "Entrada rápida"}
           autoComplete="off"
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}

@@ -44,12 +44,13 @@ export async function openDetachedEditor(
   const token = await invoke<string>("editor_stash", {
     payload: JSON.stringify(state),
   });
-  const url = new URL(window.location.href);
-  url.searchParams.set("detach", token);
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set("detach", token);
 
-  const first = state.files.find((f) => f.path === state.activePath) ?? state.files[0];
-  const label = `editor-${Date.now()}-${seq++}`;
-  const win = new WebviewWindow(label, {
+    const first = state.files.find((f) => f.path === state.activePath) ?? state.files[0];
+    const label = `editor-${Date.now()}-${seq++}`;
+    const win = new WebviewWindow(label, {
     url: url.toString(),
     title: first?.name ?? "Editor",
     width: 900,
@@ -67,14 +68,18 @@ export async function openDetachedEditor(
     windowEffects: { effects: [Effect.Mica] },
     // Drop the window with its titlebar roughly under the cursor.
     ...(pos ? { x: Math.round(pos.x - 90), y: Math.round(pos.y - 12) } : {}),
-  });
+    });
 
-  await new Promise<void>((resolve, reject) => {
-    void win.once("tauri://created", () => resolve());
-    void win.once("tauri://error", (e) =>
-      reject(new Error(String((e as { payload?: unknown }).payload ?? "erro")))
-    );
-  });
+    await new Promise<void>((resolve, reject) => {
+      void win.once("tauri://created", () => resolve());
+      void win.once("tauri://error", (e) =>
+        reject(new Error(String((e as { payload?: unknown }).payload ?? "erro")))
+      );
+    });
+  } catch (error) {
+    await editorRelease(token).catch(() => {});
+    throw error;
+  }
   // No setFocus / always-on-top here on purpose: any activation of the new window
   // deactivates the source, which Windows then minimises behind a fullscreen app.
 }

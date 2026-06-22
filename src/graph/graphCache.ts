@@ -19,11 +19,14 @@ export function getCachedGraph(root: string): GraphData | null {
 export function loadGraph(root: string, force = false): Promise<GraphData> {
   if (!force && cache && cache.root === root) return Promise.resolve(cache.data);
   if (!force && inflight && inflight.root === root) return inflight.promise;
-  const promise = buildContextGraph(root).then((data) => {
-    cache = { root, data };
-    if (inflight && inflight.root === root) inflight = null;
-    return data;
-  });
+  const promise = buildContextGraph(root)
+    .then((data) => {
+      cache = { root, data };
+      return data;
+    })
+    .finally(() => {
+      if (inflight?.root === root) inflight = null;
+    });
   inflight = { root, promise };
   return promise;
 }

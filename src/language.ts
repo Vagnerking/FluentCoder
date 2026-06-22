@@ -52,15 +52,22 @@ const EXT_TO_LANG: Record<string, string> = {
  */
 const languageOverrides = new Map<string, string>();
 
+function languageOverrideKey(path: string): string {
+  const remote = getActiveRemote();
+  if (!remote) return `local:${path}`;
+  return `ssh:${remote.user}@${remote.host}:${remote.rootPath}:${path}`;
+}
+
 /** Sets (or, with `null`, clears → auto-detect) the language for a file path. */
 export function setLanguageOverride(path: string, languageId: string | null): void {
-  if (languageId) languageOverrides.set(path, languageId);
-  else languageOverrides.delete(path);
+  const key = languageOverrideKey(path);
+  if (languageId) languageOverrides.set(key, languageId);
+  else languageOverrides.delete(key);
 }
 
 /** The user-chosen language for a path, if any (else undefined → auto-detect). */
 export function getLanguageOverride(path: string): string | undefined {
-  return languageOverrides.get(path);
+  return languageOverrides.get(languageOverrideKey(path));
 }
 
 /**
@@ -71,7 +78,7 @@ export function getLanguageOverride(path: string): string | undefined {
  */
 export function languageForFile(name: string, path?: string): string {
   if (path) {
-    const override = languageOverrides.get(path);
+    const override = getLanguageOverride(path);
     if (override) return override;
   }
   const lower = name.toLowerCase();
@@ -114,3 +121,4 @@ export function languageLabel(id: string, aliases?: readonly string[]): string {
   if (alias) return alias;
   return id.charAt(0).toUpperCase() + id.slice(1);
 }
+import { getActiveRemote } from "./remote/host.ts";

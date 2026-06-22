@@ -701,12 +701,15 @@ export function termCreate(
   const remote = getActiveRemote();
   if (remote) {
     remoteTerminals.add(id);
-    return invoke("ssh_term_create", {
+    return invoke<void>("ssh_term_create", {
       connId: remote.connId,
       id,
       cwd: remote.rootPath,
       cols,
       rows,
+    }).catch((error) => {
+      remoteTerminals.delete(id);
+      throw error;
     });
   }
   return invoke("term_create", { id, cwd, cols, rows, command: command ?? null });
@@ -933,6 +936,9 @@ export function sshLspStart(
     id: runtimeLspId(id),
     command,
     cwd,
+  }).catch((error) => {
+    remoteLspServers.delete(id);
+    throw error;
   });
 }
 

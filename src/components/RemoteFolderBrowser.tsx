@@ -130,7 +130,10 @@ export function RemoteFolderBrowser({
     if (e.key === "Escape") {
       e.preventDefault();
       onCancel();
-    } else if (e.key === "ArrowDown") {
+      return;
+    }
+    if (!listRef.current?.contains(e.target as Node)) return;
+    if (e.key === "ArrowDown") {
       e.preventDefault();
       setSelected((s) => (rowCount ? (s + 1) % rowCount : 0));
     } else if (e.key === "ArrowUp") {

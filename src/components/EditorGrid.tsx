@@ -19,15 +19,36 @@ export interface EditorGridProps {
 /** A draggable handle between two panes of a split; resizes them live. */
 function SplitHandle({
   orientation,
+  left,
+  right,
   onResize,
 }: {
   orientation: Orientation;
+  left: number;
+  right: number;
   onResize: (fracLeft: number, fracRight: number) => void;
 }) {
   const horiz = orientation === "row";
+  const total = left + right;
+  const current = total > 0 ? left / total : 0.5;
   return (
     <div
       className={`split-handle split-${orientation}`}
+      role="separator"
+      tabIndex={0}
+      aria-orientation={horiz ? "vertical" : "horizontal"}
+      aria-valuemin={10}
+      aria-valuemax={90}
+      aria-valuenow={Math.round(current * 100)}
+      aria-label="Redimensionar editores"
+      onKeyDown={(event) => {
+        const decrease = horiz ? event.key === "ArrowLeft" : event.key === "ArrowUp";
+        const increase = horiz ? event.key === "ArrowRight" : event.key === "ArrowDown";
+        if (!decrease && !increase) return;
+        event.preventDefault();
+        const next = Math.max(0.1, Math.min(0.9, current + (increase ? 0.05 : -0.05)));
+        onResize(next, 1 - next);
+      }}
       onPointerDown={(e) => {
         const handle = e.currentTarget;
         const prev = handle.previousElementSibling as HTMLElement | null;
@@ -83,6 +104,8 @@ export function EditorGrid({
           {i < node.children.length - 1 && (
             <SplitHandle
               orientation={node.orientation}
+              left={node.sizes[i]}
+              right={node.sizes[i + 1]}
               onResize={(fl, fr) => {
                 const pair = node.sizes[i] + node.sizes[i + 1];
                 onResize(branchPath, i, pair * fl, pair * fr);

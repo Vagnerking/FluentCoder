@@ -229,10 +229,12 @@ export function MenuBar({ menus }: MenuBarProps) {
     function handleAlt(e: KeyboardEvent) {
       if (e.key !== "Alt" || e.ctrlKey || e.shiftKey || e.metaKey) return;
       e.preventDefault();
-      if (barFocused || openIndex !== null) {
+      if (barFocused || openIndex !== null || overflowOpen) {
         setOpenIndex(null);
         setBarFocused(false);
         setFocusedItem(null);
+        setOverflowOpen(false);
+        setOverflowSub(null);
       } else if (fitCount > 0) {
         setBarFocused(true);
         setActiveIndex(0);
@@ -240,11 +242,12 @@ export function MenuBar({ menus }: MenuBarProps) {
       } else {
         // Fully collapsed → open the hamburger.
         setOverflowOpen(true);
+        overflowBtnRef.current?.focus();
       }
     }
     document.addEventListener("keydown", handleAlt);
     return () => document.removeEventListener("keydown", handleAlt);
-  }, [barFocused, openIndex, focusButton, fitCount]);
+  }, [barFocused, openIndex, overflowOpen, focusButton, fitCount]);
 
   useEffect(() => {
     if (barFocused && openIndex === null) focusButton(activeIndex);

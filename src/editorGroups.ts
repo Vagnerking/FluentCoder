@@ -315,6 +315,9 @@ export function splitWithFile(
   if (edge === "center") {
     return moveFileToGroup(layout, fromGroup, sourceGroup, path);
   }
+  if (!layout.groups[sourceGroup] || !groupOrder(layout.root).includes(sourceGroup)) {
+    return layout;
+  }
   const src = layout.groups[fromGroup];
   if (!src) return layout;
   const file = src.files.find((f) => f.path === path);
@@ -389,6 +392,9 @@ export function splitGroupWith(
   newId: GroupId
 ): EditorLayout {
   if (edge === "center") return layout;
+  if (!layout.groups[sourceGroup] || !groupOrder(layout.root).includes(sourceGroup)) {
+    return layout;
+  }
   const { orientation, before } = edgeAxis(edge);
   return {
     root: insertBeside(layout.root, sourceGroup, newId, orientation, before),

@@ -163,11 +163,15 @@ export function GraphView({ rootPath, activePath, onOpenFile }: GraphViewProps) 
   // Fetch (cache-aware): reuse the module cache so reopening is instant.
   useEffect(() => {
     if (!rootPath) {
+      setLoading(false);
+      setError(null);
       setData(null);
       return;
     }
     const cached = getCachedGraph(rootPath);
     if (cached) {
+      setLoading(false);
+      setError(null);
       setData(cached);
       return;
     }
@@ -250,13 +254,14 @@ export function GraphView({ rootPath, activePath, onOpenFile }: GraphViewProps) 
       deg.set(e.target, (deg.get(e.target) ?? 0) + 1);
     }
     // First time for this root: try the on-disk layout, else start empty.
-    if (rootPath && (!posCache || posCache.root !== rootPath)) {
+    const sameRootCache = Boolean(rootPath && posCache?.root === rootPath);
+    if (sameRootCache && posCache) {
+      for (const p of sim.current.nodes) posCache.pos.set(p.id, { x: p.x, y: p.y });
+    }
+    if (rootPath && !sameRootCache) {
       posCache = loadPos(rootPath) ?? { root: rootPath, pos: new Map(), view: { x: 0, y: 0, k: 1 } };
     }
     const cachedPos = rootPath && posCache?.root === rootPath ? posCache.pos : null;
-    if (cachedPos) {
-      for (const p of sim.current.nodes) cachedPos.set(p.id, { x: p.x, y: p.y });
-    }
     const now = performance.now();
     let restored = 0;
     const nodes: SimNode[] = filtered.nodes.map((n, i) => {
@@ -751,6 +756,7 @@ export function GraphView({ rootPath, activePath, onOpenFile }: GraphViewProps) 
         <button
           type="button"
           className="graph-icon-btn"
+          aria-label="Atualizar grafo"
           title="Atualizar — reanalisa o workspace e reorganiza (animado)"
           onClick={refresh}
         >
@@ -771,13 +777,28 @@ export function GraphView({ rootPath, activePath, onOpenFile }: GraphViewProps) 
         <canvas ref={canvasRef} className="graph-canvas" />
 
         <div className="graph-zoom">
-          <button type="button" title="Aproximar" onClick={() => zoomRef.current(1.3)}>
+          <button
+            type="button"
+            aria-label="Aproximar"
+            title="Aproximar"
+            onClick={() => zoomRef.current(1.3)}
+          >
             +
           </button>
-          <button type="button" title="Enquadrar tudo" onClick={() => fitRef.current()}>
+          <button
+            type="button"
+            aria-label="Enquadrar tudo"
+            title="Enquadrar tudo"
+            onClick={() => fitRef.current()}
+          >
             ⤢
           </button>
-          <button type="button" title="Afastar" onClick={() => zoomRef.current(1 / 1.3)}>
+          <button
+            type="button"
+            aria-label="Afastar"
+            title="Afastar"
+            onClick={() => zoomRef.current(1 / 1.3)}
+          >
             −
           </button>
         </div>

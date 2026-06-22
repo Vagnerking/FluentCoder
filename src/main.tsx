@@ -4,6 +4,7 @@ import "./monaco-loader";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "./App";
 import { DetachedEditor } from "./components/DetachedEditor";
 import { readDetachToken } from "./detach/editorWindow";
@@ -36,5 +37,9 @@ async function revealPaintedWindow() {
 if (!detachToken) {
   void revealPaintedWindow().catch((error) => {
     console.error("Falha ao exibir a janela inicializada:", error);
+    const current = getCurrentWindow();
+    void current.show().then(() => current.setFocus()).catch((fallbackError) => {
+      console.error("Falha no fallback de exibição da janela:", fallbackError);
+    });
   });
 }

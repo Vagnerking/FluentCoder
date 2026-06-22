@@ -368,6 +368,17 @@ export default function App() {
   layoutRef.current = layout;
   // Monotonic group-id source ("g0" already exists; next ones start at "g1").
   const groupSeq = useRef(1);
+  const allOpenFiles = useCallback(() => {
+    const byPath = new Map<string, OpenFile>();
+    for (const group of Object.values(layoutRef.current.groups)) {
+      for (const file of group.files) byPath.set(file.path, file);
+    }
+    return [...byPath.values()];
+  }, []);
+  const resetEditorLayout = useCallback(() => {
+    setLayout(createLayout({ id: "g0", files: [], activePath: null }));
+    groupSeq.current = 1;
+  }, []);
   const nextGroupId = useCallback(() => `g${groupSeq.current++}`, []);
   // True while a tab is being dragged, so every group shields its editor with a
   // drop-zone overlay (Monaco mustn't move its cursor/scroll under the drag).
@@ -813,11 +824,15 @@ export default function App() {
   // brings up. Recomputed only when the set of open paths changes.
   const openedLanguages = useMemo(() => {
     const set = new Set<string>();
-    for (const f of openFiles) set.add(languageForFile(f.name, f.path));
+    for (const group of Object.values(layout.groups)) {
+      for (const file of group.files) {
+        set.add(languageForFile(file.name, file.path));
+      }
+    }
     return set;
     // `languageOverrides` is read indirectly via `languageForFile`; list it so a
     // language-mode change re-derives which servers should be running.
-  }, [openFiles, languageOverrides]);
+  }, [layout.groups, languageOverrides]);
 
   // LSP lifecycle: starts/stops servers per workspace + open languages. Its
   // diagnostics surface as Monaco markers, which EditorPane already funnels into
@@ -1058,8 +1073,7 @@ export default function App() {
       return;
     }
 
-    setOpenFiles([]);
-    setActivePath(null);
+    resetEditorLayout();
     if (previousRemote && previousRemote.connId !== connId) {
       clearRemoteTerminals();
       clearRemoteLspServers();
@@ -1173,8 +1187,7 @@ export default function App() {
       setActiveRemote(previousRemote);
       return;
     }
-    setOpenFiles([]);
-    setActivePath(null);
+    resetEditorLayout();
     if (previousRemote) {
       setRemoteSession(null);
       clearRemoteTerminals();
@@ -2478,8 +2491,8 @@ export default function App() {
    * succeed; Descartar tudo proceeds without saving; Cancelar/Esc aborts.
    * Returns whether the caller may proceed to discard the session.
    */
-  const guardDirtySession = useCallback(async (): Promise<boolean> => {
-    const dirty = openFilesRef.current.filter((f) => f.dirty);
+  const guardDirtyFiles = useCallback(async (files: OpenFile[]): Promise<boolean> => {
+    const dirty = [...new Map(files.filter((file) => file.dirty).map((file) => [file.path, file])).values()];
     if (dirty.length === 0) return true;
     const choice = await askConfirm(
       "Deseja salvar as alterações?",
@@ -2505,6 +2518,11 @@ export default function App() {
     return false; // "cancel" / Esc
   }, [askConfirm, saveFile]);
 
+  const guardDirtySession = useCallback(
+    () => guardDirtyFiles(allOpenFiles()),
+    [allOpenFiles, guardDirtyFiles]
+  );
+
   // Once true, the next close request is the real one we triggered after the
   // dialog — let it through instead of reopening the guard (reentrancy guard).
   const confirmedClose = useRef(false);
@@ -2518,7 +2536,7 @@ export default function App() {
     const appWindow = getCurrentWindow();
     const unlistenPromise = appWindow.onCloseRequested(async (event) => {
       if (confirmedClose.current) return; // our own close — let it proceed
-      const hasDirty = openFilesRef.current.some((f) => f.dirty);
+      const hasDirty = allOpenFiles().some((f) => f.dirty);
       if (!hasDirty) {
         // Nothing to guard. Don't preventDefault — let the close proceed. We also
         // destroy() explicitly as a fallback in case the default close is being
@@ -2537,23 +2555,30 @@ export default function App() {
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [guardDirtySession]);
+  }, [allOpenFiles, guardDirtySession]);
 
   /** "Close all" within a group → empties it; a non-final group is removed. */
-  const handleCloseAll = useCallback((groupId = layoutRef.current.activeGroup) => {
-    setLayout((l) => {
-      if (groupOrder(l.root).length > 1) return removeGroup(l, groupId);
-      const g = l.groups[groupId];
-      if (!g) return l;
-      return {
-        ...l,
-        groups: { ...l.groups, [groupId]: { ...g, files: [], activePath: null } },
-      };
-    });
-  }, []);
+  const handleCloseAll = useCallback(
+    async (groupId = layoutRef.current.activeGroup) => {
+      const group = layoutRef.current.groups[groupId];
+      if (!group || !(await guardDirtyFiles(group.files))) return;
+      setLayout((l) => {
+        if (groupOrder(l.root).length > 1) return removeGroup(l, groupId);
+        const g = l.groups[groupId];
+        if (!g) return l;
+        return {
+          ...l,
+          groups: { ...l.groups, [groupId]: { ...g, files: [], activePath: null } },
+        };
+      });
+    },
+    [guardDirtyFiles]
+  );
 
   const handleCloseOthers = useCallback(
-    (path: string, groupId = layoutRef.current.activeGroup) => {
+    async (path: string, groupId = layoutRef.current.activeGroup) => {
+      const group = layoutRef.current.groups[groupId];
+      if (!group || !(await guardDirtyFiles(group.files.filter((file) => file.path !== path)))) return;
       setLayout((l) => {
         const g = l.groups[groupId];
         if (!g) return l;
@@ -2570,11 +2595,14 @@ export default function App() {
         };
       });
     },
-    []
+    [guardDirtyFiles]
   );
 
   const handleCloseLeft = useCallback(
-    (path: string, groupId = layoutRef.current.activeGroup) => {
+    async (path: string, groupId = layoutRef.current.activeGroup) => {
+      const group = layoutRef.current.groups[groupId];
+      const index = group?.files.findIndex((file) => file.path === path) ?? -1;
+      if (!group || index <= 0 || !(await guardDirtyFiles(group.files.slice(0, index)))) return;
       setLayout((l) => {
         const g = l.groups[groupId];
         if (!g) return l;
@@ -2590,11 +2618,14 @@ export default function App() {
         };
       });
     },
-    []
+    [guardDirtyFiles]
   );
 
   const handleCloseRight = useCallback(
-    (path: string, groupId = layoutRef.current.activeGroup) => {
+    async (path: string, groupId = layoutRef.current.activeGroup) => {
+      const group = layoutRef.current.groups[groupId];
+      const index = group?.files.findIndex((file) => file.path === path) ?? -1;
+      if (!group || index < 0 || !(await guardDirtyFiles(group.files.slice(index + 1)))) return;
       setLayout((l) => {
         const g = l.groups[groupId];
         if (!g) return l;
@@ -2610,7 +2641,7 @@ export default function App() {
         };
       });
     },
-    []
+    [guardDirtyFiles]
   );
 
   /** Focuses a tab within a group (and makes the group active). */
@@ -2784,15 +2815,13 @@ export default function App() {
     if (!dest) return;
     try {
       await writeFile(dest, file.content);
-      // Re-point the active tab at the new path and clear its dirty flag.
-      setOpenFiles((prev) =>
-        prev.map((f) =>
-          f.path === activePath
-            ? { ...f, path: dest, name: baseName(dest), dirty: false }
-            : f
-        )
+      setLayout((current) =>
+        patchFileEverywhere(current, file.path, {
+          path: dest,
+          name: baseName(dest),
+          dirty: false,
+        })
       );
-      setActivePath(dest);
     } catch (err) {
       console.error(err);
       alert(`Não foi possível salvar:\n${err}`);
@@ -2830,8 +2859,7 @@ export default function App() {
     setRootPath(null);
     setRootName(null);
     setRoots([]);
-    setOpenFiles([]);
-    setActivePath(null);
+    resetEditorLayout();
     // Clear every workspace-derived bit so no project remnants linger in this
     // same window (branch, git decorations, diagnostics, search scope, history).
     // The LSP servers and search index tear down when rootPath becomes null
@@ -2841,7 +2869,7 @@ export default function App() {
     setHistoryFile(null);
     setActiveView("explorer");
     sessionSetLastFolder(null).catch(() => {});
-  }, [guardDirtySession, resetWorkspaceState]);
+  }, [guardDirtySession, resetEditorLayout, resetWorkspaceState]);
 
   /** Re-point any open tab(s) when the explorer renames a file or folder. */
   const handlePathRenamed = useCallback(

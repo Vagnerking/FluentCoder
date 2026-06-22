@@ -16,11 +16,14 @@ export function getCachedIndex(root: string): KnowledgeIndex | null {
 export function loadIndex(root: string, force = false): Promise<KnowledgeIndex> {
   if (!force && cache && cache.root === root) return Promise.resolve(cache.index);
   if (!force && inflight && inflight.root === root) return inflight.promise;
-  const promise = buildKnowledgeIndex(root).then((index) => {
-    cache = { root, index };
-    if (inflight && inflight.root === root) inflight = null;
-    return index;
-  });
+  const promise = buildKnowledgeIndex(root)
+    .then((index) => {
+      cache = { root, index };
+      return index;
+    })
+    .finally(() => {
+      if (inflight?.root === root) inflight = null;
+    });
   inflight = { root, promise };
   return promise;
 }

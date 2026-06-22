@@ -790,6 +790,10 @@ body {
   font-size: 14px;
   width: 18px;
   height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1251,6 +1255,11 @@ body {
 .split-handle.split-row::after { inset: 0 -3px; }
 .split-handle.split-column::after { inset: -3px 0; }
 .split-handle:hover { background: var(--accent); }
+.split-handle:focus-visible {
+  background: var(--accent);
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
 
 .editor-group {
   display: flex;

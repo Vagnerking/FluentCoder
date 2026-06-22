@@ -308,12 +308,11 @@ export function GitPanel({
             className="git-icon-btn"
             title="Guardar alterações (stash)"
             disabled={busy || (status?.files.length ?? 0) === 0}
-            onClick={() =>
-              act(async () => {
-                const msg = window.prompt("Mensagem do stash (opcional):") ?? undefined;
-                await gitStashPush(rootPath, msg);
-              })
-            }
+            onClick={() => {
+              const raw = window.prompt("Mensagem do stash (opcional):");
+              if (raw === null) return;
+              void act(() => gitStashPush(rootPath, raw || undefined));
+            }}
           >
             <Codicon name="bookmark" />
           </button>

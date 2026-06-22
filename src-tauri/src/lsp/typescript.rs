@@ -116,8 +116,12 @@ pub async fn resolve_ts_launch(
     // It's handed to the server via `initializationOptions.tsserver.path` on the
     // front end — the old `--tsserver-path` CLI flag was removed and now errors.
     let tsserver = if prefer_editor {
-        let _ = ensure_ts_cached(app).await; // make sure the cached TS exists
-        cached_tsserver(app)
+        ensure_ts_cached(app)
+            .await
+            .map_err(|e| format!("não foi possível preparar o TypeScript do editor: {e}"))?;
+        Some(cached_tsserver(app).ok_or_else(|| {
+            "TypeScript do editor não foi encontrado após preparar o cache".to_string()
+        })?)
     } else {
         detect_tsserver(project_root).or_else(|| cached_tsserver(app))
     };

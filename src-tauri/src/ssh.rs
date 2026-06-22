@@ -27,6 +27,10 @@ use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
+const SSH_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+const SSH_SFTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+const MAX_REMOTE_EXEC_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
+
 /// Verifies the server host key against `~/.ssh/known_hosts`:
 /// - known and matching → accept;
 /// - unknown host → trust on first use (record it), then accept;
@@ -229,53 +233,65 @@ async fn open_connection(
         key_changed: Arc::clone(&key_changed),
     };
     let config = Arc::new(client::Config::default());
-    let mut handle = client::connect(config, (host, port), handler)
-        .await
-        .map_err(|e| {
-            if key_changed.load(std::sync::atomic::Ordering::SeqCst) {
-                format!(
-                    "A chave do host {host} MUDOU desde a última conexão — possível ataque \
+    let connect_result = tokio::time::timeout(
+        SSH_CONNECT_TIMEOUT,
+        client::connect(config, (host, port), handler),
+    )
+    .await
+    .map_err(|_| format!("Tempo esgotado ao conectar em {host}:{port}."))?;
+    let mut handle = connect_result.map_err(|e| {
+        if key_changed.load(std::sync::atomic::Ordering::SeqCst) {
+            format!(
+                "A chave do host {host} MUDOU desde a última conexão — possível ataque \
                      (man-in-the-middle). Se a mudança for legítima, remova a entrada antiga \
                      de ~/.ssh/known_hosts e tente de novo."
-                )
-            } else {
-                format!("Falha ao conectar em {host}:{port}: {e}")
-            }
-        })?;
-
-    let authenticated = match auth {
-        AuthMethod::Password(password) => handle
-            .authenticate_password(user, password)
-            .await
-            .map_err(|e| format!("Erro na autenticação por senha: {e}"))?,
-        AuthMethod::KeyFile { path, passphrase } => {
-            let key = russh::keys::load_secret_key(&path, passphrase.as_deref())
-                .map_err(|e| format!("Não foi possível carregar a chave '{path}': {e}"))?;
-            handle
-                .authenticate_publickey(
-                    user,
-                    russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key), None),
-                )
-                .await
-                .map_err(|e| format!("Erro na autenticação por chave: {e}"))?
+            )
+        } else {
+            format!("Falha ao conectar em {host}:{port}: {e}")
         }
-        AuthMethod::Agent => authenticate_with_agent(&mut handle, user).await?,
-    };
+    })?;
+
+    let authenticated = tokio::time::timeout(SSH_CONNECT_TIMEOUT, async {
+        match auth {
+            AuthMethod::Password(password) => handle
+                .authenticate_password(user, password)
+                .await
+                .map_err(|e| format!("Erro na autenticação por senha: {e}")),
+            AuthMethod::KeyFile { path, passphrase } => {
+                let key = russh::keys::load_secret_key(&path, passphrase.as_deref())
+                    .map_err(|e| format!("Não foi possível carregar a chave '{path}': {e}"))?;
+                handle
+                    .authenticate_publickey(
+                        user,
+                        russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key), None),
+                    )
+                    .await
+                    .map_err(|e| format!("Erro na autenticação por chave: {e}"))
+            }
+            AuthMethod::Agent => authenticate_with_agent(&mut handle, user).await,
+        }
+    })
+    .await
+    .map_err(|_| "Tempo esgotado durante a autenticação SSH.".to_string())??;
     if !authenticated.success() {
         return Err("Autenticação SSH recusada (usuário/senha/chave/agente).".to_string());
     }
 
-    let channel = handle
-        .channel_open_session()
-        .await
-        .map_err(|e| format!("Falha ao abrir canal SSH: {e}"))?;
-    channel
-        .request_subsystem(true, "sftp")
-        .await
-        .map_err(|e| format!("Falha ao iniciar SFTP: {e}"))?;
-    let sftp = SftpSession::new(channel.into_stream())
-        .await
-        .map_err(|e| format!("Falha ao iniciar a sessão SFTP: {e}"))?;
+    let sftp = tokio::time::timeout(SSH_SFTP_TIMEOUT, async {
+        let channel = handle
+            .channel_open_session()
+            .await
+            .map_err(|e| format!("Falha ao abrir canal SSH: {e}"))?;
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(|e| format!("Falha ao iniciar SFTP: {e}"))?;
+        SftpSession::new(channel.into_stream())
+            .await
+            .map_err(|e| format!("Falha ao iniciar a sessão SFTP: {e}"))
+    })
+    .await
+    .map_err(|_| "Tempo esgotado ao iniciar a sessão SFTP.".to_string())??;
 
     Ok(Connection { handle, sftp })
 }
@@ -1085,6 +1101,17 @@ struct ExecOutput {
     code: i32,
 }
 
+fn append_bounded_output(buffer: &mut Vec<u8>, data: &[u8]) -> Result<(), String> {
+    if buffer.len().saturating_add(data.len()) > MAX_REMOTE_EXEC_OUTPUT_BYTES {
+        return Err(format!(
+            "A saída do comando remoto excedeu {} MiB.",
+            MAX_REMOTE_EXEC_OUTPUT_BYTES / (1024 * 1024)
+        ));
+    }
+    buffer.extend_from_slice(data);
+    Ok(())
+}
+
 /// Runs `command` on the remote over a fresh exec channel and collects stdout,
 /// stderr and the exit code.
 async fn exec_capture(conn: &Connection, command: &str) -> Result<ExecOutput, String> {
@@ -1103,8 +1130,10 @@ async fn exec_capture(conn: &Connection, command: &str) -> Result<ExecOutput, St
     let mut code = 0;
     loop {
         match channel.wait().await {
-            Some(ChannelMsg::Data { data }) => stdout.extend_from_slice(&data),
-            Some(ChannelMsg::ExtendedData { data, .. }) => stderr.extend_from_slice(&data),
+            Some(ChannelMsg::Data { data }) => append_bounded_output(&mut stdout, &data)?,
+            Some(ChannelMsg::ExtendedData { data, .. }) => {
+                append_bounded_output(&mut stderr, &data)?
+            }
             Some(ChannelMsg::ExitStatus { exit_status }) => code = exit_status as i32,
             Some(ChannelMsg::Close) | None => break,
             _ => {}
@@ -2272,6 +2301,14 @@ mod tests {
     fn shell_quote_escapes_single_quotes() {
         assert_eq!(shell_quote("/a/b"), "'/a/b'");
         assert_eq!(shell_quote("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn remote_exec_output_is_bounded() {
+        let mut output = vec![0; MAX_REMOTE_EXEC_OUTPUT_BYTES - 1];
+        assert!(append_bounded_output(&mut output, &[1]).is_ok());
+        assert!(append_bounded_output(&mut output, &[2]).is_err());
+        assert_eq!(output.len(), MAX_REMOTE_EXEC_OUTPUT_BYTES);
     }
 
     #[test]

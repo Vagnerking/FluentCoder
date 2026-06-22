@@ -129,12 +129,18 @@ pub fn empty_status() -> GitStatus {
     }
 }
 
+fn is_not_repo_error(error: &str) -> bool {
+    error.to_ascii_lowercase().contains("not a git repository")
+}
+
 /// Collects working-tree status: branch, ahead/behind, and per-file changes.
 #[tauri::command]
 pub fn git_status(path: String) -> Result<GitStatus, String> {
     // Not a repo? Return an empty, non-erroring status so the UI can say so.
-    if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
-        return Ok(empty_status());
+    match run_git(&path, &["rev-parse", "--is-inside-work-tree"]) {
+        Ok(_) => {}
+        Err(error) if is_not_repo_error(&error) => return Ok(empty_status()),
+        Err(error) => return Err(error),
     }
 
     // --porcelain=v2 --branch gives both branch/ahead/behind headers and files.
@@ -175,10 +181,10 @@ pub fn parse_status_v2(raw: &str) -> GitStatus {
             }
         } else if let Some(rest) = line.strip_prefix("1 ") {
             // Ordinary changed entry: "<XY> <sub> ... <path>"
-            push_v2_entry(rest, &mut files);
+            push_v2_entry(rest, false, &mut files);
         } else if let Some(rest) = line.strip_prefix("2 ") {
             // Renamed/copied: path is "<new>\t<orig>"; keep the new path.
-            push_v2_entry(rest, &mut files);
+            push_v2_entry(rest, true, &mut files);
         } else if let Some(rest) = line.strip_prefix("u ") {
             // Unmerged (merge/rebase conflict): "<XY> <sub> ... <path>".
             let mut parts = rest.splitn(2, ' ');
@@ -217,7 +223,7 @@ pub fn parse_status_v2(raw: &str) -> GitStatus {
 
 /// Parses the tail of a porcelain v2 "1"/"2" line into a GitFileStatus.
 /// The XY status field is the first token; the path is the last field.
-fn push_v2_entry(rest: &str, files: &mut Vec<GitFileStatus>) {
+fn push_v2_entry(rest: &str, renamed: bool, files: &mut Vec<GitFileStatus>) {
     let mut parts = rest.splitn(2, ' ');
     let xy = parts.next().unwrap_or("..").to_string();
     let tail = parts.next().unwrap_or("");
@@ -226,12 +232,17 @@ fn push_v2_entry(rest: &str, files: &mut Vec<GitFileStatus>) {
     // v2 separates the path with a single space after the score/sha columns, and
     // a rename uses a tab between new and original. We split off the path as the
     // final whitespace-tab segment.
-    let path = tail
-        .rsplit('\t')
-        .next()
-        .and_then(|p| p.rsplit(' ').next())
-        .unwrap_or(tail)
-        .to_string();
+    let field_count = if renamed { 8 } else { 7 };
+    let path_field = tail
+        .splitn(field_count, ' ')
+        .nth(field_count - 1)
+        .unwrap_or(tail);
+    let path = if renamed {
+        path_field.split('\t').next().unwrap_or(path_field)
+    } else {
+        path_field
+    }
+    .to_string();
 
     let staged = xy.chars().next().map(|c| c != '.').unwrap_or(false);
     files.push(GitFileStatus {
@@ -798,4 +809,24 @@ pub fn git_snapshot_restore(path: String, snapshot_id: String, head: String) -> 
         ],
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn porcelain_v2_rename_uses_destination_path() {
+        let raw = "# branch.head main\n2 R. N... 100644 100644 100644 abcdef abcdef R100 new name.ts\told name.ts\n";
+        let status = parse_status_v2(raw);
+        assert_eq!(status.files.len(), 1);
+        assert_eq!(status.files[0].path, "new name.ts");
+    }
+
+    #[test]
+    fn only_not_a_repo_errors_are_downgraded() {
+        assert!(is_not_repo_error("fatal: not a git repository"));
+        assert!(!is_not_repo_error("git executable was not found"));
+        assert!(!is_not_repo_error("permission denied"));
+    }
 }

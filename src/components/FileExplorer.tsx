@@ -710,12 +710,17 @@ export function FileExplorer({
               return (
                 <div
                   key={p}
+                  id={`treeitem-${p}`}
+                  data-tree-path={p}
+                  data-tree-name={baseName(p)}
+                  data-tree-dir="0"
                   className={`explorer-flat-row${p === activePath ? " active" : ""}`}
                   title={rel}
                   role="treeitem"
-                  onClick={() =>
-                    onOpenFile({ name: baseName(p), path: p, isDir: false })
-                  }
+                  onClick={() => {
+                    setFocusedPath(p);
+                    onOpenFile({ name: baseName(p), path: p, isDir: false });
+                  }}
                 >
                   <FileIcon path={p} className="explorer-flat-icon" />
                   <span className="explorer-flat-name">{baseName(p)}</span>
