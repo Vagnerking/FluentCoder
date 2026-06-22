@@ -1,9 +1,9 @@
 use agent_client_protocol::schema::v1::{
-    ClientCapabilities, ContentBlock, FileSystemCapabilities, InitializeRequest, NewSessionRequest,
-    PermissionOptionKind, PromptRequest, ReadTextFileRequest, ReadTextFileResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionId, SessionNotification, SessionUpdate, TextContent,
-    WriteTextFileRequest, WriteTextFileResponse,
+    ClientCapabilities, ContentBlock, FileSystemCapabilities, InitializeRequest, McpServer,
+    McpServerStdio, NewSessionRequest, PermissionOptionKind, PromptRequest, ReadTextFileRequest,
+    ReadTextFileResponse, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SelectedPermissionOutcome, SessionId, SessionNotification,
+    SessionUpdate, TextContent, WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{AcpAgent, Agent, ConnectionTo};
@@ -203,6 +203,9 @@ pub fn agents_save(root: String, store: Value) -> Result<(), String> {
     fs::write(path, json).map_err(|error| format!("Falha ao salvar os agentes: {error}"))
 }
 
+// The argument list mirrors the IPC payload from the front end; grouping it into
+// a struct would only obscure the command's contract.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn acp_prompt(
     provider: String,
@@ -909,10 +912,10 @@ async fn process_job(
 ) -> Result<(), agent_client_protocol::Error> {
     let is_new_session = !sessions.contains_key(&job.conversation_id);
     if is_new_session {
-        let response = connection
-            .send_request(NewSessionRequest::new(root))
-            .block_task()
-            .await?;
+        // Hand the editor's own knowledge MCP server to the session, so the agent
+        // can query the project's "brain" (graph) — no external setup needed.
+        let request = NewSessionRequest::new(root).mcp_servers(knowledge_mcp_servers(root));
+        let response = connection.send_request(request).block_task().await?;
         sessions.insert(
             job.conversation_id.clone(),
             SessionRuntime {
@@ -937,7 +940,8 @@ async fn process_job(
     // message, app restart or worker recovery). A live session receives only the
     // new turn, avoiding duplicated history and prompts that grow every send.
     let prompt = prompt_for_session(is_new_session, &job.context_prompt, &job.prompt);
-    let directed_prompt = format!("{}\n\n{}", mode_directive(job.mode), prompt);
+    let hint = if is_new_session { KNOWLEDGE_HINT } else { "" };
+    let directed_prompt = format!("{}{}\n\n{}", mode_directive(job.mode), hint, prompt);
     let response = connection
         .send_request(PromptRequest::new(
             session.session_id.clone(),
@@ -951,6 +955,30 @@ async fn process_job(
     });
     Ok(())
 }
+
+/// The editor's own knowledge MCP server (`fluent-coder --mcp <root>`), handed to
+/// every ACP session so the agent can query the project's context graph
+/// (backlinks, related files, knowledge search, context bundle) — the same
+/// "brain" exposed to external Claude Code, but wired in automatically. Empty if
+/// the executable path can't be resolved (the session still works without it).
+fn knowledge_mcp_servers(root: &Path) -> Vec<McpServer> {
+    match std::env::current_exe() {
+        Ok(exe) => vec![McpServer::Stdio(
+            McpServerStdio::new("fluent-knowledge", exe).args(vec![
+                "--mcp".to_string(),
+                root.to_string_lossy().to_string(),
+            ]),
+        )],
+        Err(_) => Vec::new(),
+    }
+}
+
+/// A one-line nudge (new sessions only) so the agent knows the knowledge tools
+/// exist and reaches for them before answering.
+const KNOWLEDGE_HINT: &str = "\n\nVocê tem ferramentas MCP \"fluent-knowledge\" \
+    (search_knowledge, get_backlinks, get_related_files, get_outline, \
+    get_context_bundle) para consultar o grafo de contexto do projeto — use-as \
+    para se orientar antes de responder.";
 
 fn prompt_for_session<'a>(
     is_new_session: bool,
@@ -1189,7 +1217,7 @@ fn decode_error(error: std::io::Error) -> String {
     }
 }
 
-fn empty_store() -> Value {
+pub(crate) fn empty_store() -> Value {
     json!({
         "version": 1,
         "agents": [],

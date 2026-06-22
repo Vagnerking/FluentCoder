@@ -1,5 +1,6 @@
 import type { MonacoLanguageClient } from "monaco-languageclient";
 import { ensureCsharpServer, startLspServer } from "../../api";
+import { getActiveRemote } from "../../remote/host";
 import { createLanguageClient } from "../client";
 import { toFileUri } from "../uri";
 import { wireRoslynStartup } from "./roslynShared";
@@ -46,6 +47,13 @@ export async function startCsharpServer(
   rootPath: string,
   context?: ServerStartContext
 ): Promise<MonacoLanguageClient> {
+  if (getActiveRemote()) {
+    // Roslyn runs locally; a remote workspace would need it on the host (and
+    // remote `solution/open` paths). Not wired yet — surface a clear status.
+    throw new Error(
+      "C# (Roslyn) remoto ainda não é suportado — use o terminal remoto para builds. TS/JS já funciona no host."
+    );
+  }
   const command = await ensureCsharpServer(rootPath);
   const [program, ...args] = command.split("\n").filter((s) => s.length > 0);
   if (!program) {

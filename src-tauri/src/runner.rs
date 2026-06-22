@@ -49,7 +49,9 @@ pub fn run_configs_save(root: String, configs: Vec<RunConfig>) -> Result<(), Str
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let file = RunFile { configurations: configs };
+    let file = RunFile {
+        configurations: configs,
+    };
     let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
     fs::write(&path, json).map_err(|e| e.to_string())
 }
@@ -60,14 +62,26 @@ pub fn run_configs_save(root: String, configs: Vec<RunConfig>) -> Result<(), Str
 /// them, so they always reflect the current project.
 #[tauri::command]
 pub fn run_configs_detect(root: String) -> Result<Vec<RunConfig>, String> {
-    let mut detected: Vec<RunConfig> = Vec::new();
     let root_path = Path::new(&root);
+    let pkg_json = fs::read_to_string(root_path.join("package.json")).ok();
+    let runner = detect_node_runner(root_path);
+    let has_cargo = root_path.join("Cargo.toml").exists();
+    Ok(detect_configs(pkg_json.as_deref(), runner, has_cargo))
+}
+
+/// Pure detection shared by the local and remote (SSH) detectors: builds run
+/// suggestions from a `package.json` body (if any), the chosen package runner,
+/// and whether a `Cargo.toml` is present.
+pub(crate) fn detect_configs(
+    pkg_json: Option<&str>,
+    runner: &str,
+    has_cargo: bool,
+) -> Vec<RunConfig> {
+    let mut detected: Vec<RunConfig> = Vec::new();
 
     // package.json → one entry per script.
-    let pkg_path = root_path.join("package.json");
-    if let Ok(raw) = fs::read_to_string(&pkg_path) {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) {
-            let runner = detect_node_runner(root_path);
+    if let Some(raw) = pkg_json {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(raw) {
             if let Some(scripts) = json.get("scripts").and_then(|s| s.as_object()) {
                 for name in scripts.keys() {
                     detected.push(RunConfig {
@@ -81,7 +95,7 @@ pub fn run_configs_detect(root: String) -> Result<Vec<RunConfig>, String> {
     }
 
     // Cargo.toml → cargo run.
-    if root_path.join("Cargo.toml").exists() {
+    if has_cargo {
         detected.push(RunConfig {
             name: "cargo run".to_string(),
             command: "cargo run".to_string(),
@@ -89,7 +103,24 @@ pub fn run_configs_detect(root: String) -> Result<Vec<RunConfig>, String> {
         });
     }
 
-    Ok(detected)
+    detected
+}
+
+/// Parses the run config file body (`.project/run.json`); empty/blank → no entries.
+pub(crate) fn parse_run_file(raw: &str) -> Result<Vec<RunConfig>, String> {
+    if raw.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let parsed: RunFile = serde_json::from_str(raw).map_err(|e| e.to_string())?;
+    Ok(parsed.configurations)
+}
+
+/// Serializes run configs to the `.project/run.json` body (shared with SSH save).
+pub(crate) fn serialize_run_file(configs: Vec<RunConfig>) -> Result<String, String> {
+    let file = RunFile {
+        configurations: configs,
+    };
+    serde_json::to_string_pretty(&file).map_err(|e| e.to_string())
 }
 
 /// Picks the package manager based on the lockfile present, defaulting to npm.

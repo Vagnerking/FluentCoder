@@ -1,8 +1,8 @@
-/// Domain types for the CSHTML engine (issue #33).
-///
-/// No dependency on Tauri, Monaco, LSP or Roslyn. All positions use
-/// UTF-16 code unit offsets so they map 1-to-1 with Monaco's model
-/// coordinate system.
+//! Domain types for the CSHTML engine (issue #33).
+//!
+//! No dependency on Tauri, Monaco, LSP or Roslyn. All positions use
+//! UTF-16 code unit offsets so they map 1-to-1 with Monaco's model
+//! coordinate system.
 
 // ── Identifiers ──────────────────────────────────────────────────────────────
 
@@ -56,7 +56,10 @@ pub struct TextRange {
 
 impl TextRange {
     pub fn point(pos: TextPosition) -> Self {
-        Self { start: pos, end: pos }
+        Self {
+            start: pos,
+            end: pos,
+        }
     }
 }
 

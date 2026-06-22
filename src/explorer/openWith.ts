@@ -23,6 +23,21 @@ const IMAGE_EXTENSIONS = new Set([
   "avif",
 ]);
 
+/** Extensions the video player mode applies to. */
+const VIDEO_EXTENSIONS = new Set(["mp4", "m4v", "webm", "ogv", "mov", "mkv", "avi"]);
+
+/** Extensions the audio player mode applies to. */
+const AUDIO_EXTENSIONS = new Set([
+  "mp3",
+  "wav",
+  "ogg",
+  "oga",
+  "flac",
+  "m4a",
+  "aac",
+  "opus",
+]);
+
 /** Lowercased extension of `path` without the dot ("" when none). */
 export function extensionOf(path: string): string {
   const name = path.split(/[\\/]/).pop() ?? path;
@@ -33,6 +48,21 @@ export function extensionOf(path: string): string {
 /** True when `path` is an image type the preview mode can render. */
 export function isImagePath(path: string): boolean {
   return IMAGE_EXTENSIONS.has(extensionOf(path));
+}
+
+/** True when `path` is a video type the player mode can render. */
+export function isVideoPath(path: string): boolean {
+  return VIDEO_EXTENSIONS.has(extensionOf(path));
+}
+
+/** True when `path` is an audio type the player mode can render. */
+export function isAudioPath(path: string): boolean {
+  return AUDIO_EXTENSIONS.has(extensionOf(path));
+}
+
+/** True when `path` is any previewable media (image/video/audio). */
+export function isMediaPath(path: string): boolean {
+  return isImagePath(path) || isVideoPath(path) || isAudioPath(path);
 }
 
 /**
@@ -47,8 +77,8 @@ export const OPEN_WITH_MODES: OpenWithMode[] = [
     label: "Editor de Texto",
     icon: "textEditor",
     appliesTo: () => true,
-    // Default for everything that isn't an image.
-    isDefaultFor: (path) => !isImagePath(path),
+    // Default for everything that isn't previewable media.
+    isDefaultFor: (path) => !isMediaPath(path),
   },
   {
     mode: "image",
@@ -56,6 +86,20 @@ export const OPEN_WITH_MODES: OpenWithMode[] = [
     icon: "imagePreview",
     appliesTo: (path) => isImagePath(path),
     isDefaultFor: (path) => isImagePath(path),
+  },
+  {
+    mode: "video",
+    label: "Reproduzir Vídeo",
+    icon: "video",
+    appliesTo: (path) => isVideoPath(path),
+    isDefaultFor: (path) => isVideoPath(path),
+  },
+  {
+    mode: "audio",
+    label: "Reproduzir Áudio",
+    icon: "audio",
+    appliesTo: (path) => isAudioPath(path),
+    isDefaultFor: (path) => isAudioPath(path),
   },
 ];
 

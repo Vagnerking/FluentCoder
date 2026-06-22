@@ -91,6 +91,14 @@ export function EditorPane({
 }: EditorPaneProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
+  // This editor's own reveal fn + actions api, set on mount. Kept internally so
+  // we can (re)bind them to the parent's refs whenever THIS pane becomes the
+  // active group — Monaco panes are not remounted on group switch, so binding
+  // only on mount would leave go-to-line / Edit menus pointed at the old editor.
+  const internalReveal = useRef<
+    ((line: number, selection?: MatchSelection) => void) | null
+  >(null);
+  const internalApi = useRef<EditorActionsApi | null>(null);
 
   // Keep the global opener pointed at the current callback (it's a single
   // Monaco-wide registration, so it can't close over a stale prop).
@@ -103,19 +111,31 @@ export function EditorPane({
   // Current cursor line to highlight a specific blame.
   const cursorLineRef = useRef<number>(1);
 
-  // Clear the actions bridge when the EditorPane unmounts, so the App's helper
-  // (`actionsRef.current != null`) correctly reports "no active editor".
+  // Bind THIS editor's reveal/actions to the parent refs whenever they're handed
+  // to us (i.e. this pane became the active group) and clear them when they're
+  // taken away or on unmount. React flushes all effect cleanups before all new
+  // effects, so a group switch (old pane clears, new pane sets) ends with the
+  // refs pointing at the newly-active editor.
   useEffect(() => {
+    if (revealRef) revealRef.current = internalReveal.current;
+    if (actionsRef) actionsRef.current = internalApi.current;
     return () => {
+      if (revealRef) revealRef.current = null;
       if (actionsRef) actionsRef.current = null;
     };
-  }, [actionsRef]);
+  }, [revealRef, actionsRef]);
 
-  // When there is no file, the <Editor> doesn't mount (empty-state below), so
-  // the bridge is never repopulated. Clear it so the App can disable menu items.
+  // When there is no file, the <Editor> unmounts (empty-state below), so its
+  // api is gone — clear both the internal cache and the parent bridge so the App
+  // reports "no active editor" and can disable menu items.
   useEffect(() => {
-    if (!file && actionsRef) actionsRef.current = null;
-  }, [file, actionsRef]);
+    if (!file) {
+      internalReveal.current = null;
+      internalApi.current = null;
+      if (actionsRef) actionsRef.current = null;
+      if (revealRef) revealRef.current = null;
+    }
+  }, [file, actionsRef, revealRef]);
 
   // -------------------------------------------------------------------------
   // Helpers
@@ -397,19 +417,20 @@ export function EditorPane({
       editorInstance.focus();
     };
 
+    internalReveal.current = reveal;
     if (revealRef) revealRef.current = reveal;
 
-    if (actionsRef) {
-      actionsRef.current = {
-        run: (actionId) => {
-          editorInstance.getAction(actionId)?.run();
-        },
-        trigger: (source, handlerId, payload) => {
-          editorInstance.trigger(source, handlerId, payload);
-        },
-        focus: () => editorInstance.focus(),
-      };
-    }
+    const api: EditorActionsApi = {
+      run: (actionId) => {
+        editorInstance.getAction(actionId)?.run();
+      },
+      trigger: (source, handlerId, payload) => {
+        editorInstance.trigger(source, handlerId, payload);
+      },
+      focus: () => editorInstance.focus(),
+    };
+    internalApi.current = api;
+    if (actionsRef) actionsRef.current = api;
 
     if (pendingReveal?.current != null) {
       reveal(pendingReveal.current.line, pendingReveal.current.selection);
@@ -470,7 +491,7 @@ export function EditorPane({
       // documentSelector is `{ scheme: "file" }` attach to it. Passing the raw
       // Windows path would make Monaco treat the drive letter as the URI scheme.
       path={modelPath}
-      language={languageForFile(file.name)}
+      language={languageForFile(file.name, file.path)}
       value={file.content}
       onChange={(value) => onChange(value ?? "")}
       beforeMount={handleBeforeMount}

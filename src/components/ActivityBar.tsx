@@ -27,6 +27,8 @@ const VIEWS: { id: string; label: string; icon: IconAction }[] = [
   { id: 'git', label: 'Controle do Código-Fonte', icon: 'sourceControl' },
   { id: 'debug', label: 'Executar e Depurar', icon: 'run' },
   { id: 'agents', label: 'Agentes', icon: 'agents' },
+  { id: 'backlinks', label: 'Backlinks', icon: 'backlinks' },
+  { id: 'graph', label: 'Grafo de Contextos', icon: 'graph' },
 ];
 
 const BOTTOM_VIEWS: { id: string; label: string; icon: IconAction }[] = [

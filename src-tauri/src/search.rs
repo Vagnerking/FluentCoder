@@ -5,6 +5,7 @@ use grep_searcher::{sinks, BinaryDetection, SearcherBuilder};
 use ignore::overrides::{Override, OverrideBuilder};
 use ignore::{DirEntry, WalkBuilder, WalkState};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -36,17 +37,33 @@ struct FileIndex {
     built_at: Instant,
 }
 
-pub struct SearchState {
+#[derive(Clone)]
+struct WindowSearchState {
     generation: Arc<AtomicU64>,
     index: Arc<Mutex<Option<FileIndex>>>,
+}
+
+pub struct SearchState {
+    windows: Mutex<HashMap<String, WindowSearchState>>,
 }
 
 impl SearchState {
     pub fn new() -> Self {
         Self {
-            generation: Arc::new(AtomicU64::new(0)),
-            index: Arc::new(Mutex::new(None)),
+            windows: Mutex::new(HashMap::new()),
         }
+    }
+
+    fn for_window(&self, label: &str) -> WindowSearchState {
+        self.windows
+            .lock()
+            .expect("search window state poisoned")
+            .entry(label.to_string())
+            .or_insert_with(|| WindowSearchState {
+                generation: Arc::new(AtomicU64::new(0)),
+                index: Arc::new(Mutex::new(None)),
+            })
+            .clone()
     }
 }
 
@@ -109,18 +126,22 @@ pub enum SearchEvent {
 }
 
 #[tauri::command]
-pub fn cancel_search(state: State<'_, SearchState>) {
-    state.generation.fetch_add(1, Ordering::SeqCst);
+pub fn cancel_search(window: tauri::Window, state: State<'_, SearchState>) {
+    state
+        .for_window(window.label())
+        .generation
+        .fetch_add(1, Ordering::SeqCst);
 }
 
 /// Pre-builds (warms) the file index for `root` so the first search is instant.
 /// Called when a folder is opened. No-op work if the index is already fresh.
 #[tauri::command]
 pub async fn build_search_index(
+    window: tauri::Window,
     state: State<'_, SearchState>,
     root: String,
 ) -> Result<(), String> {
-    let index = Arc::clone(&state.index);
+    let index = state.for_window(window.label()).index;
     let root = PathBuf::from(root);
     tauri::async_runtime::spawn_blocking(move || {
         ensure_index(&index, &root);
@@ -135,6 +156,7 @@ pub async fn build_search_index(
 /// and the user's include/exclude globs.
 #[tauri::command]
 pub async fn search_in_dir(
+    window: tauri::Window,
     state: State<'_, SearchState>,
     root: String,
     query: String,
@@ -156,9 +178,10 @@ pub async fn search_in_dir(
     // Bumping the generation invalidates any in-flight search; this one owns the
     // new value and every worker checks it to bail out the moment a newer search
     // (or an explicit cancel) starts.
-    let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
-    let shared_generation = Arc::clone(&state.generation);
-    let index = Arc::clone(&state.index);
+    let window_state = state.for_window(window.label());
+    let generation = window_state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let shared_generation = window_state.generation;
+    let index = window_state.index;
     let root = PathBuf::from(root);
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -299,13 +322,8 @@ where
                     }
                 }
 
-                let line_matches = search_file(
-                    path,
-                    matcher,
-                    &total_matches,
-                    generation,
-                    shared_generation,
-                );
+                let line_matches =
+                    search_file(path, matcher, &total_matches, generation, shared_generation);
                 if line_matches.is_empty() {
                     continue;
                 }
@@ -369,10 +387,7 @@ fn normalize_glob(glob: &str) -> String {
 }
 
 /// `Some(overrides)` when the query has include/exclude globs, else `None`.
-fn build_overrides_opt(
-    root: &Path,
-    options: &SearchOptions,
-) -> Result<Option<Override>, String> {
+fn build_overrides_opt(root: &Path, options: &SearchOptions) -> Result<Option<Override>, String> {
     if options.include_globs.is_empty() && options.exclude_globs.is_empty() {
         return Ok(None);
     }
@@ -755,7 +770,8 @@ mod tests {
         assert!(Arc::ptr_eq(&first, &cached));
 
         // Forcing the stored timestamp past the TTL triggers a rebuild.
-        index.lock().unwrap().as_mut().unwrap().built_at = Instant::now() - INDEX_TTL - Duration::from_secs(1);
+        index.lock().unwrap().as_mut().unwrap().built_at =
+            Instant::now() - INDEX_TTL - Duration::from_secs(1);
         let rebuilt = ensure_index(&index, &root);
         assert_eq!(rebuilt.len(), 2);
         fs::remove_dir_all(root).unwrap();

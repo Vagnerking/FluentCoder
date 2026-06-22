@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { gitBranches } from "../api";
 import { Codicon } from "../icons/codicons/Codicon";
+import { useModalDismiss } from "./useModalDismiss";
 import type { GitBranchInfo } from "../types";
 
 interface BranchPickerProps {
@@ -153,11 +154,9 @@ export function BranchPicker({
   }
 
   return (
-    <div className="quick-open-backdrop" onMouseDown={onClose}>
-      <div
-        className="quick-open branch-picker"
-        onMouseDown={(e) => e.stopPropagation()}
-      >
+    <div className="quick-open-backdrop" {...useModalDismiss(onClose)}>
+      <div className="quick-open branch-picker">
+        <div className="quick-pick-title">Selecionar branch</div>
         <input
           ref={inputRef}
           className="quick-open-input"

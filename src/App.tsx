@@ -5,6 +5,8 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type Dispatch,
+  type SetStateAction,
 } from "react";
 import {
   subscribeDiagnostics,
@@ -21,14 +23,19 @@ import { SearchPanel } from "./components/SearchPanel";
 import { GitPanel } from "./components/GitPanel";
 import { RunPanel } from "./components/RunPanel";
 import { PlaceholderPanel } from "./components/PlaceholderPanel";
-import { EditorPane } from "./components/EditorPane";
+import { EditorGrid } from "./components/EditorGrid";
+import { EditorGroupView } from "./components/EditorGroupView";
+import { BacklinksPanel } from "./components/BacklinksPanel";
+import { invalidateGraph } from "./graph/graphCache";
+import { invalidateIndex } from "./knowledge/knowledgeCache";
+import type { TabDragPayload } from "./components/TabBar";
+import { WelcomeScreen } from "./components/WelcomeScreen";
+import { addRecentFolder, getRecentFolders } from "./recentFolders";
 import { ImagePreview } from "./components/ImagePreview";
 import { OpenWithPicker } from "./explorer/OpenWithPicker";
 import { defaultModeFor } from "./explorer/openWith";
-import { TabBar } from "./components/TabBar";
 import { TitleBar } from "./components/TitleBar";
 import { ActivityBar } from "./components/ActivityBar";
-import { Breadcrumbs } from "./components/Breadcrumbs";
 import { StatusBar } from "./components/StatusBar";
 import { TerminalPanel, type PanelTab } from "./components/TerminalPanel";
 import { QuickOpen } from "./components/QuickOpen";
@@ -38,6 +45,11 @@ import { ConfirmDialog } from "./components/ConfirmDialog";
 import { AgentsPanel } from "./components/AgentsPanel";
 import { AgentWorkspace } from "./components/AgentWorkspace";
 import { BranchPicker } from "./components/BranchPicker";
+import { SshConnectDialog } from "./components/SshConnectDialog";
+import { RemoteFolderBrowser } from "./components/RemoteFolderBrowser";
+import { RemoteConnectionMenu } from "./components/RemoteConnectionMenu";
+import { QuickPick, type QuickPickItem } from "./components/QuickPick";
+import { QuickInput } from "./components/QuickInput";
 import { Codicon } from "./icons/codicons/Codicon";
 import {
   acpCancel,
@@ -49,10 +61,17 @@ import {
   gitBranch,
   gitCheckout,
   gitCreateBranch,
+  gitFetch,
+  gitPublish,
+  gitPull,
+  gitPush,
   gitSnapshotCreate,
   gitSnapshotRestore,
   gitStatus,
   isFreshWindow,
+  buildContextBundle,
+  mcpConfig,
+  mcpWriteProjectConfig,
   openNewWindow,
   pickFile,
   pickFolder,
@@ -62,11 +81,70 @@ import {
   sessionLoad,
   sessionSetLastFolder,
   sessionSetOpenFiles,
+  sshConnect,
+  sshDisconnect,
+  sshListSavedHosts,
+  tsVersions,
+  clearRemoteTerminals,
+  clearRemoteLspServers,
   writeFile,
 } from "./api";
+import type { SshConnectInput, SavedHost } from "./api";
+import {
+  getActiveRemote,
+  isRemoteActive,
+  setActiveRemote,
+  type RemoteSession,
+} from "./remote/host";
+import { loadLastRemoteTarget, saveLastRemoteTarget } from "./remote/persist";
+import {
+  clearRemoteAttachParam,
+  encodeRemoteAttach,
+  readRemoteAttach,
+  shouldOpenRemoteInNewWindow,
+} from "./remote/window";
+import {
+  clearActiveEditor,
+  cursorPosition,
+  editorRelease,
+  getActiveEditor,
+  openDetachedEditor,
+  openInDetached,
+  takeDetachedState,
+  windowAtPosition,
+  adoptTabInWindow,
+  type DetachedState,
+} from "./detach/editorWindow";
+import {
+  activateFile,
+  buildLayout,
+  closeFile,
+  createLayout,
+  getActiveGroup,
+  groupOrder,
+  insertFileInGroup,
+  maxGroupSeq,
+  moveFileToGroup,
+  openInGroup,
+  patchFileEverywhere,
+  removeGroup,
+  reorderInGroup,
+  resizeBranch,
+  serializeLayout,
+  splitGroupWith,
+  splitWithFile,
+  type Edge,
+  type EditorGroup,
+  type EditorLayout,
+  type SerializedLayout,
+} from "./editorGroups";
+import { dropTargetAt } from "./detach/dropTarget";
+import { listen, emitTo } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import * as monaco from "monaco-editor";
+import { languageForFile, languageLabel, setLanguageOverride } from "./language";
+import { toFileUri } from "./lsp/uri";
 import { samePath } from "./paths";
-import { languageForFile } from "./language";
 import { buildDecorations, decoKey } from "./icon-theme/decorations";
 import { useLspManager } from "./lsp/useLspManager";
 import { serverIdForLanguage } from "./lsp/servers";
@@ -115,6 +193,13 @@ function baseName(path: string): string {
 /** Untitled buffers use a synthetic `untitled:<name>` path (never on disk). */
 const UNTITLED_PREFIX = "untitled:";
 
+/** Synthetic path of the (single) context-graph tab — never on disk, so it's
+ *  excluded from saving and session restore. */
+const GRAPH_URI = "fluentcoder://graph";
+function isGraphTab(path: string): boolean {
+  return path === GRAPH_URI;
+}
+
 /** How long the user must press-and-hold a draggable chrome element (activity bar,
  * panel) before the drag arms. A deliberate hold tells "I want to move this" apart
  * from a click; the cursor and a charging ring give feedback while it builds up. */
@@ -155,12 +240,14 @@ function readStoredSide(key: string, fallback: "left" | "right"): "left" | "righ
   }
 }
 
-/** Activity bar placement: lateral (vertical), atop the sidebar (horizontal), or hidden. */
-type ActivityBarPos = "side" | "top" | "hidden";
+/** Activity bar placement: lateral (vertical) or atop the sidebar (horizontal).
+    The bar is always visible — it can't be fully hidden (it hosts the views). */
+type ActivityBarPos = "side" | "top";
 function readStoredActivityPos(key: string, fallback: ActivityBarPos): ActivityBarPos {
   try {
     const raw = localStorage.getItem(key);
-    return raw === "side" || raw === "top" || raw === "hidden" ? raw : fallback;
+    // A previously-stored "hidden" now falls back to the lateral bar.
+    return raw === "side" || raw === "top" ? raw : fallback;
   } catch {
     return fallback;
   }
@@ -221,8 +308,184 @@ export default function App() {
   );
   const [branch, setBranch] = useState<string | null>(null);
 
-  const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
-  const [activePath, setActivePath] = useState<string | null>(null);
+  // The editor area is a tree of groups (VS Code-style split grid). `layout` is
+  // the single source of truth; `openFiles`/`activePath` below are the ACTIVE
+  // group's view, and `setOpenFiles`/`setActivePath` are stable wrappers that
+  // edit the active group — so the existing handlers keep working unchanged
+  // while the data model is already multi-group.
+  const [layout, setLayout] = useState<EditorLayout>(() =>
+    createLayout({ id: "g0", files: [], activePath: null })
+  );
+  const FALLBACK_GROUP = useRef<EditorGroup>({
+    id: "g0",
+    files: [],
+    activePath: null,
+  }).current;
+  const activeGroup = getActiveGroup(layout) ?? FALLBACK_GROUP;
+  const openFiles = activeGroup.files;
+  const activePath = activeGroup.activePath;
+
+  const setOpenFiles = useCallback<Dispatch<SetStateAction<OpenFile[]>>>(
+    (action) => {
+      setLayout((l) => {
+        const g = l.groups[l.activeGroup];
+        if (!g) return l;
+        const next =
+          typeof action === "function"
+            ? (action as (p: OpenFile[]) => OpenFile[])(g.files)
+            : action;
+        if (next === g.files) return l;
+        return {
+          ...l,
+          groups: { ...l.groups, [l.activeGroup]: { ...g, files: next } },
+        };
+      });
+    },
+    []
+  );
+  const setActivePath = useCallback<Dispatch<SetStateAction<string | null>>>(
+    (action) => {
+      setLayout((l) => {
+        const g = l.groups[l.activeGroup];
+        if (!g) return l;
+        const next =
+          typeof action === "function"
+            ? (action as (p: string | null) => string | null)(g.activePath)
+            : action;
+        if (next === g.activePath) return l;
+        return {
+          ...l,
+          groups: { ...l.groups, [l.activeGroup]: { ...g, activePath: next } },
+        };
+      });
+    },
+    []
+  );
+
+  const activeGroupId = layout.activeGroup;
+  // Latest layout, readable from stable callbacks without re-subscribing.
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+  // Monotonic group-id source ("g0" already exists; next ones start at "g1").
+  const groupSeq = useRef(1);
+  const allOpenFiles = useCallback(() => {
+    const byPath = new Map<string, OpenFile>();
+    for (const group of Object.values(layoutRef.current.groups)) {
+      for (const file of group.files) byPath.set(file.path, file);
+    }
+    return [...byPath.values()];
+  }, []);
+  const resetEditorLayout = useCallback(() => {
+    setLayout(createLayout({ id: "g0", files: [], activePath: null }));
+    groupSeq.current = 1;
+  }, []);
+  const nextGroupId = useCallback(() => `g${groupSeq.current++}`, []);
+  // True while a tab is being dragged, so every group shields its editor with a
+  // drop-zone overlay (Monaco mustn't move its cursor/scroll under the drag).
+  const [tabDragging, setTabDragging] = useState(false);
+  // The tab in flight (origin group + path), so each group can judge whether a
+  // drop on it would actually change the layout before lighting up a drop-zone.
+  const [activeTabDrag, setActiveTabDrag] = useState<TabDragPayload | null>(null);
+  // The last REAL file the user looked at (not the graph tab), so the graph view
+  // can highlight "where you are" even while its own tab is focused.
+  const [lastRealFile, setLastRealFile] = useState<string | null>(null);
+  // A tab dragged from ANOTHER window is hovering THIS one: either over a tab
+  // strip (show the insertion bar at `dropBar`) or elsewhere (whole-window hint).
+  const [dropHint, setDropHint] = useState(false);
+  const [dropBar, setDropBar] = useState<
+    { left: number; top: number; height: number } | null
+  >(null);
+  // The window we last sent a hint to (as the drag source).
+  const lastHintRef = useRef<string | null>(null);
+
+  // As the drag source, continuously tell whichever OTHER window is under the
+  // cursor where the cursor is, so it can place its own insertion indicator.
+  const handleDragMove = useCallback(async (x: number, y: number) => {
+    let target: string | null = null;
+    try {
+      target = await windowAtPosition(x, y, "");
+    } catch {
+      target = null;
+    }
+    const myLabel = getCurrentWindow().label;
+    const hint = target && target !== myLabel ? target : null;
+    if (lastHintRef.current && lastHintRef.current !== hint) {
+      void emitTo(lastHintRef.current, "drop-hint", { active: false });
+    }
+    lastHintRef.current = hint;
+    if (hint) void emitTo(hint, "drop-hint", { active: true, x, y });
+  }, []);
+  const clearDragHint = useCallback(() => {
+    if (lastHintRef.current) {
+      void emitTo(lastHintRef.current, "drop-hint", { active: false });
+      lastHintRef.current = null;
+    }
+  }, []);
+
+  // Poll the GLOBAL cursor while dragging: HTML5 `drag` freezes once the cursor
+  // leaves this window, so we read the OS cursor to keep hinting other windows.
+  const dragPoll = useRef(0);
+  const startDragPoll = useCallback(() => {
+    if (dragPoll.current) return;
+    dragPoll.current = window.setInterval(async () => {
+      try {
+        const [x, y] = await cursorPosition();
+        void handleDragMove(x, y);
+      } catch {
+        /* ignore */
+      }
+    }, 50);
+  }, [handleDragMove]);
+  const stopDragPoll = useCallback(() => {
+    if (dragPoll.current) {
+      clearInterval(dragPoll.current);
+      dragPoll.current = 0;
+    }
+  }, []);
+
+  // This window reacts to hints aimed at it: resolve the cursor to a tab-strip
+  // insertion point (bar) or fall back to the whole-window highlight.
+  useEffect(() => {
+    const un = listen<{ active: boolean; x?: number; y?: number }>(
+      "drop-hint",
+      (e) => {
+        if (!e.payload.active || e.payload.x == null || e.payload.y == null) {
+          setDropHint(false);
+          setDropBar(null);
+          return;
+        }
+        const t = dropTargetAt(e.payload.x, e.payload.y);
+        if (t) {
+          setDropBar(t.bar);
+          setDropHint(false);
+        } else {
+          setDropBar(null);
+          setDropHint(true);
+        }
+      }
+    );
+    return () => {
+      void un.then((fn) => fn());
+    };
+  }, []);
+
+  // Safety net: any drag end/drop anywhere clears the shield + hints, so they
+  // can never get stuck on (e.g. if the source tab unmounts mid-drag).
+  useEffect(() => {
+    const reset = () => {
+      setTabDragging(false);
+      setDropHint(false);
+      setDropBar(null);
+      clearDragHint();
+    };
+    window.addEventListener("dragend", reset);
+    window.addEventListener("drop", reset);
+    return () => {
+      window.removeEventListener("dragend", reset);
+      window.removeEventListener("drop", reset);
+    };
+  }, [clearDragHint]);
+
   const navigationHistoryRef = useRef(createNavigationHistory());
   const historyNavigationTargetRef = useRef<string | null>(null);
   const historyNavigationPendingRef = useRef(false);
@@ -231,6 +494,9 @@ export default function App() {
   // good session on disk (e.g. saving an empty tab list before the first tab
   // reopens). Cleared once the restore finishes.
   const restoringSessionRef = useRef(false);
+  // Guards the boot restore against React.StrictMode's double-invoke in dev (it
+  // would otherwise reopen every saved tab twice).
+  const bootRestoredRef = useRef(false);
 
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelHeight, setPanelHeight] = useState(() =>
@@ -252,6 +518,43 @@ export default function App() {
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [branchPickerOpen, setBranchPickerOpen] = useState(false);
+  // Generic VS Code-style quick-pick, reused by any "pick one option" flow (the
+  // TypeScript version picker today; future runtime/version selectors next).
+  const [quickPick, setQuickPick] = useState<{
+    title: string;
+    placeholder: string;
+    items: QuickPickItem[];
+    onPick: (item: QuickPickItem) => void;
+  } | null>(null);
+  // User-chosen language modes (VS Code's "Change Language Mode"), keyed by file
+  // path. Mirrored into the `language.ts` override map so `languageForFile`
+  // everywhere — including the editor's Monaco model — honors the choice; kept in
+  // React state here purely so the status bar + LSP recompute when it changes.
+  const [languageOverrides, setLanguageOverrides] = useState<
+    Record<string, string>
+  >({});
+  // SSH connect flow (VS Code style): a host quick-pick → password prompt / form.
+  const [sshDialogOpen, setSshDialogOpen] = useState(false);
+  const [sshHostsOpen, setSshHostsOpen] = useState(false);
+  const [sshSavedHosts, setSshSavedHosts] = useState<SavedHost[]>([]);
+  const [sshPasswordFor, setSshPasswordFor] = useState<SavedHost | null>(null);
+  const [sshFormInitial, setSshFormInitial] = useState<
+    Partial<SshConnectInput> | undefined
+  >(undefined);
+  // After a successful connect, holds the open connection while the user browses
+  // for a folder. `input` is the credentials for a brand-new connection (cancel
+  // disconnects); null when reusing an already-attached session (cancel keeps it).
+  const [remoteBrowser, setRemoteBrowser] = useState<{
+    connId: string;
+    host: string;
+    user: string;
+    input: SshConnectInput | null;
+  } | null>(null);
+  // Connection-management menu (opened by clicking the status-bar SSH chip).
+  const [manageMenuOpen, setManageMenuOpen] = useState(false);
+  // True while attached to a remote host (drives the status-bar indicator and
+  // read-only guards). Mirrors the ambient `getActiveRemote()` for rendering.
+  const [remoteSession, setRemoteSession] = useState<RemoteSession | null>(null);
   const [agentStore, setAgentStore] = useState<AgentStore>(() => ({
     ...EMPTY_AGENT_STORE,
   }));
@@ -345,6 +648,102 @@ export default function App() {
   // Git status of the open folder, used (with diagnostics) to decorate the
   // explorer/tabs. Refreshed when the folder changes; null when not a repo.
   const [gitState, setGitState] = useState<GitStatus | null>(null);
+  const [recents, setRecents] = useState<string[]>(() => getRecentFolders());
+  const [gitBusy, setGitBusy] = useState(false);
+  const [lastFetch, setLastFetch] = useState<number | null>(null);
+  const [autoFetch, setAutoFetch] = useState(
+    () => localStorage.getItem("git.autofetch") !== "off"
+  );
+
+  // Keep git status live while a repo is open, so the status bar's ahead/behind,
+  // conflicts and branch stay current (VS Code refreshes on focus + on a timer).
+  const refreshGitStatus = useCallback(() => {
+    if (!rootPath) {
+      setGitState(null);
+      return;
+    }
+    gitStatus(rootPath)
+      .then((s) => {
+        setGitState(s);
+        setBranch(s.isRepo ? s.branch : null);
+      })
+      .catch(() => {});
+  }, [rootPath]);
+
+  useEffect(() => {
+    if (!rootPath) return;
+    refreshGitStatus();
+    const id = window.setInterval(refreshGitStatus, 5000);
+    const onFocus = () => refreshGitStatus();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [rootPath, refreshGitStatus]);
+
+  // Periodic background fetch (VS Code's git.autofetch), so behind-counts show up
+  // without a manual fetch. Toggleable + persisted in localStorage.
+  useEffect(() => {
+    if (!rootPath || !autoFetch) return;
+    const id = window.setInterval(() => {
+      gitFetch(rootPath)
+        .then(() => {
+          setLastFetch(Date.now());
+          refreshGitStatus();
+        })
+        .catch(() => {});
+    }, 180_000);
+    return () => clearInterval(id);
+  }, [rootPath, autoFetch, refreshGitStatus]);
+
+  const toggleAutoFetch = useCallback(() => {
+    setAutoFetch((v) => {
+      const next = !v;
+      localStorage.setItem("git.autofetch", next ? "on" : "off");
+      return next;
+    });
+  }, []);
+
+  // Runs a git op with a spinner, surfaces errors, then refreshes status.
+  const runGitOp = useCallback(
+    async (fn: (root: string) => Promise<unknown>) => {
+      if (!rootPath || gitBusy) return;
+      setGitBusy(true);
+      try {
+        await fn(rootPath);
+      } catch (err) {
+        alert(`Git: ${err}`);
+      } finally {
+        setGitBusy(false);
+        refreshGitStatus();
+      }
+    },
+    [rootPath, gitBusy, refreshGitStatus]
+  );
+
+  const handleGitSync = useCallback(
+    () =>
+      runGitOp(async (root) => {
+        await gitPull(root);
+        await gitPush(root);
+      }),
+    [runGitOp]
+  );
+  const handleGitFetch = useCallback(
+    () =>
+      runGitOp(async (root) => {
+        await gitFetch(root);
+        setLastFetch(Date.now());
+      }),
+    [runGitOp]
+  );
+  const handleGitPull = useCallback(() => runGitOp((root) => gitPull(root)), [runGitOp]);
+  const handleGitPush = useCallback(() => runGitOp((root) => gitPush(root)), [runGitOp]);
+  const handleGitPublish = useCallback(
+    () => runGitOp((root) => gitPublish(root)),
+    [runGitOp]
+  );
 
   // path → decoration (label color + git badge), rebuilt only when an input
   // changes. The lookup normalizes separators so callers can pass any path.
@@ -356,6 +755,14 @@ export default function App() {
     (path: string) => decorations.get(decoKey(path)),
     [decorations]
   );
+
+  // Absolute paths of files changed in the working tree (issue #19) — feeds the
+  // explorer's "only changed files" toggle. Relative git paths are joined to the
+  // root with the same scheme GitPanel uses to open them.
+  const changedPaths = useMemo(() => {
+    if (!rootPath || !gitState?.isRepo) return [];
+    return gitState.files.map((f) => `${rootPath}/${f.path}`);
+  }, [rootPath, gitState]);
 
   // Lets Search/Problems jump to a line in the active editor, optionally
   // selecting a range on that line (search results highlight the matched term).
@@ -417,9 +824,15 @@ export default function App() {
   // brings up. Recomputed only when the set of open paths changes.
   const openedLanguages = useMemo(() => {
     const set = new Set<string>();
-    for (const f of openFiles) set.add(languageForFile(f.name));
+    for (const group of Object.values(layout.groups)) {
+      for (const file of group.files) {
+        set.add(languageForFile(file.name, file.path));
+      }
+    }
     return set;
-  }, [openFiles]);
+    // `languageOverrides` is read indirectly via `languageForFile`; list it so a
+    // language-mode change re-derives which servers should be running.
+  }, [layout.groups, languageOverrides]);
 
   // LSP lifecycle: starts/stops servers per workspace + open languages. Its
   // diagnostics surface as Monaco markers, which EditorPane already funnels into
@@ -448,7 +861,8 @@ export default function App() {
   // (Servers for other open files keep running in the background for instant tab
   // switches; they're just hidden until you focus a file they handle.)
   const activeServerId = activeFile
-    ? serverIdForLanguage(languageForFile(activeFile.name))?.serverId
+    ? serverIdForLanguage(languageForFile(activeFile.name, activeFile.path))
+        ?.serverId
     : undefined;
   const activeLspServers = useMemo(
     () =>
@@ -505,6 +919,10 @@ export default function App() {
   const openFolder = useCallback(
     async (folder: string, opts?: { persist?: boolean; silent?: boolean }) => {
       const persist = opts?.persist ?? true;
+      // When attached to a remote host, `readDir` routes over SFTP; git, the
+      // search index and local-session persistence are local-only (later phases),
+      // so they're skipped here. The remote attachment must already be set.
+      const remote = isRemoteActive();
       try {
         const entries = await readDir(folder);
         // Now that the folder is confirmed to open, drop the previous project's
@@ -514,28 +932,209 @@ export default function App() {
         setRoots(entries);
         setRootName(baseName(folder).toUpperCase());
         setRootPath(folder);
-        // Resolve the git branch for the status bar (null if not a repo).
+        // git routes to the host over SSH when remote, so branch + decorations
+        // work for both local and remote workspaces.
         gitBranch(folder).then(setBranch).catch(() => setBranch(null));
-        // Pull status to decorate the explorer (modified/new/conflict badges).
         gitStatus(folder).then(setGitState).catch(() => setGitState(null));
-        // Warm the search index so the first Ctrl+Shift+F is instant (the walk +
-        // ignore parsing happen now, in the background, not on the first query).
-        buildSearchIndex(folder).catch(() => {});
-        if (persist) sessionSetLastFolder(folder).catch(() => {});
+        if (!remote) {
+          // Warm the search index so the first Ctrl+Shift+F is instant (remote
+          // search uses live `grep`, so it needs no local index).
+          buildSearchIndex(folder).catch(() => {});
+          if (persist) {
+            sessionSetLastFolder(folder).catch(() => {});
+            addRecentFolder(folder);
+            setRecents(getRecentFolders());
+          }
+        }
+        return true;
       } catch (err) {
         console.error(err);
         if (!opts?.silent) alert(`Não foi possível abrir a pasta:\n${err}`);
         // A folder that no longer opens shouldn't be reopened next launch.
         if (persist) sessionSetLastFolder(null).catch(() => {});
+        return false;
       }
     },
     [resetWorkspaceState]
   );
 
+  /**
+   * Step 1 of opening a remote workspace (issue #8): connect to the host. On
+   * success the connection is held in `remoteBrowser` so the user can navigate
+   * the host's filesystem and pick a folder. Throws on auth/connect failure so
+   * the dialog can surface the message.
+   */
+  const connectRemote = useCallback(async (input: SshConnectInput) => {
+    const connId = await sshConnect(input);
+    setRemoteBrowser({ connId, host: input.host, user: input.user, input });
+    setSshDialogOpen(false);
+    setSshHostsOpen(false);
+    setSshPasswordFor(null);
+  }, []);
+
+  /**
+   * Opens the VS Code-style SSH host quick-pick: the saved `~/.ssh/config` hosts
+   * plus an "add new host" action. This is the entry point for connecting.
+   */
+  const openSshFlow = useCallback(async () => {
+    setSshPasswordFor(null);
+    setSshFormInitial(undefined);
+    try {
+      const hosts = await sshListSavedHosts();
+      const seen = new Set<string>();
+      setSshSavedHosts(
+        hosts.filter((h) => {
+          const k = `${h.label} ${h.host} ${h.user ?? ""} ${h.port ?? ""}`;
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        })
+      );
+    } catch {
+      setSshSavedHosts([]);
+    }
+    setSshHostsOpen(true);
+  }, []);
+
+  /** Routes a chosen saved host: password prompt, or the full form (key/no user). */
+  const pickSavedHost = useCallback((h: SavedHost) => {
+    setSshHostsOpen(false);
+    if (h.identityFile || !h.user) {
+      // Key auth or a host without a user → the form (prefilled) gives full control.
+      setSshFormInitial({
+        host: h.host,
+        port: h.port ?? undefined,
+        user: h.user ?? undefined,
+        keyPath: h.identityFile ?? undefined,
+      });
+      setSshDialogOpen(true);
+    } else {
+      setSshPasswordFor(h);
+    }
+  }, []);
+
+  type RemoteBrowserCtx = {
+    connId: string;
+    host: string;
+    user: string;
+    input: SshConnectInput | null;
+  };
+
+  /**
+   * Step 2: attach the chosen remote folder and open it. Sets the ambient remote
+   * session first so `openFolder`'s `readDir`/git/search route over SSH, then
+   * persists the (secret-free) target for next-launch reconnect.
+   */
+  async function finalizeRemoteFolder(browser: RemoteBrowserCtx, rootPath: string) {
+    const { connId, host, user, input } = browser;
+
+    // A new SSH connection must not replace an existing workspace. Hand the
+    // already-open backend connection to a warm same-process window instead.
+    if (shouldOpenRemoteInNewWindow(rootPathRef.current, input !== null)) {
+      try {
+        await openNewWindow(
+          encodeRemoteAttach({ connId, host, user, rootPath })
+        );
+        setRemoteBrowser(null);
+
+        const last = loadLastRemoteTarget();
+        const sameHost = last?.host === host;
+        saveLastRemoteTarget({
+          host,
+          port: input?.port ?? (sameHost ? last?.port ?? 22 : 22),
+          user,
+          keyPath: input?.keyPath ?? (sameHost ? last?.keyPath : undefined),
+          remotePath: rootPath,
+        });
+      } catch (err) {
+        console.error("Falha ao abrir a conexão em uma nova janela:", err);
+        alert(`Não foi possível abrir a conexão em uma nova janela:\n${err}`);
+      }
+      return;
+    }
+
+    if (!(await guardDirtySession())) return;
+
+    const previousRemote = getActiveRemote();
+    const session: RemoteSession = {
+      connId,
+      host,
+      user,
+      rootPath,
+      input: input ?? previousRemote?.input,
+    };
+    setActiveRemote(session);
+    const opened = await openFolder(rootPath, { persist: false });
+    if (!opened) {
+      setActiveRemote(previousRemote);
+      if (connId !== previousRemote?.connId) {
+        void sshDisconnect(connId).catch(() => {});
+      }
+      return;
+    }
+
+    resetEditorLayout();
+    if (previousRemote && previousRemote.connId !== connId) {
+      clearRemoteTerminals();
+      clearRemoteLspServers();
+      void sshDisconnect(previousRemote.connId).catch(() => {});
+    }
+    setRemoteSession(session);
+    setRemoteBrowser(null);
+
+    // Persist only after the folder is known to be accessible.
+    const last = loadLastRemoteTarget();
+    const sameHost = last?.host === host;
+    saveLastRemoteTarget({
+      host,
+      port: input?.port ?? (sameHost ? last?.port ?? 22 : 22),
+      user,
+      keyPath: input?.keyPath ?? (sameHost ? last?.keyPath : undefined),
+      remotePath: rootPath,
+    });
+  }
+
+  /**
+   * Cancels the folder browser. For a brand-new connection this closes it; for a
+   * reused session (opening another folder) the connection is kept.
+   */
+  const cancelRemoteBrowser = useCallback(() => {
+    if (remoteBrowser?.input) void sshDisconnect(remoteBrowser.connId).catch(() => {});
+    setRemoteBrowser(null);
+  }, [remoteBrowser]);
+
+  /**
+   * Re-establishes a dropped connection using the in-memory credentials and
+   * reopens the same folder. Falls back to the connect dialog when there are no
+   * stored credentials (e.g. a session restored without them).
+   */
+  const reconnectRemote = useCallback(async () => {
+    const session = getActiveRemote();
+    if (!session?.input) {
+      setSshDialogOpen(true);
+      return;
+    }
+    void sshDisconnect(session.connId).catch(() => {});
+    clearRemoteTerminals();
+    clearRemoteLspServers();
+    try {
+      const connId = await sshConnect(session.input);
+      const next: RemoteSession = { ...session, connId };
+      setActiveRemote(next);
+      setRemoteSession(next);
+      await openFolder(session.rootPath, { persist: false });
+    } catch (err) {
+      setActiveRemote(null);
+      setRemoteSession(null);
+      alert(`Não foi possível reconectar:\n${err}`);
+    }
+  }, [openFolder]);
+
   const refreshExplorerRoot = useCallback(async () => {
     if (!rootPath) return;
     const entries = await readDir(rootPath);
     setRoots(entries);
+    // git routes over SSH when remote, so decorations refresh either way.
     gitStatus(rootPath).then(setGitState).catch(() => setGitState(null));
   }, [rootPath]);
 
@@ -579,18 +1178,37 @@ export default function App() {
     }
   }, [rootPath, refreshAfterCheckout]);
 
-  /** Native folder picker → load top-level entries into the explorer. */
+  async function openLocalFolderInPlace(folder: string) {
+    if (!(await guardDirtySession())) return;
+    const previousRemote = getActiveRemote();
+    if (previousRemote) setActiveRemote(null);
+    const opened = await openFolder(folder);
+    if (!opened) {
+      setActiveRemote(previousRemote);
+      return;
+    }
+    resetEditorLayout();
+    if (previousRemote) {
+      setRemoteSession(null);
+      clearRemoteTerminals();
+      clearRemoteLspServers();
+      void sshDisconnect(previousRemote.connId).catch(() => {});
+    }
+  }
+
+  /** Native folder picker → reuse this window for the selected project. */
   async function handleOpenFolder() {
     const folder = await pickFolder();
     if (!folder) return;
-    // Switching folders drops the current session — guard unsaved buffers first.
-    if (!(await guardDirtySession())) return;
-    setOpenFiles([]);
-    setActivePath(null);
-    await openFolder(folder);
+    await openLocalFolderInPlace(folder);
   }
 
-  /** Opens a new isolated editor window (separate process), starting empty. */
+  /** Opens a folder chosen from the welcome screen's "Recentes" list. */
+  async function handleOpenRecent(folder: string) {
+    await openLocalFolderInPlace(folder);
+  }
+
+  /** Opens a new empty workbench in the already-warm app process. */
   const handleNewWindow = useCallback(() => {
     openNewWindow().catch((err) => {
       console.error(err);
@@ -690,22 +1308,50 @@ export default function App() {
   }, []);
 
   // On launch, reopen the last project folder and the tabs that were open in it
-  // (issue #7) — unless this is a fresh window (File ▸ New Window → `--new`),
+  // (issue #7) — unless this is a fresh window (URL marker or legacy `--new`),
   // which starts empty. Restore is silent so a moved/deleted folder/file doesn't
   // greet the user with an error dialog. The `restoringSessionRef` guard keeps
   // the session-save effect from overwriting the good session with the partial
   // state produced while tabs are reopening.
   useEffect(() => {
+    if (bootRestoredRef.current) return;
+    bootRestoredRef.current = true;
     restoringSessionRef.current = true;
     (async () => {
-      let fresh = false;
+      // Multi-window (issue #8): a window opened as a remote attach restores the
+      // remote session (the connection is already open) instead of a local folder.
+      const attach = readRemoteAttach();
+      if (attach) {
+        clearRemoteAttachParam();
+        const session: RemoteSession = {
+          connId: attach.connId,
+          host: attach.host,
+          user: attach.user,
+          rootPath: attach.rootPath,
+        };
+        setActiveRemote(session);
+        setRemoteSession(session);
+        try {
+          const opened = await openFolder(attach.rootPath, { persist: false });
+          if (!opened) throw new Error("A pasta remota não pôde ser aberta.");
+        } catch (err) {
+          console.error("Falha ao anexar a janela remota:", err);
+          setActiveRemote(null);
+          setRemoteSession(null);
+          void sshDisconnect(attach.connId).catch(() => {});
+        }
+        restoringSessionRef.current = false;
+        return;
+      }
+
+      // A fresh window (Arquivo ▸ Nova Janela) starts empty — nothing to restore.
+      let fresh = new URLSearchParams(window.location.search).has("freshWindow");
       try {
-        fresh = await isFreshWindow();
+        if (!fresh) fresh = await isFreshWindow();
       } catch (err) {
         console.error("Falha ao verificar se a janela é nova:", err);
       }
       if (fresh) {
-        // A fresh window starts empty — nothing to restore, and saves are allowed.
         restoringSessionRef.current = false;
         return;
       }
@@ -722,6 +1368,54 @@ export default function App() {
       // Open the folder first so the explorer/rootPath are ready before tabs
       // reopen (handleOpenFile resolves paths against the loaded project).
       if (s.lastFolder) await openFolder(s.lastFolder, { silent: true });
+
+      // Restore the FULL split grid when the session saved one (>1 group);
+      // otherwise fall through to the simpler flat single-group reopen.
+      if (s.layout) {
+        try {
+          const sl = JSON.parse(s.layout) as SerializedLayout;
+          if (sl.groups && sl.groups.length > 1) {
+            const groups: Record<string, EditorGroup> = {};
+            for (const sg of sl.groups) {
+              const files: OpenFile[] = [];
+              for (const t of sg.tabs) {
+                const mode: OpenMode = (t.mode ?? defaultModeFor(t.path)) as OpenMode;
+                let content = "";
+                if (mode === "text") {
+                  try {
+                    content = await readFile(t.path);
+                  } catch {
+                    continue; // file gone — skip this tab
+                  }
+                }
+                files.push({
+                  path: t.path,
+                  name: baseName(t.path),
+                  content,
+                  dirty: false,
+                  mode,
+                });
+              }
+              const activePath =
+                sg.activePath && files.some((f) => f.path === sg.activePath)
+                  ? sg.activePath
+                  : files[files.length - 1]?.path ?? null;
+              groups[sg.id] = { id: sg.id, files, activePath };
+            }
+            const built = buildLayout(sl.root, sl.activeGroup, groups);
+            if (built) {
+              // built already carries each group's tabs + activePath + the
+              // active group, so one setLayout restores the whole grid.
+              setLayout(built);
+              groupSeq.current = maxGroupSeq(Object.keys(built.groups)) + 1;
+              restoringSessionRef.current = false;
+              return;
+            }
+          }
+        } catch {
+          // Corrupt/old layout blob — fall back to the flat reopen below.
+        }
+      }
 
       // Reopen tabs in their saved order, skipping any file that no longer
       // exists (handleOpenFile returns false silently). Re-read content from
@@ -814,6 +1508,7 @@ export default function App() {
       if (!rootPath) return;
       try {
         await agentsSave(rootPath, next);
+        setAgentError(null);
       } catch (error) {
         setAgentError(String(error));
       }
@@ -1061,6 +1756,7 @@ export default function App() {
       if (!store || isStaleWorkspace()) return saveQueue;
       saveQueue = saveQueue
         .then(() => agentsSave(sendRoot, store))
+        .then(() => setAgentError(null))
         .catch((error) => {
           setAgentError(String(error));
         });
@@ -1293,32 +1989,59 @@ export default function App() {
         return true;
       }
 
+      // Active-group routing (VS Code style): when a detached editor window is
+      // the active group, a NEW file opens there as a tab instead of here. Files
+      // already open in this window were focused-in-place above.
       try {
+        const active = await getActiveEditor();
+        if (active) {
+          const content =
+            resolvedMode === "text" ? await readFile(node.path) : "";
+          await openInDetached(active.label, {
+            path: node.path,
+            name: node.name,
+            content,
+            dirty: false,
+            mode: resolvedMode,
+          });
+          return true;
+        }
+      } catch (err) {
+        // Detached window gone/unreachable — fall back to opening locally below.
+        console.warn("Roteamento para a janela destacada falhou:", err);
+      }
+
+      try {
+        // Preview modes (image/video/audio) load their own bytes via base64;
+        // only the text editor needs the file contents up front.
         const content =
-          resolvedMode === "image" ? "" : await readFile(node.path);
-        // Guard against the closure's `openFiles` being stale between two fast
-        // back-to-back opens (e.g. the launch restore awaits each tab but React
-        // hasn't re-rendered, so the dedup above saw an outdated list). The
-        // functional updater sees the live `prev`, so re-check there and skip
-        // the append if the file already has a tab (issue #7).
-        setOpenFiles((prev) =>
-          prev.some((f) => samePath(f.path, node.path))
-            ? prev
-            : [
-                ...prev,
-                {
-                  path: node.path,
-                  name: node.name,
-                  content,
-                  dirty: false,
-                  mode: resolvedMode,
-                },
-              ]
-        );
+          resolvedMode === "text" ? await readFile(node.path) : "";
+        // Dedupe INSIDE the functional update: the `already` check above reads a
+        // snapshot, so two quick opens of the same file both pass it and would
+        // each append a tab. Re-checking `prev` here makes "one tab per file"
+        // race-safe (no duplicate tabs).
+        let duplicate = false;
+        setOpenFiles((prev) => {
+          if (prev.some((f) => samePath(f.path, node.path))) {
+            duplicate = true;
+            return prev;
+          }
+          return [
+            ...prev,
+            {
+              path: node.path,
+              name: node.name,
+              content,
+              dirty: false,
+              mode: resolvedMode,
+            },
+          ];
+        });
         setActivePath(node.path);
         // The editor isn't mounted with this content yet; defer the reveal.
         if (line != null && resolvedMode === "text") {
-          pendingReveal.current = { line, selection };
+          if (duplicate) revealRef.current?.(line, selection);
+          else pendingReveal.current = { line, selection };
         }
         return true;
       } catch (err) {
@@ -1461,14 +2184,18 @@ export default function App() {
   );
 
   /** Editor edits update the active buffer and mark it dirty. */
-  function handleEditorChange(value: string) {
-    if (!activePath) return;
-    setOpenFiles((prev) =>
-      prev.map((f) =>
-        f.path === activePath ? { ...f, content: value, dirty: true } : f
-      )
-    );
-  }
+  /**
+   * Edits the active buffer of a group. Updates EVERY group holding that file —
+   * the same document can be open in two split groups (Monaco shares the model
+   * by path), so all copies must stay in sync.
+   */
+  const editInGroup = useCallback((groupId: string, value: string) => {
+    setLayout((l) => {
+      const g = l.groups[groupId];
+      if (!g || !g.activePath) return l;
+      return patchFileEverywhere(l, g.activePath, { content: value, dirty: true });
+    });
+  }, []);
 
   /**
    * Writes a single open file to disk and clears its dirty flag. The shared
@@ -1489,15 +2216,19 @@ export default function App() {
       }
       try {
         await writeFile(targetPath, file.content);
-        setOpenFiles((prev) =>
-          prev.map((f) =>
-            f.path === file.path
-              ? { ...f, path: targetPath, name: baseName(targetPath), dirty: false }
-              : f
-          )
+        // Clear dirty (and follow the rename, for untitled buffers) in EVERY
+        // group holding this file — it may be open in more than one split.
+        setLayout((l) =>
+          patchFileEverywhere(l, file.path, {
+            path: targetPath,
+            name: baseName(targetPath),
+            dirty: false,
+          })
         );
-        // If we just gave an untitled buffer a real path, follow it with focus.
-        setActivePath((cur) => (cur === file.path ? targetPath : cur));
+        // The file's links/imports may have changed — drop the cached graph +
+        // knowledge index so the graph/backlinks re-scan on next open/switch.
+        invalidateGraph();
+        invalidateIndex();
       } catch (err) {
         console.error(err);
         alert(`Não foi possível salvar:\n${err}`);
@@ -1508,18 +2239,156 @@ export default function App() {
   );
 
   /** Remove a tab from `openFiles`, moving focus off it if it was active. */
-  const removeTab = useCallback(
-    (path: string) => {
-      setOpenFiles((prev) => {
-        const next = prev.filter((f) => f.path !== path);
-        if (path === activePath) {
-          setActivePath(next.length ? next[next.length - 1].path : null);
-        }
-        return next;
-      });
+  /** Removes a tab from a group, moving focus off it and collapsing an emptied
+   *  group (except the last one). */
+  const removeTabFromGroup = useCallback((groupId: string, path: string) => {
+    setLayout((l) => closeFile(l, groupId, path));
+  }, []);
+
+  /** Reorders tabs within a group: drops `fromPath` just before/after `toPath`. */
+  const reorderTabsInGroup = useCallback(
+    (groupId: string, fromPath: string, toPath: string, before: boolean) => {
+      setLayout((l) => reorderInGroup(l, groupId, fromPath, toPath, before));
     },
-    [activePath]
+    []
   );
+
+  /**
+   * Tears a tab off into its own window ("Mover para Nova Janela"). The whole
+   * buffer (incl. unsaved changes + remote info) is handed off; on success the
+   * tab is removed here since the file now lives in the detached window.
+   */
+  const detachFromGroup = useCallback(
+    async (groupId: string, path: string, screenX = 0, screenY = 0) => {
+      const file = layoutRef.current.groups[groupId]?.files.find(
+        (f) => f.path === path
+      );
+      if (!file) return;
+
+      // The HTML5 dragend coords freeze when the cursor is over another app, so
+      // read the real OS cursor for the true drop position.
+      try {
+        const [cx, cy] = await cursorPosition();
+        if (cx || cy) {
+          screenX = cx;
+          screenY = cy;
+        }
+      } catch {
+        /* keep the passed coords */
+      }
+
+      // Gesture (drop with screen coords): decide by what's under the cursor.
+      if (screenX || screenY) {
+        let target: string | null = null;
+        try {
+          target = await windowAtPosition(screenX, screenY, "");
+        } catch {
+          target = null;
+        }
+        const myLabel = getCurrentWindow().label;
+        // Dropped back inside THIS window's own dead space → not a tear-off.
+        if (target === myLabel) return;
+        // Dropped over ANOTHER app window → move the tab into it.
+        if (target) {
+          try {
+            await adoptTabInWindow(target, file, { x: screenX, y: screenY });
+            removeTabFromGroup(groupId, path);
+          } catch (err) {
+            console.warn("Não foi possível mover a aba para a janela:", err);
+          }
+          return;
+        }
+      }
+
+      // Empty desktop (or menu action with no coords) → spawn a new window,
+      // placed where it was dropped when we have coordinates.
+      const remote = getActiveRemote();
+      const state: DetachedState = {
+        files: [file],
+        activePath: file.path,
+        remote: remote
+          ? {
+              connId: remote.connId,
+              host: remote.host,
+              user: remote.user,
+              rootPath: remote.rootPath,
+            }
+          : undefined,
+      };
+      try {
+        await openDetachedEditor(
+          state,
+          screenX || screenY ? { x: screenX, y: screenY } : undefined
+        );
+        removeTabFromGroup(groupId, path);
+      } catch (err) {
+        console.warn("Não foi possível destacar a aba:", err);
+      }
+    },
+    [removeTabFromGroup]
+  );
+
+  /** Reopens a whole group handed back from a detached window (re-dock). */
+  const reopenDetached = useCallback((state: DetachedState) => {
+    setOpenFiles((prev) => {
+      const merged = [...prev];
+      for (const f of state.files) {
+        const i = merged.findIndex((x) => x.path === f.path);
+        if (i >= 0) merged[i] = { ...merged[i], content: f.content, dirty: f.dirty };
+        else merged.push({ ...f, mode: f.mode ?? "text" });
+      }
+      return merged;
+    });
+    if (state.activePath) setActivePath(state.activePath);
+  }, []);
+
+  // Listen for groups handed back from detached editor windows (re-dock).
+  useEffect(() => {
+    const unlisten = listen<{ token: string }>("redock-editor", async (e) => {
+      const state = await takeDetachedState(e.payload.token);
+      if (state) reopenDetached(state);
+      void editorRelease(e.payload.token);
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [reopenDetached]);
+
+  // Adopt a tab dragged in from ANOTHER window: insert it where the cursor was
+  // (a specific group's strip at before/after a tab), else into the active
+  // group; then bring this window to the front.
+  useEffect(() => {
+    const unlisten = listen<{ file: OpenFile; x?: number; y?: number }>(
+      "adopt-tab",
+      (e) => {
+        const file = { ...e.payload.file, mode: e.payload.file.mode ?? "text" };
+        const t =
+          e.payload.x != null && e.payload.y != null
+            ? dropTargetAt(e.payload.x, e.payload.y)
+            : null;
+        setLayout((l) =>
+          t && t.groupId && l.groups[t.groupId]
+            ? insertFileInGroup(l, t.groupId, file, t.targetPath ?? undefined, t.before)
+            : openInGroup(l, l.activeGroup, file)
+        );
+        setDropHint(false);
+        setDropBar(null);
+        void getCurrentWindow().setFocus();
+      }
+    );
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // The main window starts as the active editor group (the home group). It
+  // RECLAIMS "active" when the user interacts with its editor area (see
+  // onMouseDownCapture on <main>), NOT merely when the OS focuses it — opening a
+  // file from the explorer focuses this window, yet must still route to a focused
+  // detached group ("o próximo arquivo vai pra essa outra janela").
+  useEffect(() => {
+    void clearActiveEditor();
+  }, []);
 
   /**
    * Close a tab, guarding unsaved work. A clean buffer closes immediately; a
@@ -1528,16 +2397,19 @@ export default function App() {
    * aborts. Async so the close waits for the user's decision.
    */
   const handleCloseTab = useCallback(
-    async (path: string) => {
-      const file = openFiles.find((f) => f.path === path);
+    async (path: string, groupId: string = layoutRef.current.activeGroup) => {
+      const file = layoutRef.current.groups[groupId]?.files.find(
+        (f) => f.path === path
+      );
       if (!file) return;
       if (!file.dirty) {
-        removeTab(path);
+        removeTabFromGroup(groupId, path);
         return;
       }
       // Don't stack a second dialog for a tab already mid-confirmation.
-      if (closingPaths.current.has(path)) return;
-      closingPaths.current.add(path);
+      const key = `${groupId}:${path}`;
+      if (closingPaths.current.has(key)) return;
+      closingPaths.current.add(key);
       try {
         const choice = await askConfirm(
           "Deseja salvar as alterações?",
@@ -1555,16 +2427,16 @@ export default function App() {
           } catch {
             return; // error already reported; keep the tab open and dirty
           }
-          removeTab(path);
+          removeTabFromGroup(groupId, path);
         } else if (choice === "discard") {
-          removeTab(path);
+          removeTabFromGroup(groupId, path);
         }
         // "cancel" / null (Esc/overlay): do nothing.
       } finally {
-        closingPaths.current.delete(path);
+        closingPaths.current.delete(key);
       }
     },
-    [openFiles, askConfirm, saveFile, removeTab]
+    [askConfirm, saveFile, removeTabFromGroup]
   );
 
   // Latest open files / active path, readable from non-reactive listeners
@@ -1586,16 +2458,30 @@ export default function App() {
   useEffect(() => {
     if (restoringSessionRef.current) return;
     const timer = window.setTimeout(() => {
-      const tabs: OpenTab[] = openFiles.map((f) => ({
-        path: f.path,
-        mode: f.mode,
+      // Flat fallback = the active group's tabs; `layout` carries the full grid.
+      // The synthetic graph tab has no file on disk, so it's never persisted.
+      const tabs: OpenTab[] = openFiles
+        .filter((f) => !isGraphTab(f.path))
+        .map((f) => ({ path: f.path, mode: f.mode }));
+      const sl = serializeLayout(layout);
+      sl.groups = sl.groups.map((g) => ({
+        ...g,
+        tabs: g.tabs.filter((t) => !isGraphTab(t.path)),
+        activePath: isGraphTab(g.activePath ?? "") ? null : g.activePath,
       }));
-      sessionSetOpenFiles(tabs, activePath).catch((err) =>
+      const serialized = JSON.stringify(sl);
+      sessionSetOpenFiles(tabs, activePath, serialized).catch((err) =>
         console.error("Falha ao salvar abas da sessão:", err)
       );
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [openFiles, activePath]);
+  }, [layout, openFiles, activePath]);
+
+  // Remember the last real file the user focused (ignoring the graph tab), so the
+  // graph can highlight it even when the graph tab itself is active.
+  useEffect(() => {
+    if (activePath && !isGraphTab(activePath)) setLastRealFile(activePath);
+  }, [activePath]);
 
   /**
    * Batch unsaved-changes guard for actions that drop the whole session at once
@@ -1605,8 +2491,8 @@ export default function App() {
    * succeed; Descartar tudo proceeds without saving; Cancelar/Esc aborts.
    * Returns whether the caller may proceed to discard the session.
    */
-  const guardDirtySession = useCallback(async (): Promise<boolean> => {
-    const dirty = openFilesRef.current.filter((f) => f.dirty);
+  const guardDirtyFiles = useCallback(async (files: OpenFile[]): Promise<boolean> => {
+    const dirty = [...new Map(files.filter((file) => file.dirty).map((file) => [file.path, file])).values()];
     if (dirty.length === 0) return true;
     const choice = await askConfirm(
       "Deseja salvar as alterações?",
@@ -1632,6 +2518,11 @@ export default function App() {
     return false; // "cancel" / Esc
   }, [askConfirm, saveFile]);
 
+  const guardDirtySession = useCallback(
+    () => guardDirtyFiles(allOpenFiles()),
+    [allOpenFiles, guardDirtyFiles]
+  );
+
   // Once true, the next close request is the real one we triggered after the
   // dialog — let it through instead of reopening the guard (reentrancy guard).
   const confirmedClose = useRef(false);
@@ -1645,7 +2536,7 @@ export default function App() {
     const appWindow = getCurrentWindow();
     const unlistenPromise = appWindow.onCloseRequested(async (event) => {
       if (confirmedClose.current) return; // our own close — let it proceed
-      const hasDirty = openFilesRef.current.some((f) => f.dirty);
+      const hasDirty = allOpenFiles().some((f) => f.dirty);
       if (!hasDirty) {
         // Nothing to guard. Don't preventDefault — let the close proceed. We also
         // destroy() explicitly as a fallback in case the default close is being
@@ -1664,39 +2555,250 @@ export default function App() {
     return () => {
       unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [guardDirtySession]);
+  }, [allOpenFiles, guardDirtySession]);
 
-  function handleCloseAll() {
-    setOpenFiles([]);
-    setActivePath(null);
-  }
+  /** "Close all" within a group → empties it; a non-final group is removed. */
+  const handleCloseAll = useCallback(
+    async (groupId = layoutRef.current.activeGroup) => {
+      const group = layoutRef.current.groups[groupId];
+      if (!group || !(await guardDirtyFiles(group.files))) return;
+      setLayout((l) => {
+        if (groupOrder(l.root).length > 1) return removeGroup(l, groupId);
+        const g = l.groups[groupId];
+        if (!g) return l;
+        return {
+          ...l,
+          groups: { ...l.groups, [groupId]: { ...g, files: [], activePath: null } },
+        };
+      });
+    },
+    [guardDirtyFiles]
+  );
 
-  function handleCloseOthers(path: string) {
-    setOpenFiles((prev) => prev.filter((f) => f.path === path));
-    setActivePath(path);
-  }
+  const handleCloseOthers = useCallback(
+    async (path: string, groupId = layoutRef.current.activeGroup) => {
+      const group = layoutRef.current.groups[groupId];
+      if (!group || !(await guardDirtyFiles(group.files.filter((file) => file.path !== path)))) return;
+      setLayout((l) => {
+        const g = l.groups[groupId];
+        if (!g) return l;
+        return {
+          ...l,
+          groups: {
+            ...l.groups,
+            [groupId]: {
+              ...g,
+              files: g.files.filter((f) => f.path === path),
+              activePath: path,
+            },
+          },
+        };
+      });
+    },
+    [guardDirtyFiles]
+  );
 
-  function handleCloseLeft(path: string) {
-    setOpenFiles((prev) => {
-      const idx = prev.findIndex((f) => f.path === path);
-      const next = idx > 0 ? prev.slice(idx) : prev;
-      if (activePath && !next.find((f) => f.path === activePath)) {
-        setActivePath(next[0]?.path ?? null);
+  const handleCloseLeft = useCallback(
+    async (path: string, groupId = layoutRef.current.activeGroup) => {
+      const group = layoutRef.current.groups[groupId];
+      const index = group?.files.findIndex((file) => file.path === path) ?? -1;
+      if (!group || index <= 0 || !(await guardDirtyFiles(group.files.slice(0, index)))) return;
+      setLayout((l) => {
+        const g = l.groups[groupId];
+        if (!g) return l;
+        const idx = g.files.findIndex((f) => f.path === path);
+        const files = idx > 0 ? g.files.slice(idx) : g.files;
+        const activePath =
+          g.activePath && !files.some((f) => f.path === g.activePath)
+            ? files[0]?.path ?? null
+            : g.activePath;
+        return {
+          ...l,
+          groups: { ...l.groups, [groupId]: { ...g, files, activePath } },
+        };
+      });
+    },
+    [guardDirtyFiles]
+  );
+
+  const handleCloseRight = useCallback(
+    async (path: string, groupId = layoutRef.current.activeGroup) => {
+      const group = layoutRef.current.groups[groupId];
+      const index = group?.files.findIndex((file) => file.path === path) ?? -1;
+      if (!group || index < 0 || !(await guardDirtyFiles(group.files.slice(index + 1)))) return;
+      setLayout((l) => {
+        const g = l.groups[groupId];
+        if (!g) return l;
+        const idx = g.files.findIndex((f) => f.path === path);
+        const files = idx >= 0 ? g.files.slice(0, idx + 1) : g.files;
+        const activePath =
+          g.activePath && !files.some((f) => f.path === g.activePath)
+            ? files[files.length - 1]?.path ?? null
+            : g.activePath;
+        return {
+          ...l,
+          groups: { ...l.groups, [groupId]: { ...g, files, activePath } },
+        };
+      });
+    },
+    [guardDirtyFiles]
+  );
+
+  /** Focuses a tab within a group (and makes the group active). */
+  const selectInGroup = useCallback((groupId: string, path: string) => {
+    setLayout((l) => activateFile(l, groupId, path));
+  }, []);
+
+  /** Makes a group active (clicking in its editor body). */
+  const focusGroup = useCallback((groupId: string) => {
+    setLayout((l) =>
+      l.activeGroup === groupId ? l : { ...l, activeGroup: groupId }
+    );
+  }, []);
+
+  /** Wires this workspace's knowledge "brain" into Claude Code: offers to write a
+   *  project-scoped `.mcp.json` (auto-detected by Claude Code) and copies the
+   *  global `claude mcp add` command as an alternative. */
+  const handleShowMcpConfig = useCallback(async () => {
+    if (!rootPath) {
+      window.alert("Abra uma pasta primeiro — o cérebro (MCP) é por workspace.");
+      return;
+    }
+    try {
+      const cfg = await mcpConfig(rootPath);
+      try {
+        await navigator.clipboard.writeText(cfg.claudeAdd);
+      } catch {
+        /* clipboard may be unavailable */
       }
-      return next;
-    });
-  }
-
-  function handleCloseRight(path: string) {
-    setOpenFiles((prev) => {
-      const idx = prev.findIndex((f) => f.path === path);
-      const next = idx >= 0 ? prev.slice(0, idx + 1) : prev;
-      if (activePath && !next.find((f) => f.path === activePath)) {
-        setActivePath(next[next.length - 1]?.path ?? null);
+      const write = window.confirm(
+        "Conectar o cérebro (MCP) ao Claude Code\n\n" +
+          "O servidor MCP já está embutido no editor (roda quando um cliente o " +
+          "inicia). Posso criar/atualizar um .mcp.json neste projeto para o Claude " +
+          "Code detectá-lo automaticamente ao abrir esta pasta.\n\n" +
+          "Criar o .mcp.json agora?\n\n" +
+          "(Alternativa global já copiada para a área de transferência:\n" +
+          cfg.claudeAdd +
+          ")"
+      );
+      if (write) {
+        const path = await mcpWriteProjectConfig(rootPath);
+        window.alert(
+          `Pronto! Criei ${path}.\n\n` +
+            "Abra este projeto no Claude Code (CLI) — ele detecta o servidor " +
+            "'fluent-knowledge' e passa a consultar backlinks, arquivos " +
+            "relacionados, busca e pacotes de contexto do seu projeto."
+        );
       }
-      return next;
-    });
-  }
+    } catch (e) {
+      window.alert(`Não foi possível configurar o MCP:\n${e}`);
+    }
+  }, [rootPath]);
+
+  /** Builds a context bundle (the active file + its graph neighbours) and copies
+   *  it to the clipboard, ready to paste into an agent prompt. */
+  const handleCopyContextBundle = useCallback(async () => {
+    if (!rootPath || !activePath || isGraphTab(activePath)) {
+      window.alert("Abra um arquivo do projeto para montar o pacote de contexto.");
+      return;
+    }
+    try {
+      const bundle = await buildContextBundle(rootPath, activePath, 1);
+      await navigator.clipboard.writeText(bundle);
+      window.alert(
+        `Pacote de contexto copiado (${bundle.length} caracteres).\n\n` +
+          "Cole no chat de um agente para dar a ele o arquivo atual + os arquivos relacionados."
+      );
+    } catch (e) {
+      window.alert(`Não foi possível montar o pacote de contexto:\n${e}`);
+    }
+  }, [rootPath, activePath]);
+
+  /** Opens (or focuses, since openInGroup dedupes by path) the context-graph tab
+   *  in the active group. Triggered by the activity-bar graph icon. */
+  const handleShowGraph = useCallback(() => {
+    setLayout((l) =>
+      openInGroup(l, l.activeGroup, {
+        path: GRAPH_URI,
+        name: "Grafo",
+        content: "",
+        dirty: false,
+        mode: "graph",
+      })
+    );
+  }, []);
+
+  /** "Split Editor": copies a group's active file into a new group on `edge`. */
+  const splitGroupOnEdge = useCallback(
+    (groupId: string, edge: Edge) => {
+      const newId = nextGroupId();
+      setLayout((l) => {
+        const g = l.groups[groupId];
+        if (!g || !g.activePath) return l;
+        const file = g.files.find((f) => f.path === g.activePath);
+        if (!file) return l;
+        return splitGroupWith(l, groupId, file, edge, newId);
+      });
+    },
+    [nextGroupId]
+  );
+
+  /**
+   * Handles a tab dropped onto a group's drop-zone: `center` moves it into that
+   * group; an edge splits a new group off that side (moving the tab there).
+   */
+  const handleTabDrop = useCallback(
+    (
+      targetGroupId: string,
+      edge: Edge,
+      fromGroupId: string,
+      path: string
+    ) => {
+      if (edge === "center") {
+        setLayout((l) => moveFileToGroup(l, fromGroupId, targetGroupId, path));
+        return;
+      }
+      const newId = nextGroupId();
+      setLayout((l) =>
+        splitWithFile(l, targetGroupId, fromGroupId, path, edge, newId)
+      );
+    },
+    [nextGroupId]
+  );
+
+  /** A tab from another division was dropped on a group's tab strip — move it
+   *  into that group at the chosen position (before/after a tab, or at the end). */
+  const handleTabStripDrop = useCallback(
+    (
+      targetGroupId: string,
+      payload: { groupId: string; path: string },
+      targetPath: string | null,
+      before: boolean
+    ) => {
+      setLayout((l) =>
+        moveFileToGroup(
+          l,
+          payload.groupId,
+          targetGroupId,
+          payload.path,
+          targetPath ?? undefined,
+          before
+        )
+      );
+    },
+    []
+  );
+
+  /** Adjusts a split's two adjacent pane weights as the user drags a handle. */
+  const resizeGroupBranch = useCallback(
+    (branchPath: number[], index: number, left: number, right: number) => {
+      setLayout((l) => ({
+        ...l,
+        root: resizeBranch(l.root, branchPath, index, left, right),
+      }));
+    },
+    []
+  );
 
   /** Open a file chosen via the native file picker (File ▸ Open File…). */
   const handleOpenFileDialog = useCallback(async () => {
@@ -1713,15 +2815,13 @@ export default function App() {
     if (!dest) return;
     try {
       await writeFile(dest, file.content);
-      // Re-point the active tab at the new path and clear its dirty flag.
-      setOpenFiles((prev) =>
-        prev.map((f) =>
-          f.path === activePath
-            ? { ...f, path: dest, name: baseName(dest), dirty: false }
-            : f
-        )
+      setLayout((current) =>
+        patchFileEverywhere(current, file.path, {
+          path: dest,
+          name: baseName(dest),
+          dirty: false,
+        })
       );
-      setActivePath(dest);
     } catch (err) {
       console.error(err);
       alert(`Não foi possível salvar:\n${err}`);
@@ -1745,11 +2845,21 @@ export default function App() {
   const handleCloseFolder = useCallback(async () => {
     // Closing the folder discards the session — guard unsaved buffers first.
     if (!(await guardDirtySession())) return;
+    // Detach + close the SSH connection if this was a remote workspace. This is
+    // also the "disconnect / reset window" path: it returns the workbench to the
+    // empty local state.
+    const remote = getActiveRemote();
+    if (remote) {
+      setActiveRemote(null);
+      setRemoteSession(null);
+      clearRemoteTerminals();
+      clearRemoteLspServers();
+      void sshDisconnect(remote.connId).catch(() => {});
+    }
     setRootPath(null);
     setRootName(null);
     setRoots([]);
-    setOpenFiles([]);
-    setActivePath(null);
+    resetEditorLayout();
     // Clear every workspace-derived bit so no project remnants linger in this
     // same window (branch, git decorations, diagnostics, search scope, history).
     // The LSP servers and search index tear down when rootPath becomes null
@@ -1759,7 +2869,7 @@ export default function App() {
     setHistoryFile(null);
     setActiveView("explorer");
     sessionSetLastFolder(null).catch(() => {});
-  }, [guardDirtySession, resetWorkspaceState]);
+  }, [guardDirtySession, resetEditorLayout, resetWorkspaceState]);
 
   /** Re-point any open tab(s) when the explorer renames a file or folder. */
   const handlePathRenamed = useCallback(
@@ -1969,6 +3079,13 @@ export default function App() {
         setCommandPaletteOpen(true);
         return;
       }
+      // Ctrl+Shift+F → Search across files (opens the Search view).
+      if (key === "f" && e.shiftKey) {
+        e.preventDefault();
+        setActiveView("search");
+        setSidebarOpen(true);
+        return;
+      }
       // Ctrl+P → Quick Open (file search by name).
       if (key === "p" && !e.shiftKey) {
         e.preventDefault();
@@ -2017,35 +3134,137 @@ export default function App() {
    * restarts the server so the choice takes effect (VSCode "Select TS Version").
    */
   const handleSelectTsVersion = useCallback(async () => {
-    let current: "project" | "editor" = "project";
-    try {
-      current = localStorage.getItem(TS_PREFER_EDITOR_KEY) === "1" ? "editor" : "project";
-    } catch {
-      /* storage unavailable — assume project */
-    }
-    const choice = await askConfirm(
-      "Versão do TypeScript",
-      "Qual versão do TypeScript usar nas linguagens TS/JS? Recomendamos a do projeto quando houver.",
-      [
-        {
-          label: "Versão do projeto (recomendado)",
-          variant: "primary",
-          value: "project",
-          default: current === "project",
-        },
-        { label: "Versão do editor", variant: "secondary", value: "editor", default: current === "editor" },
-        { label: "Cancelar", variant: "secondary", value: "cancel" },
-      ]
-    );
-    if (choice === "project" || choice === "editor") {
+    const current: "project" | "editor" =
+      (() => {
+        try {
+          return localStorage.getItem(TS_PREFER_EDITOR_KEY) === "1" ? "editor" : "project";
+        } catch {
+          return "project";
+        }
+      })();
+    // Fetch the real version numbers (like VS Code shows them in the picker).
+    let versions = { project: null as string | null, editor: null as string | null };
+    if (rootPath) {
       try {
-        localStorage.setItem(TS_PREFER_EDITOR_KEY, choice === "editor" ? "1" : "0");
+        versions = await tsVersions(rootPath);
+      } catch {
+        /* leave nulls — the picker still works, just without numbers */
+      }
+    }
+    const apply = (id: string) => {
+      if (id !== "project" && id !== "editor") return;
+      try {
+        localStorage.setItem(TS_PREFER_EDITOR_KEY, id === "editor" ? "1" : "0");
       } catch {
         /* storage unavailable — ignore */
       }
       restartLsp("typescript");
-    }
-  }, [askConfirm, restartLsp]);
+    };
+    setQuickPick({
+      title: "Selecionar versão do TypeScript",
+      placeholder: "Qual TypeScript usar nas linguagens TS/JS…",
+      items: [
+        {
+          id: "project",
+          label: `Versão do projeto${current === "project" ? " (atual)" : ""}`,
+          detail: versions.project
+            ? `TypeScript ${versions.project} · node_modules/typescript`
+            : "Nenhuma no projeto — usa a do editor como fallback",
+          icon: current === "project" ? "success" : "folder",
+          pinned: true,
+          keywords: "recomendado workspace projeto",
+        },
+        {
+          id: "editor",
+          label: `Versão do editor${current === "editor" ? " (atual)" : ""}`,
+          detail: versions.editor
+            ? `TypeScript ${versions.editor} · gerenciada pelo Fluent Coder`
+            : "Gerenciada pelo Fluent Coder (mais recente)",
+          icon: current === "editor" ? "success" : "settings",
+          keywords: "global editor mais recente",
+        },
+      ],
+      onPick: (it) => apply(it.id),
+    });
+  }, [rootPath, restartLsp]);
+
+  // "Change Language Mode" (VS Code): click the language in the status bar to pick
+  // the active file's language — e.g. TypeScript ↔ TypeScript JSX. The choice is
+  // stored as a per-file override (so the status bar + LSP follow it) and applied
+  // to the live Monaco model so highlighting/IntelliSense switch immediately.
+  const handleSelectLanguageMode = useCallback(() => {
+    if (!activeFile) return;
+    const file = activeFile;
+    const modelUri = file.path.startsWith("untitled:")
+      ? file.path
+      : toFileUri(file.path);
+    const detected = languageForFile(file.name); // extension-based, ignores override
+    const current = languageForFile(file.name, file.path); // honors override
+
+    // Full list from Monaco's registry (includes our tsx/jsx/razor/csharp ids),
+    // filterable like VS Code. `plaintext` is offered explicitly below.
+    const langItems: QuickPickItem[] = monaco.languages
+      .getLanguages()
+      .filter((l) => l.id && l.id !== "plaintext")
+      .map((l): QuickPickItem => {
+        const ext = l.extensions?.[0];
+        // A representative file name so the Material theme resolves the language's
+        // file-type icon (".tsx" → React TS icon, "Dockerfile" → docker, …).
+        const sample = ext ? `x${ext}` : l.filenames?.[0];
+        const exts = l.extensions?.join(" ");
+        const isCurrent = l.id === current;
+        return {
+          id: l.id,
+          label: languageLabel(l.id, l.aliases) + (isCurrent ? "  (atual)" : ""),
+          description: exts || undefined,
+          iconFile: sample,
+          icon: sample ? undefined : "file",
+          keywords: `${l.aliases?.join(" ") ?? ""} ${exts ?? ""}`,
+        };
+      })
+      .sort((a, b) => a.label.localeCompare(b.label, "pt"));
+
+    const items: QuickPickItem[] = [
+      {
+        id: "__auto__",
+        label: "Detecção Automática",
+        description: `→ ${languageLabel(detected)}`,
+        icon: "hint",
+        pinned: true,
+        keywords: "auto detect automatico extensao redefinir",
+      },
+      {
+        id: "plaintext",
+        label:
+          languageLabel("plaintext") +
+          (current === "plaintext" ? "  (atual)" : ""),
+        icon: "file",
+        keywords: "texto plano plaintext sem formatacao",
+      },
+      ...langItems,
+    ];
+
+    setQuickPick({
+      title: "Selecionar Modo de Linguagem",
+      placeholder: `Linguagem para ${file.name}…`,
+      items,
+      onPick: (it) => {
+        const isAuto = it.id === "__auto__";
+        const langId = isAuto ? detected : it.id;
+        setLanguageOverride(file.path, isAuto ? null : langId);
+        setLanguageOverrides((prev) => {
+          const next = { ...prev };
+          if (isAuto) delete next[file.path];
+          else next[file.path] = langId;
+          return next;
+        });
+        const model = monaco.editor.getModel(monaco.Uri.parse(modelUri));
+        if (model && model.getLanguageId() !== langId) {
+          monaco.editor.setModelLanguage(model, langId);
+        }
+      },
+    });
+  }, [activeFile]);
 
   // True when there's an active editor buffer; gates Edit/Selection/Go items.
   const hasEditor = activeFile != null;
@@ -2118,8 +3337,14 @@ export default function App() {
           run: rootPath != null ? handleCloseFolder : undefined,
         },
         {
+          id: "file.disconnectRemote",
+          label: "Desconectar do Host Remoto",
+          enabled: remoteSession != null,
+          run: remoteSession != null ? handleCloseFolder : undefined,
+        },
+        {
           id: "file.closeWindow",
-          label: "Close Window",
+          label: "Fechar Janela",
           accelerator: "Alt+F4",
           run: () => getCurrentWindow().close(),
         },
@@ -2289,6 +3514,17 @@ export default function App() {
           run: () => setActiveView("git"),
         },
         { id: "view.run", label: "Executar", run: () => setActiveView("debug") },
+        { id: "view.graph", label: "Grafo de Contextos", run: handleShowGraph },
+        {
+          id: "view.mcp",
+          label: "Conectar cérebro ao Claude Code (MCP)…",
+          run: () => void handleShowMcpConfig(),
+        },
+        {
+          id: "view.contextBundle",
+          label: "Copiar pacote de contexto (arquivo atual)",
+          run: () => void handleCopyContextBundle(),
+        },
         { id: "view.sep1", label: "", separator: true },
         {
           id: "view.toggleSidebar",
@@ -2309,13 +3545,8 @@ export default function App() {
           label:
             activityBarPos === "side"
               ? "Barra de atividades: no topo"
-              : activityBarPos === "top"
-              ? "Barra de atividades: ocultar"
               : "Barra de atividades: lateral",
-          run: () =>
-            setActivityBarPos((p) =>
-              p === "side" ? "top" : p === "top" ? "hidden" : "side"
-            ),
+          run: () => setActivityBarPos((p) => (p === "side" ? "top" : "side")),
         },
         {
           id: "view.toggleTerminal",
@@ -2326,7 +3557,7 @@ export default function App() {
         { id: "view.sep2", label: "", separator: true },
         {
           id: "view.commandPalette",
-          label: "Paleta de Comandos",
+          label: "Paleta de Comandos…",
           accelerator: "Ctrl+Shift+P",
           run: () => setCommandPaletteOpen(true),
         },
@@ -2427,6 +3658,7 @@ export default function App() {
   }, [
     hasEditor,
     rootPath,
+    remoteSession,
     activePath,
     handleOpenFileDialog,
     handleOpenFolder,
@@ -2437,9 +3669,37 @@ export default function App() {
     handleNewWindow,
     handleNewTextFile,
     runEditorAction,
+    openSshFlow,
     sidebarSide,
     activityBarPos,
+    handleShowGraph,
+    handleShowMcpConfig,
+    handleCopyContextBundle,
   ]);
+
+  // Full command-palette list (issue #12 + #8): the curated commands + the
+  // remote-SSH entry + every runnable menu action, in the palette's shape.
+  const paletteCommands = useMemo<Command[]>(() => {
+    const fromMenus: Command[] = menus.flatMap((menu) =>
+      menu.items
+        .filter((it) => it.run && !it.separator && it.enabled !== false)
+        .map((it) => ({
+          id: `menu.${it.id}`,
+          title: it.label,
+          detail: menu.label,
+          run: it.run as () => void,
+        }))
+    );
+    const ssh: Command[] = [
+      {
+        id: "ssh.connect",
+        title: "Conectar a Host SSH…",
+        detail: "Remoto",
+        run: () => void openSshFlow(),
+      },
+    ];
+    return [...commands, ...ssh, ...fromMenus];
+  }, [commands, menus, openSshFlow]);
 
   const titleText = activeFile
     ? `${activeFile.dirty ? "● " : ""}${activeFile.name} — Fluent Coder`
@@ -2472,6 +3732,7 @@ export default function App() {
             onOpenTerminalAt={handleOpenTerminalAt}
             onFindInFolder={handleFindInFolder}
             advancedActions={explorerAdvancedActions}
+            changedPaths={changedPaths}
           />
         );
       case "git":
@@ -2487,6 +3748,16 @@ export default function App() {
         );
       case "debug":
         return <RunPanel rootPath={rootPath} onRun={handleRun} />;
+      case "backlinks":
+        return (
+          <BacklinksPanel
+            rootPath={rootPath}
+            activePath={activePath && !isGraphTab(activePath) ? activePath : null}
+            onOpenFile={(p) =>
+              handleOpenFile({ name: baseName(p), path: p, isDir: false })
+            }
+          />
+        );
       case "agents":
         return (
           <AgentsPanel
@@ -2522,9 +3793,106 @@ export default function App() {
             onOpenTerminalAt={handleOpenTerminalAt}
             onFindInFolder={handleFindInFolder}
             advancedActions={explorerAdvancedActions}
+            changedPaths={changedPaths}
           />
         );
     }
+  }
+
+  // The home / welcome screen shown by any empty editor group.
+  const welcomeNode = (
+    <WelcomeScreen
+      hasFolder={rootPath != null}
+      folderName={rootPath ? baseName(rootPath) : null}
+      folderPath={rootPath}
+      recents={recents}
+      onNewFile={handleNewTextFile}
+      onOpenFile={handleOpenFileDialog}
+      onOpenFolder={handleOpenFolder}
+      onConnectRemote={() => void openSshFlow()}
+      onOpenRecent={handleOpenRecent}
+    />
+  );
+
+  /** Renders one editor group (a leaf of the split grid) with all its handlers
+   *  bound to that group's id. The active group also gets the imperative editor
+   *  refs (reveal / actions) so go-to-line and the Edit/Selection menus work. */
+  function renderGroup(groupId: string) {
+    const g = layout.groups[groupId];
+    if (!g) return null;
+    const groupIsActive = groupId === activeGroupId;
+    return (
+      <EditorGroupView
+        key={groupId}
+        group={g}
+        isActive={groupIsActive}
+        rootPath={rootPath}
+        decorationFor={decorationFor}
+        onFocusGroup={() => focusGroup(groupId)}
+        onSelect={(p) => selectInGroup(groupId, p)}
+        onClose={(p) => handleCloseTab(p, groupId)}
+        onCloseAll={() => handleCloseAll(groupId)}
+        onCloseOthers={(p) => handleCloseOthers(p, groupId)}
+        onCloseLeft={(p) => handleCloseLeft(p, groupId)}
+        onCloseRight={(p) => handleCloseRight(p, groupId)}
+        onReorder={(from, to, before) =>
+          reorderTabsInGroup(groupId, from, to, before)
+        }
+        externalDragActive={tabDragging}
+        onTabStripDrop={(payload, targetPath, before) =>
+          handleTabStripDrop(groupId, payload, targetPath, before)
+        }
+        onMoveToNewWindow={(p) => detachFromGroup(groupId, p)}
+        onDetach={(p, x, y) => detachFromGroup(groupId, p, x, y)}
+        onSplit={(edge) => splitGroupOnEdge(groupId, edge)}
+        onChange={(v) => editInGroup(groupId, v)}
+        onCursorChange={
+          groupIsActive
+            ? (l, c) => {
+                setCursorLine(l);
+                setCursorCol(c);
+              }
+            : () => {}
+        }
+        onProblemsChange={groupIsActive ? setProblems : () => {}}
+        onOpenDefinition={(path, line) =>
+          handleOpenFile({ name: baseName(path), path, isDir: false }, line)
+        }
+        revealRef={groupIsActive ? revealRef : undefined}
+        pendingReveal={groupIsActive ? pendingReveal : undefined}
+        actionsRef={groupIsActive ? editorActionsRef : undefined}
+        onTabDrop={(edge, fromGroupId, path) =>
+          handleTabDrop(groupId, edge, fromGroupId, path)
+        }
+        onOpenPath={(p) =>
+          handleOpenFile({ name: baseName(p), path: p, isDir: false })
+        }
+        graphActivePath={lastRealFile}
+        tabDragging={tabDragging}
+        dragSource={
+          activeTabDrag
+            ? {
+                groupId: activeTabDrag.groupId,
+                fileCount:
+                  layout.groups[activeTabDrag.groupId]?.files.length ?? 0,
+              }
+            : null
+        }
+        onTabDragStart={(drag) => {
+          setActiveTabDrag(drag);
+          setTabDragging(true);
+          startDragPoll();
+        }}
+        onTabDragEnd={() => {
+          setActiveTabDrag(null);
+          setTabDragging(false);
+          stopDragPoll();
+          clearDragHint();
+        }}
+        onDragMove={handleDragMove}
+        welcome={welcomeNode}
+      />
+    );
   }
 
   return (
@@ -2533,6 +3901,8 @@ export default function App() {
         title={titleText}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
+        panelOpen={panelOpen}
+        onTogglePanel={() => setPanelOpen((v) => !v)}
         menus={menus}
       />
 
@@ -2545,11 +3915,17 @@ export default function App() {
             (activity bar lateral or as a compact horizontal strip atop the
             sidebar) and slide to either side as a unit. */}
         <div className={`primary-dock activity-${activityBarPos}`}>
-          {activityBarPos !== "hidden" &&
-            (activityBarPos === "side" || sidebarOpen) && (
+          {/* Lateral bar is always shown; the horizontal (top) strip only when the
+              sidebar is open (it sits atop the explorer). */}
+          {(activityBarPos === "side" || sidebarOpen) && (
               <ActivityBar
                 activeView={activeView}
-                onViewChange={setActiveView}
+                onViewChange={(v) => {
+                  // The graph is an editor tab, not a sidebar panel: its icon
+                  // opens (or focuses) the graph tab and leaves the sidebar as is.
+                  if (v === "graph") handleShowGraph();
+                  else setActiveView(v);
+                }}
                 side={sidebarSide}
                 orientation={activityBarPos === "top" ? "horizontal" : "vertical"}
                 onToggleSide={() =>
@@ -2604,8 +3980,15 @@ export default function App() {
           />
         )}
 
-        <main className="app-main">
-          {activeView === "agents" ? (
+        <main
+          className="app-main"
+          // Interacting with the main editor area (tabs/breadcrumbs/editor)
+          // makes THIS window the active group again, so subsequent opens land
+          // here. Clicking the sidebar/explorer (outside <main>) does NOT, so a
+          // detached group stays active while you pick its next file.
+          onMouseDownCapture={() => void clearActiveEditor()}
+        >
+          {activeView === "agents" && (
             <div className="agent-center-bar">
               <Codicon name="agents" size={15} />
               <span>Agentes</span>
@@ -2613,21 +3996,6 @@ export default function App() {
                 {rootPath ?? "Nenhum workspace aberto"}
               </span>
             </div>
-          ) : (
-            <>
-              <Breadcrumbs filePath={activePath} rootPath={rootPath} />
-              <TabBar
-                files={openFiles}
-                activePath={activePath}
-                onSelect={setActivePath}
-                onClose={handleCloseTab}
-                onCloseAll={handleCloseAll}
-                onCloseOthers={handleCloseOthers}
-                onCloseLeft={handleCloseLeft}
-                onCloseRight={handleCloseRight}
-                decorationFor={decorationFor}
-              />
-            </>
           )}
           {/* Editor + bottom panel. The panel can dock bottom (column) or to a
               side (row); the dock class flips the axis and the handle/orientation. */}
@@ -2654,28 +4022,11 @@ export default function App() {
                   onStop={handleStopAgent}
                   onRevert={handleRevertMessage}
                 />
-              ) : activeFile && activeFile.mode === "image" ? (
-                // Image-mode tab (ISSUE-70): read-only preview, no Monaco.
-                <ImagePreview path={activeFile.path} name={activeFile.name} />
               ) : (
-                <EditorPane
-                  file={activeFile}
-                  rootPath={rootPath}
-                  onChange={handleEditorChange}
-                  onCursorChange={(l, c) => {
-                    setCursorLine(l);
-                    setCursorCol(c);
-                  }}
-                  onProblemsChange={setProblems}
-                  revealRef={revealRef}
-                  pendingReveal={pendingReveal}
-                  actionsRef={editorActionsRef}
-                  onOpenDefinition={(path, line) =>
-                    handleOpenFile(
-                      { name: baseName(path), path, isDir: false },
-                      line
-                    )
-                  }
+                <EditorGrid
+                  node={layout.root}
+                  renderGroup={renderGroup}
+                  onResize={resizeGroupBranch}
                 />
               )}
             </div>
@@ -2735,13 +4086,45 @@ export default function App() {
         </main>
       </div>
 
+      {/* A tab from another window is hovering over this one. Over a tab strip →
+          an insertion bar at the exact spot; elsewhere → a whole-window hint. */}
+      {dropHint && <div className="window-drop-hint" aria-hidden="true" />}
+      {dropBar && (
+        <div
+          className="x-insert-bar"
+          aria-hidden="true"
+          style={{
+            left: dropBar.left,
+            top: dropBar.top,
+            height: dropBar.height,
+          }}
+        />
+      )}
+
       <StatusBar
-        language={activeFile ? languageForFile(activeFile.name) : ""}
+        language={
+          activeFile ? languageForFile(activeFile.name, activeFile.path) : ""
+        }
         line={cursorLine}
         column={cursorCol}
         fileName={activeFile?.name ?? null}
         branch={branch}
+        gitStatus={gitState}
+        gitBusy={gitBusy}
+        autoFetch={autoFetch}
+        lastFetch={lastFetch}
         onClickBranch={rootPath ? () => setBranchPickerOpen(true) : undefined}
+        onGitSync={handleGitSync}
+        onGitFetch={handleGitFetch}
+        onGitPull={handleGitPull}
+        onGitPush={handleGitPush}
+        onGitPublish={handleGitPublish}
+        onToggleAutoFetch={toggleAutoFetch}
+        remoteHost={
+          remoteSession ? `${remoteSession.user}@${remoteSession.host}` : null
+        }
+        onManageRemote={remoteSession ? () => setManageMenuOpen(true) : undefined}
+        onOpenRemote={() => void openSshFlow()}
         tabSize={TAB_SIZE}
         errorCount={errorCount}
         warningCount={warningCount}
@@ -2749,6 +4132,7 @@ export default function App() {
         onRestartLsp={restartLsp}
         onShowProblems={() => showPanelTab("problems")}
         onSelectTsVersion={handleSelectTsVersion}
+        onSelectLanguage={activeFile ? handleSelectLanguageMode : undefined}
       />
 
 
@@ -2760,19 +4144,139 @@ export default function App() {
         />
       )}
 
-      {commandPaletteOpen && (
-        <CommandPalette
-          commands={commands}
-          onClose={() => setCommandPaletteOpen(false)}
-        />
-      )}
-
       {branchPickerOpen && (
         <BranchPicker
           rootPath={rootPath}
           onCheckout={handleCheckoutBranch}
           onCreateBranch={handleCreateBranch}
           onClose={() => setBranchPickerOpen(false)}
+        />
+      )}
+
+      {commandPaletteOpen && (
+        <CommandPalette
+          commands={paletteCommands}
+          onClose={() => setCommandPaletteOpen(false)}
+        />
+      )}
+
+      {sshHostsOpen && (
+        <QuickPick
+          title="Conectar a um host SSH"
+          placeholder="Escolha um host salvo ou adicione um novo…"
+          items={[
+            {
+              id: "__add__",
+              label: "Adicionar novo host SSH…",
+              icon: "add",
+              pinned: true,
+            },
+            ...sshSavedHosts.map((h, i) => ({
+              id: `host-${i}`,
+              label: h.label,
+              detail: `${h.user ? `${h.user}@` : ""}${h.host}${h.port ? `:${h.port}` : ""}`,
+              icon: "remote" as const,
+              keywords: `${h.host} ${h.user ?? ""}`,
+            })),
+          ]}
+          onPick={(it) => {
+            if (it.id === "__add__") {
+              setSshHostsOpen(false);
+              setSshFormInitial(undefined);
+              setSshDialogOpen(true);
+              return;
+            }
+            const idx = Number.parseInt(it.id.replace("host-", ""), 10);
+            const h = sshSavedHosts[idx];
+            if (h) pickSavedHost(h);
+          }}
+          onClose={() => setSshHostsOpen(false)}
+        />
+      )}
+
+      {quickPick && (
+        <QuickPick
+          title={quickPick.title}
+          placeholder={quickPick.placeholder}
+          items={quickPick.items}
+          onPick={(it) => {
+            quickPick.onPick(it);
+            setQuickPick(null);
+          }}
+          onClose={() => setQuickPick(null)}
+        />
+      )}
+
+      {sshPasswordFor && (
+        <QuickInput
+          title={`Senha de ${sshPasswordFor.user}@${sshPasswordFor.host}`}
+          placeholder="Senha"
+          password
+          prompt="Enter para conectar · Esc para cancelar"
+          onSubmit={async (password) => {
+            const h = sshPasswordFor;
+            await connectRemote({
+              host: h.host,
+              port: h.port ?? 22,
+              user: h.user ?? "",
+              password,
+            });
+          }}
+          onClose={() => setSshPasswordFor(null)}
+        />
+      )}
+
+      {sshDialogOpen && (
+        <SshConnectDialog
+          initial={sshFormInitial}
+          onConnect={connectRemote}
+          onBack={() => {
+            // Cancel returns to the host quick-pick (keeps the flow), not closes.
+            setSshDialogOpen(false);
+            setSshFormInitial(undefined);
+            setSshHostsOpen(true);
+          }}
+          onClose={() => {
+            setSshDialogOpen(false);
+            setSshFormInitial(undefined);
+          }}
+        />
+      )}
+
+      {remoteBrowser && (
+        <RemoteFolderBrowser
+          connId={remoteBrowser.connId}
+          target={`${remoteBrowser.user}@${remoteBrowser.host}`}
+          onPick={(path) => void finalizeRemoteFolder(remoteBrowser, path)}
+          onCancel={cancelRemoteBrowser}
+        />
+      )}
+
+      {manageMenuOpen && remoteSession && (
+        <RemoteConnectionMenu
+          target={`${remoteSession.user}@${remoteSession.host}`}
+          onOpenFolder={() => {
+            setManageMenuOpen(false);
+            setRemoteBrowser({
+              connId: remoteSession.connId,
+              host: remoteSession.host,
+              user: remoteSession.user,
+              input: null,
+            });
+          }}
+          onNewTerminal={() => {
+            setManageMenuOpen(false);
+            handleOpenTerminalAt(remoteSession.rootPath);
+          }}
+          onReconnect={() => {
+            setManageMenuOpen(false);
+            void reconnectRemote();
+          }}
+          onDisconnect={() => {
+            setManageMenuOpen(false);
+            void handleCloseFolder();
+          }}
+          onClose={() => setManageMenuOpen(false)}
         />
       )}
 
