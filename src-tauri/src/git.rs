@@ -106,7 +106,11 @@ fn run_git(cwd: &str, args: &[&str]) -> Result<String, String> {
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let msg = if stderr.trim().is_empty() { stdout } else { stderr };
+        let msg = if stderr.trim().is_empty() {
+            stdout
+        } else {
+            stderr
+        };
         Err(msg.trim().to_string())
     }
 }
@@ -442,7 +446,14 @@ pub fn git_discard_file(path: String, file: String, untracked: bool) -> Result<(
     } else {
         run_git(
             &path,
-            &["restore", "--staged", "--worktree", "--source=HEAD", "--", &file],
+            &[
+                "restore",
+                "--staged",
+                "--worktree",
+                "--source=HEAD",
+                "--",
+                &file,
+            ],
         )
         .map(|_| ())
     }
@@ -454,7 +465,14 @@ pub fn git_discard_file(path: String, file: String, untracked: bool) -> Result<(
 pub fn git_discard_all(path: String) -> Result<(), String> {
     run_git(
         &path,
-        &["restore", "--staged", "--worktree", "--source=HEAD", "--", "."],
+        &[
+            "restore",
+            "--staged",
+            "--worktree",
+            "--source=HEAD",
+            "--",
+            ".",
+        ],
     )?;
     run_git(&path, &["clean", "-fd"]).map(|_| ())
 }
@@ -646,10 +664,7 @@ pub fn git_log(path: String, limit: u32) -> Result<Vec<GitCommit>, String> {
     // Unit separator (\x1f) between fields, record separator (\x1e) between rows
     // — safe against any character that could appear in a subject.
     let fmt = "--pretty=format:%H\x1f%h\x1f%an\x1f%ar\x1f%s\x1e";
-    let raw = run_git(
-        &path,
-        &["log", &format!("-{limit}"), "--no-color", fmt],
-    )?;
+    let raw = run_git(&path, &["log", &format!("-{limit}"), "--no-color", fmt])?;
 
     parse_log_records(&raw)
 }
@@ -748,11 +763,7 @@ pub fn git_snapshot_create(path: String) -> Result<GitSnapshot, String> {
 /// discarding everything the agent changed since. Tracked files are reset to the
 /// snapshot; files the agent newly created (untracked) are removed.
 #[tauri::command]
-pub fn git_snapshot_restore(
-    path: String,
-    snapshot_id: String,
-    head: String,
-) -> Result<(), String> {
+pub fn git_snapshot_restore(path: String, snapshot_id: String, head: String) -> Result<(), String> {
     if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Err("O workspace não é um repositório git.".into());
     }
@@ -774,6 +785,17 @@ pub fn git_snapshot_restore(
     }
 
     // Reset both the index and the working tree of every path to the snapshot.
-    run_git(&path, &["restore", "--source", source, "--staged", "--worktree", "--", "."])?;
+    run_git(
+        &path,
+        &[
+            "restore",
+            "--source",
+            source,
+            "--staged",
+            "--worktree",
+            "--",
+            ".",
+        ],
+    )?;
     Ok(())
 }

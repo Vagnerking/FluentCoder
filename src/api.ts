@@ -856,9 +856,9 @@ export function sessionSetOpenFiles(
 
 // ---- Windows ----
 
-/** Opens an empty workbench window in the already-warm app process. */
-export function openNewWindow(): Promise<void> {
-  return invoke("open_new_window");
+/** Opens a workbench window in the already-warm app process. */
+export function openNewWindow(remoteAttach?: string): Promise<void> {
+  return invoke("open_new_window", { remoteAttach: remoteAttach ?? null });
 }
 
 /** Whether this window was launched fresh (`--new`) and should start empty. */

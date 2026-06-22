@@ -50,7 +50,12 @@ pub fn term_create(
 ) -> Result<(), String> {
     let pty_system = native_pty_system();
     let pair = pty_system
-        .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
         .map_err(|e| e.to_string())?;
 
     let mut cmd = CommandBuilder::new("powershell.exe");
@@ -87,20 +92,26 @@ pub fn term_create(
     });
 
     let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
-    sessions.insert(id, PtySession { writer, master: pair.master, child });
+    sessions.insert(
+        id,
+        PtySession {
+            writer,
+            master: pair.master,
+            child,
+        },
+    );
 
     Ok(())
 }
 
 #[tauri::command]
-pub fn term_write(
-    id: String,
-    data: String,
-    state: State<'_, TerminalState>,
-) -> Result<(), String> {
+pub fn term_write(id: String, data: String, state: State<'_, TerminalState>) -> Result<(), String> {
     let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
     if let Some(session) = sessions.get_mut(&id) {
-        session.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+        session
+            .writer
+            .write_all(data.as_bytes())
+            .map_err(|e| e.to_string())?;
         session.writer.flush().map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -115,17 +126,21 @@ pub fn term_resize(
 ) -> Result<(), String> {
     let sessions = state.sessions.lock().map_err(|e| e.to_string())?;
     if let Some(session) = sessions.get(&id) {
-        session.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+        session
+            .master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
             .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
 
 #[tauri::command]
-pub fn term_close(
-    id: String,
-    state: State<'_, TerminalState>,
-) -> Result<(), String> {
+pub fn term_close(id: String, state: State<'_, TerminalState>) -> Result<(), String> {
     let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
     if let Some(mut session) = sessions.remove(&id) {
         let _ = session.child.kill();

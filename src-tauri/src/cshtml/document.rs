@@ -3,10 +3,10 @@
 //! Tracks open documents as versioned snapshots. All mutations are
 //! validated against the current version to reject stale updates.
 
-use std::collections::HashMap;
 use crate::cshtml::types::{
     DocumentId, DocumentVersion, Snapshot, TextEdit, TextPosition, TextRange,
 };
+use std::collections::HashMap;
 
 // ── UTF-16 / byte conversion ──────────────────────────────────────────────────
 
@@ -62,7 +62,9 @@ fn apply_edits_sorted(text: &str, edits: &[TextEdit]) -> Result<String, String> 
 /// Sorts edits in reverse document order (bottom-to-top within the buffer).
 fn sort_edits_reverse(edits: &mut [TextEdit]) {
     edits.sort_unstable_by(|a, b| {
-        b.range.start.line
+        b.range
+            .start
+            .line
             .cmp(&a.range.start.line)
             .then(b.range.start.character.cmp(&a.range.start.character))
     });
@@ -91,7 +93,11 @@ impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotFound(id) => write!(f, "document not open: {id}"),
-            Self::StaleVersion { doc, current, received } => write!(
+            Self::StaleVersion {
+                doc,
+                current,
+                received,
+            } => write!(
                 f,
                 "stale version for {doc}: current={}, received={}",
                 current.0, received.0
@@ -150,7 +156,10 @@ impl DocumentStore {
         mut changes: Vec<TextEdit>,
     ) -> Result<(), StoreError> {
         let id = DocumentId::new(uri);
-        let snap = self.docs.get_mut(&id).ok_or_else(|| StoreError::NotFound(id.clone()))?;
+        let snap = self
+            .docs
+            .get_mut(&id)
+            .ok_or_else(|| StoreError::NotFound(id.clone()))?;
 
         let new_ver = DocumentVersion(new_version);
         if new_ver <= snap.version {
@@ -162,8 +171,7 @@ impl DocumentStore {
         }
 
         sort_edits_reverse(&mut changes);
-        let new_text =
-            apply_edits_sorted(&snap.text, &changes).map_err(StoreError::EditFailed)?;
+        let new_text = apply_edits_sorted(&snap.text, &changes).map_err(StoreError::EditFailed)?;
 
         snap.text = new_text;
         snap.version = new_ver;
@@ -178,7 +186,10 @@ impl DocumentStore {
         new_text: impl Into<String>,
     ) -> Result<(), StoreError> {
         let id = DocumentId::new(uri);
-        let snap = self.docs.get_mut(&id).ok_or_else(|| StoreError::NotFound(id.clone()))?;
+        let snap = self
+            .docs
+            .get_mut(&id)
+            .ok_or_else(|| StoreError::NotFound(id.clone()))?;
 
         let new_ver = DocumentVersion(new_version);
         if new_ver <= snap.version {
@@ -252,11 +263,17 @@ mod tests {
     use super::*;
 
     fn pos(line: u32, ch: u32) -> TextPosition {
-        TextPosition { line, character: ch }
+        TextPosition {
+            line,
+            character: ch,
+        }
     }
 
     fn range(sl: u32, sc: u32, el: u32, ec: u32) -> TextRange {
-        TextRange { start: pos(sl, sc), end: pos(el, ec) }
+        TextRange {
+            start: pos(sl, sc),
+            end: pos(el, ec),
+        }
     }
 
     // ── open / close ──────────────────────────────────────────────────────────
@@ -321,7 +338,9 @@ mod tests {
     #[test]
     fn single_insertion() {
         let mut store = DocumentStore::new();
-        store.open_document("file:///a.cshtml", 1, "hello world").unwrap();
+        store
+            .open_document("file:///a.cshtml", 1, "hello world")
+            .unwrap();
         // Insert " beautiful" between "hello" and " world"
         store
             .apply_changes(
@@ -333,13 +352,18 @@ mod tests {
                 }],
             )
             .unwrap();
-        assert_eq!(store.snapshot("file:///a.cshtml").unwrap().text(), "hello beautiful world");
+        assert_eq!(
+            store.snapshot("file:///a.cshtml").unwrap().text(),
+            "hello beautiful world"
+        );
     }
 
     #[test]
     fn single_deletion() {
         let mut store = DocumentStore::new();
-        store.open_document("file:///a.cshtml", 1, "hello world").unwrap();
+        store
+            .open_document("file:///a.cshtml", 1, "hello world")
+            .unwrap();
         // Delete " world"
         store
             .apply_changes(
@@ -407,7 +431,13 @@ mod tests {
         // On CRLF files, '\n' is at byte after '\r'. Position (1, 0) is start of "line2".
         // UTF-16 position (1, 0) → byte offset of 'l' in "line2".
         let snap = store.snapshot("file:///crlf.cshtml").unwrap();
-        let offset = utf16_pos_to_byte_offset(snap.text(), TextPosition { line: 1, character: 0 });
+        let offset = utf16_pos_to_byte_offset(
+            snap.text(),
+            TextPosition {
+                line: 1,
+                character: 0,
+            },
+        );
         // "line1\r\n" = 7 bytes, so line2 starts at 7.
         assert_eq!(offset, Some(7));
     }
@@ -435,8 +465,13 @@ mod tests {
     fn replace_full_updates_text() {
         let mut store = DocumentStore::new();
         store.open_document("file:///a.cshtml", 1, "old").unwrap();
-        store.replace_full("file:///a.cshtml", 2, "new content").unwrap();
-        assert_eq!(store.snapshot("file:///a.cshtml").unwrap().text(), "new content");
+        store
+            .replace_full("file:///a.cshtml", 2, "new content")
+            .unwrap();
+        assert_eq!(
+            store.snapshot("file:///a.cshtml").unwrap().text(),
+            "new content"
+        );
     }
 
     // ── byte_to_position ─────────────────────────────────────────────────────
@@ -449,7 +484,19 @@ mod tests {
             .unwrap();
         let snap = store.snapshot("file:///a.cshtml").unwrap();
         // byte 0 → (0, 0); byte 3 → (1, 0)
-        assert_eq!(snap.byte_to_position(0), Some(TextPosition { line: 0, character: 0 }));
-        assert_eq!(snap.byte_to_position(3), Some(TextPosition { line: 1, character: 0 }));
+        assert_eq!(
+            snap.byte_to_position(0),
+            Some(TextPosition {
+                line: 0,
+                character: 0
+            })
+        );
+        assert_eq!(
+            snap.byte_to_position(3),
+            Some(TextPosition {
+                line: 1,
+                character: 0
+            })
+        );
     }
 }

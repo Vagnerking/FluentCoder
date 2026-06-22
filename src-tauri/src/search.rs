@@ -322,13 +322,8 @@ where
                     }
                 }
 
-                let line_matches = search_file(
-                    path,
-                    matcher,
-                    &total_matches,
-                    generation,
-                    shared_generation,
-                );
+                let line_matches =
+                    search_file(path, matcher, &total_matches, generation, shared_generation);
                 if line_matches.is_empty() {
                     continue;
                 }
@@ -392,10 +387,7 @@ fn normalize_glob(glob: &str) -> String {
 }
 
 /// `Some(overrides)` when the query has include/exclude globs, else `None`.
-fn build_overrides_opt(
-    root: &Path,
-    options: &SearchOptions,
-) -> Result<Option<Override>, String> {
+fn build_overrides_opt(root: &Path, options: &SearchOptions) -> Result<Option<Override>, String> {
     if options.include_globs.is_empty() && options.exclude_globs.is_empty() {
         return Ok(None);
     }
@@ -778,7 +770,8 @@ mod tests {
         assert!(Arc::ptr_eq(&first, &cached));
 
         // Forcing the stored timestamp past the TTL triggers a rebuild.
-        index.lock().unwrap().as_mut().unwrap().built_at = Instant::now() - INDEX_TTL - Duration::from_secs(1);
+        index.lock().unwrap().as_mut().unwrap().built_at =
+            Instant::now() - INDEX_TTL - Duration::from_secs(1);
         let rebuilt = ensure_index(&index, &root);
         assert_eq!(rebuilt.len(), 2);
         fs::remove_dir_all(root).unwrap();

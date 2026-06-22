@@ -1,12 +1,9 @@
-//! SSH/SFTP remote workspaces — issue #8, Phase 1 (MVP: connect + read-only).
+//! SSH/SFTP remote workspaces — issue #8.
 //!
-//! Lets the editor open a folder that lives on a remote host over SSH and read
-//! its files/dirs via SFTP, like VS Code's Remote-SSH. Editing, terminal, search,
-//! git and LSP on the remote are later phases. Crypto uses `ring` (no NASM / C
-//! openssl), matching the project's rustls stance.
-//!
-//! SECURITY NOTE (MVP): the host key is accepted unconditionally — `known_hosts`
-//! verification is a planned follow-up. Surfaced here so it isn't forgotten.
+//! Lets the editor work in a remote folder over SSH/SFTP, including editing,
+//! terminal, search, Git and selected language servers. Server keys follow TOFU:
+//! unknown hosts are recorded in `~/.ssh/known_hosts`, known keys must match and
+//! changed keys are rejected. Crypto uses `ring` (no NASM/OpenSSL dependency).
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -52,21 +49,32 @@ impl client::Handler for HostKeyHandler {
         match russh::keys::check_known_hosts(&self.host, self.port, server_public_key) {
             Ok(true) => Ok(true),
             Ok(false) => {
-                // First time we see this host: remember its key (TOFU).
-                let _ = russh::keys::known_hosts::learn_known_hosts(
+                // known_hosts exists but has no entry for this host yet.
+                Ok(russh::keys::known_hosts::learn_known_hosts(
                     &self.host,
                     self.port,
                     server_public_key,
-                );
-                Ok(true)
+                )
+                .is_ok())
+            }
+            Err(russh::keys::Error::IO(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                // First connection and no known_hosts file yet: trust only if
+                // the key can be recorded successfully. Otherwise fail closed.
+                Ok(russh::keys::known_hosts::learn_known_hosts(
+                    &self.host,
+                    self.port,
+                    server_public_key,
+                )
+                .is_ok())
             }
             Err(russh::keys::Error::KeyChanged { .. }) => {
                 self.key_changed
                     .store(true, std::sync::atomic::Ordering::SeqCst);
                 Ok(false)
             }
-            // Couldn't read known_hosts (missing file/permissions): best-effort accept.
-            Err(_) => Ok(true),
+            // Corrupt/unreadable known_hosts or an unavailable home directory
+            // must never silently disable host verification.
+            Err(_) => Ok(false),
         }
     }
 }
@@ -141,7 +149,10 @@ impl SshState {
 /// or the running SSH agent.
 enum AuthMethod {
     Password(String),
-    KeyFile { path: String, passphrase: Option<String> },
+    KeyFile {
+        path: String,
+        passphrase: Option<String>,
+    },
     Agent,
 }
 
@@ -187,9 +198,7 @@ async fn authenticate_with_agent(
     use russh::keys::agent::client::AgentClient;
     #[cfg(windows)]
     {
-        if let Ok(agent) =
-            AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent").await
-        {
+        if let Ok(agent) = AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent").await {
             return agent_auth_loop(handle, user, agent).await;
         }
         let agent = AgentClient::connect_pageant()
@@ -299,16 +308,10 @@ fn remote_agent_cache_dir(home: &str, root: &str) -> String {
     let digest = Sha256::digest(root.trim_end_matches('/').as_bytes());
     let workspace_id = format!("{digest:x}");
     let app_dir = join_posix(home.trim_end_matches('/'), ".fluent-coder");
-    join_posix(
-        &join_posix(&app_dir, "workspaces"),
-        &workspace_id[..16],
-    )
+    join_posix(&join_posix(&app_dir, "workspaces"), &workspace_id[..16])
 }
 
-async fn remote_agent_cache_file(
-    sftp: &SftpSession,
-    root: &str,
-) -> Result<String, String> {
+async fn remote_agent_cache_file(sftp: &SftpSession, root: &str) -> Result<String, String> {
     let home = sftp
         .canonicalize(".")
         .await
@@ -350,7 +353,9 @@ async fn ensure_remote_dir(sftp: &SftpSession, path: &str) -> Result<(), String>
                     .await
                     .map_err(|e| format!("Falha ao verificar a pasta remota '{dir}': {e}"))?;
                 if !metadata.is_dir() {
-                    return Err(format!("'{dir}' existe no host remoto, mas não é uma pasta."));
+                    return Err(format!(
+                        "'{dir}' existe no host remoto, mas não é uma pasta."
+                    ));
                 }
             }
             Ok(false) => {
@@ -362,18 +367,16 @@ async fn ensure_remote_dir(sftp: &SftpSession, path: &str) -> Result<(), String>
                 }
             }
             Err(error) => {
-                return Err(format!("Falha ao verificar a pasta remota '{dir}': {error}"));
+                return Err(format!(
+                    "Falha ao verificar a pasta remota '{dir}': {error}"
+                ));
             }
         }
     }
     Ok(())
 }
 
-async fn write_remote_file(
-    sftp: &SftpSession,
-    path: &str,
-    contents: &[u8],
-) -> Result<(), String> {
+async fn write_remote_file(sftp: &SftpSession, path: &str, contents: &[u8]) -> Result<(), String> {
     ensure_remote_dir(sftp, posix_dirname(path)).await?;
     sftp.write(path, contents)
         .await
@@ -432,10 +435,7 @@ pub async fn ssh_connect(
 }
 
 /// Looks up a live connection by id.
-async fn get_conn(
-    state: &State<'_, SshState>,
-    conn_id: &str,
-) -> Result<Arc<Connection>, String> {
+async fn get_conn(state: &State<'_, SshState>, conn_id: &str) -> Result<Arc<Connection>, String> {
     state
         .conns
         .lock()
@@ -522,10 +522,7 @@ pub async fn ssh_read_file_base64(
 
 /// Closes a connection: reaps its terminals, then drops the SSH session.
 #[tauri::command]
-pub async fn ssh_disconnect(
-    conn_id: String,
-    state: State<'_, SshState>,
-) -> Result<(), String> {
+pub async fn ssh_disconnect(conn_id: String, state: State<'_, SshState>) -> Result<(), String> {
     {
         let mut terminals = state.terminals.lock().await;
         terminals.retain(|_, term| {
@@ -571,7 +568,10 @@ pub async fn ssh_canonicalize(
 
 /// Last segment of a POSIX path (`/a/b/c` → `c`).
 fn posix_basename(path: &str) -> &str {
-    path.trim_end_matches('/').rsplit('/').next().unwrap_or(path)
+    path.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(path)
 }
 
 /// Parent of a POSIX path (`/a/b/c` → `/a/b`; root/relative handled).
@@ -685,7 +685,13 @@ pub async fn ssh_rename(
     let conn = get_conn(&state, &conn_id).await?;
     let parent = posix_dirname(&path);
     let new_path = join_posix(parent, &new_name);
-    if new_path != path && conn.sftp.try_exists(new_path.clone()).await.unwrap_or(false) {
+    if new_path != path
+        && conn
+            .sftp
+            .try_exists(new_path.clone())
+            .await
+            .unwrap_or(false)
+    {
         return Err(format!("Já existe '{new_name}' nesta pasta."));
     }
     let is_dir = conn
@@ -959,10 +965,7 @@ pub async fn ssh_term_resize(
 
 /// Closes a remote terminal (aborts its task, which drops the SSH channel).
 #[tauri::command]
-pub async fn ssh_term_close(
-    id: String,
-    state: State<'_, SshState>,
-) -> Result<(), String> {
+pub async fn ssh_term_close(id: String, state: State<'_, SshState>) -> Result<(), String> {
     if let Some(term) = state.terminals.lock().await.remove(&id) {
         term.task.abort();
     }
@@ -1118,7 +1121,14 @@ async fn exec_capture(conn: &Connection, command: &str) -> Result<ExecOutput, St
 
 /// Heavy dirs always pruned from a remote `grep`, mirroring the local search.
 const REMOTE_SKIP_DIRS: &[&str] = &[
-    ".git", "node_modules", "target", "dist", "build", ".next", ".venv", "vendor",
+    ".git",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    ".next",
+    ".venv",
+    "vendor",
 ];
 
 /// Caps to keep a runaway grep from flooding the UI.
@@ -1215,7 +1225,11 @@ fn build_grep_command(root: &str, query: &str, options: &crate::search::SearchOp
         }
     }
     // `-e <pat>` so patterns starting with `-` aren't read as flags.
-    cmd.push_str(&format!(" -e {} -- {}", shell_quote(query), shell_quote(root)));
+    cmd.push_str(&format!(
+        " -e {} -- {}",
+        shell_quote(query),
+        shell_quote(root)
+    ));
     cmd
 }
 
@@ -1256,12 +1270,18 @@ pub async fn ssh_search(
     let mut current_path: Option<String> = None;
     let mut current: Vec<SshLineMatch> = Vec::new();
 
-    let flush = |path: Option<String>, matches: Vec<SshLineMatch>, ev: &tauri::ipc::Channel<SshSearchEvent>| {
+    let flush = |path: Option<String>,
+                 matches: Vec<SshLineMatch>,
+                 ev: &tauri::ipc::Channel<SshSearchEvent>| {
         if let Some(p) = path {
             if !matches.is_empty() {
                 let name = posix_basename(&p).to_string();
                 let _ = ev.send(SshSearchEvent::Matches {
-                    file: SshFileMatches { path: p, name, matches },
+                    file: SshFileMatches {
+                        path: p,
+                        name,
+                        matches,
+                    },
                 });
             }
         }
@@ -1345,8 +1365,16 @@ fn build_graph_dump_command(root: &str) -> String {
     let prune = remote_prune_names();
 
     let exts = [
-        "*.md", "*.markdown", "*.mdx", "*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs",
-        "*.cjs", "*.rs",
+        "*.md",
+        "*.markdown",
+        "*.mdx",
+        "*.ts",
+        "*.tsx",
+        "*.js",
+        "*.jsx",
+        "*.mjs",
+        "*.cjs",
+        "*.rs",
     ];
     let mut names = String::new();
     for (i, e) in exts.iter().enumerate() {
@@ -1531,7 +1559,15 @@ pub async fn ssh_git_log_file(
     let out = exec_git(
         &conn,
         &root,
-        &["log", &n, "--no-color", "--follow", REMOTE_LOG_FORMAT, "--", &file],
+        &[
+            "log",
+            &n,
+            "--no-color",
+            "--follow",
+            REMOTE_LOG_FORMAT,
+            "--",
+            &file,
+        ],
     )
     .await?;
     crate::git::parse_log_records(&out)
@@ -1597,7 +1633,12 @@ pub async fn ssh_git_stash_apply(
     state: State<'_, SshState>,
 ) -> Result<String, String> {
     let conn = get_conn(&state, &conn_id).await?;
-    exec_git(&conn, &root, &["stash", "apply", &format!("stash@{{{index}}}")]).await
+    exec_git(
+        &conn,
+        &root,
+        &["stash", "apply", &format!("stash@{{{index}}}")],
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1608,7 +1649,12 @@ pub async fn ssh_git_stash_pop(
     state: State<'_, SshState>,
 ) -> Result<String, String> {
     let conn = get_conn(&state, &conn_id).await?;
-    exec_git(&conn, &root, &["stash", "pop", &format!("stash@{{{index}}}")]).await
+    exec_git(
+        &conn,
+        &root,
+        &["stash", "pop", &format!("stash@{{{index}}}")],
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1619,9 +1665,13 @@ pub async fn ssh_git_stash_drop(
     state: State<'_, SshState>,
 ) -> Result<(), String> {
     let conn = get_conn(&state, &conn_id).await?;
-    exec_git(&conn, &root, &["stash", "drop", &format!("stash@{{{index}}}")])
-        .await
-        .map(|_| ())
+    exec_git(
+        &conn,
+        &root,
+        &["stash", "drop", &format!("stash@{{{index}}}")],
+    )
+    .await
+    .map(|_| ())
 }
 
 #[tauri::command]
@@ -1641,7 +1691,14 @@ pub async fn ssh_git_discard_file(
         exec_git(
             &conn,
             &root,
-            &["restore", "--staged", "--worktree", "--source=HEAD", "--", &file],
+            &[
+                "restore",
+                "--staged",
+                "--worktree",
+                "--source=HEAD",
+                "--",
+                &file,
+            ],
         )
         .await
         .map(|_| ())
@@ -1658,7 +1715,14 @@ pub async fn ssh_git_discard_all(
     exec_git(
         &conn,
         &root,
-        &["restore", "--staged", "--worktree", "--source=HEAD", "--", "."],
+        &[
+            "restore",
+            "--staged",
+            "--worktree",
+            "--source=HEAD",
+            "--",
+            ".",
+        ],
     )
     .await?;
     exec_git(&conn, &root, &["clean", "-fd"]).await.map(|_| ())
@@ -1697,7 +1761,11 @@ pub async fn ssh_run_configs_detect(
     } else {
         "npm"
     };
-    let pkg_json = if pkg.trim().is_empty() { None } else { Some(pkg) };
+    let pkg_json = if pkg.trim().is_empty() {
+        None
+    } else {
+        Some(pkg)
+    };
     Ok(crate::runner::detect_configs(pkg_json, runner, has_cargo))
 }
 
@@ -1875,7 +1943,9 @@ pub async fn ssh_git_checkout(
     state: State<'_, SshState>,
 ) -> Result<(), String> {
     let conn = get_conn(&state, &conn_id).await?;
-    exec_git(&conn, &root, &["checkout", &branch]).await.map(|_| ())
+    exec_git(&conn, &root, &["checkout", &branch])
+        .await
+        .map(|_| ())
 }
 
 #[tauri::command]
@@ -1886,7 +1956,9 @@ pub async fn ssh_git_create_branch(
     state: State<'_, SshState>,
 ) -> Result<(), String> {
     let conn = get_conn(&state, &conn_id).await?;
-    exec_git(&conn, &root, &["checkout", "-b", &name]).await.map(|_| ())
+    exec_git(&conn, &root, &["checkout", "-b", &name])
+        .await
+        .map(|_| ())
 }
 
 #[tauri::command]
@@ -1897,7 +1969,9 @@ pub async fn ssh_git_stage(
     state: State<'_, SshState>,
 ) -> Result<(), String> {
     let conn = get_conn(&state, &conn_id).await?;
-    exec_git(&conn, &root, &["add", "--", &file]).await.map(|_| ())
+    exec_git(&conn, &root, &["add", "--", &file])
+        .await
+        .map(|_| ())
 }
 
 #[tauri::command]
@@ -1908,7 +1982,9 @@ pub async fn ssh_git_unstage(
     state: State<'_, SshState>,
 ) -> Result<(), String> {
     let conn = get_conn(&state, &conn_id).await?;
-    exec_git(&conn, &root, &["reset", "--", &file]).await.map(|_| ())
+    exec_git(&conn, &root, &["reset", "--", &file])
+        .await
+        .map(|_| ())
 }
 
 #[tauri::command]
@@ -1932,7 +2008,9 @@ pub async fn ssh_git_commit(
         return Err("A mensagem de commit não pode estar vazia.".to_string());
     }
     let conn = get_conn(&state, &conn_id).await?;
-    exec_git(&conn, &root, &["commit", "-m", &message]).await.map(|_| ())
+    exec_git(&conn, &root, &["commit", "-m", &message])
+        .await
+        .map(|_| ())
 }
 
 #[tauri::command]

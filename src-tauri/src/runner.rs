@@ -49,7 +49,9 @@ pub fn run_configs_save(root: String, configs: Vec<RunConfig>) -> Result<(), Str
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let file = RunFile { configurations: configs };
+    let file = RunFile {
+        configurations: configs,
+    };
     let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
     fs::write(&path, json).map_err(|e| e.to_string())
 }
@@ -115,7 +117,9 @@ pub(crate) fn parse_run_file(raw: &str) -> Result<Vec<RunConfig>, String> {
 
 /// Serializes run configs to the `.project/run.json` body (shared with SSH save).
 pub(crate) fn serialize_run_file(configs: Vec<RunConfig>) -> Result<String, String> {
-    let file = RunFile { configurations: configs };
+    let file = RunFile {
+        configurations: configs,
+    };
     serde_json::to_string_pretty(&file).map_err(|e| e.to_string())
 }
 

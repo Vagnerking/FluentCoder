@@ -39,10 +39,8 @@ pub fn run() {
             // transparent window won't always pick up the embedded default).
             #[cfg(desktop)]
             {
-                let icon = tauri::image::Image::from_bytes(include_bytes!(
-                    "../icons/128x128@2x.png"
-                ))
-                .ok();
+                let icon =
+                    tauri::image::Image::from_bytes(include_bytes!("../icons/128x128@2x.png")).ok();
                 if let Some(icon) = icon {
                     for (_, win) in app.webview_windows() {
                         let _ = win.set_icon(icon.clone());

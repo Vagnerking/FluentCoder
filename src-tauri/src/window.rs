@@ -201,11 +201,7 @@ pub fn restore_main_window(app: &tauri::AppHandle) {
 
 /// Tracks the last non-maximized bounds and flushes them when the main window
 /// closes. Detached editor windows deliberately keep their own drag placement.
-pub fn record_main_window_event(
-    app: &tauri::AppHandle,
-    label: &str,
-    event: &tauri::WindowEvent,
-) {
+pub fn record_main_window_event(app: &tauri::AppHandle, label: &str, event: &tauri::WindowEvent) {
     if label != "main" && !label.starts_with("workbench-") {
         return;
     }
@@ -261,6 +257,7 @@ pub fn window_ready(window: tauri::Window) -> Result<(), String> {
 pub async fn open_new_window(
     app: tauri::AppHandle,
     window: tauri::Window,
+    remote_attach: Option<String>,
 ) -> Result<(), String> {
     let pos = window.outer_position().map_err(|e| e.to_string())?;
     let size = window.outer_size().map_err(|e| e.to_string())?;
@@ -291,26 +288,27 @@ pub async fn open_new_window(
     let effects = tauri::window::EffectsBuilder::new()
         .effect(tauri::window::Effect::Mica)
         .build();
-    let new_window = tauri::WebviewWindowBuilder::new(
-        &app,
-        label,
-        tauri::WebviewUrl::App("index.html?freshWindow=1".into()),
-    )
-    .title("Fluent Coder")
-    .position(placement.x as f64 / scale, placement.y as f64 / scale)
-    .inner_size(
-        placement.width as f64 / scale,
-        placement.height as f64 / scale,
-    )
-    .min_inner_size(MIN_WINDOW_WIDTH as f64, MIN_WINDOW_HEIGHT as f64)
-    .maximized(placement.maximized)
-    .resizable(true)
-    .decorations(false)
-    .transparent(true)
-    .effects(effects)
-    .visible(false)
-    .build()
-    .map_err(|e| format!("não foi possível abrir uma nova janela: {e}"))?;
+    let url = match remote_attach {
+        Some(payload) => format!("index.html?freshWindow=1&remoteAttach={payload}"),
+        None => "index.html?freshWindow=1".to_string(),
+    };
+    let new_window =
+        tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::App(url.into()))
+            .title("Fluent Coder")
+            .position(placement.x as f64 / scale, placement.y as f64 / scale)
+            .inner_size(
+                placement.width as f64 / scale,
+                placement.height as f64 / scale,
+            )
+            .min_inner_size(MIN_WINDOW_WIDTH as f64, MIN_WINDOW_HEIGHT as f64)
+            .maximized(placement.maximized)
+            .resizable(true)
+            .decorations(false)
+            .transparent(true)
+            .effects(effects)
+            .visible(false)
+            .build()
+            .map_err(|e| format!("não foi possível abrir uma nova janela: {e}"))?;
     if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128@2x.png")) {
         let _ = new_window.set_icon(icon);
     }

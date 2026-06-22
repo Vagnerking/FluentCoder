@@ -41,7 +41,11 @@ pub fn mcp_config(root: String) -> Result<McpConfig, String> {
         }
     }))
     .unwrap_or_default();
-    Ok(McpConfig { exe, claude_add, json_config })
+    Ok(McpConfig {
+        exe,
+        claude_add,
+        json_config,
+    })
 }
 
 /// Writes (merging into any existing) a project-scoped `.mcp.json` at `root`, so
@@ -213,8 +217,18 @@ fn tool_specs() -> Value {
     ])
 }
 
-fn call_tool(name: &str, args: &Value, idx: &KnowledgeIndex, _root: &str) -> Result<String, String> {
-    let arg_str = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+fn call_tool(
+    name: &str,
+    args: &Value,
+    idx: &KnowledgeIndex,
+    _root: &str,
+) -> Result<String, String> {
+    let arg_str = |k: &str| {
+        args.get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
     match name {
         "search_knowledge" => {
             let q = arg_str("query").to_lowercase();
@@ -270,7 +284,12 @@ fn call_tool(name: &str, args: &Value, idx: &KnowledgeIndex, _root: &str) -> Res
             if out.is_empty() {
                 Ok(format!("Nenhum backlink para {}.", f.rel))
             } else {
-                Ok(format!("{} backlink(s) para {}:\n{}", out.len(), f.rel, out.join("\n")))
+                Ok(format!(
+                    "{} backlink(s) para {}:\n{}",
+                    out.len(),
+                    f.rel,
+                    out.join("\n")
+                ))
             }
         }
         "get_related_files" => {
@@ -282,8 +301,11 @@ fn call_tool(name: &str, args: &Value, idx: &KnowledgeIndex, _root: &str) -> Res
                     .map(|x| x.rel.clone())
                     .unwrap_or_else(|| p.to_string())
             };
-            let mut outgoing: Vec<String> =
-                f.outgoing.iter().map(|l| format!("→ {} [{}]", rel_of(&l.target), l.relation)).collect();
+            let mut outgoing: Vec<String> = f
+                .outgoing
+                .iter()
+                .map(|l| format!("→ {} [{}]", rel_of(&l.target), l.relation))
+                .collect();
             outgoing.sort();
             outgoing.dedup();
             let mut incoming: Vec<String> = Vec::new();
@@ -312,7 +334,14 @@ fn call_tool(name: &str, args: &Value, idx: &KnowledgeIndex, _root: &str) -> Res
             let lines: Vec<String> = f
                 .headings
                 .iter()
-                .map(|h| format!("{}{} (L{})", "  ".repeat(h.level.saturating_sub(1)), h.text, h.line))
+                .map(|h| {
+                    format!(
+                        "{}{} (L{})",
+                        "  ".repeat(h.level.saturating_sub(1)),
+                        h.text,
+                        h.line
+                    )
+                })
                 .collect();
             Ok(format!("Outline de {}:\n{}", f.rel, lines.join("\n")))
         }

@@ -99,7 +99,9 @@ import {
 import { loadLastRemoteTarget, saveLastRemoteTarget } from "./remote/persist";
 import {
   clearRemoteAttachParam,
+  encodeRemoteAttach,
   readRemoteAttach,
+  shouldOpenRemoteInNewWindow,
 } from "./remote/window";
 import {
   clearActiveEditor,
@@ -1009,11 +1011,35 @@ export default function App() {
    * persists the (secret-free) target for next-launch reconnect.
    */
   async function finalizeRemoteFolder(browser: RemoteBrowserCtx, rootPath: string) {
-    // Opening a project reuses this workbench. Only the explicit "Nova Janela"
-    // command creates another OS window.
+    const { connId, host, user, input } = browser;
+
+    // A new SSH connection must not replace an existing workspace. Hand the
+    // already-open backend connection to a warm same-process window instead.
+    if (shouldOpenRemoteInNewWindow(rootPathRef.current, input !== null)) {
+      try {
+        await openNewWindow(
+          encodeRemoteAttach({ connId, host, user, rootPath })
+        );
+        setRemoteBrowser(null);
+
+        const last = loadLastRemoteTarget();
+        const sameHost = last?.host === host;
+        saveLastRemoteTarget({
+          host,
+          port: input?.port ?? (sameHost ? last?.port ?? 22 : 22),
+          user,
+          keyPath: input?.keyPath ?? (sameHost ? last?.keyPath : undefined),
+          remotePath: rootPath,
+        });
+      } catch (err) {
+        console.error("Falha ao abrir a conexão em uma nova janela:", err);
+        alert(`Não foi possível abrir a conexão em uma nova janela:\n${err}`);
+      }
+      return;
+    }
+
     if (!(await guardDirtySession())) return;
 
-    const { connId, host, user, input } = browser;
     const previousRemote = getActiveRemote();
     const session: RemoteSession = {
       connId,
@@ -1293,11 +1319,13 @@ export default function App() {
         setActiveRemote(session);
         setRemoteSession(session);
         try {
-          await openFolder(attach.rootPath, { persist: false });
+          const opened = await openFolder(attach.rootPath, { persist: false });
+          if (!opened) throw new Error("A pasta remota não pôde ser aberta.");
         } catch (err) {
           console.error("Falha ao anexar a janela remota:", err);
           setActiveRemote(null);
           setRemoteSession(null);
+          void sshDisconnect(attach.connId).catch(() => {});
         }
         restoringSessionRef.current = false;
         return;

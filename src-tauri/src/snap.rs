@@ -98,15 +98,7 @@ mod win {
             }
 
             if let Some(child) = existing {
-                let _ = SetWindowPos(
-                    HWND(child as *mut _),
-                    None,
-                    px,
-                    py,
-                    pw,
-                    ph,
-                    SWP_NOACTIVATE,
-                );
+                let _ = SetWindowPos(HWND(child as *mut _), None, px, py, pw, ph, SWP_NOACTIVATE);
                 return;
             }
 
@@ -126,7 +118,12 @@ mod win {
             ) else {
                 return;
             };
-            let state = Box::new(State { parent, hovering: false, app, label });
+            let state = Box::new(State {
+                parent,
+                hovering: false,
+                app,
+                label,
+            });
             let raw = Box::into_raw(state) as usize;
             let _ = SetWindowSubclass(child, Some(overlay_proc), SUBCLASS_ID, raw);
             if let Ok(mut m) = children().lock() {
@@ -177,8 +174,17 @@ mod win {
             WM_NCLBUTTONUP if wparam.0 as u32 == HTMAXBUTTON => {
                 if !st.is_null() {
                     let parent = HWND((*st).parent as *mut _);
-                    let cmd = if IsZoomed(parent).as_bool() { SC_RESTORE } else { SC_MAXIMIZE };
-                    SendMessageW(parent, WM_SYSCOMMAND, Some(WPARAM(cmd as usize)), Some(LPARAM(0)));
+                    let cmd = if IsZoomed(parent).as_bool() {
+                        SC_RESTORE
+                    } else {
+                        SC_MAXIMIZE
+                    };
+                    SendMessageW(
+                        parent,
+                        WM_SYSCOMMAND,
+                        Some(WPARAM(cmd as usize)),
+                        Some(LPARAM(0)),
+                    );
                 }
                 return LRESULT(0);
             }

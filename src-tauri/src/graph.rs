@@ -53,15 +53,26 @@ const MAX_PARSE_SIZE: u64 = 1_500_000;
 
 fn is_markdown(p: &Path) -> bool {
     matches!(
-        p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref(),
+        p.extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
         Some("md") | Some("markdown") | Some("mdx")
     )
 }
 
 fn is_code(p: &Path) -> bool {
     matches!(
-        p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref(),
-        Some("ts") | Some("tsx") | Some("js") | Some("jsx") | Some("mjs") | Some("cjs")
+        p.extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("ts")
+            | Some("tsx")
+            | Some("js")
+            | Some("jsx")
+            | Some("mjs")
+            | Some("cjs")
             | Some("rs")
     )
 }
@@ -242,7 +253,9 @@ pub fn build_context_graph(root: String) -> Result<GraphData, String> {
     for f in &files {
         if is_markdown(f) {
             if let Some(stem) = f.file_stem().and_then(|s| s.to_str()) {
-                by_stem.entry(stem.to_lowercase()).or_insert_with(|| f.clone());
+                by_stem
+                    .entry(stem.to_lowercase())
+                    .or_insert_with(|| f.clone());
             }
         }
     }
@@ -251,7 +264,10 @@ pub fn build_context_graph(root: String) -> Result<GraphData, String> {
     // 3. Parse each file and collect edges (deduped via a set of (src,tgt,kind)).
     let mut seen: HashSet<(String, String, String)> = HashSet::new();
     let mut edges: Vec<GraphEdge> = Vec::new();
-    let push = |src: &Path, tgt: &Path, kind: &str, edges: &mut Vec<GraphEdge>,
+    let push = |src: &Path,
+                tgt: &Path,
+                kind: &str,
+                edges: &mut Vec<GraphEdge>,
                 seen: &mut HashSet<(String, String, String)>| {
         if src == tgt {
             return;
@@ -260,12 +276,19 @@ pub fn build_context_graph(root: String) -> Result<GraphData, String> {
         let t = tgt.to_string_lossy().to_string();
         let key = (s.clone(), t.clone(), kind.to_string());
         if seen.insert(key) {
-            edges.push(GraphEdge { source: s, target: t, kind: kind.to_string() });
+            edges.push(GraphEdge {
+                source: s,
+                target: t,
+                kind: kind.to_string(),
+            });
         }
     };
 
     for f in &files {
-        if fs::metadata(f).map(|m| m.len() > MAX_PARSE_SIZE).unwrap_or(true) {
+        if fs::metadata(f)
+            .map(|m| m.len() > MAX_PARSE_SIZE)
+            .unwrap_or(true)
+        {
             continue;
         }
         let content = match fs::read_to_string(f) {
@@ -314,9 +337,16 @@ pub fn build_context_graph(root: String) -> Result<GraphData, String> {
                 .unwrap_or_else(|_| f.to_string_lossy().to_string());
             GraphNode {
                 id: f.to_string_lossy().to_string(),
-                name: f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                name: f
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default(),
                 rel,
-                kind: if is_markdown(f) { "markdown".into() } else { "code".into() },
+                kind: if is_markdown(f) {
+                    "markdown".into()
+                } else {
+                    "code".into()
+                },
             }
         })
         .collect();
@@ -666,7 +696,9 @@ pub fn build_knowledge_index(root: String) -> Result<KnowledgeIndex, String> {
     for f in &files {
         if is_markdown(f) {
             if let Some(stem) = f.file_stem().and_then(|s| s.to_str()) {
-                by_stem.entry(stem.to_lowercase()).or_insert_with(|| f.clone());
+                by_stem
+                    .entry(stem.to_lowercase())
+                    .or_insert_with(|| f.clone());
             }
         }
     }
@@ -684,16 +716,27 @@ pub fn build_knowledge_index(root: String) -> Result<KnowledgeIndex, String> {
         let mut tags: Vec<String> = Vec::new();
         let mut headings: Vec<Heading> = Vec::new();
 
-        let too_big = fs::metadata(f).map(|m| m.len() > MAX_PARSE_SIZE).unwrap_or(true);
-        let content = if too_big { String::new() } else { fs::read_to_string(f).unwrap_or_default() };
+        let too_big = fs::metadata(f)
+            .map(|m| m.len() > MAX_PARSE_SIZE)
+            .unwrap_or(true);
+        let content = if too_big {
+            String::new()
+        } else {
+            fs::read_to_string(f).unwrap_or_default()
+        };
         let mut seen_tgt: HashSet<(String, String)> = HashSet::new();
         let mut seen_tag: HashSet<String> = HashSet::new();
         let is_md = kind == "markdown";
-        let is_rs = f.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("rs")).unwrap_or(false);
+        let is_rs = f
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("rs"))
+            .unwrap_or(false);
 
         for (i, raw_line) in content.lines().enumerate() {
             let line_no = i + 1;
-            let add = |target: PathBuf, relation: &str,
+            let add = |target: PathBuf,
+                       relation: &str,
                        outgoing: &mut Vec<IndexLink>,
                        seen: &mut HashSet<(String, String)>| {
                 if target == *f {
@@ -753,7 +796,10 @@ pub fn build_knowledge_index(root: String) -> Result<KnowledgeIndex, String> {
 
         out.push(KnowledgeFile {
             path: f.to_string_lossy().to_string(),
-            name: f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+            name: f
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default(),
             rel,
             kind: kind.to_string(),
             outgoing,
@@ -905,7 +951,11 @@ pub(crate) fn find_file<'a>(idx: &'a KnowledgeIndex, q: &str) -> Option<&'a Know
     idx.files
         .iter()
         .find(|f| f.path == q || f.rel == qn)
-        .or_else(|| idx.files.iter().find(|f| f.path.replace('\\', "/").ends_with(&qn)))
+        .or_else(|| {
+            idx.files
+                .iter()
+                .find(|f| f.path.replace('\\', "/").ends_with(&qn))
+        })
 }
 
 /// A fenced-code language hint for a file (drives the bundle's markdown fences).
@@ -928,8 +978,12 @@ fn bfs_neighbours(index: &KnowledgeIndex, seed: &str, depth: usize) -> Vec<Strin
     let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
     for f in &index.files {
         for l in &f.outgoing {
-            adj.entry(f.path.as_str()).or_default().push(l.target.as_str());
-            adj.entry(l.target.as_str()).or_default().push(f.path.as_str());
+            adj.entry(f.path.as_str())
+                .or_default()
+                .push(l.target.as_str());
+            adj.entry(l.target.as_str())
+                .or_default()
+                .push(f.path.as_str());
         }
     }
     let mut seen: HashSet<&str> = HashSet::new();
@@ -1036,7 +1090,10 @@ pub fn context_bundle_from_files(
             continue;
         }
         content_by_id.insert(format!("{root}/{rel}"), f.content.clone());
-        for_index.push(RawFile { rel, content: f.content });
+        for_index.push(RawFile {
+            rel,
+            content: f.content,
+        });
     }
     let index = build_knowledge_index_from_files(root, for_index);
     context_bundle_from(&index, seed_q, depth, max_chars, &|p| {
@@ -1089,16 +1146,34 @@ mod tests {
     #[test]
     fn remote_graph_resolves_imports_and_links() {
         let files = vec![
-            RawFile { rel: "src/a.ts".into(), content: "import { x } from './b';\n".into() },
-            RawFile { rel: "src/b.ts".into(), content: "export const x = 1;\n".into() },
+            RawFile {
+                rel: "src/a.ts".into(),
+                content: "import { x } from './b';\n".into(),
+            },
+            RawFile {
+                rel: "src/b.ts".into(),
+                content: "export const x = 1;\n".into(),
+            },
             RawFile {
                 rel: "docs/index.md".into(),
                 content: "See [other](./other.md) and [[note]] and react import none.\n".into(),
             },
-            RawFile { rel: "docs/other.md".into(), content: "# Other\n".into() },
-            RawFile { rel: "docs/note.md".into(), content: "# Note\n".into() },
-            RawFile { rel: "src/main.rs".into(), content: "mod foo;\n".into() },
-            RawFile { rel: "src/foo.rs".into(), content: "pub fn f() {}\n".into() },
+            RawFile {
+                rel: "docs/other.md".into(),
+                content: "# Other\n".into(),
+            },
+            RawFile {
+                rel: "docs/note.md".into(),
+                content: "# Note\n".into(),
+            },
+            RawFile {
+                rel: "src/main.rs".into(),
+                content: "mod foo;\n".into(),
+            },
+            RawFile {
+                rel: "src/foo.rs".into(),
+                content: "pub fn f() {}\n".into(),
+            },
         ];
         // Trailing slash on root must not double up in node ids.
         let g = build_context_graph_from_files("/home/proj/", files);
@@ -1119,9 +1194,21 @@ mod tests {
                 .any(|e| e.source == s && e.target == t && e.kind == k)
         };
         assert!(has("/home/proj/src/a.ts", "/home/proj/src/b.ts", "import"));
-        assert!(has("/home/proj/docs/index.md", "/home/proj/docs/other.md", "link"));
-        assert!(has("/home/proj/docs/index.md", "/home/proj/docs/note.md", "wikilink"));
-        assert!(has("/home/proj/src/main.rs", "/home/proj/src/foo.rs", "import"));
+        assert!(has(
+            "/home/proj/docs/index.md",
+            "/home/proj/docs/other.md",
+            "link"
+        ));
+        assert!(has(
+            "/home/proj/docs/index.md",
+            "/home/proj/docs/note.md",
+            "wikilink"
+        ));
+        assert!(has(
+            "/home/proj/src/main.rs",
+            "/home/proj/src/foo.rs",
+            "import"
+        ));
         // Bare package specifiers never produce an edge.
         assert!(!g.edges.iter().any(|e| e.target.contains("react")));
     }

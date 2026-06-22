@@ -56,10 +56,12 @@ pub fn detect_ts_language_server(project_root: &Path) -> Result<PathBuf, String>
         }
     }
 
-    Err("typescript-language-server não encontrado. Instale no projeto com \
+    Err(
+        "typescript-language-server não encontrado. Instale no projeto com \
          `npm install -D typescript-language-server typescript` ou globalmente com \
          `npm install -g typescript-language-server typescript`."
-        .to_string())
+            .to_string(),
+    )
 }
 
 /// Locates `tsserver.js` (the actual TypeScript server bundle).

@@ -236,9 +236,7 @@ pub async fn lsp_ensure_npm_server(
 /// Resolves the launch command for an SDK-provided language server (Dart, Go, …)
 /// from the user's PATH — no download. Errors with an install hint if missing.
 #[tauri::command]
-pub fn lsp_ensure_system_server(
-    server_id: String,
-) -> Result<system_server::LaunchInfo, String> {
+pub fn lsp_ensure_system_server(server_id: String) -> Result<system_server::LaunchInfo, String> {
     let spec = system_server::spec_for(&server_id)
         .ok_or_else(|| format!("servidor LSP desconhecido: {server_id}"))?;
     system_server::resolve_system_server(&spec)

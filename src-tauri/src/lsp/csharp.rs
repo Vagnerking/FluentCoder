@@ -222,7 +222,11 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), String> {
 
 /// Locates `dotnet` on the PATH. Returns a descriptive error if absent.
 pub fn detect_dotnet() -> Result<String, String> {
-    let program = if cfg!(windows) { "dotnet.exe" } else { "dotnet" };
+    let program = if cfg!(windows) {
+        "dotnet.exe"
+    } else {
+        "dotnet"
+    };
 
     // `dotnet --version` succeeds iff the SDK/runtime is reachable.
     let probe = std::process::Command::new(program)
@@ -313,10 +317,7 @@ async fn ensure_csharp_ext(app: &AppHandle) -> Result<PathBuf, String> {
     }
 }
 
-async fn download_and_extract_csharp_ext(
-    app: &AppHandle,
-    cache: &Path,
-) -> Result<PathBuf, String> {
+async fn download_and_extract_csharp_ext(app: &AppHandle, cache: &Path) -> Result<PathBuf, String> {
     let platform = csharp_ext_target_platform()
         .ok_or_else(|| "sem build da extensão C# para esta plataforma".to_string())?;
     tokio::fs::create_dir_all(cache)
@@ -328,7 +329,11 @@ async fn download_and_extract_csharp_ext(
         ver = CSHARP_EXT_VERSION,
         plat = platform
     );
-    emit_progress(app, "downloading", "Baixando o servidor C#/Razor (cohosting)…");
+    emit_progress(
+        app,
+        "downloading",
+        "Baixando o servidor C#/Razor (cohosting)…",
+    );
     // The marketplace serves the .vsix with `Content-Encoding: gzip`; reqwest's
     // `gzip` feature (enabled in Cargo.toml) transparently decompresses it so the
     // bytes below are the raw ZIP. Without it, extraction fails and Razor silently
@@ -362,9 +367,7 @@ async fn download_and_extract_csharp_ext(
 /// `--csharpDesignTimePath` at the extension's C# targets. The older
 /// `--razorSourceGenerator`/`--razorDesignTimePath` flags do NOT exist on this
 /// Roslyn (confirmed via `--help`) and would make it exit immediately.
-pub async fn cohosting_launch_command(
-    app: &AppHandle,
-) -> Result<(String, Vec<String>), String> {
+pub async fn cohosting_launch_command(app: &AppHandle) -> Result<(String, Vec<String>), String> {
     let roslyn_dir = ensure_csharp_ext(app).await?;
     let exe = roslyn_dir.join(roslyn_apphost_name());
     let razor_extension = roslyn_dir.join("Microsoft.VisualStudioCode.RazorExtension.dll");
@@ -400,9 +403,7 @@ pub async fn cohosting_launch_command(
 /// `--logLevel` and `--extensionLogDirectory` are REQUIRED by the server CLI —
 /// the process exits immediately without them. The per-RID exe is self-contained,
 /// so no `dotnet exec` wrapper is needed.
-pub async fn standalone_launch_command(
-    app: &AppHandle,
-) -> Result<(String, Vec<String>), String> {
+pub async fn standalone_launch_command(app: &AppHandle) -> Result<(String, Vec<String>), String> {
     // Don't hard-fail if dotnet is missing — the bundled server still starts;
     // log a hint instead. (detect_dotnet returns Err with an install message.)
     if let Err(hint) = detect_dotnet() {

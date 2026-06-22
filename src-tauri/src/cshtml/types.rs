@@ -56,7 +56,10 @@ pub struct TextRange {
 
 impl TextRange {
     pub fn point(pos: TextPosition) -> Self {
-        Self { start: pos, end: pos }
+        Self {
+            start: pos,
+            end: pos,
+        }
     }
 }
 

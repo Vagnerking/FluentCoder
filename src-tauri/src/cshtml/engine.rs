@@ -183,11 +183,7 @@ impl CshtmlEngine {
 
     /// Current version of the document, or `None` if not open.
     pub fn version(&self, uri: &str) -> Option<DocumentVersion> {
-        self.store
-            .lock()
-            .unwrap()
-            .snapshot(uri)
-            .map(|s| s.version)
+        self.store.lock().unwrap().snapshot(uri).map(|s| s.version)
     }
 
     /// Number of open documents.
@@ -206,7 +202,7 @@ impl Default for CshtmlEngine {
 mod tests {
     use super::*;
     use crate::cshtml::types::{
-        Diagnostic, Severity, DiagnosticCode, TextRange, TextPosition, Symbol, SymbolKind,
+        Diagnostic, DiagnosticCode, Severity, Symbol, SymbolKind, TextPosition, TextRange,
     };
 
     // ── Fake providers for testing ────────────────────────────────────────────
@@ -228,12 +224,24 @@ mod tests {
                     name: format!("sym{i}"),
                     kind: SymbolKind::Function,
                     range: TextRange {
-                        start: TextPosition { line: 0, character: 0 },
-                        end: TextPosition { line: 0, character: 1 },
+                        start: TextPosition {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: TextPosition {
+                            line: 0,
+                            character: 1,
+                        },
                     },
                     selection_range: TextRange {
-                        start: TextPosition { line: 0, character: 0 },
-                        end: TextPosition { line: 0, character: 1 },
+                        start: TextPosition {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: TextPosition {
+                            line: 0,
+                            character: 1,
+                        },
                     },
                 })
                 .collect::<Vec<_>>()
@@ -246,8 +254,14 @@ mod tests {
     fn sample_diag() -> Diagnostic {
         Diagnostic {
             range: TextRange {
-                start: TextPosition { line: 0, character: 0 },
-                end: TextPosition { line: 0, character: 5 },
+                start: TextPosition {
+                    line: 0,
+                    character: 0,
+                },
+                end: TextPosition {
+                    line: 0,
+                    character: 5,
+                },
             },
             severity: Severity::Error,
             code: Some(DiagnosticCode("RZ0001".into())),
@@ -261,7 +275,9 @@ mod tests {
     #[test]
     fn open_and_close() {
         let engine = CshtmlEngine::new();
-        engine.open_document("file:///a.cshtml", 1, "@model Foo").unwrap();
+        engine
+            .open_document("file:///a.cshtml", 1, "@model Foo")
+            .unwrap();
         assert_eq!(engine.document_count(), 1);
         engine.close_document("file:///a.cshtml");
         assert_eq!(engine.document_count(), 0);
@@ -269,9 +285,11 @@ mod tests {
 
     #[test]
     fn diagnostics_from_fake_provider() {
-        let engine = CshtmlEngine::new()
-            .with_diagnostic_provider(FakeDiagProvider(vec![sample_diag()]));
-        engine.open_document("file:///a.cshtml", 1, "@model Foo").unwrap();
+        let engine =
+            CshtmlEngine::new().with_diagnostic_provider(FakeDiagProvider(vec![sample_diag()]));
+        engine
+            .open_document("file:///a.cshtml", 1, "@model Foo")
+            .unwrap();
         let diags = engine.diagnostics("file:///a.cshtml");
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].message, "test diagnostic");
@@ -279,8 +297,8 @@ mod tests {
 
     #[test]
     fn diagnostics_on_closed_doc_is_empty() {
-        let engine = CshtmlEngine::new()
-            .with_diagnostic_provider(FakeDiagProvider(vec![sample_diag()]));
+        let engine =
+            CshtmlEngine::new().with_diagnostic_provider(FakeDiagProvider(vec![sample_diag()]));
         // Not opened — must return empty, not panic.
         let diags = engine.diagnostics("file:///not-open.cshtml");
         assert!(diags.is_empty());
@@ -289,7 +307,9 @@ mod tests {
     #[test]
     fn symbols_from_fake_provider() {
         let engine = CshtmlEngine::new().with_symbol_provider(CountingSymbolProvider(3));
-        engine.open_document("file:///a.cshtml", 1, "content").unwrap();
+        engine
+            .open_document("file:///a.cshtml", 1, "content")
+            .unwrap();
         let syms = engine.document_symbols("file:///a.cshtml");
         assert_eq!(syms.len(), 3);
     }
@@ -297,7 +317,9 @@ mod tests {
     #[test]
     fn snapshot_is_consistent() {
         let engine = CshtmlEngine::new();
-        engine.open_document("file:///a.cshtml", 1, "hello").unwrap();
+        engine
+            .open_document("file:///a.cshtml", 1, "hello")
+            .unwrap();
         let snap = engine.snapshot("file:///a.cshtml").unwrap();
         assert_eq!(snap.text(), "hello");
         assert_eq!(snap.version, DocumentVersion(1));

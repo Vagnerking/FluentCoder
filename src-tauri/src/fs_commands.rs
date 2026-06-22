@@ -13,11 +13,7 @@ pub struct DirEntry {
     is_dir: bool,
 }
 
-fn validate_child_path(
-    workspace_root: &str,
-    parent: &str,
-    name: &str,
-) -> Result<PathBuf, String> {
+fn validate_child_path(workspace_root: &str, parent: &str, name: &str) -> Result<PathBuf, String> {
     if name != name.trim() {
         return Err("O nome não pode começar ou terminar com espaço.".into());
     }
@@ -31,7 +27,10 @@ fn validate_child_path(
     if name.ends_with('.') {
         return Err("O nome não pode terminar com ponto.".into());
     }
-    if name.chars().any(|c| c.is_control() || r#"<>:"/\|?*"#.contains(c)) {
+    if name
+        .chars()
+        .any(|c| c.is_control() || r#"<>:"/\|?*"#.contains(c))
+    {
         return Err("O nome contém caracteres inválidos.".into());
     }
     let stem = name
@@ -66,9 +65,10 @@ fn validate_child_path(
     ) {
         return Err("Esse nome é reservado pelo Windows.".into());
     }
-    if Path::new(name).components().any(|part| {
-        !matches!(part, Component::Normal(_))
-    }) {
+    if Path::new(name)
+        .components()
+        .any(|part| !matches!(part, Component::Normal(_)))
+    {
         return Err("Informe somente o nome, sem caminho.".into());
     }
 
@@ -90,8 +90,8 @@ fn validate_child_path(
 fn validate_existing_path(workspace_root: &str, path: &str) -> Result<PathBuf, String> {
     let root = fs::canonicalize(workspace_root)
         .map_err(|e| format!("Não foi possível validar o workspace: {e}"))?;
-    let target = fs::canonicalize(path)
-        .map_err(|e| format!("Não foi possível acessar o item: {e}"))?;
+    let target =
+        fs::canonicalize(path).map_err(|e| format!("Não foi possível acessar o item: {e}"))?;
     if !target.starts_with(&root) {
         return Err("O item está fora do workspace.".into());
     }
@@ -248,7 +248,11 @@ pub fn read_file_base64(path: String) -> Result<String, String> {
 /// Builds a `data:` URL (mime inferred from extension) from raw bytes. Shared by
 /// the local image/media preview and the remote (SFTP) one in `ssh.rs`.
 pub(crate) fn data_url(path: &str, bytes: &[u8]) -> String {
-    format!("data:{};base64,{}", mime_for_path(path), base64_encode(bytes))
+    format!(
+        "data:{};base64,{}",
+        mime_for_path(path),
+        base64_encode(bytes)
+    )
 }
 
 /// Best-effort MIME type from a file extension (image / video / audio we preview).
@@ -289,8 +293,7 @@ fn mime_for_path(path: &str) -> &'static str {
 
 /// Minimal standard-base64 encoder (avoids pulling in a crate for one use).
 fn base64_encode(input: &[u8]) -> String {
-    const TABLE: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     for chunk in input.chunks(3) {
         let b0 = chunk[0] as u32;
@@ -494,8 +497,7 @@ mod tests {
     fn creates_single_folder_and_rejects_paths() {
         let root = workspace();
         let root_text = root.to_string_lossy().to_string();
-        let created =
-            create_folder(root_text.clone(), root_text.clone(), "src".into()).unwrap();
+        let created = create_folder(root_text.clone(), root_text.clone(), "src".into()).unwrap();
         assert!(created.is_dir);
         assert!(create_folder(root_text.clone(), root_text, "../fora".into()).is_err());
         fs::remove_dir_all(root).unwrap();
@@ -587,12 +589,16 @@ mod tests {
 
         let file = create_file(root_text.clone(), root_text.clone(), "m.txt".into()).unwrap();
         let moved = move_path(root_text.clone(), file.path.clone(), dest.path.clone()).unwrap();
-        assert!(!Path::new(&file.path).exists(), "origem deve sumir após mover");
+        assert!(
+            !Path::new(&file.path).exists(),
+            "origem deve sumir após mover"
+        );
         assert!(Path::new(&moved.path).exists());
 
         let folder = create_folder(root_text.clone(), root_text.clone(), "mp".into()).unwrap();
         create_file(root_text.clone(), folder.path.clone(), "k.txt".into()).unwrap();
-        let moved_dir = move_path(root_text.clone(), folder.path.clone(), dest.path.clone()).unwrap();
+        let moved_dir =
+            move_path(root_text.clone(), folder.path.clone(), dest.path.clone()).unwrap();
         assert!(moved_dir.is_dir);
         assert!(!Path::new(&folder.path).exists());
         assert!(Path::new(&moved_dir.path).join("k.txt").exists());
@@ -605,16 +611,24 @@ mod tests {
         let root_text = root.to_string_lossy().to_string();
         // A sibling temp dir, definitely outside `root`.
         let outside = workspace();
-        let outside_file =
-            create_file(outside.to_string_lossy().to_string(), outside.to_string_lossy().to_string(), "x.txt".into())
-                .unwrap();
+        let outside_file = create_file(
+            outside.to_string_lossy().to_string(),
+            outside.to_string_lossy().to_string(),
+            "x.txt".into(),
+        )
+        .unwrap();
 
         assert!(
             rename_path(root_text.clone(), outside_file.path.clone(), "y.txt".into()).is_err(),
             "renomear fora do workspace deve falhar"
         );
         assert!(
-            copy_path(root_text.clone(), outside_file.path.clone(), root_text.clone()).is_err(),
+            copy_path(
+                root_text.clone(),
+                outside_file.path.clone(),
+                root_text.clone()
+            )
+            .is_err(),
             "copiar origem fora do workspace deve falhar"
         );
         fs::remove_dir_all(root).unwrap();
