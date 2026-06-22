@@ -1,0 +1,21 @@
+@model object
+@{
+    Layout = "_Layout";
+}
+
+@section Scripts {
+    <script src="/js/app.js"></script>
+}
+
+@section Styles {
+    <link rel="stylesheet" href="/css/page.css" />
+}
+
+<h1>Main Content</h1>
+<p>This is the body of the page.</p>
+
+@* Partial reference (Tag Helper form, resolved by workspace layer) *@
+<partial name="_Summary" model="Model" />
+
+@* @Html.Partial (classic form) *@
+@* @Html.Partial("_OldPartial") *@

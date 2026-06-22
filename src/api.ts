@@ -996,7 +996,10 @@ export function tsVersions(rootPath: string): Promise<TsVersions> {
   return invoke<TsVersions>("lsp_ts_versions", { rootPath });
 }
 
-/** Resolves the rzls executable path (rejects if not cached — download stubbed). */
+/**
+ * Ensures the Roslyn cohosting server (C# extension VSIX) is downloaded/cached.
+ * Returns the launch command as `"<program>\n<arg1>\n…"` (program on first line).
+ */
 export function ensureRazorServer(): Promise<string> {
   return invoke<string>("lsp_ensure_razor_server");
 }

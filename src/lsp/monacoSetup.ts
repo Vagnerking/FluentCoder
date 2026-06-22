@@ -13,6 +13,7 @@
 import type { Monaco } from "@monaco-editor/react";
 import type * as MonacoNS from "monaco-editor";
 import { installRazorHtmlLint } from "../lint/razorHtmlLint";
+import { registerCshtmlLanguage } from "./monacoSetupCshtml";
 // `monaco-editor`'s ESM API does not automatically bundle every basic-language
 // contribution. Register C#'s lazy Monarch loader explicitly; otherwise Roslyn
 // semantic tokens color symbols, but lexical-only tokens such as `if` and
@@ -29,6 +30,7 @@ export function setupMonacoForLsp(monaco: Monaco): void {
   disableBuiltinTsWorker(monaco);
   registerReactLanguages(monaco);
   registerRazorLanguage(monaco);
+  registerCshtmlLanguage(monaco);
   installRazorHtmlLint(monaco);
   ensureCsharpLanguage(monaco);
 }
@@ -133,9 +135,10 @@ function registerReactLanguages(monaco: Monaco): void {
   ensure("javascriptreact", "javascript", [".jsx"]);
 }
 
-/** Monaco language id for `.cshtml` / `.razor`. Matches `language.ts`. Uses the
- * VS Code id `aspnetcorerazor` so the Roslyn Razor cohost (issue #11) recognizes
- * the documents we open — it keys Razor handling off this exact language id. */
+/** Monaco language id for `.razor` components. Matches `language.ts`.
+ * Uses the VS Code id `aspnetcorerazor` so the Roslyn Razor cohost recognizes
+ * the documents we open — it keys Razor handling off this exact language id.
+ * `.cshtml` uses a separate `cshtml` id (see monacoSetupCshtml.ts). */
 export const RAZOR_LANGUAGE_ID = "aspnetcorerazor";
 
 let razorRegistered = false;
@@ -157,9 +160,9 @@ export function registerRazorLanguage(monaco: Monaco): void {
   if (!known) {
     monaco.languages.register({
       id: RAZOR_LANGUAGE_ID,
-      extensions: [".cshtml", ".razor"],
-      aliases: ["Razor", "CSHTML"],
-      mimetypes: ["text/x-cshtml"],
+      extensions: [".razor"],
+      aliases: ["Razor"],
+      mimetypes: ["text/x-razor"],
     });
   }
 

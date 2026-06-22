@@ -1,4 +1,5 @@
 mod agents;
+pub mod cshtml;
 mod file_index;
 mod fs_commands;
 mod git;
@@ -142,7 +143,7 @@ pub fn run() {
             lsp::lsp_ts_versions,
             lsp::lsp_ensure_npm_server,
             lsp::lsp_ensure_system_server,
-            lsp::razor::lsp_ensure_razor_server,
+            lsp::lsp_ensure_razor_server,
             ssh::ssh_connect,
             ssh::ssh_list_dir,
             ssh::ssh_read_file,

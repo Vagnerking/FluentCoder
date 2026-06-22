@@ -17,6 +17,7 @@ import { lspBridgeInfo } from "../api";
 import { createTransport, type LspTransport } from "./transport";
 import { installReferencesBridge } from "./references";
 import { installDiagnosticsBridge } from "./diagnostics";
+import type { DiagnosticMode } from "./diagnosticMode";
 import { lspLog } from "./debug";
 
 /** Configuration for a single LSP client. Server-agnostic. */
@@ -31,6 +32,19 @@ export interface LspClientConfig {
   rootUri: string;
   /** Server-specific `initialize` options (e.g. Roslyn extension options). */
   initializationOptions?: unknown;
+  /** How diagnostics are delivered. C# explicitly uses pull because Roslyn
+   * accepts `textDocument/diagnostic` without advertising the capability. */
+  diagnosticMode?: DiagnosticMode;
+  /** Optional diagnostic registrations to pull separately. Roslyn exposes
+   * compiler categories this way, avoiding expensive analyzer aggregation. */
+  diagnosticIdentifiers?: readonly string[];
+  /**
+   * When true, semantic tokens start disabled and are enabled only after
+   * `projectInitializationComplete` (via {@link enableLanguageClientSemanticTokens}).
+   * Both Roslyn servers (C# standalone and Razor cohosting) set this flag so
+   * provisional classifications never flash before the project is fully loaded.
+   */
+  deferSemanticTokens?: boolean;
   /** Called when the underlying connection closes (propagated to the manager). */
   onClosed?: () => void;
 }
@@ -47,6 +61,10 @@ type ClientContributions = {
   disposables: monaco.IDisposable[];
   refreshSemanticTokens?: () => void;
   enableSemanticTokens?: () => void;
+  /** Re-pull tokens on a backoff until Roslyn's classification stabilizes. */
+  stabilizeSemanticTokens?: () => void;
+  /** Invalidates cached result ids and re-pulls diagnostics for tracked models. */
+  repullDiagnostics?: () => void;
 };
 
 const clientContributions = new WeakMap<
@@ -231,7 +249,8 @@ export async function createLanguageClient(
   installSemanticTokensBridge(
     client,
     config.serverId,
-    config.documentSelector
+    config.documentSelector,
+    config.deferSemanticTokens ?? false
   );
 
   // "Find All References" / "Peek References" (Shift+F12, context menu, and the
@@ -245,10 +264,17 @@ export async function createLanguageClient(
   // Diagnostics → Monaco markers (issue #10): pull for Roslyn
   // (`textDocument/diagnostic`), push for TS/Razor (`publishDiagnostics`). Owned
   // by serverId so markers de-duplicate per server, and feed the Problems panel.
-  addClientContributions(
+  const diagnostics = installDiagnosticsBridge(
     client,
-    installDiagnosticsBridge(client, config.serverId, config.documentSelector)
+    config.serverId,
+    config.documentSelector,
+    config.diagnosticMode,
+    config.diagnosticIdentifiers
   );
+  addClientContributions(client, diagnostics.disposables);
+  mergeClientContributions(client, {
+    repullDiagnostics: diagnostics.repull,
+  });
 
   // Diagnostic: what models exist and what are their scheme/language? The client
   // only sends didOpen for models whose URI scheme + languageId match the
@@ -302,11 +328,40 @@ function addClientContributions(
   }
 }
 
+/**
+ * Merges non-disposable contribution hooks (e.g. diagnostics re-pull)
+ * into a client's entry without touching its disposables. Creates the entry with
+ * an empty disposables list if no bridge has registered one yet.
+ */
+function mergeClientContributions(
+  client: MonacoLanguageClient,
+  extra: Partial<Omit<ClientContributions, "disposables">>
+): void {
+  const existing = clientContributions.get(client);
+  if (existing) {
+    Object.assign(existing, extra);
+  } else {
+    clientContributions.set(client, { disposables: [], ...extra });
+  }
+}
+
 /** Requests Monaco to discard cached semantic tokens and ask Roslyn again. */
 export function refreshLanguageClientSemanticTokens(
   client: MonacoLanguageClient
 ): void {
   clientContributions.get(client)?.refreshSemanticTokens?.();
+}
+
+/**
+ * Re-pulls semantic tokens on a backoff until the server's classification
+ * stops changing. Use after a workspace finishes loading (Roslyn streams
+ * provisional classifications first and never signals when the correct ones are
+ * ready), so colors converge without the user having to switch tabs.
+ */
+export function stabilizeLanguageClientSemanticTokens(
+  client: MonacoLanguageClient
+): void {
+  clientContributions.get(client)?.stabilizeSemanticTokens?.();
 }
 
 /**
@@ -318,6 +373,14 @@ export function enableLanguageClientSemanticTokens(
   client: MonacoLanguageClient
 ): void {
   clientContributions.get(client)?.enableSemanticTokens?.();
+}
+
+/**
+ * Invalidates cached diagnostic result ids and pulls every tracked model again.
+ * C# calls this after rebinding documents to the fully loaded solution.
+ */
+export function repullDiagnostics(client: MonacoLanguageClient): void {
+  clientContributions.get(client)?.repullDiagnostics?.();
 }
 
 function workspaceName(rootUri: string): string {
@@ -407,9 +470,13 @@ function createVoidEvent(): {
 function installSemanticTokensBridge(
   client: MonacoLanguageClient,
   serverId: string,
-  selector: DocumentSelector
+  selector: DocumentSelector,
+  deferSemanticTokens: boolean
 ): void {
   const capability = client.initializeResult?.capabilities.semanticTokensProvider;
+  // DIAG: dump the exact capability Roslyn announced (full can be bool or
+  // { delta }, range can be bool or {}). Tells us which request path is valid.
+  lspLog("DIAG semanticTokensProvider capability", serverId, capability);
   if (!capability || typeof capability !== "object" || !capability.legend) {
     lspLog("semantic tokens unavailable for", serverId);
     return;
@@ -425,7 +492,7 @@ function installSemanticTokensBridge(
     selector as unknown as monaco.languages.LanguageSelector;
   const contributions: monaco.IDisposable[] = [];
   const refresh = createVoidEvent();
-  let semanticTokensEnabled = serverId !== "csharp";
+  let semanticTokensEnabled = !deferSemanticTokens;
   const latestRequestByModel = new Map<string, number>();
 
   const beginRequest = (model: monaco.editor.ITextModel): number => {
@@ -440,12 +507,112 @@ function installSemanticTokensBridge(
     request: number
   ): boolean => latestRequestByModel.get(model.uri.toString()) === request;
 
+  // Fingerprint of the last token data returned per model, used to detect when
+  // Roslyn's classification has stabilized. After projectInitializationComplete
+  // Roslyn serves PROVISIONAL classifications (e.g. an enum typed as `variable`)
+  // and only later returns the correct ones — without ever sending
+  // workspace/semanticTokens/refresh. So we re-pull on a backoff until two
+  // consecutive results match. See ISSUE: C# class/enum colors only paint after
+  // a manual tab switch.
+  const lastTokenHashByModel = new Map<string, string>();
+
+  const hashTokens = (data: number[]): string => {
+    // Cheap order-sensitive fold; good enough to tell two token streams apart.
+    let h = 5381;
+    for (let i = 0; i < data.length; i++) h = ((h << 5) + h + data[i]) | 0;
+    return `${data.length}:${h}`;
+  };
+
+  // Fire the provider's onDidChange now and again on the next microtask. A bare
+  // synchronous fire can land before the active tab's model is bound to the
+  // editor (e.g. enable runs while the C# file is mid-open or on a hidden tab),
+  // and Monaco only re-pulls tokens for the model bound to a visible editor.
+  // The deferred fire catches the model once binding settles. See ISSUE: C#
+  // class/enum colors not painting until a tab switch.
+  const fireRefreshNowAndDeferred = (): void => {
+    refresh.fire();
+    queueMicrotask(() => refresh.fire());
+  };
+
+  // Re-pull tokens on a backoff until the visible models' classifications stop
+  // changing (Roslyn streams provisional → correct tokens after project init,
+  // with no refresh signal of its own). Each refresh re-pulls the visible model;
+  // we stop early once a full pass sees no model's token hash change, or after
+  // the schedule is exhausted. Guarded by a token so a later poll supersedes an
+  // earlier one. Only meaningful while semanticTokensEnabled is true.
+  const STABILIZE_DELAYS_MS = [250, 600, 1200, 2400, 4000];
+  let stabilizePass = 0;
+  const repaintUntilStable = (): void => {
+    const myPass = ++stabilizePass;
+    const snapshot = (): string =>
+      monaco.editor
+        .getModels()
+        .filter((m) => servedLanguages.has(m.getLanguageId()))
+        .map((m) => `${m.uri.toString()}=${lastTokenHashByModel.get(m.uri.toString()) ?? ""}`)
+        .join("|");
+
+    let before = snapshot();
+    refresh.fire();
+
+    const step = (i: number): void => {
+      if (myPass !== stabilizePass || !semanticTokensEnabled) return;
+      const delay = STABILIZE_DELAYS_MS[i];
+      if (delay == null) return; // schedule exhausted
+      setTimeout(() => {
+        if (myPass !== stabilizePass || !semanticTokensEnabled) return;
+        const after = snapshot();
+        // A pass that changed nothing means tokens settled — stop early. We
+        // still take one extra fire below to be safe against an in-flight pull.
+        const settled = after === before && i > 0;
+        before = after;
+        refresh.fire();
+        if (!settled) step(i + 1);
+      }, delay);
+    };
+    step(0);
+  };
+
+  // Languages this client serves, lifted from the document selector. Used to
+  // tell whether a model that just became visible belongs to this client.
+  const servedLanguages = new Set(
+    (Array.isArray(selector) ? selector : [selector])
+      .map((s) => (typeof s === "string" ? s : s?.language))
+      .filter((l): l is string => typeof l === "string")
+  );
+
+  // Re-pull semantic tokens the moment one of this client's models becomes the
+  // active model of an editor. This deterministically reproduces the manual
+  // "switch tabs and the colors appear" cure: enabling tokens after Roslyn's
+  // project init fires a single global refresh, which is lost if the model
+  // wasn't the visible one then. Binding-to-visible is the reliable trigger, so
+  // we re-fire refresh here regardless of when enable happened.
+  // TEMP: prove the provider is actually invoked (not just that refresh fired)
+  // and whether the gate was open at call time. Pairs with the manual-test
+  // checklist for the C# colors-not-painting fix; remove once confirmed.
+  const logProviderCall = (model: monaco.editor.ITextModel, kind: string): void =>
+    lspLog("provideDocumentSemanticTokens", serverId, kind, {
+      enabled: semanticTokensEnabled,
+      uri: model.uri.toString().slice(-60),
+    });
+
+  const watchModelBecomesVisible = (
+    editor: monaco.editor.ICodeEditor
+  ): monaco.IDisposable =>
+    editor.onDidChangeModel((e) => {
+      if (!e.newModelUrl || !semanticTokensEnabled) return;
+      const model = monaco.editor.getModel(e.newModelUrl);
+      if (model && servedLanguages.has(model.getLanguageId())) {
+        refresh.fire();
+      }
+    });
+
   if (capability.full) {
     contributions.push(
       monaco.languages.registerDocumentSemanticTokensProvider(languageSelector, {
         getLegend: () => legend,
         onDidChange: refresh.event,
         provideDocumentSemanticTokens: async (model, _lastResultId, token) => {
+          logProviderCall(model, "full");
           if (!semanticTokensEnabled) return null;
           const request = beginRequest(model);
           const result = await client.sendRequest<SemanticTokensResult | null>(
@@ -457,6 +624,7 @@ function installSemanticTokensBridge(
             return null;
           }
           if (result) {
+            lastTokenHashByModel.set(model.uri.toString(), hashTokens(result.data));
             logSemanticTokenSamples(serverId, model, result, legend);
           }
           return result
@@ -478,6 +646,7 @@ function installSemanticTokensBridge(
         getLegend: () => legend,
         onDidChange: refresh.event,
         provideDocumentSemanticTokens: async (model, _lastResultId, token) => {
+          logProviderCall(model, "range");
           if (!semanticTokensEnabled) return null;
           const request = beginRequest(model);
           const lastLine = model.getLineCount();
@@ -499,8 +668,27 @@ function installSemanticTokensBridge(
             return null;
           }
           if (result) {
+            lastTokenHashByModel.set(model.uri.toString(), hashTokens(result.data));
             logSemanticTokenSamples(serverId, model, result, legend);
           }
+          // DIAG: probe semanticTokens/full for the SAME model and log its
+          // classification, to compare against the range result above. If full
+          // returns enum/struct/class where range returns variable, the fix is
+          // to use the full request, not to keep refreshing.
+          void client
+            .sendRequest<SemanticTokensResult | null>(
+              "textDocument/semanticTokens/full",
+              { textDocument: { uri: model.uri.toString() } }
+            )
+            .then((full) => {
+              if (full) {
+                lspLog("DIAG full-probe result for", model.uri.toString().slice(-40));
+                logSemanticTokenSamples(serverId + "(full-probe)", model, full, legend);
+              } else {
+                lspLog("DIAG full-probe returned null for", model.uri.toString().slice(-40));
+              }
+            })
+            .catch((err) => lspLog("DIAG full-probe FAILED", String(err)));
           return result
             ? {
                 data: Uint32Array.from(result.data),
@@ -514,26 +702,69 @@ function installSemanticTokensBridge(
   }
 
   if (contributions.length > 0) {
+    // Watch every editor (current + future) so a served model becoming visible
+    // re-pulls its tokens — the deterministic backstop for the enable/refresh
+    // race that otherwise needs a manual tab switch.
+    monaco.editor.getEditors().forEach((editor) => {
+      contributions.push(watchModelBecomesVisible(editor));
+    });
+    contributions.push(
+      monaco.editor.onDidCreateEditor((editor) => {
+        contributions.push(watchModelBecomesVisible(editor));
+      })
+    );
+
     // Roslyn initially returns frozen/partial semantic classifications while
     // projects are loading. It later asks the client to invalidate semantic
     // tokens through this request. The compatibility feature's provider was
     // disposed above, so route the refresh to our direct Monaco provider.
     client.onRequest("workspace/semanticTokens/refresh", () => {
       lspLog("semantic tokens refresh requested by", serverId);
-      refresh.fire();
+      fireRefreshNowAndDeferred();
       return null;
     });
+
+    // DIAG: Roslyn doesn't send semanticTokens/refresh when cross-file types
+    // upgrade from `variable` to their real classification — but it DOES drive
+    // diagnostics via pull (workspace/diagnostic/refresh) once background/full-
+    // solution compilation completes, which is the same "refs resolved" moment.
+    // Observe the DiagnosticFeature's change event (non-destructive — does NOT
+    // override the feature's own refresh handler) to confirm it fires after
+    // projectInitializationComplete, so we can hang a token re-pull off it.
+    lspLog(
+      "DIAG diagnosticProvider capability",
+      serverId,
+      client.initializeResult?.capabilities.diagnosticProvider
+    );
+    try {
+      const diagFeature = client.getFeature("textDocument/diagnostic") as
+        | { onDidChangeDiagnosticsEmitter?: { event: monaco.IEvent<void> } }
+        | undefined;
+      const emitter = diagFeature?.onDidChangeDiagnosticsEmitter;
+      if (emitter) {
+        contributions.push(
+          emitter.event(() =>
+            lspLog("DIAG diagnostics changed (refs likely resolved)", serverId)
+          )
+        );
+      } else {
+        lspLog("DIAG diagnostic feature has no onDidChangeDiagnosticsEmitter", serverId);
+      }
+    } catch (err) {
+      lspLog("DIAG diagnostic-feature observe FAILED", String(err));
+    }
 
     contributions.push({ dispose: refresh.dispose });
     clientContributions.set(client, {
       disposables: contributions,
-      refreshSemanticTokens: refresh.fire,
+      refreshSemanticTokens: fireRefreshNowAndDeferred,
       enableSemanticTokens: () => {
         if (semanticTokensEnabled) return;
         semanticTokensEnabled = true;
         lspLog("semantic tokens enabled for", serverId);
-        refresh.fire();
+        fireRefreshNowAndDeferred();
       },
+      stabilizeSemanticTokens: repaintUntilStable,
     });
     lspLog("semantic tokens bridge registered for", serverId, {
       full: Boolean(capability.full),

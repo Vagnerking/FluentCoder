@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { pathForWorkspaceDisplay } from "./paths.ts";
+import { pathForWorkspaceDisplay, samePath } from "./paths.ts";
 
 test("shows a Windows project file relative to the workspace despite drive casing", () => {
   assert.equal(
@@ -39,5 +39,36 @@ test("keeps POSIX path comparison case-sensitive", () => {
       "/home/user/CodeEditor"
     ),
     "/home/user/codeeditor/src/App.tsx"
+  );
+});
+
+test("samePath treats Windows paths that differ only in drive casing as equal", () => {
+  assert.equal(
+    samePath(
+      "C:\\Users\\Vagner\\Titulo.cs",
+      "c:\\Users\\Vagner\\Titulo.cs"
+    ),
+    true
+  );
+});
+
+test("samePath ignores separator differences on Windows", () => {
+  assert.equal(
+    samePath("C:\\Users\\Vagner\\Titulo.cs", "C:/Users/Vagner/Titulo.cs"),
+    true
+  );
+});
+
+test("samePath keeps different Windows files distinct", () => {
+  assert.equal(
+    samePath("C:\\Users\\Vagner\\Titulo.cs", "C:\\Users\\Vagner\\Outro.cs"),
+    false
+  );
+});
+
+test("samePath stays case-sensitive for POSIX paths", () => {
+  assert.equal(
+    samePath("/home/user/Titulo.cs", "/home/user/titulo.cs"),
+    false
   );
 });

@@ -444,14 +444,17 @@ export function EditorPane({
     const pushMarkers = () => {
       const markers = monaco.editor.getModelMarkers({});
       onProblemsChange(
-        markers.map((m) => ({
-          path: m.resource.path,
-          name: baseName(m.resource.path),
-          severity: mapSeverity(m.severity),
-          message: m.message,
-          line: m.startLineNumber,
-          column: m.startColumn,
-        }))
+        markers.map((m) => {
+          const path = fromFileUri(m.resource.toString());
+          return {
+            path,
+            name: baseName(path),
+            severity: mapSeverity(m.severity),
+            message: m.message,
+            line: m.startLineNumber,
+            column: m.startColumn,
+          };
+        })
       );
     };
     monaco.editor.onDidChangeMarkers(pushMarkers);

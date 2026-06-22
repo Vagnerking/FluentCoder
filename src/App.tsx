@@ -142,6 +142,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as monaco from "monaco-editor";
 import { languageForFile, languageLabel, setLanguageOverride } from "./language";
 import { toFileUri } from "./lsp/uri";
+import { samePath } from "./paths";
 import { buildDecorations, decoKey } from "./icon-theme/decorations";
 import { useLspManager } from "./lsp/useLspManager";
 import { serverIdForLanguage } from "./lsp/servers";
@@ -884,28 +885,13 @@ export default function App() {
    * their workspace info (C# solution/projects) tear down separately when
    * `rootPath` changes (see useLspManager).
    */
-  // Tracks the workspace we already ran an initial compiler build for (#11).
-  const builtForRootRef = useRef<string | null>(null);
-
   const resetWorkspaceState = useCallback(() => {
     setBranch(null);
     setGitState(null);
     setProblems([]);
     clearAllDiagnostics();
     clearBuildDiagnostics();
-    builtForRootRef.current = null;
   }, []);
-
-  // Run the real compiler (dotnet build) once when a C#/Razor file first opens in
-  // a workspace, so its errors show on open — not only on save (issue #11).
-  useEffect(() => {
-    const isNet =
-      openedLanguages.has("csharp") || openedLanguages.has("aspnetcorerazor");
-    if (isNet && rootPath && builtForRootRef.current !== rootPath) {
-      builtForRootRef.current = rootPath;
-      void runBuildDiagnostics(rootPath);
-    }
-  }, [openedLanguages, rootPath]);
 
   /**
    * Loads a project folder into the explorer. Shared by the folder picker and
@@ -1392,9 +1378,13 @@ export default function App() {
 
       // Reopen tabs in their saved order, skipping any file that no longer
       // exists (handleOpenFile returns false silently). Re-read content from
-      // disk — only the path + view mode were persisted.
+      // disk — only the path + view mode were persisted. Drop duplicate paths
+      // here too (a stale session may hold the same file twice, e.g. saved with
+      // different drive-letter casing) so the restore never re-creates them and
+      // the healed session below is deduplicated (issue #7).
       const restored: OpenTab[] = [];
       for (const tab of s.openTabs) {
+        if (restored.some((t) => samePath(t.path, tab.path))) continue;
         const node: FileNode = {
           name: baseName(tab.path),
           path: tab.path,
@@ -1410,13 +1400,16 @@ export default function App() {
         if (ok) restored.push(tab);
       }
 
-      // Focus the tab that was active, if it survived the restore.
+      // Focus the tab that was active, if it survived the restore. Match the
+      // active path against the restored tab (case-insensitively on Windows) so
+      // we focus the path actually stored, not a differently-cased saved one.
+      const activeTab =
+        s.activePath != null
+          ? restored.find((t) => samePath(t.path, s.activePath!))
+          : undefined;
       const activeRestored =
-        s.activePath && restored.some((t) => t.path === s.activePath)
-          ? s.activePath
-          : restored.length > 0
-            ? restored[restored.length - 1].path
-            : null;
+        activeTab?.path ??
+        (restored.length > 0 ? restored[restored.length - 1].path : null);
       if (activeRestored) setActivePath(activeRestored);
 
       restoringSessionRef.current = false;
@@ -1933,18 +1926,22 @@ export default function App() {
 
       const resolvedMode: OpenMode = mode ?? defaultModeFor(node.path);
 
-      const already = openFiles.find((f) => f.path === node.path);
+      // Compare case-insensitively on Windows: the same file can arrive with a
+      // different drive-letter casing (explorer vs picker vs LSP URI), which
+      // would otherwise open it as a second tab (issue #7). Reuse the existing
+      // tab's stored path so focus/active matching stays consistent.
+      const already = openFiles.find((f) => samePath(f.path, node.path));
       if (already) {
         // Re-opening with a different mode (e.g. via "Open With…") switches the
         // existing tab's view rather than duplicating it.
         if (mode && already.mode !== mode) {
           setOpenFiles((prev) =>
             prev.map((f) =>
-              f.path === node.path ? { ...f, mode: resolvedMode } : f
+              samePath(f.path, node.path) ? { ...f, mode: resolvedMode } : f
             )
           );
         }
-        setActivePath(node.path);
+        setActivePath(already.path);
         if (line != null && resolvedMode === "text") {
           revealRef.current?.(line, selection);
         }
@@ -1984,7 +1981,7 @@ export default function App() {
         // race-safe (no duplicate tabs).
         let duplicate = false;
         setOpenFiles((prev) => {
-          if (prev.some((f) => f.path === node.path)) {
+          if (prev.some((f) => samePath(f.path, node.path))) {
             duplicate = true;
             return prev;
           }
@@ -2785,11 +2782,7 @@ export default function App() {
     if (!file.dirty && !isUntitled(file.path)) return;
     // saveFile already reports/throws on failure; swallow here (no close to gate).
     await saveFile(file).catch(() => {});
-    // Refresh real compiler errors for C#/Razor on save (issue #11).
-    if (rootPath && /\.(cs|cshtml|razor)$/i.test(file.name)) {
-      void runBuildDiagnostics(rootPath);
-    }
-  }, [openFiles, activePath, saveFile, rootPath]);
+  }, [openFiles, activePath, saveFile]);
 
   /** Close the current workspace folder, returning to the empty state. */
   const handleCloseFolder = useCallback(async () => {
