@@ -34,11 +34,17 @@ pub struct Session {
     #[serde(default)]
     pub last_folder: Option<String>,
     /// Tabs that were open in that folder, in tab-bar (left-to-right) order.
+    /// Flat fallback (the active group's tabs) for when `layout` is absent.
     #[serde(default)]
     pub open_tabs: Vec<OpenTab>,
     /// Absolute path of the tab that was active, if any.
     #[serde(default)]
     pub active_path: Option<String>,
+    /// The editor split grid as an opaque JSON blob owned by the frontend (tree
+    /// of groups + each group's tabs). Restores the whole split layout, not just
+    /// the active group. Absent ⇒ restore the flat `open_tabs` into one group.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<String>,
 }
 
 /// Path to the session file: `<app_data>/session.json`.
@@ -99,9 +105,11 @@ pub fn session_set_open_files(
     app: AppHandle,
     tabs: Vec<OpenTab>,
     active_path: Option<String>,
+    layout: Option<String>,
 ) -> Result<(), String> {
     let mut session = read_session(&app)?;
     session.open_tabs = tabs;
     session.active_path = active_path.filter(|p| !p.is_empty());
+    session.layout = layout.filter(|l| !l.is_empty());
     write_session(&app, &session)
 }

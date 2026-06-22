@@ -9,11 +9,15 @@
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager};
 
-/// `{ program, args }` the frontend forwards to `lsp_start_server`.
+/// `{ program, args }` the frontend forwards to `lsp_start_server`, plus the
+/// resolved `tsserver.js` path it passes via `initializationOptions.tsserver.path`
+/// (current `typescript-language-server` rejects the old `--tsserver-path` flag).
 #[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct LaunchInfo {
     pub program: String,
     pub args: Vec<String>,
+    pub tsserver_path: Option<String>,
 }
 
 /// Locates the `node` executable on the PATH.
@@ -103,26 +107,24 @@ pub async fn resolve_ts_launch(
         Err(_) => ensure_ts_cached(app).await?,
     };
 
-    let mut args = vec![server.to_string_lossy().to_string(), "--stdio".to_string()];
+    let args = vec![server.to_string_lossy().to_string(), "--stdio".to_string()];
 
     // tsserver = the TypeScript version. By default we prefer the project's (the
     // recommended choice); the user can force the editor-managed (cached) one.
+    // It's handed to the server via `initializationOptions.tsserver.path` on the
+    // front end — the old `--tsserver-path` CLI flag was removed and now errors.
     let tsserver = if prefer_editor {
         let _ = ensure_ts_cached(app).await; // make sure the cached TS exists
         cached_tsserver(app)
     } else {
         detect_tsserver(project_root).or_else(|| cached_tsserver(app))
     };
-    if let Some(tsserver) = tsserver {
-        if let Some(lib_dir) = tsserver.parent() {
-            args.push("--tsserver-path".to_string());
-            args.push(lib_dir.to_string_lossy().to_string());
-        }
-    }
+    let tsserver_path = tsserver.map(|p| p.to_string_lossy().to_string());
 
     Ok(LaunchInfo {
         program: node.to_string_lossy().to_string(),
         args,
+        tsserver_path,
     })
 }
 
@@ -152,6 +154,33 @@ fn cached_ts_language_server(app: &AppHandle) -> Option<PathBuf> {
         .join("lib")
         .join("cli.mjs");
     cli.is_file().then_some(cli)
+}
+
+/// Project + editor-managed TypeScript versions, for the "Select TS Version"
+/// picker (mirrors VS Code showing both version numbers).
+#[derive(serde::Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TsVersions {
+    /// The project's `typescript` version (`node_modules/typescript`), if installed.
+    pub project: Option<String>,
+    /// The editor-managed (cached) `typescript` version, if downloaded.
+    pub editor: Option<String>,
+}
+
+/// Reads the `version` field from a `typescript` package's `package.json`.
+fn read_ts_version(ts_pkg_dir: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(ts_pkg_dir.join("package.json")).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+    json.get("version")?.as_str().map(str::to_string)
+}
+
+/// The TypeScript versions available to the project (its own + the editor's).
+pub fn ts_versions(app: &AppHandle, project_root: &Path) -> TsVersions {
+    let project = read_ts_version(&project_root.join("node_modules").join("typescript"));
+    let editor = ts_cache_dir(app)
+        .ok()
+        .and_then(|dir| read_ts_version(&dir.join("node_modules").join("typescript")));
+    TsVersions { project, editor }
 }
 
 /// `tsserver.js` from the cached `typescript` package, if present.

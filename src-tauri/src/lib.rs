@@ -2,10 +2,13 @@ mod agents;
 mod file_index;
 mod fs_commands;
 mod git;
+mod graph;
 mod lsp;
+mod mcp;
 mod runner;
 mod search;
 mod session;
+mod snap;
 mod ssh;
 mod terminal;
 mod walk;
@@ -15,13 +18,47 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // `fluent-coder --mcp <root>` runs the knowledge MCP server (stdio) instead of
+    // the GUI, so Claude Code / other MCP clients can query the project's brain.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(pos) = args.iter().position(|a| a == "--mcp") {
+        let root = args
+            .get(pos + 1)
+            .cloned()
+            .unwrap_or_else(|| ".".to_string());
+        mcp::run_mcp_server(root);
+        return;
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            // Explicitly stamp every window with a crisp, high-resolution icon so
+            // the Windows taskbar / Alt-Tab show the app logo (a frameless,
+            // transparent window won't always pick up the embedded default).
+            #[cfg(desktop)]
+            {
+                let icon = tauri::image::Image::from_bytes(include_bytes!(
+                    "../icons/128x128@2x.png"
+                ))
+                .ok();
+                if let Some(icon) = icon {
+                    for (_, win) in app.webview_windows() {
+                        let _ = win.set_icon(icon.clone());
+                    }
+                }
+            }
+            window::restore_main_window(app.handle());
+            Ok(())
+        })
         .manage(terminal::TerminalState::new())
         .manage(lsp::LspState::new())
         .manage(search::SearchState::new())
         .manage(agents::AcpState::new())
         .manage(ssh::SshState::new())
+        .manage(window::WindowPlacementState::new())
+        .manage(window::WindowHandoffState::new())
+        .manage(window::ActiveEditorState::new())
         .invoke_handler(tauri::generate_handler![
             agents::agents_load,
             agents::agents_save,
@@ -43,6 +80,12 @@ pub fn run() {
             search::cancel_search,
             search::build_search_index,
             file_index::list_project_files,
+            graph::build_context_graph,
+            graph::build_knowledge_index,
+            graph::build_context_bundle,
+            mcp::mcp_config,
+            mcp::mcp_write_project_config,
+            snap::snap_set_max_button_rect,
             git::git_branch,
             git::git_branches,
             git::git_checkout,
@@ -55,9 +98,17 @@ pub fn run() {
             git::git_fetch,
             git::git_pull,
             git::git_push,
+            git::git_publish,
             git::git_log,
             git::git_log_file,
             git::git_blame,
+            git::git_discard_file,
+            git::git_discard_all,
+            git::git_stash_push,
+            git::git_stash_list,
+            git::git_stash_apply,
+            git::git_stash_pop,
+            git::git_stash_drop,
             git::git_snapshot_create,
             git::git_snapshot_restore,
             runner::run_configs_load,
@@ -68,6 +119,16 @@ pub fn run() {
             session::session_set_open_files,
             window::open_new_window,
             window::is_fresh_window,
+            window::window_ready,
+            window::window_at_position,
+            window::cursor_position,
+            window::editor_stash,
+            window::editor_take,
+            window::editor_update,
+            window::editor_release,
+            window::set_active_editor,
+            window::clear_active_editor,
+            window::get_active_editor,
             terminal::term_create,
             terminal::term_write,
             terminal::term_resize,
@@ -78,6 +139,7 @@ pub fn run() {
             lsp::lsp_ensure_csharp_server,
             lsp::build::csharp_build_diagnostics,
             lsp::lsp_ensure_ts_server,
+            lsp::lsp_ts_versions,
             lsp::lsp_ensure_npm_server,
             lsp::lsp_ensure_system_server,
             lsp::razor::lsp_ensure_razor_server,
@@ -100,6 +162,15 @@ pub fn run() {
             ssh::ssh_list_saved_hosts,
             ssh::ssh_search,
             ssh::ssh_canonicalize,
+            ssh::ssh_build_context_graph,
+            ssh::ssh_build_knowledge_index,
+            ssh::ssh_build_context_bundle,
+            ssh::ssh_list_project_files,
+            ssh::ssh_run_configs_detect,
+            ssh::ssh_run_configs_load,
+            ssh::ssh_run_configs_save,
+            ssh::ssh_agents_load,
+            ssh::ssh_agents_save,
             ssh::ssh_git_status,
             ssh::ssh_git_branch,
             ssh::ssh_git_branches,
@@ -112,12 +183,25 @@ pub fn run() {
             ssh::ssh_git_fetch,
             ssh::ssh_git_pull,
             ssh::ssh_git_push,
+            ssh::ssh_git_log,
+            ssh::ssh_git_log_file,
+            ssh::ssh_git_blame,
+            ssh::ssh_git_stash_list,
+            ssh::ssh_git_stash_push,
+            ssh::ssh_git_stash_apply,
+            ssh::ssh_git_stash_pop,
+            ssh::ssh_git_stash_drop,
+            ssh::ssh_git_discard_file,
+            ssh::ssh_git_discard_all,
             ssh::ssh_lsp_start,
             ssh::ssh_lsp_stop,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
+            if let tauri::RunEvent::WindowEvent { label, event, .. } = &event {
+                window::record_main_window_event(app, label, event);
+            }
             // Kill every child process (PTY shells + LSP servers) and their reader
             // threads, then force-quit. `portable-pty` doesn't kill its child on
             // drop and the PTY reader is a blocking OS thread, so relying on `Drop`
@@ -145,6 +229,7 @@ pub fn run() {
                     std::process::exit(0);
                 }
                 tauri::RunEvent::ExitRequested { .. } => {
+                    window::persist_main_window(app);
                     eprintln!("[exit] ExitRequested — tearing down children");
                     app.state::<terminal::TerminalState>().shutdown_all();
                     app.state::<agents::AcpState>().shutdown_all();

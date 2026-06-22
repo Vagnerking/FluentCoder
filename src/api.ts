@@ -1,4 +1,5 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { getActiveRemote } from "./remote/host";
 import type {
@@ -6,7 +7,11 @@ import type {
   FileNode,
   GitBranchInfo,
   GitCommit,
+  GitStashEntry,
   GitStatus,
+  GraphData,
+  KnowledgeIndex,
+  McpConfig,
   OpenTab,
   ProjectFile,
   RawDirEntry,
@@ -29,6 +34,7 @@ interface RawGitStatus {
   behind: number;
   is_repo: boolean;
   has_upstream: boolean;
+  conflicted: number;
   files: GitStatus["files"];
 }
 
@@ -354,12 +360,94 @@ export function cancelSearch(): Promise<void> {
  * while fresh, so typing doesn't re-walk the disk on every keystroke.
  */
 export function buildSearchIndex(root: string): Promise<void> {
+  // Remote search uses the host's grep (ssh_search), so no local index is needed.
+  if (getActiveRemote()) return Promise.resolve();
   return invoke<void>("build_search_index", { root });
 }
 
-/** Lists every file under `root` (skipping heavy dirs) for Quick Open (Ctrl+P). */
+/** Lists every file under `root` (skipping heavy dirs) for Quick Open (Ctrl+P).
+ *  Over SSH the host's `find` produces the list (no contents read). */
 export function listProjectFiles(root: string): Promise<ProjectFile[]> {
+  const remote = getActiveRemote();
+  if (remote)
+    return invoke<ProjectFile[]>("ssh_list_project_files", {
+      connId: remote.connId,
+      root,
+    });
   return invoke<ProjectFile[]>("list_project_files", { root });
+}
+
+/** Builds the workspace "context graph" (markdown links + code imports) for the
+ *  Obsidian-style graph view. Over SSH the host enumerates + reads the files
+ *  (one `find | cat` exec) and we build the graph from that stream. */
+export function buildContextGraph(root: string): Promise<GraphData> {
+  const remote = getActiveRemote();
+  if (remote)
+    return invoke<GraphData>("ssh_build_context_graph", {
+      connId: remote.connId,
+      root,
+    });
+  return invoke<GraphData>("build_context_graph", { root });
+}
+
+/** Builds the richer knowledge index (links with line+snippet, tags, headings).
+ *  The base the backlinks panel, the MCP tools and the RAG retrieval consume.
+ *  Over SSH the host streams the files and we build the index from that. */
+export function buildKnowledgeIndex(root: string): Promise<KnowledgeIndex> {
+  const remote = getActiveRemote();
+  if (remote)
+    return invoke<KnowledgeIndex>("ssh_build_knowledge_index", {
+      connId: remote.connId,
+      root,
+    });
+  return invoke<KnowledgeIndex>("build_knowledge_index", { root });
+}
+
+/** Message for MCP actions while attached to a remote host. */
+const REMOTE_MCP_MSG =
+  "O cérebro (MCP) indexa o workspace localmente e ainda não cobre um " +
+  "workspace remoto (SSH). Abra a pasta localmente para conectá-lo ao Claude Code.";
+
+/** How to register this workspace's knowledge MCP server in an MCP client. */
+export function mcpConfig(root: string): Promise<McpConfig> {
+  if (getActiveRemote()) return Promise.reject(new Error(REMOTE_MCP_MSG));
+  return invoke<McpConfig>("mcp_config", { root });
+}
+
+/** Writes/merges a project-scoped `.mcp.json` so Claude Code auto-detects the
+ *  knowledge server. Returns the written file path. */
+export function mcpWriteProjectConfig(root: string): Promise<string> {
+  if (getActiveRemote()) return Promise.reject(new Error(REMOTE_MCP_MSG));
+  return invoke<string>("mcp_write_project_config", { root });
+}
+
+/** Places the Snap Layouts overlay over the maximize button (CSS px, viewport
+ *  coords). A zero-size rect removes it. No-op off Windows. */
+export function snapSetMaxButtonRect(
+  x: number,
+  y: number,
+  width: number,
+  height: number
+): Promise<void> {
+  return invoke<void>("snap_set_max_button_rect", { x, y, width, height });
+}
+
+/** Assembles a markdown "context bundle" — the seed file + its graph neighbours
+ *  (up to `depth` hops) — to feed an agent. */
+export function buildContextBundle(
+  root: string,
+  path: string,
+  depth = 1
+): Promise<string> {
+  const remote = getActiveRemote();
+  if (remote)
+    return invoke<string>("ssh_build_context_bundle", {
+      connId: remote.connId,
+      root,
+      path,
+      depth,
+    });
+  return invoke<string>("build_context_bundle", { root, path, depth });
 }
 
 /** Returns the current git branch for `path`, or null if not a repo. */
@@ -432,6 +520,7 @@ export async function gitStatus(path: string): Promise<GitStatus> {
     behind: raw.behind,
     isRepo: raw.is_repo,
     hasUpstream: raw.has_upstream,
+    conflicted: raw.conflicted ?? 0,
     files: raw.files,
   };
 }
@@ -473,9 +562,66 @@ export function gitPush(path: string): Promise<string> {
   if (remote) return invoke<string>("ssh_git_push", { connId: remote.connId, root: path });
   return invoke<string>("git_push", { path });
 }
+/** Publishes a branch with no upstream (`git push -u <remote> <branch>`). Over
+ *  SSH this falls back to a plain push (no `-u` wiring there yet). */
+export function gitPublish(path: string): Promise<string> {
+  const remote = getActiveRemote();
+  if (remote) return invoke<string>("ssh_git_push", { connId: remote.connId, root: path });
+  return invoke<string>("git_publish", { path });
+}
+/** Discards a file's changes (reverts to HEAD; deletes if untracked). */
+export function gitDiscardFile(path: string, file: string, untracked: boolean): Promise<void> {
+  const remote = getActiveRemote();
+  if (remote)
+    return invoke("ssh_git_discard_file", { connId: remote.connId, root: path, file, untracked });
+  return invoke("git_discard_file", { path, file, untracked });
+}
+/** Discards ALL working-tree changes (revert tracked + remove untracked). */
+export function gitDiscardAll(path: string): Promise<void> {
+  const remote = getActiveRemote();
+  if (remote) return invoke("ssh_git_discard_all", { connId: remote.connId, root: path });
+  return invoke("git_discard_all", { path });
+}
+/** Stashes the working tree (incl. untracked), with an optional message. */
+export function gitStashPush(path: string, message?: string): Promise<string> {
+  const remote = getActiveRemote();
+  if (remote)
+    return invoke<string>("ssh_git_stash_push", {
+      connId: remote.connId,
+      root: path,
+      message: message ?? null,
+    });
+  return invoke<string>("git_stash_push", { path, message: message ?? null });
+}
+/** Lists the stash entries (newest first). */
+export function gitStashList(path: string): Promise<GitStashEntry[]> {
+  const remote = getActiveRemote();
+  if (remote)
+    return invoke<GitStashEntry[]>("ssh_git_stash_list", { connId: remote.connId, root: path });
+  return invoke<GitStashEntry[]>("git_stash_list", { path });
+}
+export function gitStashApply(path: string, index: number): Promise<string> {
+  const remote = getActiveRemote();
+  if (remote)
+    return invoke<string>("ssh_git_stash_apply", { connId: remote.connId, root: path, index });
+  return invoke<string>("git_stash_apply", { path, index });
+}
+export function gitStashPop(path: string, index: number): Promise<string> {
+  const remote = getActiveRemote();
+  if (remote)
+    return invoke<string>("ssh_git_stash_pop", { connId: remote.connId, root: path, index });
+  return invoke<string>("git_stash_pop", { path, index });
+}
+export function gitStashDrop(path: string, index: number): Promise<void> {
+  const remote = getActiveRemote();
+  if (remote)
+    return invoke("ssh_git_stash_drop", { connId: remote.connId, root: path, index });
+  return invoke("git_stash_drop", { path, index });
+}
 export function gitLog(path: string, limit = 30): Promise<GitCommit[]> {
-  // History over SSH isn't wired yet — return empty so the UI degrades cleanly.
-  if (getActiveRemote()) return Promise.resolve([]);
+  const remote = getActiveRemote();
+  if (remote)
+    return invoke<GitCommit[]>("ssh_git_log", { connId: remote.connId, root: path, limit });
   return invoke<GitCommit[]>("git_log", { path, limit });
 }
 
@@ -489,13 +635,22 @@ export function gitLogFile(
   file: string,
   limit = 50
 ): Promise<GitCommit[]> {
-  if (getActiveRemote()) return Promise.resolve([]);
+  const remote = getActiveRemote();
+  if (remote)
+    return invoke<GitCommit[]>("ssh_git_log_file", {
+      connId: remote.connId,
+      root: path,
+      file,
+      limit,
+    });
   return invoke<GitCommit[]>("git_log_file", { path, file, limit });
 }
 
 /** Returns per-line blame info for `file` inside the repo at `root`. */
 export function gitBlame(root: string, file: string): Promise<BlameHunk[]> {
-  if (getActiveRemote()) return Promise.resolve([]);
+  const remote = getActiveRemote();
+  if (remote)
+    return invoke<BlameHunk[]>("ssh_git_blame", { connId: remote.connId, root, file });
   return invoke<BlameHunk[]>("git_blame", { root, file });
 }
 
@@ -584,14 +739,23 @@ export function clearRemoteTerminals(): void {
 
 /** Loads saved run configs from `.project/run.json` (empty if none yet). */
 export function runConfigsLoad(root: string): Promise<RunConfig[]> {
+  const remote = getActiveRemote();
+  if (remote)
+    return invoke<RunConfig[]>("ssh_run_configs_load", { connId: remote.connId, root });
   return invoke<RunConfig[]>("run_configs_load", { root });
 }
 /** Persists run configs to `.project/run.json`. */
 export function runConfigsSave(root: string, configs: RunConfig[]): Promise<void> {
+  const remote = getActiveRemote();
+  if (remote)
+    return invoke("ssh_run_configs_save", { connId: remote.connId, root, configs });
   return invoke("run_configs_save", { root, configs });
 }
 /** Suggests run configs by inspecting package.json scripts, Cargo.toml, etc. */
 export function runConfigsDetect(root: string): Promise<RunConfig[]> {
+  const remote = getActiveRemote();
+  if (remote)
+    return invoke<RunConfig[]>("ssh_run_configs_detect", { connId: remote.connId, root });
   return invoke<RunConfig[]>("run_configs_detect", { root });
 }
 
@@ -599,11 +763,17 @@ export function runConfigsDetect(root: string): Promise<RunConfig[]> {
 
 /** Loads agents and conversation history from `<root>/.project/agents.json`. */
 export function agentsLoad(root: string): Promise<AgentStore> {
+  const remote = getActiveRemote();
+  if (remote)
+    return invoke<AgentStore>("ssh_agents_load", { connId: remote.connId, root });
   return invoke<AgentStore>("agents_load", { root });
 }
 
 /** Persists agents and conversation history inside the current workspace. */
 export function agentsSave(root: string, store: AgentStore): Promise<void> {
+  const remote = getActiveRemote();
+  if (remote)
+    return invoke("ssh_agents_save", { connId: remote.connId, root, store });
   return invoke("agents_save", { root, store });
 }
 
@@ -620,6 +790,13 @@ export function acpPrompt(
   mode: AgentMode,
   onEvent: (event: AcpEvent) => void,
 ): Promise<void> {
+  if (getActiveRemote())
+    return Promise.reject(
+      new Error(
+        "O modo agente roda localmente e ainda não opera num workspace remoto (SSH). " +
+          "Abra a pasta localmente para usar os agentes."
+      )
+    );
   const channel = new Channel<AcpEvent>();
   channel.onmessage = onEvent;
   return invoke("acp_prompt", {
@@ -638,8 +815,10 @@ export function acpCancel(): Promise<void> {
   return invoke("acp_cancel");
 }
 
-/** Stops cached provider processes and sessions associated with a workspace. */
+/** Stops cached provider processes and sessions associated with a workspace.
+ *  No-op over SSH (the agent never started — it runs locally only). */
 export function acpStopWorkspace(workspaceRoot: string): Promise<void> {
+  if (getActiveRemote()) return Promise.resolve();
   return invoke("acp_stop_workspace", { workspaceRoot });
 }
 
@@ -655,6 +834,7 @@ export async function sessionLoad(): Promise<Session> {
     lastFolder: s.lastFolder ?? null,
     openTabs: s.openTabs ?? [],
     activePath: s.activePath ?? null,
+    layout: s.layout ?? null,
   };
 }
 /** Remembers the last opened project folder (pass null to clear). */
@@ -668,14 +848,15 @@ export function sessionSetLastFolder(folder: string | null): Promise<void> {
  */
 export function sessionSetOpenFiles(
   tabs: OpenTab[],
-  activePath: string | null
+  activePath: string | null,
+  layout?: string | null
 ): Promise<void> {
-  return invoke("session_set_open_files", { tabs, activePath });
+  return invoke("session_set_open_files", { tabs, activePath, layout: layout ?? null });
 }
 
 // ---- Windows ----
 
-/** Opens a new, isolated editor window (a separate OS process), starting empty. */
+/** Opens an empty workbench window in the already-warm app process. */
 export function openNewWindow(): Promise<void> {
   return invoke("open_new_window");
 }
@@ -693,10 +874,15 @@ export interface LspBridgeInfo {
   token: string;
 }
 
+const runtimeWindowLabel = getCurrentWindow().label;
+const runtimeLspId = (id: string) => `${runtimeWindowLabel}:${id}`;
+
 /** `{ program, args }` resolved by `lsp_ensure_ts_server` (TS/JS). */
 export interface LspLaunchInfo {
   program: string;
   args: string[];
+  /** TS only: the `tsserver.js` path, forwarded via `initializationOptions`. */
+  tsserverPath?: string;
 }
 
 /**
@@ -709,7 +895,12 @@ export function startLspServer(
   args: string[],
   cwd: string
 ): Promise<LspBridgeInfo> {
-  return invoke<LspBridgeInfo>("lsp_start_server", { id, program, args, cwd });
+  return invoke<LspBridgeInfo>("lsp_start_server", {
+    id: runtimeLspId(id),
+    program,
+    args,
+    cwd,
+  });
 }
 
 // LSP servers started on the remote host (their stop must route to ssh_lsp_stop).
@@ -719,9 +910,9 @@ const remoteLspServers = new Set<string>();
 export function stopLspServer(id: string): Promise<void> {
   if (remoteLspServers.has(id)) {
     remoteLspServers.delete(id);
-    return invoke("ssh_lsp_stop", { id });
+    return invoke("ssh_lsp_stop", { id: runtimeLspId(id) });
   }
-  return invoke("lsp_stop_server", { id });
+  return invoke("lsp_stop_server", { id: runtimeLspId(id) });
 }
 
 /**
@@ -737,13 +928,12 @@ export function sshLspStart(
   cwd: string
 ): Promise<LspBridgeInfo> {
   remoteLspServers.add(id);
-  return invoke<LspBridgeInfo>("ssh_lsp_start", { connId, id, command, cwd });
-}
-
-/** Stops a remote LSP bridge (kills the server on the host). */
-export function sshLspStop(id: string): Promise<void> {
-  remoteLspServers.delete(id);
-  return invoke("ssh_lsp_stop", { id });
+  return invoke<LspBridgeInfo>("ssh_lsp_start", {
+    connId,
+    id: runtimeLspId(id),
+    command,
+    cwd,
+  });
 }
 
 /** Forgets all remote LSP server ids (called on disconnect). */
@@ -753,7 +943,7 @@ export function clearRemoteLspServers(): void {
 
 /** Returns the bridge `{ port, token }` for an active session (reconnect). */
 export function lspBridgeInfo(id: string): Promise<LspBridgeInfo> {
-  return invoke<LspBridgeInfo>("lsp_bridge_info", { id });
+  return invoke<LspBridgeInfo>("lsp_bridge_info", { id: runtimeLspId(id) });
 }
 
 /**
@@ -793,6 +983,17 @@ export function ensureTsServer(
   preferEditor: boolean
 ): Promise<LspLaunchInfo> {
   return invoke<LspLaunchInfo>("lsp_ensure_ts_server", { rootPath, preferEditor });
+}
+
+/** Project + editor-managed TypeScript versions (for the version picker). */
+export interface TsVersions {
+  project: string | null;
+  editor: string | null;
+}
+
+/** Reads the TypeScript versions available to a project (own + editor-managed). */
+export function tsVersions(rootPath: string): Promise<TsVersions> {
+  return invoke<TsVersions>("lsp_ts_versions", { rootPath });
 }
 
 /** Resolves the rzls executable path (rejects if not cached — download stubbed). */

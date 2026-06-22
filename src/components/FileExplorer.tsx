@@ -11,6 +11,7 @@ import {
 } from "../api";
 import type { ContextMenuItem, FileNode, FileDecoration } from "../types";
 import { Codicon } from "../icons/codicons/Codicon";
+import { FileIcon } from "../icon-theme/material/FileIcon";
 import {
   ExplorerInlineCreation,
   type PendingCreation,
@@ -55,6 +56,11 @@ interface FileExplorerProps {
    * `buildAdvancedFileMenuItems` (see `src/explorer/advancedFileMenu.ts`).
    */
   advancedActions?: ExplorerAdvancedActions;
+  /**
+   * Absolute paths changed in the working tree (issue #19). Drives the "show
+   * only changed files" toggle — a flat list of just these, for focus.
+   */
+  changedPaths?: string[];
 }
 
 /** Handlers App passes down for the advanced file context-menu items. */
@@ -87,6 +93,7 @@ export function FileExplorer({
   onOpenFile,
   onRefreshRoot,
   decorationFor = () => undefined,
+  changedPaths = [],
   onPathRenamed,
   onPathDeleted,
   onOpenTerminalAt,
@@ -100,6 +107,9 @@ export function FileExplorer({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState("");
+  // "Show only changed files" (issue #19): flattens the tree to just the files
+  // changed in the working tree, for a focused view of work in progress.
+  const [onlyChanged, setOnlyChanged] = useState(false);
 
   // Context-menu + explorer-operation state.
   const [contextMenu, setContextMenu] = useState<{
@@ -432,6 +442,65 @@ export function FileExplorer({
     [buildItems]
   );
 
+  // ---- Empty-area context menu (issue #18) ----
+  // Root-level actions when right-clicking the blank space of the tree (VS Code
+  // style). Node right-clicks stopPropagation in `openContextMenu`, so only true
+  // empty-area clicks reach here. Operates on the workspace root.
+  const buildRootItems = useCallback((): ContextMenuItem[] => {
+    if (!rootPath) return [];
+    const rootNode: FileNode = {
+      name: baseName(rootPath),
+      path: rootPath,
+      isDir: true,
+    };
+    const pasteEnabled = clipboard != null;
+    return [
+      {
+        id: "root-newFile",
+        label: "Novo arquivo",
+        icon: "newFile",
+        run: () => {
+          setSelectedDirectory(rootPath);
+          setPending({ kind: "file", parentPath: rootPath });
+        },
+      },
+      {
+        id: "root-newFolder",
+        label: "Nova pasta",
+        icon: "newFolder",
+        run: () => {
+          setSelectedDirectory(rootPath);
+          setPending({ kind: "folder", parentPath: rootPath });
+        },
+      },
+      { id: "root-sep-clip", label: "", separator: true },
+      {
+        id: "root-paste",
+        label: "Colar",
+        accelerator: "Ctrl+V",
+        icon: "paste",
+        enabled: pasteEnabled,
+        run: pasteEnabled ? () => paste(rootNode) : undefined,
+      },
+      { id: "root-sep-os", label: "", separator: true },
+      {
+        id: "root-reveal",
+        label: "Revelar no Explorer do Windows",
+        icon: "revealExplorer",
+        run: () => revealInOs(rootNode),
+      },
+    ];
+  }, [rootPath, clipboard, paste, revealInOs]);
+
+  const openEmptyAreaMenu = useCallback(
+    (e: React.MouseEvent) => {
+      if (!rootPath) return;
+      e.preventDefault();
+      setContextMenu({ x: e.clientX, y: e.clientY, items: buildRootItems() });
+    },
+    [rootPath, buildRootItems]
+  );
+
   // ---- Keyboard navigation + focus-gated shortcuts (issue 64) ----
   // The key handler lives on the tree container (tabIndex=0), so it only ever
   // fires when the tree itself owns focus — Del/F2/Ctrl+X/C/V never reach the
@@ -574,6 +643,20 @@ export function FileExplorer({
               </button>
             ))}
             <button
+              className={`explorer-action${onlyChanged ? " active" : ""}`}
+              title={
+                onlyChanged
+                  ? "Mostrar todos os arquivos"
+                  : "Mostrar apenas arquivos alterados"
+              }
+              aria-label="Alternar exibição de arquivos alterados"
+              aria-pressed={onlyChanged}
+              disabled={actionsDisabled}
+              onClick={() => setOnlyChanged((v) => !v)}
+            >
+              <Codicon name="sourceControl" size={16} />
+            </button>
+            <button
               className="explorer-action"
               title="Atualizar explorador"
               aria-label="Atualizar explorador"
@@ -606,6 +689,7 @@ export function FileExplorer({
         aria-label="Arquivos do projeto"
         tabIndex={rootPath ? 0 : undefined}
         onKeyDown={onTreeKeyDown}
+        onContextMenu={openEmptyAreaMenu}
         aria-activedescendant={focusedPath ? `treeitem-${focusedPath}` : undefined}
       >
         {!rootPath ? (
@@ -614,6 +698,32 @@ export function FileExplorer({
             <br />
             Use o menu Arquivo (ou Ctrl+K Ctrl+O) para abrir uma pasta.
           </div>
+        ) : onlyChanged ? (
+          changedPaths.length === 0 ? (
+            <div className="explorer-empty">Nenhum arquivo alterado na branch.</div>
+          ) : (
+            changedPaths.map((p) => {
+              const rel = p.startsWith(rootPath)
+                ? p.slice(rootPath.length).replace(/^[\\/]+/, "")
+                : p;
+              const dir = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+              return (
+                <div
+                  key={p}
+                  className={`explorer-flat-row${p === activePath ? " active" : ""}`}
+                  title={rel}
+                  role="treeitem"
+                  onClick={() =>
+                    onOpenFile({ name: baseName(p), path: p, isDir: false })
+                  }
+                >
+                  <FileIcon path={p} className="explorer-flat-icon" />
+                  <span className="explorer-flat-name">{baseName(p)}</span>
+                  {dir && <span className="explorer-flat-dir">{dir}</span>}
+                </div>
+              );
+            })
+          )
         ) : (
           <>
             {pending?.parentPath === rootPath && (

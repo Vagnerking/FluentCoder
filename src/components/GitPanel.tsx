@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   gitCommit,
+  gitDiscardAll,
+  gitDiscardFile,
   gitFetch,
   gitLog,
   gitLogFile,
@@ -8,13 +10,25 @@ import {
   gitPush,
   gitStage,
   gitStageAll,
+  gitStashApply,
+  gitStashDrop,
+  gitStashList,
+  gitStashPop,
+  gitStashPush,
   gitStatus,
   gitUnstage,
 } from "../api";
-import type { GitCommit, GitFileStatus, GitStatus } from "../types";
+import type {
+  ContextMenuItem,
+  GitCommit,
+  GitFileStatus,
+  GitStashEntry,
+  GitStatus,
+} from "../types";
 import { Codicon } from "../icons/codicons/Codicon";
 import type { IconAction } from "../icons/codicons/codicon-map";
 import { FileIcon } from "../icon-theme/material/FileIcon";
+import { TreeContextMenu } from "./TreeContextMenu";
 
 interface GitPanelProps {
   /** Open folder; the repo is resolved from here. Null when nothing is open. */
@@ -69,9 +83,17 @@ export function GitPanel({
   const [showHistory, setShowHistory] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [stashes, setStashes] = useState<GitStashEntry[]>([]);
+  const [showStashes, setShowStashes] = useState(false);
   // Commits for the file under "File History" (ISSUE-71). Separate from the
   // repo-wide `commits` so switching back doesn't refetch the whole log.
   const [fileCommits, setFileCommits] = useState<GitCommit[]>([]);
+  // Right-click context menu over a changed file (issue #9), VS Code-style.
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    items: ContextMenuItem[];
+  } | null>(null);
 
   const refresh = useCallback(async () => {
     if (!rootPath) {
@@ -82,6 +104,7 @@ export function GitPanel({
       const s = await gitStatus(rootPath);
       setStatus(s);
       setError(null);
+      gitStashList(rootPath).then(setStashes).catch(() => {});
     } catch (err) {
       setError(String(err));
     }
@@ -165,8 +188,90 @@ export function GitPanel({
     );
   }
 
-  const staged = status?.files.filter((f) => f.staged) ?? [];
-  const changes = status?.files.filter((f) => !f.staged) ?? [];
+  const conflicts = status?.files.filter((f) => f.conflicted) ?? [];
+  const staged = status?.files.filter((f) => f.staged && !f.conflicted) ?? [];
+  const changes = status?.files.filter((f) => !f.staged && !f.conflicted) ?? [];
+
+  const discardFile = (f: GitFileStatus) =>
+    act(async () => {
+      if (
+        !window.confirm(
+          `Descartar as alterações de "${fileName(f.path)}"? Esta ação não pode ser desfeita.`
+        )
+      )
+        return;
+      await gitDiscardFile(rootPath, f.path, f.untracked);
+    });
+
+  // Right-click menu for a changed file (issue #9). Mirrors VS Code's Source
+  // Control context menu: Open File, Open Changes (diff — "em breve", like the
+  // explorer's), and the stage/unstage/discard action set for the file's group.
+  const openFileMenu = (e: React.MouseEvent, items: ContextMenuItem[]) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, items });
+  };
+
+  const fileMenu = (
+    f: GitFileStatus,
+    group: "conflict" | "staged" | "changes"
+  ): ContextMenuItem[] => {
+    const open: ContextMenuItem = {
+      id: "open",
+      label: "Abrir Arquivo",
+      icon: "file",
+      run: () => onOpenFile(`${rootPath}/${f.path}`, fileName(f.path)),
+    };
+    const openChanges: ContextMenuItem = {
+      id: "openChanges",
+      label: "Abrir Alterações",
+      icon: "openChanges",
+      enabled: false,
+      title: "Em breve (visualização de diff)",
+    };
+    const sep: ContextMenuItem = { id: "sep", label: "", separator: true };
+    if (group === "conflict") {
+      return [
+        open,
+        sep,
+        {
+          id: "resolve",
+          label: "Marcar como resolvido",
+          icon: "success",
+          run: () => act(() => gitStage(rootPath, f.path)),
+        },
+      ];
+    }
+    if (group === "staged") {
+      return [
+        open,
+        openChanges,
+        sep,
+        {
+          id: "unstage",
+          label: "Remover do stage",
+          icon: "remove",
+          run: () => act(() => gitUnstage(rootPath, f.path)),
+        },
+      ];
+    }
+    return [
+      open,
+      openChanges,
+      sep,
+      {
+        id: "stage",
+        label: "Preparar (stage)",
+        icon: "add",
+        run: () => act(() => gitStage(rootPath, f.path)),
+      },
+      {
+        id: "discard",
+        label: "Descartar Alterações",
+        icon: "discard",
+        run: () => discardFile(f),
+      },
+    ];
+  };
 
   return (
     <div className="git-panel">
@@ -198,6 +303,19 @@ export function GitPanel({
           >
             <Codicon name="gitPush" />
             {status && status.ahead > 0 ? status.ahead : ""}
+          </button>
+          <button
+            className="git-icon-btn"
+            title="Guardar alterações (stash)"
+            disabled={busy || (status?.files.length ?? 0) === 0}
+            onClick={() =>
+              act(async () => {
+                const msg = window.prompt("Mensagem do stash (opcional):") ?? undefined;
+                await gitStashPush(rootPath, msg);
+              })
+            }
+          >
+            <Codicon name="bookmark" />
           </button>
         </div>
       </div>
@@ -237,6 +355,29 @@ export function GitPanel({
       {error && <div className="git-error">{error}</div>}
 
       <div className="git-lists">
+        {conflicts.length > 0 && (
+          <div className="git-group">
+            <div className="git-group-header git-group-conflict">
+              <span>
+                <Codicon name="warning" size={13} /> Conflitos de merge
+              </span>
+              <span className="git-count">{conflicts.length}</span>
+            </div>
+            {conflicts.map((f) => (
+              <GitFileRow
+                key={`x-${f.path}`}
+                file={f}
+                actionIcon="success"
+                actionTitle="Marcar como resolvido (stage)"
+                onAction={() => act(() => gitStage(rootPath, f.path))}
+                onOpen={() => onOpenFile(`${rootPath}/${f.path}`, fileName(f.path))}
+                onContextMenu={(e) => openFileMenu(e, fileMenu(f, "conflict"))}
+                disabled={busy}
+              />
+            ))}
+          </div>
+        )}
+
         {staged.length > 0 && (
           <div className="git-group">
             <div className="git-group-header">
@@ -251,6 +392,7 @@ export function GitPanel({
                 actionTitle="Remover do stage"
                 onAction={() => act(() => gitUnstage(rootPath, f.path))}
                 onOpen={() => onOpenFile(`${rootPath}/${f.path}`, fileName(f.path))}
+                onContextMenu={(e) => openFileMenu(e, fileMenu(f, "staged"))}
                 disabled={busy}
               />
             ))}
@@ -262,19 +404,39 @@ export function GitPanel({
             <span>Alterações</span>
             <div className="git-group-header-actions">
               {changes.length > 0 && (
-                <button
-                  className="git-link-btn"
-                  disabled={busy}
-                  title="Preparar tudo"
-                  onClick={() => act(() => gitStageAll(rootPath))}
-                >
-                  <Codicon name="add" />
-                </button>
+                <>
+                  <button
+                    className="git-link-btn"
+                    disabled={busy}
+                    title="Descartar todas as alterações"
+                    onClick={() =>
+                      act(async () => {
+                        if (
+                          !window.confirm(
+                            "Descartar TODAS as alterações do diretório de trabalho? Esta ação não pode ser desfeita."
+                          )
+                        )
+                          return;
+                        await gitDiscardAll(rootPath);
+                      })
+                    }
+                  >
+                    <Codicon name="discard" />
+                  </button>
+                  <button
+                    className="git-link-btn"
+                    disabled={busy}
+                    title="Preparar tudo"
+                    onClick={() => act(() => gitStageAll(rootPath))}
+                  >
+                    <Codicon name="add" />
+                  </button>
+                </>
               )}
               <span className="git-count">{changes.length}</span>
             </div>
           </div>
-          {changes.length === 0 && staged.length === 0 ? (
+          {changes.length === 0 && staged.length === 0 && conflicts.length === 0 ? (
             <div className="panel-empty">Nenhuma alteração.</div>
           ) : (
             changes.map((f) => (
@@ -284,12 +446,66 @@ export function GitPanel({
                 actionIcon="add"
                 actionTitle="Preparar (stage)"
                 onAction={() => act(() => gitStage(rootPath, f.path))}
+                onDiscard={() => discardFile(f)}
                 onOpen={() => onOpenFile(`${rootPath}/${f.path}`, fileName(f.path))}
+                onContextMenu={(e) => openFileMenu(e, fileMenu(f, "changes"))}
                 disabled={busy}
               />
             ))
           )}
         </div>
+
+        {stashes.length > 0 && (
+          <div className="git-group">
+            <button
+              className="git-group-toggle"
+              onClick={() => setShowStashes((v) => !v)}
+            >
+              <span className="tree-chevron">
+                <Codicon name={showStashes ? "chevronDown" : "chevronRight"} size={12} />
+              </span>
+              Stashes
+              <span className="git-count">{stashes.length}</span>
+            </button>
+            {showStashes &&
+              stashes.map((st) => (
+                <div key={st.index} className="git-stash-row" title={st.message}>
+                  <Codicon name="bookmark" size={13} />
+                  <span className="git-stash-msg">{st.message}</span>
+                  <span className="git-file-spacer" />
+                  <button
+                    className="git-file-action"
+                    title="Aplicar (mantém o stash)"
+                    disabled={busy}
+                    onClick={() => act(() => gitStashApply(rootPath, st.index))}
+                  >
+                    <Codicon name="add" size={14} />
+                  </button>
+                  <button
+                    className="git-file-action"
+                    title="Pop (aplica e remove)"
+                    disabled={busy}
+                    onClick={() => act(() => gitStashPop(rootPath, st.index))}
+                  >
+                    <Codicon name="gitPull" size={14} />
+                  </button>
+                  <button
+                    className="git-file-action"
+                    title="Descartar stash"
+                    disabled={busy}
+                    onClick={() =>
+                      act(async () => {
+                        if (!window.confirm("Descartar este stash?")) return;
+                        await gitStashDrop(rootPath, st.index);
+                      })
+                    }
+                  >
+                    <Codicon name="trash" size={14} />
+                  </button>
+                </div>
+              ))}
+          </div>
+        )}
 
         <div className="git-group">
           <button className="git-group-toggle" onClick={toggleHistory}>
@@ -330,6 +546,15 @@ export function GitPanel({
             })()}
         </div>
       </div>
+
+      {contextMenu && (
+        <TreeContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenu.items}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
     </div>
   );
 }
@@ -340,6 +565,10 @@ interface GitFileRowProps {
   actionTitle: string;
   onAction: () => void;
   onOpen: () => void;
+  /** Optional "discard changes" action (shown before the primary action). */
+  onDiscard?: () => void;
+  /** Right-click handler (issue #9): opens the Git context menu for this file. */
+  onContextMenu?: (e: React.MouseEvent) => void;
   disabled: boolean;
 }
 
@@ -349,16 +578,28 @@ function GitFileRow({
   actionTitle,
   onAction,
   onOpen,
+  onDiscard,
+  onContextMenu,
   disabled,
 }: GitFileRowProps) {
   const b = badge(file);
   return (
-    <div className="git-file-row" title={file.path}>
+    <div className="git-file-row" title={file.path} onContextMenu={onContextMenu}>
       <FileIcon path={file.path} className="git-file-icon" />
       <span className="git-file-name" onClick={onOpen}>
         {fileName(file.path)}
       </span>
       <span className="git-file-spacer" />
+      {onDiscard && (
+        <button
+          className="git-file-action"
+          title="Descartar alterações"
+          disabled={disabled}
+          onClick={onDiscard}
+        >
+          <Codicon name="discard" />
+        </button>
+      )}
       <button
         className="git-file-action"
         title={actionTitle}

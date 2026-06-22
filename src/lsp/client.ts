@@ -9,6 +9,10 @@ import {
   type DocumentSelector,
   type MessageTransports,
 } from "vscode-languageclient";
+// Resolves (via the Vite "vscode" alias) to the exact same monaco-languageclient
+// VS Code compatibility shim that vscode-languageclient itself `require("vscode")`s
+// — i.e. the live singleton — so patching it here affects the language client too.
+import * as vscodeShim from "vscode";
 import { lspBridgeInfo } from "../api";
 import { createTransport, type LspTransport } from "./transport";
 import { installReferencesBridge } from "./references";
@@ -33,11 +37,10 @@ export interface LspClientConfig {
 
 /**
  * Alias kept for the per-language adapters. Every server adapter returns the
- * same concrete client type; these names exist only to read clearly at call
- * sites (the TS/JS and Razor epics referred to the client by these names).
+ * same concrete client type; this name exists only to read clearly at call
+ * sites (the TS/JS and Razor epics referred to the client by this name).
  */
 export type RunningClient = MonacoLanguageClient;
-export type LanguageClient = MonacoLanguageClient;
 
 let servicesInstalled = false;
 type ClientContributions = {
@@ -60,7 +63,90 @@ const clientContributions = new WeakMap<
 export function ensureMonacoServices(): void {
   if (servicesInstalled) return;
   MonacoServices.install(monaco);
+  defuseUnsupportedProviderRegistrations();
   servicesInstalled = true;
+}
+
+/**
+ * Makes the monaco-languageclient 1.x VS Code shim degrade gracefully instead of
+ * crashing `client.start()`.
+ *
+ * The shim implements most `languages.register*Provider` methods as a safe no-op
+ * (return an empty disposable when the underlying Monaco service is absent), but a
+ * handful are hard-coded as `() => { throw new Error('unsupported') }`. When a
+ * server advertises one of those capabilities *statically* in its `initialize`
+ * result, the matching `vscode-languageclient` feature self-registers during
+ * `start()` and the throw bubbles up — `doInitialize` then tears the server down
+ * and `start()` rejects with "unsupported". The TypeScript server triggers this
+ * via `linkedEditingRangeProvider`; other servers/capabilities could hit the
+ * siblings below. None of these providers are features we rely on, so we replace
+ * them with the same empty-disposable no-op the shim already uses elsewhere.
+ *
+ * (The pull-diagnostics crash is handled separately — see
+ * {@link neutralizeBuiltinDiagnosticFeature} — because there we must avoid
+ * competing with our own diagnostics bridge, not merely avoid a throw.)
+ */
+function defuseUnsupportedProviderRegistrations(): void {
+  try {
+    const languages = (vscodeShim as unknown as {
+      languages?: Record<string, unknown>;
+    }).languages;
+    if (!languages) return;
+    const noop = (): monaco.IDisposable => ({ dispose() {} });
+    for (const method of [
+      "registerLinkedEditingRangeProvider",
+      "registerTypeHierarchyProvider",
+      "registerEvaluatableExpressionProvider",
+      "registerInlineValuesProvider",
+    ]) {
+      if (typeof languages[method] === "function") {
+        languages[method] = noop;
+      }
+    }
+  } catch (err) {
+    lspLog("could not defuse unsupported provider registrations", String(err));
+  }
+}
+
+/**
+ * Defuses the built-in pull-diagnostics feature **before** `start()`.
+ *
+ * `vscode-languageclient`'s `DiagnosticFeature` builds a `Tabs` helper the moment
+ * a server advertises pull diagnostics (`diagnosticProvider`) *statically* in its
+ * `initialize` result — which `typescript-language-server` and the JSON server
+ * both do. That `Tabs` constructor reads `vscode.window.tabGroups`, and the
+ * monaco-languageclient 1.x VS Code shim implements `tabGroups` (and
+ * `activeTextEditor`, `onDidChangeActiveTextEditor`, …) as `() => throw
+ * Error('unsupported')`. The throw happens *inside* `client.start()`, so
+ * `doInitialize` stops the connection and `start()` rejects with "unsupported" —
+ * the server never comes up. (Roslyn dodges this only because it registers
+ * diagnostics *dynamically*, after start, where the same throw is swallowed as a
+ * request-error response instead of failing startup.)
+ *
+ * We run our own diagnostics bridge — push + manual pull, see
+ * {@link installDiagnosticsBridge} — and that bridge already disposes this same
+ * built-in feature once the client is running. So the feature is pure dead weight
+ * that only crashes startup. Here we no-op its `initialize` (the static
+ * self-registration path) while leaving `fillClientCapabilities` untouched, so the
+ * client still advertises pull support, the server still offers pull diagnostics,
+ * and our bridge drives them directly.
+ */
+function neutralizeBuiltinDiagnosticFeature(
+  client: MonacoLanguageClient,
+  serverId: string
+): void {
+  try {
+    const feature = client.getFeature("textDocument/diagnostic") as
+      | { initialize?: (...args: unknown[]) => void }
+      | undefined;
+    if (feature && typeof feature.initialize === "function") {
+      feature.initialize = () => {};
+      lspLog("built-in pull-diagnostics feature neutralized for", serverId);
+    }
+  } catch (err) {
+    // Never let this guard itself break startup.
+    lspLog("could not neutralize diagnostics feature for", serverId, String(err));
+  }
 }
 
 /**
@@ -123,8 +209,23 @@ export async function createLanguageClient(
     },
   });
 
+  neutralizeBuiltinDiagnosticFeature(client, config.serverId);
+
   lspLog("calling client.start() for", config.serverId);
-  await client.start();
+  try {
+    await client.start();
+  } catch (err) {
+    // The error message alone ("unsupported") has no location; log the stack so
+    // we can see which monaco-languageclient compat shim threw it.
+    lspLog(
+      "client.start() THREW for",
+      config.serverId,
+      String(err),
+      "\n",
+      (err as Error)?.stack ?? "(no stack)"
+    );
+    throw err;
+  }
   lspLog("client.start() RESOLVED for", config.serverId, "state=", client.state);
 
   installSemanticTokensBridge(

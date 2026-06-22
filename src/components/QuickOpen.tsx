@@ -125,6 +125,7 @@ export function QuickOpen({ rootPath, onOpenFile, onClose }: QuickOpenProps) {
   return (
     <div className="quick-open-backdrop" {...useModalDismiss(onClose)}>
       <div className="quick-open">
+        <div className="quick-pick-title">Ir para arquivo</div>
         <input
           ref={inputRef}
           className="quick-open-input"

@@ -1,4 +1,5 @@
-import { defineConfig } from "vite";
+import { realpathSync } from "node:fs";
+import { defineConfig, searchForWorkspaceRoot } from "vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 
@@ -15,6 +16,12 @@ const vscodeShim = fileURLToPath(
     "./node_modules/monaco-languageclient/lib/vscode-compatibility.js",
     import.meta.url,
   ),
+);
+
+// Worktrees may share dependencies through a junction/symlink. Vite resolves
+// font URLs to that physical directory, so explicitly allow it in development.
+const dependenciesRoot = realpathSync(
+  fileURLToPath(new URL("./node_modules", import.meta.url)),
 );
 
 // https://vitejs.dev/config/
@@ -56,6 +63,9 @@ export default defineConfig(async () => ({
           port: 1421,
         }
       : undefined,
+    fs: {
+      allow: [searchForWorkspaceRoot(process.cwd()), dependenciesRoot],
+    },
     watch: {
       // Don't watch the Rust side from Vite.
       ignored: ["**/src-tauri/**"],

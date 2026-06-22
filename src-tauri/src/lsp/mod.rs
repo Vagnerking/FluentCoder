@@ -187,6 +187,13 @@ pub async fn lsp_ensure_ts_server(
         .map_err(|e| format!("falha ao preparar o servidor TypeScript: {e}"))?
 }
 
+/// The TypeScript versions available for a project (its own + the editor's), so
+/// the UI can show real version numbers in the "Select TS Version" picker.
+#[tauri::command]
+pub fn lsp_ts_versions(root_path: String, app: AppHandle) -> typescript::TsVersions {
+    typescript::ts_versions(&app, &PathBuf::from(root_path))
+}
+
 /// Resolves the launch command for an npm-distributed language server (Python,
 /// YAML, JSON/HTML/CSS, Bash, Dockerfile, …), installing it into the app cache on
 /// first use. The frontend forwards `{ program, args }` to `lsp_start_server`.

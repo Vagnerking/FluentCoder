@@ -1,57 +1,14 @@
 /**
- * Multi-window remote attach (issue #8) — VS Code-style "open the remote in its
- * own window".
- *
- * After the user connects and picks a folder, the connection's **ownership is
- * handed off** to a fresh app window: the original window stays local, and the
- * new window attaches to the already-open SSH connection. The connection id and
- * (non-secret) metadata travel in the new window's URL; the password is never
- * passed (so a reconnect there re-prompts).
+ * Legacy remote-window attach payload. New connections now reuse the current
+ * workbench; this reader remains so a remote window that was already open during
+ * a development reload can still finish attaching safely.
  */
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { Effect } from "@tauri-apps/api/window";
 
 export interface RemoteAttach {
   connId: string;
   host: string;
   user: string;
   rootPath: string;
-}
-
-let windowSeq = 0;
-
-/**
- * Opens a new window attached to an existing remote connection. Resolves once the
- * window is created; rejects if creation fails (so the caller can fall back to an
- * in-place attach).
- */
-export async function openRemoteWindow(attach: RemoteAttach): Promise<void> {
-  const payload = btoa(encodeURIComponent(JSON.stringify(attach)));
-  const url = new URL(window.location.href);
-  url.searchParams.set("remoteAttach", payload);
-
-  const label = `remote-${Date.now()}-${windowSeq++}`;
-  // Mirror the main window's frameless chrome (custom title bar + Mica acrylic);
-  // otherwise the new window shows the native OS frame on top of our title bar.
-  const win = new WebviewWindow(label, {
-    url: url.toString(),
-    title: `${attach.user}@${attach.host} — Fluent Coder`,
-    width: 1200,
-    height: 800,
-    minWidth: 600,
-    minHeight: 400,
-    resizable: true,
-    decorations: false,
-    transparent: true,
-    windowEffects: { effects: [Effect.Mica] },
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    void win.once("tauri://created", () => resolve());
-    void win.once("tauri://error", (e) =>
-      reject(new Error(String((e as { payload?: unknown }).payload ?? "erro")))
-    );
-  });
 }
 
 /**

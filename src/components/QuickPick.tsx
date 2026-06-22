@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Codicon } from "../icons/codicons/Codicon";
 import type { IconAction } from "../icons/codicons/codicon-map";
+import { FileIcon } from "../icon-theme/material/FileIcon";
 import { useModalDismiss } from "./useModalDismiss";
 
 /** One row in a {@link QuickPick}. */
@@ -8,10 +9,18 @@ export interface QuickPickItem {
   id: string;
   /** Primary text. */
   label: string;
+  /** Inline, dimmed text shown right after the label on the same line. */
+  description?: string;
   /** Secondary line, dimmed below the label. */
   detail?: string;
-  /** Leading codicon. */
+  /** Leading codicon (used when {@link iconFile} is absent). */
   icon?: IconAction;
+  /**
+   * A file name/path whose Material file-type icon is shown instead of a codicon
+   * — e.g. `"x.tsx"` to show the TypeScript-React icon. Takes precedence over
+   * {@link icon}.
+   */
+  iconFile?: string;
   /** Extra text matched by the filter but not displayed. */
   keywords?: string;
   /** Pins the row above the filtered list (e.g. an "add new" action). */
@@ -125,12 +134,27 @@ export function QuickPick({
                 onMouseMove={() => setSelected(i)}
                 onClick={() => onPick(it)}
               >
-                <Codicon
-                  name={it.icon ?? "chevronRight"}
-                  className="quick-pick-icon"
-                />
+                {it.iconFile ? (
+                  <FileIcon
+                    path={it.iconFile}
+                    size={16}
+                    className="quick-pick-icon"
+                  />
+                ) : (
+                  <Codicon
+                    name={it.icon ?? "chevronRight"}
+                    className="quick-pick-icon"
+                  />
+                )}
                 <div className="quick-pick-text">
-                  <span className="quick-pick-label">{it.label}</span>
+                  <span className="quick-pick-primary">
+                    <span className="quick-pick-label">{it.label}</span>
+                    {it.description && (
+                      <span className="quick-pick-description">
+                        {it.description}
+                      </span>
+                    )}
+                  </span>
                   {it.detail && (
                     <span className="quick-pick-detail">{it.detail}</span>
                   )}

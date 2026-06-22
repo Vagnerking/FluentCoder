@@ -61,6 +61,7 @@ export type IconAction =
   | "gitPush"
   | "sync"
   | "gitMerge"
+  | "cloudUpload"
   | "add"
   | "remove"
   | "discard"
@@ -87,6 +88,8 @@ export type IconAction =
   | "commandPalette"
   | "menu"
   | "agents"
+  | "graph"
+  | "backlinks"
   | "send"
   | "modeAsk"
   | "modePlan"
@@ -174,6 +177,7 @@ export const CODICON_MAP: Record<IconAction, string> = {
   gitPush: "arrow-up",
   sync: "sync",
   gitMerge: "git-merge",
+  cloudUpload: "cloud-upload",
   add: "add",
   remove: "remove",
   discard: "discard",
@@ -203,6 +207,8 @@ export const CODICON_MAP: Record<IconAction, string> = {
   commandPalette: "symbol-color",
   menu: "menu",
   agents: "hubot",
+  graph: "type-hierarchy",
+  backlinks: "references",
   send: "send",
   modeAsk: "comment",
   modePlan: "checklist",

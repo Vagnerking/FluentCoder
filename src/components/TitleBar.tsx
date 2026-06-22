@@ -1,25 +1,43 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { MenuBar } from "./MenuBar";
+import { useSnapLayout } from "../snap/useSnapLayout";
 import type { MenuDef } from "../types";
+import logoUrl from "../assets/fluent-coder.png";
 
 interface TitleBarProps {
   /** Text shown centred in the bar (e.g. active file name). */
   title: string;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
+  /** Bottom panel (terminal/problems) open state + toggle. */
+  panelOpen: boolean;
+  onTogglePanel: () => void;
   /** Menu definitions (File, Edit, …) rendered in the left-hand MenuBar. */
   menus: MenuDef[];
 }
 
 /**
  * Custom Windows 11-style title bar. The bar itself is the OS drag region;
- * the right side hosts minimize / maximize / close caption buttons that
- * drive the native window through the Tauri window API.
+ * the right side hosts the VS Code-style layout toggles (side bar / panel),
+ * a "pin on top" (always-on-top) toggle, and the minimize / maximize / close
+ * caption buttons that drive the native window through the Tauri window API.
  */
-export function TitleBar({ title, sidebarOpen, onToggleSidebar, menus }: TitleBarProps) {
+export function TitleBar({
+  title,
+  sidebarOpen,
+  onToggleSidebar,
+  panelOpen,
+  onTogglePanel,
+  menus,
+}: TitleBarProps) {
   const appWindow = getCurrentWindow();
   const [maximized, setMaximized] = useState(false);
+  // The Snap Layouts overlay covers the maximize button, so the webview can't
+  // `:hover` it — the backend relays the OS hover instead.
+  const [maxHover, setMaxHover] = useState(false);
+  const maxBtnRef = useRef<HTMLButtonElement>(null);
+  useSnapLayout(maxBtnRef, setMaxHover);
 
   // Keep the maximize/restore glyph in sync with the real window state.
   useEffect(() => {
@@ -32,30 +50,54 @@ export function TitleBar({ title, sidebarOpen, onToggleSidebar, menus }: TitleBa
   }, [appWindow]);
 
   return (
-    <div className="titlebar" data-tauri-drag-region>
-      {/* data-tauri-drag-region marks the empty areas as draggable; the
-          interactive children below opt out via their own handlers. */}
-      <button
-        className="titlebar-icon-btn"
-        onClick={onToggleSidebar}
-        title={sidebarOpen ? "Ocultar explorador" : "Mostrar explorador"}
-      >
-        <SidebarIcon />
-      </button>
+    <div className="titlebar">
+      {/* Three grid zones (1fr auto 1fr): the menu lives in the LEFT zone and
+          collapses there, the title sits centred in its own zone, and the
+          controls are on the RIGHT — so the title can never overlap the menus. */}
+      {/* Every zone + button group is a drag region (Tauri v2 checks the EXACT
+          mousedown target, so the buttons/menus inside still click). This makes
+          the WHOLE bar draggable, not just the bits with explicit regions. */}
+      <div className="titlebar-left" data-tauri-drag-region>
+        {/* App brand mark (like VS Code's top-left logo). Doubles as a drag
+            region; it is not a control — the side-bar toggle lives on the right. */}
+        <img
+          className="titlebar-logo"
+          src={logoUrl}
+          alt="Fluent Coder"
+          draggable={false}
+          data-tauri-drag-region
+        />
+        <MenuBar menus={menus} />
+      </div>
 
-      {/* No data-tauri-drag-region here: the menu and its buttons must not drag
-          the window. Children without the attribute already opt out of drag. */}
-      <MenuBar menus={menus} />
+      <div className="titlebar-center" data-tauri-drag-region>
+        <span className="titlebar-title">{title}</span>
+      </div>
 
-      {/* Flexible drag region filling the space between menu and window
-          controls; the centred title floats above it (position: absolute). */}
-      <div className="titlebar-spacer" data-tauri-drag-region />
+      <div className="titlebar-right" data-tauri-drag-region>
+      {/* VS Code-style layout controls, just left of the window buttons. */}
+      <div className="titlebar-layout" data-tauri-drag-region>
+        <button
+          className={`titlebar-layout-btn${sidebarOpen ? " active" : ""}`}
+          onClick={onToggleSidebar}
+          title={sidebarOpen ? "Ocultar barra lateral" : "Mostrar barra lateral"}
+          aria-label="Alternar barra lateral"
+          aria-pressed={sidebarOpen}
+        >
+          <SidebarIcon open={sidebarOpen} />
+        </button>
+        <button
+          className={`titlebar-layout-btn${panelOpen ? " active" : ""}`}
+          onClick={onTogglePanel}
+          title={panelOpen ? "Ocultar painel inferior" : "Mostrar painel inferior"}
+          aria-label="Alternar painel inferior"
+          aria-pressed={panelOpen}
+        >
+          <PanelIcon open={panelOpen} />
+        </button>
+      </div>
 
-      <span className="titlebar-title" data-tauri-drag-region>
-        {title}
-      </span>
-
-      <div className="window-controls">
+      <div className="window-controls" data-tauri-drag-region>
         <button
           className="caption-btn"
           onClick={() => appWindow.minimize()}
@@ -68,7 +110,8 @@ export function TitleBar({ title, sidebarOpen, onToggleSidebar, menus }: TitleBa
         </button>
 
         <button
-          className="caption-btn"
+          ref={maxBtnRef}
+          className={`caption-btn${maxHover ? " nc-hover" : ""}`}
           onClick={() => appWindow.toggleMaximize()}
           title={maximized ? "Restaurar" : "Maximizar"}
           aria-label={maximized ? "Restaurar" : "Maximizar"}
@@ -96,16 +139,29 @@ export function TitleBar({ title, sidebarOpen, onToggleSidebar, menus }: TitleBa
           </svg>
         </button>
       </div>
+      </div>
     </div>
   );
 }
 
-/** Small "panel" glyph for the sidebar toggle, Fluent-style. */
-function SidebarIcon() {
+/** "Side bar" glyph; the left column fills when the side bar is visible. */
+function SidebarIcon({ open }: { open: boolean }) {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16">
+      {open && <rect x="2" y="3" width="4" height="10" fill="currentColor" opacity="0.45" />}
       <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" fill="none" />
       <line x1="6" y1="2.5" x2="6" y2="13.5" stroke="currentColor" />
+    </svg>
+  );
+}
+
+/** "Bottom panel" glyph; the lower strip fills when the panel is visible. */
+function PanelIcon({ open }: { open: boolean }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16">
+      {open && <rect x="2" y="10" width="12" height="3" fill="currentColor" opacity="0.45" />}
+      <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" fill="none" />
+      <line x1="1.5" y1="10" x2="14.5" y2="10" stroke="currentColor" />
     </svg>
   );
 }

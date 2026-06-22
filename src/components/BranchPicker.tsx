@@ -156,6 +156,7 @@ export function BranchPicker({
   return (
     <div className="quick-open-backdrop" {...useModalDismiss(onClose)}>
       <div className="quick-open branch-picker">
+        <div className="quick-pick-title">Selecionar branch</div>
         <input
           ref={inputRef}
           className="quick-open-input"

@@ -280,6 +280,106 @@ fn join_posix(dir: &str, name: &str) -> String {
     }
 }
 
+fn remote_project_dir(root: &str) -> String {
+    let base = root.trim_end_matches('/');
+    if base.is_empty() {
+        "/.project".to_string()
+    } else {
+        join_posix(base, ".project")
+    }
+}
+
+fn remote_project_file(root: &str, name: &str) -> String {
+    join_posix(&remote_project_dir(root), name)
+}
+
+fn remote_agent_cache_dir(home: &str, root: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let digest = Sha256::digest(root.trim_end_matches('/').as_bytes());
+    let workspace_id = format!("{digest:x}");
+    let app_dir = join_posix(home.trim_end_matches('/'), ".fluent-coder");
+    join_posix(
+        &join_posix(&app_dir, "workspaces"),
+        &workspace_id[..16],
+    )
+}
+
+async fn remote_agent_cache_file(
+    sftp: &SftpSession,
+    root: &str,
+) -> Result<String, String> {
+    let home = sftp
+        .canonicalize(".")
+        .await
+        .map_err(|e| format!("Falha ao localizar a pasta pessoal remota: {e}"))?;
+    Ok(join_posix(
+        &remote_agent_cache_dir(&home, root),
+        "agents.json",
+    ))
+}
+
+fn directory_chain(path: &str) -> Vec<String> {
+    let absolute = path.starts_with('/');
+    let mut current = String::new();
+    let mut chain = Vec::new();
+    for part in path.split('/').filter(|part| !part.is_empty()) {
+        if absolute && current.is_empty() {
+            current.push('/');
+            current.push_str(part);
+        } else if current.is_empty() {
+            current.push_str(part);
+        } else {
+            current.push('/');
+            current.push_str(part);
+        }
+        chain.push(current.clone());
+    }
+    chain
+}
+
+/// SFTP exposes only single-level mkdir. Verify every path component so a
+/// failed `.project` creation is reported at its real location instead of
+/// surfacing later as an opaque "No such file" from the write call.
+async fn ensure_remote_dir(sftp: &SftpSession, path: &str) -> Result<(), String> {
+    for dir in directory_chain(path) {
+        match sftp.try_exists(dir.clone()).await {
+            Ok(true) => {
+                let metadata = sftp
+                    .metadata(dir.clone())
+                    .await
+                    .map_err(|e| format!("Falha ao verificar a pasta remota '{dir}': {e}"))?;
+                if !metadata.is_dir() {
+                    return Err(format!("'{dir}' existe no host remoto, mas não é uma pasta."));
+                }
+            }
+            Ok(false) => {
+                if let Err(error) = sftp.create_dir(dir.as_str()).await {
+                    // Another window may have created it between exists + mkdir.
+                    if !sftp.try_exists(dir.clone()).await.unwrap_or(false) {
+                        return Err(format!("Falha ao criar a pasta remota '{dir}': {error}"));
+                    }
+                }
+            }
+            Err(error) => {
+                return Err(format!("Falha ao verificar a pasta remota '{dir}': {error}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn write_remote_file(
+    sftp: &SftpSession,
+    path: &str,
+    contents: &[u8],
+) -> Result<(), String> {
+    ensure_remote_dir(sftp, posix_dirname(path)).await?;
+    sftp.write(path, contents)
+        .await
+        .map_err(|e| format!("Falha ao salvar '{path}': {e}"))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshConnectArgs {
@@ -1216,6 +1316,150 @@ pub async fn ssh_search(
     Ok(())
 }
 
+// ---- Remote context graph (SSH parity for the Obsidian-style graph view) ----
+
+/// Record separator used to frame each file in the graph dump stream. Chosen to
+/// be vanishingly unlikely to occur at the start of a source line.
+const GRAPH_NODE_MARKER: &str = "\n<<<FCNODE>>>";
+
+/// `-name a -o -name b …` expression for the heavy + hidden dirs to prune in a
+/// remote `find`, shared by the graph/knowledge dump and the Quick Open lister.
+fn remote_prune_names() -> String {
+    let mut prune = String::new();
+    for (i, dir) in REMOTE_SKIP_DIRS.iter().enumerate() {
+        if i > 0 {
+            prune.push_str(" -o");
+        }
+        prune.push_str(&format!(" -name {}", shell_quote(dir)));
+    }
+    // Also prune hidden directories ('.?*' excludes "." and "..").
+    prune.push_str(" -o -name '.?*'");
+    prune
+}
+
+/// Builds the `find … | cat` one-liner that streams every graphable file as
+/// `\n<<<FCNODE>>><rel>\n<content>` records. Heavy + hidden dirs are pruned, big
+/// files skipped, and the file count capped — mirroring the local graph walk
+/// (`graph::MAX_PARSE_SIZE` = 1_500_000, `graph::MAX_NODES` = 4000).
+fn build_graph_dump_command(root: &str) -> String {
+    let prune = remote_prune_names();
+
+    let exts = [
+        "*.md", "*.markdown", "*.mdx", "*.ts", "*.tsx", "*.js", "*.jsx", "*.mjs",
+        "*.cjs", "*.rs",
+    ];
+    let mut names = String::new();
+    for (i, e) in exts.iter().enumerate() {
+        if i > 0 {
+            names.push_str(" -o");
+        }
+        names.push_str(&format!(" -name {}", shell_quote(e)));
+    }
+
+    format!(
+        "cd {root} 2>/dev/null && find . -type d \\({prune} \\) -prune -o -type f \\({names} \\) -size -1500000c -print | head -n 4000 | while IFS= read -r f; do printf '\\n<<<FCNODE>>>%s\\n' \"${{f#./}}\"; cat -- \"$f\" 2>/dev/null; done",
+        root = shell_quote(root),
+    )
+}
+
+/// Parses the framed dump stream into `(rel, content)` pairs for the graph engine.
+fn parse_graph_dump(stdout: &str) -> Vec<crate::graph::RawFile> {
+    let mut files = Vec::new();
+    for chunk in stdout.split(GRAPH_NODE_MARKER) {
+        if chunk.is_empty() {
+            continue;
+        }
+        let (rel, content) = chunk.split_once('\n').unwrap_or((chunk, ""));
+        let rel = rel.trim();
+        if rel.is_empty() {
+            continue;
+        }
+        files.push(crate::graph::RawFile {
+            rel: rel.to_string(),
+            content: content.to_string(),
+        });
+    }
+    files
+}
+
+/// Builds the context graph for a REMOTE workspace: streams the host's markdown +
+/// code files in one exec, then runs the same link/import engine on them. The
+/// heavy file I/O happens host-side, so it's fast even on big remote trees.
+#[tauri::command]
+pub async fn ssh_build_context_graph(
+    conn_id: String,
+    root: String,
+    state: State<'_, SshState>,
+) -> Result<crate::graph::GraphData, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    let command = build_graph_dump_command(&root);
+    let output = exec_capture(&conn, &command).await?;
+    let files = parse_graph_dump(&output.stdout);
+    Ok(crate::graph::build_context_graph_from_files(&root, files))
+}
+
+/// Remote twin of `build_knowledge_index`: streams the host's files (same dump as
+/// the graph) and builds the richer index that backs the backlinks panel + RAG.
+#[tauri::command]
+pub async fn ssh_build_knowledge_index(
+    conn_id: String,
+    root: String,
+    state: State<'_, SshState>,
+) -> Result<crate::graph::KnowledgeIndex, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    let output = exec_capture(&conn, &build_graph_dump_command(&root)).await?;
+    let files = parse_graph_dump(&output.stdout);
+    Ok(crate::graph::build_knowledge_index_from_files(&root, files))
+}
+
+/// Remote twin of `build_context_bundle` (RAG-lite): streams the host's files and
+/// assembles the seed file + its graph neighbours as one markdown bundle.
+#[tauri::command]
+pub async fn ssh_build_context_bundle(
+    conn_id: String,
+    root: String,
+    path: String,
+    depth: usize,
+    state: State<'_, SshState>,
+) -> Result<String, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    let output = exec_capture(&conn, &build_graph_dump_command(&root)).await?;
+    let files = parse_graph_dump(&output.stdout);
+    crate::graph::context_bundle_from_files(&root, files, &path, depth, 60_000)
+}
+
+/// Remote twin of `list_project_files` (Quick Open / Ctrl+P): one `find` lists
+/// every file host-side (no contents read), capped like the local walk.
+#[tauri::command]
+pub async fn ssh_list_project_files(
+    conn_id: String,
+    root: String,
+    state: State<'_, SshState>,
+) -> Result<Vec<crate::file_index::ProjectFile>, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    let prune = remote_prune_names();
+    let command = format!(
+        "cd {root} 2>/dev/null && find . -type d \\({prune} \\) -prune -o -type f -print | head -n 20000",
+        root = shell_quote(&root),
+    );
+    let output = exec_capture(&conn, &command).await?;
+    let base = root.trim_end_matches('/');
+    let mut out = Vec::new();
+    for raw in output.stdout.lines() {
+        let rel = raw.trim().trim_start_matches("./");
+        if rel.is_empty() {
+            continue;
+        }
+        let name = posix_basename(rel).to_string();
+        out.push(crate::file_index::ProjectFile::new(
+            format!("{base}/{rel}"),
+            name,
+            rel.to_string(),
+        ));
+    }
+    Ok(out)
+}
+
 // ---- Phase 5: remote git (drives the host's `git` CLI over an exec channel) ----
 
 /// Runs `git -C <root> <args>` on the remote, returning stdout on success or the
@@ -1237,6 +1481,317 @@ async fn exec_git(conn: &Connection, root: &str, args: &[&str]) -> Result<String
         };
         Err(msg.trim().to_string())
     }
+}
+
+// ---- Remote git: history, blame, stash, discard (SSH parity for GitPanel) ----
+//
+// Each mirrors its local `git.rs` twin's arguments over `exec_git` and reuses the
+// SAME parser (`git::parse_log_records` / `parse_blame` / `parse_stash_list`), so
+// the GitPanel renders remote history/blame/stash identically to local.
+
+/// Record format shared by the repo-wide and per-file remote logs (matches
+/// `git.rs`): unit-separated fields, record-separated rows.
+const REMOTE_LOG_FORMAT: &str = "--pretty=format:%H\x1f%h\x1f%an\x1f%ar\x1f%s\x1e";
+
+#[tauri::command]
+pub async fn ssh_git_log(
+    conn_id: String,
+    root: String,
+    limit: u32,
+    state: State<'_, SshState>,
+) -> Result<Vec<crate::git::GitCommit>, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .is_err()
+    {
+        return Ok(Vec::new());
+    }
+    let n = format!("-{limit}");
+    let out = exec_git(&conn, &root, &["log", &n, "--no-color", REMOTE_LOG_FORMAT]).await?;
+    crate::git::parse_log_records(&out)
+}
+
+#[tauri::command]
+pub async fn ssh_git_log_file(
+    conn_id: String,
+    root: String,
+    file: String,
+    limit: u32,
+    state: State<'_, SshState>,
+) -> Result<Vec<crate::git::GitCommit>, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .is_err()
+    {
+        return Ok(Vec::new());
+    }
+    let n = format!("-{limit}");
+    let out = exec_git(
+        &conn,
+        &root,
+        &["log", &n, "--no-color", "--follow", REMOTE_LOG_FORMAT, "--", &file],
+    )
+    .await?;
+    crate::git::parse_log_records(&out)
+}
+
+#[tauri::command]
+pub async fn ssh_git_blame(
+    conn_id: String,
+    root: String,
+    file: String,
+    state: State<'_, SshState>,
+) -> Result<Vec<crate::git::BlameHunk>, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .is_err()
+    {
+        return Ok(Vec::new());
+    }
+    let out = exec_git(&conn, &root, &["blame", "--porcelain", "-M", "--", &file]).await?;
+    Ok(crate::git::parse_blame(&out))
+}
+
+#[tauri::command]
+pub async fn ssh_git_stash_list(
+    conn_id: String,
+    root: String,
+    state: State<'_, SshState>,
+) -> Result<Vec<crate::git::GitStashEntry>, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .is_err()
+    {
+        return Ok(Vec::new());
+    }
+    let out = exec_git(&conn, &root, &["stash", "list", "--format=%gd\x1f%s"]).await?;
+    Ok(crate::git::parse_stash_list(&out))
+}
+
+#[tauri::command]
+pub async fn ssh_git_stash_push(
+    conn_id: String,
+    root: String,
+    message: Option<String>,
+    state: State<'_, SshState>,
+) -> Result<String, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    let msg = message.unwrap_or_default();
+    let mut args: Vec<&str> = vec!["stash", "push", "-u"];
+    if !msg.trim().is_empty() {
+        args.push("-m");
+        args.push(&msg);
+    }
+    exec_git(&conn, &root, &args).await
+}
+
+#[tauri::command]
+pub async fn ssh_git_stash_apply(
+    conn_id: String,
+    root: String,
+    index: u32,
+    state: State<'_, SshState>,
+) -> Result<String, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    exec_git(&conn, &root, &["stash", "apply", &format!("stash@{{{index}}}")]).await
+}
+
+#[tauri::command]
+pub async fn ssh_git_stash_pop(
+    conn_id: String,
+    root: String,
+    index: u32,
+    state: State<'_, SshState>,
+) -> Result<String, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    exec_git(&conn, &root, &["stash", "pop", &format!("stash@{{{index}}}")]).await
+}
+
+#[tauri::command]
+pub async fn ssh_git_stash_drop(
+    conn_id: String,
+    root: String,
+    index: u32,
+    state: State<'_, SshState>,
+) -> Result<(), String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    exec_git(&conn, &root, &["stash", "drop", &format!("stash@{{{index}}}")])
+        .await
+        .map(|_| ())
+}
+
+#[tauri::command]
+pub async fn ssh_git_discard_file(
+    conn_id: String,
+    root: String,
+    file: String,
+    untracked: bool,
+    state: State<'_, SshState>,
+) -> Result<(), String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    if untracked {
+        exec_git(&conn, &root, &["clean", "-f", "--", &file])
+            .await
+            .map(|_| ())
+    } else {
+        exec_git(
+            &conn,
+            &root,
+            &["restore", "--staged", "--worktree", "--source=HEAD", "--", &file],
+        )
+        .await
+        .map(|_| ())
+    }
+}
+
+#[tauri::command]
+pub async fn ssh_git_discard_all(
+    conn_id: String,
+    root: String,
+    state: State<'_, SshState>,
+) -> Result<(), String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    exec_git(
+        &conn,
+        &root,
+        &["restore", "--staged", "--worktree", "--source=HEAD", "--", "."],
+    )
+    .await?;
+    exec_git(&conn, &root, &["clean", "-fd"]).await.map(|_| ())
+}
+
+// ---- Remote run configurations (Run/Debug panel parity over SSH) ----
+
+/// Detects run suggestions on the host (one exec: lockfile/Cargo flags + the
+/// `package.json` body), reusing the local `runner::detect_configs` logic.
+#[tauri::command]
+pub async fn ssh_run_configs_detect(
+    conn_id: String,
+    root: String,
+    state: State<'_, SshState>,
+) -> Result<Vec<crate::runner::RunConfig>, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    let cmd = format!(
+        "cd {root} 2>/dev/null; test -f pnpm-lock.yaml && echo FCRUN:pnpm; test -f yarn.lock && echo FCRUN:yarn; test -f Cargo.toml && echo FCRUN:cargo; echo FCRUN:PKG; cat package.json 2>/dev/null",
+        root = shell_quote(&root),
+    );
+    let out = exec_capture(&conn, &cmd).await?.stdout;
+    let (flags, pkg) = out.split_once("FCRUN:PKG\n").unwrap_or((out.as_str(), ""));
+    let (mut pnpm, mut yarn, mut has_cargo) = (false, false, false);
+    for line in flags.lines() {
+        match line.trim() {
+            "FCRUN:pnpm" => pnpm = true,
+            "FCRUN:yarn" => yarn = true,
+            "FCRUN:cargo" => has_cargo = true,
+            _ => {}
+        }
+    }
+    let runner = if pnpm {
+        "pnpm"
+    } else if yarn {
+        "yarn"
+    } else {
+        "npm"
+    };
+    let pkg_json = if pkg.trim().is_empty() { None } else { Some(pkg) };
+    Ok(crate::runner::detect_configs(pkg_json, runner, has_cargo))
+}
+
+/// Reads the saved `.project/run.json` on the host (empty when absent).
+#[tauri::command]
+pub async fn ssh_run_configs_load(
+    conn_id: String,
+    root: String,
+    state: State<'_, SshState>,
+) -> Result<Vec<crate::runner::RunConfig>, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    let path = remote_project_file(&root, "run.json");
+    match conn.sftp.read(&path).await {
+        Ok(bytes) => crate::runner::parse_run_file(&String::from_utf8_lossy(&bytes)),
+        Err(_) => Ok(Vec::new()),
+    }
+}
+
+/// Persists run configs to `.project/run.json` on the host (creating `.project`).
+#[tauri::command]
+pub async fn ssh_run_configs_save(
+    conn_id: String,
+    root: String,
+    configs: Vec<crate::runner::RunConfig>,
+    state: State<'_, SshState>,
+) -> Result<(), String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    let dir = remote_project_dir(&root);
+    ensure_remote_dir(&conn.sftp, &dir).await?;
+    let json = crate::runner::serialize_run_file(configs)?;
+    let path = remote_project_file(&root, "run.json");
+    conn.sftp
+        .write(path.as_str(), json.as_bytes())
+        .await
+        .map_err(|e| format!("Falha ao salvar '{path}': {e}"))
+}
+
+// ---- Remote agent config (.project/agents.json) over SFTP ----
+//
+// The agent itself can't run against a remote workspace yet (it executes
+// locally — see the frontend guard), but its config + history persist in the
+// workspace, so we load/save them on the host like any other `.project` file.
+
+/// Reads `<root>/.project/agents.json` on the host; empty store when absent.
+#[tauri::command]
+pub async fn ssh_agents_load(
+    conn_id: String,
+    root: String,
+    state: State<'_, SshState>,
+) -> Result<serde_json::Value, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    let project_path = remote_project_file(&root, "agents.json");
+    let bytes = match conn.sftp.read(&project_path).await {
+        Ok(bytes) => Some(bytes),
+        Err(_) => {
+            let fallback_path = remote_agent_cache_file(&conn.sftp, &root).await?;
+            conn.sftp.read(&fallback_path).await.ok()
+        }
+    };
+    let Some(bytes) = bytes else {
+        return Ok(crate::agents::empty_store());
+    };
+    let raw = String::from_utf8_lossy(&bytes);
+    if raw.trim().is_empty() {
+        return Ok(crate::agents::empty_store());
+    }
+    serde_json::from_str(&raw).map_err(|e| format!("O arquivo de agentes está inválido: {e}"))
+}
+
+/// Persists the agent store to `<root>/.project/agents.json` on the host.
+#[tauri::command]
+pub async fn ssh_agents_save(
+    conn_id: String,
+    root: String,
+    store: serde_json::Value,
+    state: State<'_, SshState>,
+) -> Result<(), String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    let json = serde_json::to_string_pretty(&store)
+        .map_err(|e| format!("Falha ao serializar os agentes: {e}"))?;
+    let project_path = remote_project_file(&root, "agents.json");
+    let project_error = match write_remote_file(&conn.sftp, &project_path, json.as_bytes()).await {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+
+    let fallback_path = remote_agent_cache_file(&conn.sftp, &root).await?;
+    write_remote_file(&conn.sftp, &fallback_path, json.as_bytes())
+        .await
+        .map_err(|fallback_error| {
+            format!(
+                "Não foi possível salvar os agentes no projeto ({project_error}) nem na pasta pessoal remota ({fallback_error})."
+            )
+        })
 }
 
 /// Working-tree status on the remote (decorations + SCM list).
@@ -1485,6 +2040,9 @@ pub async fn ssh_lsp_stop(id: String, state: State<'_, SshState>) -> Result<(), 
 
 /// Proxies one token-authenticated WS connection to the remote server's stdio
 /// over `stream` (the SSH channel), framing with the shared LSP codec.
+// The handshake callback's `Err` (an `http::Response`) is fixed by tungstenite,
+// so it can't be boxed — allow the large-error lint here.
+#[allow(clippy::result_large_err)]
 async fn serve_remote_lsp<S>(
     tcp: tokio::net::TcpStream,
     expected_token: &str,
@@ -1583,6 +2141,40 @@ mod tests {
     }
 
     #[test]
+    fn project_paths_handle_root_and_trailing_slashes() {
+        assert_eq!(remote_project_dir("/"), "/.project");
+        assert_eq!(remote_project_dir("/home/dev/"), "/home/dev/.project");
+        assert_eq!(
+            remote_project_file("/home/dev", "agents.json"),
+            "/home/dev/.project/agents.json"
+        );
+    }
+
+    #[test]
+    fn agent_cache_is_stable_and_scoped_by_workspace() {
+        let first = remote_agent_cache_dir("/home/rafael", "/srv/project");
+        let same = remote_agent_cache_dir("/home/rafael/", "/srv/project/");
+        let other = remote_agent_cache_dir("/home/rafael", "/srv/other");
+
+        assert_eq!(first, same);
+        assert_ne!(first, other);
+        assert!(first.starts_with("/home/rafael/.fluent-coder/workspaces/"));
+        assert_eq!(first.rsplit('/').next().unwrap().len(), 16);
+    }
+
+    #[test]
+    fn directory_chain_builds_each_sftp_mkdir_level() {
+        assert_eq!(
+            directory_chain("/home/dev/.project"),
+            vec!["/home", "/home/dev", "/home/dev/.project"]
+        );
+        assert_eq!(
+            directory_chain("workspace/.project"),
+            vec!["workspace", "workspace/.project"]
+        );
+    }
+
+    #[test]
     fn posix_basename_and_dirname() {
         assert_eq!(posix_basename("/a/b/c.txt"), "c.txt");
         assert_eq!(posix_basename("/a/b/"), "b");
@@ -1606,10 +2198,12 @@ mod tests {
 
     #[test]
     fn build_grep_command_honors_options() {
-        let mut opts = crate::search::SearchOptions::default();
-        opts.case_sensitive = false;
-        opts.whole_word = true;
-        opts.regex = false;
+        let opts = crate::search::SearchOptions {
+            case_sensitive: false,
+            whole_word: true,
+            regex: false,
+            ..Default::default()
+        };
         let cmd = build_grep_command("/srv/app", "to do", &opts);
         assert!(cmd.contains(" -i"));
         assert!(cmd.contains(" -w"));

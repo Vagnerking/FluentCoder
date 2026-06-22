@@ -52,12 +52,14 @@ fn find_git_dir(start: &Path) -> Option<PathBuf> {
 pub struct GitFileStatus {
     /// Path relative to the repo root.
     path: String,
-    /// Two-letter porcelain code, e.g. " M", "A ", "??", "MM".
+    /// Two-letter porcelain code, e.g. " M", "A ", "??", "MM", "UU".
     code: String,
     /// Whether the change is (at least partly) staged in the index.
     staged: bool,
     /// Whether the file is untracked ("??").
     untracked: bool,
+    /// Whether the file is unmerged (a merge/rebase conflict).
+    conflicted: bool,
 }
 
 /// Overall repo state shown above the file list.
@@ -74,6 +76,8 @@ pub struct GitStatus {
     is_repo: bool,
     /// True when an upstream tracking branch is configured (enables push/pull).
     has_upstream: bool,
+    /// Number of unmerged (conflicted) paths — non-zero during a merge/rebase.
+    conflicted: u32,
     files: Vec<GitFileStatus>,
 }
 
@@ -116,6 +120,7 @@ pub fn empty_status() -> GitStatus {
         behind: 0,
         is_repo: false,
         has_upstream: false,
+        conflicted: 0,
         files: Vec::new(),
     }
 }
@@ -148,6 +153,7 @@ pub fn parse_status_v2(raw: &str) -> GitStatus {
     let mut ahead = 0u32;
     let mut behind = 0u32;
     let mut has_upstream = false;
+    let mut conflicted = 0u32;
     let mut files: Vec<GitFileStatus> = Vec::new();
 
     for line in raw.lines() {
@@ -169,12 +175,27 @@ pub fn parse_status_v2(raw: &str) -> GitStatus {
         } else if let Some(rest) = line.strip_prefix("2 ") {
             // Renamed/copied: path is "<new>\t<orig>"; keep the new path.
             push_v2_entry(rest, &mut files);
+        } else if let Some(rest) = line.strip_prefix("u ") {
+            // Unmerged (merge/rebase conflict): "<XY> <sub> ... <path>".
+            let mut parts = rest.splitn(2, ' ');
+            let code = parts.next().unwrap_or("UU").to_string();
+            let tail = parts.next().unwrap_or("");
+            let path = tail.rsplit(' ').next().unwrap_or(tail).to_string();
+            conflicted += 1;
+            files.push(GitFileStatus {
+                path,
+                code,
+                staged: false,
+                untracked: false,
+                conflicted: true,
+            });
         } else if let Some(rest) = line.strip_prefix("? ") {
             files.push(GitFileStatus {
                 path: rest.trim().to_string(),
                 code: "??".to_string(),
                 staged: false,
                 untracked: true,
+                conflicted: false,
             });
         }
     }
@@ -185,6 +206,7 @@ pub fn parse_status_v2(raw: &str) -> GitStatus {
         behind,
         is_repo: true,
         has_upstream,
+        conflicted,
         files,
     }
 }
@@ -201,7 +223,7 @@ fn push_v2_entry(rest: &str, files: &mut Vec<GitFileStatus>) {
     // a rename uses a tab between new and original. We split off the path as the
     // final whitespace-tab segment.
     let path = tail
-        .rsplitn(2, '\t')
+        .rsplit('\t')
         .next()
         .and_then(|p| p.rsplit(' ').next())
         .unwrap_or(tail)
@@ -213,6 +235,7 @@ fn push_v2_entry(rest: &str, files: &mut Vec<GitFileStatus>) {
         code: xy,
         staged,
         untracked: false,
+        conflicted: false,
     });
 }
 
@@ -387,6 +410,124 @@ pub fn git_push(path: String) -> Result<String, String> {
     run_git(&path, &["push"])
 }
 
+/// Publishes the current branch: pushes it AND sets its upstream
+/// (`git push -u <remote> <branch>`), so a never-pushed branch gets a tracking
+/// ref. Prefers the "origin" remote, else the first configured one.
+#[tauri::command]
+pub fn git_publish(path: String) -> Result<String, String> {
+    let branch = run_git(&path, &["rev-parse", "--abbrev-ref", "HEAD"])?
+        .trim()
+        .to_string();
+    if branch.is_empty() || branch == "HEAD" {
+        return Err("HEAD destacado: faça checkout de uma branch antes de publicar.".into());
+    }
+    let remotes = run_git(&path, &["remote"]).unwrap_or_default();
+    let remote = remotes
+        .lines()
+        .map(str::trim)
+        .find(|r| *r == "origin")
+        .or_else(|| remotes.lines().map(str::trim).find(|r| !r.is_empty()))
+        .ok_or_else(|| "Nenhum remoto configurado para publicar.".to_string())?
+        .to_string();
+    run_git(&path, &["push", "-u", &remote, &branch])
+}
+
+/// Discards a file's changes, reverting index + worktree to HEAD. An untracked
+/// file is removed from disk instead (it has no HEAD version). Irreversible — the
+/// UI confirms first.
+#[tauri::command]
+pub fn git_discard_file(path: String, file: String, untracked: bool) -> Result<(), String> {
+    if untracked {
+        run_git(&path, &["clean", "-f", "--", &file]).map(|_| ())
+    } else {
+        run_git(
+            &path,
+            &["restore", "--staged", "--worktree", "--source=HEAD", "--", &file],
+        )
+        .map(|_| ())
+    }
+}
+
+/// Discards ALL working-tree changes: reverts tracked files to HEAD and removes
+/// untracked files/dirs. Irreversible — the UI confirms first.
+#[tauri::command]
+pub fn git_discard_all(path: String) -> Result<(), String> {
+    run_git(
+        &path,
+        &["restore", "--staged", "--worktree", "--source=HEAD", "--", "."],
+    )?;
+    run_git(&path, &["clean", "-fd"]).map(|_| ())
+}
+
+/// One entry in `git stash list`.
+#[derive(Serialize)]
+pub struct GitStashEntry {
+    /// Stash index (`stash@{index}`).
+    index: u32,
+    /// Stash subject/message.
+    message: String,
+}
+
+/// Stashes the working tree (including untracked, `-u`), with an optional message.
+#[tauri::command]
+pub fn git_stash_push(path: String, message: Option<String>) -> Result<String, String> {
+    let msg = message.unwrap_or_default();
+    let mut args: Vec<&str> = vec!["stash", "push", "-u"];
+    if !msg.trim().is_empty() {
+        args.push("-m");
+        args.push(&msg);
+    }
+    run_git(&path, &args)
+}
+
+/// Lists the stash entries (newest first), or an empty list when not a repo.
+#[tauri::command]
+pub fn git_stash_list(path: String) -> Result<Vec<GitStashEntry>, String> {
+    if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
+        return Ok(Vec::new());
+    }
+    let raw = run_git(&path, &["stash", "list", "--format=%gd\x1f%s"])?;
+    Ok(parse_stash_list(&raw))
+}
+
+/// Parses `git stash list --format=%gd\x1f%s` rows into `GitStashEntry`s. Shared
+/// with the remote (SSH) stash list.
+pub(crate) fn parse_stash_list(raw: &str) -> Vec<GitStashEntry> {
+    let mut out = Vec::new();
+    for line in raw.lines() {
+        let mut parts = line.splitn(2, '\x1f');
+        let refname = parts.next().unwrap_or("");
+        let message = parts.next().unwrap_or("").to_string();
+        if let Some(idx) = refname
+            .strip_prefix("stash@{")
+            .and_then(|s| s.strip_suffix('}'))
+        {
+            if let Ok(index) = idx.parse::<u32>() {
+                out.push(GitStashEntry { index, message });
+            }
+        }
+    }
+    out
+}
+
+/// Applies a stash entry, keeping it in the list (`git stash apply`).
+#[tauri::command]
+pub fn git_stash_apply(path: String, index: u32) -> Result<String, String> {
+    run_git(&path, &["stash", "apply", &format!("stash@{{{index}}}")])
+}
+
+/// Pops a stash entry (apply + drop) (`git stash pop`).
+#[tauri::command]
+pub fn git_stash_pop(path: String, index: u32) -> Result<String, String> {
+    run_git(&path, &["stash", "pop", &format!("stash@{{{index}}}")])
+}
+
+/// Drops a stash entry without applying it (`git stash drop`).
+#[tauri::command]
+pub fn git_stash_drop(path: String, index: u32) -> Result<(), String> {
+    run_git(&path, &["stash", "drop", &format!("stash@{{{index}}}")]).map(|_| ())
+}
+
 /// Blame info for a single line, returned by `git_blame`.
 #[derive(Serialize)]
 pub struct BlameHunk {
@@ -406,14 +547,18 @@ pub struct BlameHunk {
 /// Lines that have never been committed get placeholder values with empty `short`.
 #[tauri::command]
 pub fn git_blame(root: String, file: String) -> Result<Vec<BlameHunk>, String> {
-    use std::collections::HashMap;
-
     if run_git(&root, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Ok(Vec::new());
     }
-
     // --porcelain: machine-readable. -M: detect moved lines within the file.
     let raw = run_git(&root, &["blame", "--porcelain", "-M", "--", &file])?;
+    Ok(parse_blame(&raw))
+}
+
+/// Parses `git blame --porcelain` output into per-line `BlameHunk`s. Shared with
+/// the remote (SSH) blame over `exec_git`.
+pub(crate) fn parse_blame(raw: &str) -> Vec<BlameHunk> {
+    use std::collections::HashMap;
 
     let mut hunks: Vec<BlameHunk> = Vec::new();
 
@@ -459,8 +604,8 @@ pub fn git_blame(root: String, file: String) -> Result<Vec<BlameHunk>, String> {
         // Header fields — git only emits them once per unique hash.
         if let Some(rest) = raw_line.strip_prefix("author ") {
             cache.entry(cur_hash.clone()).or_default().0 = rest.to_string();
-        } else if raw_line.starts_with("author-time ") {
-            if let Ok(ts) = raw_line["author-time ".len()..].trim().parse::<i64>() {
+        } else if let Some(rest) = raw_line.strip_prefix("author-time ") {
+            if let Ok(ts) = rest.trim().parse::<i64>() {
                 cache.entry(cur_hash.clone()).or_default().1 = format_relative_time(ts);
             }
         } else if let Some(rest) = raw_line.strip_prefix("summary ") {
@@ -468,7 +613,7 @@ pub fn git_blame(root: String, file: String) -> Result<Vec<BlameHunk>, String> {
         }
     }
 
-    Ok(hunks)
+    hunks
 }
 
 /// Converts a Unix timestamp to a human-readable relative string.
@@ -535,8 +680,9 @@ pub fn git_log_file(path: String, file: String, limit: u32) -> Result<Vec<GitCom
 }
 
 /// Parses the `%H\x1f%h\x1f%an\x1f%ar\x1f%s\x1e` record stream shared by the
-/// repo-wide and per-file log commands into `GitCommit`s.
-fn parse_log_records(raw: &str) -> Result<Vec<GitCommit>, String> {
+/// repo-wide and per-file log commands into `GitCommit`s. Also reused by the
+/// remote (SSH) log over `exec_git`.
+pub(crate) fn parse_log_records(raw: &str) -> Result<Vec<GitCommit>, String> {
     let mut commits = Vec::new();
     for record in raw.split('\x1e') {
         let record = record.trim_start_matches('\n');

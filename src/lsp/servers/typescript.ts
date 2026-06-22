@@ -51,12 +51,16 @@ export async function startTypescriptServer(
   rootPath: string
 ): Promise<RunningClient> {
   const remote = getActiveRemote();
+  // The TypeScript version to use, passed to the server via initializationOptions
+  // (current typescript-language-server has no `--tsserver-path` CLI flag).
+  let tsserverPath: string | undefined;
   if (remote) {
     // Run the server on the host; the local WS bridge is identical to local.
     await sshLspStart(remote.connId, TS_SERVER_ID, TS_REMOTE_COMMAND, rootPath);
   } else {
-    const { program, args } = await ensureTsServer(rootPath, preferEditorVersion());
-    await startLspServer(TS_SERVER_ID, program, args, rootPath);
+    const info = await ensureTsServer(rootPath, preferEditorVersion());
+    tsserverPath = info.tsserverPath;
+    await startLspServer(TS_SERVER_ID, info.program, info.args, rootPath);
   }
 
   return createLanguageClient({
@@ -71,6 +75,7 @@ export async function startTypescriptServer(
     rootUri: toFileUri(rootPath),
     initializationOptions: {
       hostInfo: "fluent-coder",
+      ...(tsserverPath ? { tsserver: { path: tsserverPath } } : {}),
       preferences: {
         includeInlayParameterNameHints: "none",
         importModuleSpecifierPreference: "shortest",

@@ -19,7 +19,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# `image-png` lets us decode the bundled PNG at runtime to set a crisp,
+# high-resolution window/taskbar icon (see the `setup` hook in lib.rs).
+tauri = { version = "2", features = ["image-png"] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -55,6 +57,16 @@ agent-client-protocol = "0.15"
 # Windows — matching the project's openssl-free (rustls) stance.
 russh = { version = "0.61", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "2.3.0"
+
+# Win11 Snap Layouts on our frameless title bar (our own implementation in
+# src/snap.rs). Same `windows` version tao already builds, so it's reused.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
 
 [profile.release]
 panic = "abort"

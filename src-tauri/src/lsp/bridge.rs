@@ -112,6 +112,9 @@ pub async fn start_bridge(process: LspProcess) -> std::io::Result<BridgeHandle> 
 
 /// Validates the token from the request URI's `token` query param and, on
 /// success, upgrades to WebSocket and proxies the connection.
+// The handshake callback's `Err` type is `ErrorResponse` (an `http::Response`),
+// fixed by tungstenite — we can't box it, so allow the large-error lint here.
+#[allow(clippy::result_large_err)]
 async fn serve_connection(
     stream: TcpStream,
     expected_token: &str,
