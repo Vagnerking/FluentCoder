@@ -12,3 +12,5 @@ pub mod sourcemap;
 pub mod shadow;
 #[allow(dead_code)]
 pub mod remap;
+#[allow(dead_code)]
+pub mod projection_gen;
