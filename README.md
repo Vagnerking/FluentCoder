@@ -14,8 +14,8 @@ Um editor de código desktop no estilo VSCode, construído com **Tauri 2**, **Re
 - **IntelliSense via LSP** sobre `monaco-languageclient`, com bridge WebSocket ↔ stdio em Rust:
   - **C#** (Microsoft.CodeAnalysis.LanguageServer / Roslyn) — com download e verificação automáticos do servidor.
   - **TypeScript / JavaScript** (typescript-language-server).
-  - **CSHTML (`.cshtml`)** — suporte experimental em migração para uma
-    [engine independente](docs/adr/0001-cshtml-language-service.md).
+  - **CSHTML (`.cshtml`)** — suporte experimental, migrando para **projeção C# + Roslyn**
+    ([ADR 0002](docs/adr/0002-cshtml-projection-roslyn.md), supersede a [ADR 0001](docs/adr/0001-cshtml-language-service.md)).
   - **Razor Components (`.razor`)** — realce léxico, com lifecycle separado do
     CSHTML na arquitetura alvo.
 - **Sessão persistente**: reabre a última pasta aberta ao iniciar o app.
@@ -85,7 +85,7 @@ npm run tauri dev
 ## Documentação
 
 - [Contratos de integração do editor](docs/context/editor.md) — regras obrigatórias do pipeline C#/Roslyn, tokens semânticos e LSP.
-- [ADR da engine CSHTML](docs/adr/0001-cshtml-language-service.md) — arquitetura, dependências permitidas e migração do Razor legado.
+- [ADR 0002 — CSHTML via projeção C# + Roslyn](docs/adr/0002-cshtml-projection-roslyn.md) — decisão vigente (supersede a [ADR 0001](docs/adr/0001-cshtml-language-service.md), histórica).
 - [Contratos do language service CSHTML](docs/context/cshtml-language-service.md) — IDs, snapshots, posições, diagnósticos, lifecycle e ownership.
 - [Matriz de funcionalidades CSHTML](docs/roadmap/cshtml-language-service.md) — fases, gates e critérios de conclusão da milestone.
 - [Guia de Design Fluent 2](docs/design/fluent-design.md) — princípios, tokens, estados e acessibilidade da UI.

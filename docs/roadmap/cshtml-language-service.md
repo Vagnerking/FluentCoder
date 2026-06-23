@@ -1,5 +1,7 @@
 # CSHTML — matriz de funcionalidades e fases
 
+> ⚠️ **HISTÓRICO — supersedido por [ADR 0002](../adr/0002-cshtml-projection-roslyn.md) (23/06/2026).** Esta matriz descreve a milestone do **motor homegrown sem Roslyn** (parser/lint/projection/metadata/IntelliSense próprios), que **não** é mais o alvo para `.cshtml`. A semântica `.cshtml` (erros C#, hover, ctrl+click, completion, semantic tokens) passa a vir da **projeção C# + Roslyn padrão**; os itens homegrown abaixo marcados `implementado` referem-se à engine que será **aposentada atrás de flag**. Mantidos como histórico/contexto.
+
 Esta matriz define a sequência da milestone
 [CSHTML: Language Service e Linter Independentes](https://github.com/Vagnerking/FluentCoder/milestone/1).
 Ela não declara funcionalidades como implementadas; o estado real é controlado

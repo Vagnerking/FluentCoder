@@ -1,5 +1,7 @@
 # CSHTML — contratos de integração
 
+> ⚠️ **Direção atualizada por [ADR 0002](../adr/0002-cshtml-projection-roslyn.md) (23/06/2026):** a semântica `.cshtml` passa a vir da **projeção C# + Roslyn padrão** (não do motor homegrown sem Roslyn, que será aposentado atrás de flag). Mudança em relação a este documento: o **Roslyn e o compilador Razor do SDK são permitidos** para a semântica (eram proibidos); os métodos privados de cohost `razor/*`/`_vs_*` e o serviço OOP do cohost **continuam proibidos**. **Mantêm-se** as identidades reservadas: id Monaco `cshtml` e owner de markers/diagnósticos `fluent-cshtml` para `.cshtml` (agora servidos pelo broker de projeção, não pelo motor homegrown). O id `aspnetcorerazor` era transitório do experimento de cohosting e está sendo **aposentado**. As demais regras abaixo (ranges sempre no `.cshtml`, ownership de markers, lifecycle/reset, dedup com `dotnet-build`, separação `.cshtml`×`.razor`) **continuam normativas**.
+
 Este documento é normativo para qualquer alteração relacionada a `.cshtml`.
 Leia também:
 

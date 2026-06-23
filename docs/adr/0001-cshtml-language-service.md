@@ -1,6 +1,8 @@
 # ADR 0001 — Language service CSHTML independente
 
-- **Status:** aceito
+> ⚠️ **SUPERSEDIDO por [ADR 0002 — CSHTML/Razor via projeção C# + Roslyn](0002-cshtml-projection-roslyn.md)** (23/06/2026). A decisão de implementar a engine `.cshtml` sem Roslyn não entregou semântica real (erros C#, hover, ctrl+click, tipos); adotou-se a projeção C# + Roslyn padrão. Este documento permanece como histórico. As partes ainda válidas (id Monaco/ownership, política de diagnósticos/ranges, lifecycle/reset, separação `.cshtml`×`.razor`) continuam em vigor; a proibição de depender do Roslyn/compilador Razor **não** se aplica mais.
+
+- **Status:** supersedido (era: aceito)
 - **Data:** 21/06/2026
 - **Milestone:** [CSHTML: Language Service e Linter Independentes](https://github.com/Vagnerking/FluentCoder/milestone/1)
 - **Issue:** [#31](https://github.com/Vagnerking/FluentCoder/issues/31)
