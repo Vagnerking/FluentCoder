@@ -1,7 +1,8 @@
-# Fase 0 — Gate de validação do cohost Roslyn (Razor/CSHTML)
+# Fase 0/B — Gate de validação do cohost Roslyn (Razor/CSHTML)
 
-**Data:** 2026-06-23 · **Status do gate:** ✅ **PROSSEGUIR com o cohost (Opção A). NÃO pivotar para a Opção B ainda.**
-Há **um** bloqueio nomeado e isolado (a seguir), com hipóteses de correção ranqueadas a validar na Fase B.
+**Data:** 2026-06-23 · **Status final:** ⛔ **Cohost BLOQUEADO para `.cshtml` headless nesta versão → PIVÔ para a Opção B (projeção in-house, variante b1).** (Decisão validada pelo Codex; ver "Fase B — resultado" no fim.)
+
+_(Histórico Fase 0 abaixo: o gate inicial concluiu "seguir com o cohost"; a Fase B testou as correções e bateu num muro server-side, acionando o critério de pivô do próprio gate.)_
 
 Reproduzir: `dotnet restore tools/razor-lsp-probe/fixtures/SampleMvc/SampleMvc.csproj` e
 `node tools/razor-lsp-probe/probe.mjs` (ver [README](README.md)). Evidência bruta em `capture/` (git-ignored).
@@ -67,6 +68,21 @@ _Já descartadas em Fase 0: config nula (corrigida e mirrorada), `project/open` 
 | definition @Model.City | ❌ -32000 |
 | completion após @Model. | ❌ -32000 |
 | requests `razor/*` server→client (insumo Fase C) | nenhum nesta execução (provável que surjam após o gerador funcionar) |
+
+## Fase B — resultado (cohost bloqueado → pivô para Opção B)
+Root cause confirmado lendo o fonte do Roslyn (`GeneratorRunResult.CreateAsync`): nosso erro é o ramo **`result is null`** — o Razor source generator está **referenciado** (provado), mas **nunca executa** no remoto OOP, então não há run result. O fix recomendado (notificação `workspace/_roslyn_refreshSourceGenerators`, paridade com o `csharp.rerunSourceGenerators` do vscode-csharp) foi implementado e **NÃO resolveu**.
+
+Alavancas testadas no probe — **todas falharam** (mesma exceção server-side):
+- `workspace/configuration` espelhando o app (`openFiles`);
+- `solution/open` com `.sln` real;
+- `semanticTokens/range`;
+- reabrir documento (`didClose`+`didOpen`) ×6 com backoff;
+- `workspace/_roslyn_refreshSourceGenerators {forceRegeneration:true}` ×7 (aceito pelo servidor, sem method-not-found);
+- `--sourceGeneratorExecutionPreference Automatic` explícito.
+
+O fix do #12069 (PR #12079 "Initialize feature flags in OOP early") é **host-side do Visual Studio** e "não adiciona um passo client-side que um cliente LSP headless possa invocar" — consistente com a falha empírica. Não há VSIX/RazorExtension casada mais nova que valha a pena (a estável é a 2.144.9; a Crashdummyy 5.9.0-1.26322.12 é Roslyn-only → skew com a RazorExtension 26306/26314).
+
+**Decisão (Codex + Claude):** acionar o critério de pivô do gate → **Opção B, variante b1**: rodar o **próprio `Microsoft.CodeAnalysis.Razor.Compiler`** para emitir o `.g.cs` projetado (com `#line`/source maps), alimentar o **Roslyn C# LSP padrão** (que sabidamente funciona para `.cs`) e remapear diagnostics/hover/definition/completion de volta ao `.cshtml` via [projection.rs](../../src-tauri/src/cshtml/projection.rs). Rejeitada b2 (codegen à mão — frágil demais). Gate de sucesso do spike b1: gerar `.g.cs` de Index.cshtml, confirmar `@model`/`Model.City` no C# gerado, alimentar o Roslyn padrão e provar hover/completion em `Model.City` + remapear 1 diagnóstico.
 
 ## Referências
 dotnet/razor#12069 (generator no outputs on first load) · dotnet/roslyn#82535 (flags razor não documentados) · dotnet/roslyn#83993 / #83878 (fix) · dotnet/vscode-csharp#9308 (wrong ALC com SDK antigo) · dotnet/razor#11834, #12332 (cohost exige generator + AdditionalFiles) · seblyng/roslyn.nvim (cohost OSS sem DevKit, min 5.8.0-1.26262.10).

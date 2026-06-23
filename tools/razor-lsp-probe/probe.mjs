@@ -124,6 +124,10 @@ const args = [
 if (existsSync(csharpDesignTime)) {
   args.push("--csharpDesignTimePath", csharpDesignTime);
 }
+const sgPref = arg("sgpref", ""); // e.g. Automatic | Balanced
+if (sgPref) {
+  args.push("--sourceGeneratorExecutionPreference", sgPref);
+}
 
 console.log(`[probe] launching cohost:\n  ${exe}\n  ${args.join(" ")}\n`);
 const child = spawn(exe, args, { cwd: root, stdio: ["pipe", "pipe", "pipe"] });
@@ -338,6 +342,17 @@ async function main() {
   // give Razor a beat to wire the doc
   await delay(2000);
 
+  // THE FIX (dotnet/vscode-csharp parity): force the Razor source generator to
+  // execute so it produces a run result. Without this, the generator is
+  // *referenced* but never *runs*, so the cohost's GetSourceGeneratorRunResultAsync
+  // returns null -> "no run result found". vscode-csharp sends this via its
+  // csharp.rerunSourceGenerators command / on build events.
+  function refreshGenerators(force) {
+    notify("workspace/_roslyn_refreshSourceGenerators", { forceRegeneration: !!force });
+  }
+  refreshGenerators(true);
+  await delay(3000);
+
   // open the .cshtml
   let docVersion = 1;
   notify("textDocument/didOpen", {
@@ -384,8 +399,8 @@ async function main() {
     });
     if (items) { diagOk = true; break; }
     if (firstLoad) {
-      await reopenDoc();
-      await delay(3000 + attempt * 2000); // increasing backoff for generator to run
+      refreshGenerators(true); // force a generator run, then give it time
+      await delay(3000 + attempt * 2000);
     } else {
       break; // a different error — stop retrying
     }
