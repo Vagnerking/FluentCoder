@@ -5,6 +5,8 @@
 //! analyzes that projection; this module maps positions/results back to the
 //! `.cshtml`. Independent of the (retiring) homegrown `cshtml` engine.
 
-// Foundational brick: consumed by the projection broker in a later slice.
+// Foundational bricks: consumed by the projection broker in a later slice.
 #[allow(dead_code)]
 pub mod sourcemap;
+#[allow(dead_code)]
+pub mod shadow;
