@@ -40,6 +40,8 @@ import { canonicalFileUriKey, fromFileUri, toFileUri } from "../uri";
 import { wireRoslynStartup } from "./roslynShared";
 import { ROSLYN_INIT_OPTIONS } from "./csharp";
 import {
+  pickProjectForCshtml,
+  relativize,
   remapRangeToMonaco,
   routeDefinition,
   routeDiagnostics,
@@ -95,23 +97,10 @@ async function resolveProject(
   cshtmlPath: string
 ): Promise<{ projectDir: string; csprojPath: string } | null> {
   const files = await listProjectFiles(rootPath);
-  const target = cshtmlPath.replace(/\\/g, "/").toLowerCase();
-  let best: { projectDir: string; csprojPath: string; len: number } | null = null;
-  for (const f of files) {
-    if (!f.name.toLowerCase().endsWith(".csproj")) continue;
-    const dir = f.path.replace(/[\\/][^\\/]+$/, ""); // dirname
-    const dirKey = dir.replace(/\\/g, "/").toLowerCase() + "/";
-    if (target.startsWith(dirKey) && (!best || dir.length > best.len)) {
-      best = { projectDir: dir, csprojPath: f.path, len: dir.length };
-    }
-  }
-  return best ? { projectDir: best.projectDir, csprojPath: best.csprojPath } : null;
-}
-
-/** Path of `full` relative to ancestor `base` (OS separators preserved). */
-function relativize(base: string, full: string): string {
-  const b = base.replace(/[\\/]+$/, "");
-  return full.slice(b.length).replace(/^[\\/]+/, "");
+  return pickProjectForCshtml(
+    files.filter((f) => f.name.toLowerCase().endsWith(".csproj")).map((f) => f.path),
+    cshtmlPath
+  );
 }
 
 /**

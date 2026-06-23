@@ -8,6 +8,10 @@ import {
   lspSeverityToMonaco,
   asLocationArray,
   monacoPosToGenerated,
+  dirname,
+  relativize,
+  isAncestorDir,
+  pickProjectForCshtml,
   type LspDiagnostic,
   type RemapFn,
 } from "./razorProjectionRouting.ts";
@@ -179,4 +183,38 @@ test("monacoPosToGenerated converts 1-based Monaco → 0-based and forwards", as
   const got = await monacoPosToGenerated(16, 15, remap);
   assert.deepEqual(calls, [[15, 14]]);
   assert.deepEqual(got, { line: 200, character: 4 });
+});
+
+test("dirname strips the last segment (Windows + POSIX)", () => {
+  assert.equal(dirname("C:\\proj\\Views\\Index.cshtml"), "C:\\proj\\Views");
+  assert.equal(dirname("/proj/Views/Index.cshtml"), "/proj/Views");
+});
+
+test("relativize yields the path under base, handling trailing separators", () => {
+  assert.equal(relativize("C:\\proj", "C:\\proj\\Views\\Index.cshtml"), "Views\\Index.cshtml");
+  assert.equal(relativize("C:\\proj\\", "C:\\proj\\Views\\Index.cshtml"), "Views\\Index.cshtml");
+  assert.equal(relativize("/proj", "/proj/Views/Index.cshtml"), "Views/Index.cshtml");
+});
+
+test("isAncestorDir is case/separator-insensitive and rejects sibling-prefix traps", () => {
+  assert.equal(isAncestorDir("C:\\proj", "c:/PROJ/Views/Index.cshtml"), true);
+  assert.equal(isAncestorDir("/a/proj", "/a/proj/x.cshtml"), true);
+  // "/a/proj" must NOT be considered an ancestor of "/a/project2/..."
+  assert.equal(isAncestorDir("/a/proj", "/a/project2/x.cshtml"), false);
+  assert.equal(isAncestorDir("/a/other", "/a/proj/x.cshtml"), false);
+});
+
+test("pickProjectForCshtml chooses the longest (most specific) containing project", () => {
+  const csprojs = [
+    "C:\\sln\\Outer.csproj",
+    "C:\\sln\\Web\\Web.csproj",
+    "C:\\sln\\Other\\Other.csproj",
+  ];
+  const got = pickProjectForCshtml(csprojs, "C:\\sln\\Web\\Views\\Home\\Index.cshtml");
+  assert.deepEqual(got, { projectDir: "C:\\sln\\Web", csprojPath: "C:\\sln\\Web\\Web.csproj" });
+});
+
+test("pickProjectForCshtml returns null for a loose file and ignores non-csproj", () => {
+  assert.equal(pickProjectForCshtml(["C:\\a\\A.csproj"], "C:\\b\\Index.cshtml"), null);
+  assert.equal(pickProjectForCshtml(["C:\\a\\A.sln"], "C:\\a\\Index.cshtml"), null);
 });

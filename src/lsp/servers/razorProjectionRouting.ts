@@ -217,3 +217,42 @@ export async function monacoPosToGenerated(
 ): Promise<RemapPos | null> {
   return remapToGenerated(lineNumber - 1, column - 1);
 }
+
+// ── Project/path resolution (pure; the starter does the I/O) ──────────────────
+
+/** Directory portion of `path` (strips the last `/` or `\` segment). */
+export function dirname(path: string): string {
+  return path.replace(/[\\/][^\\/]+$/, "");
+}
+
+/** Path of `full` relative to ancestor `base`, OS separators preserved. */
+export function relativize(base: string, full: string): string {
+  const b = base.replace(/[\\/]+$/, "");
+  return full.slice(b.length).replace(/^[\\/]+/, "");
+}
+
+/** Case/separator-insensitive test that `dir` is an ancestor of `path`. */
+export function isAncestorDir(dir: string, path: string): boolean {
+  const dirKey = dir.replace(/\\/g, "/").toLowerCase().replace(/\/+$/, "") + "/";
+  return path.replace(/\\/g, "/").toLowerCase().startsWith(dirKey);
+}
+
+/**
+ * Of `csprojPaths`, the one whose directory is the **longest** ancestor of
+ * `cshtmlPath` (the most specific containing project), or null if none contains
+ * it (loose file). Windows-insensitive. Pure — `resolveProject` does the listing.
+ */
+export function pickProjectForCshtml(
+  csprojPaths: readonly string[],
+  cshtmlPath: string
+): { projectDir: string; csprojPath: string } | null {
+  let best: { projectDir: string; csprojPath: string; len: number } | null = null;
+  for (const csprojPath of csprojPaths) {
+    if (!/\.csproj$/i.test(csprojPath)) continue;
+    const projectDir = dirname(csprojPath);
+    if (isAncestorDir(projectDir, cshtmlPath) && (!best || projectDir.length > best.len)) {
+      best = { projectDir, csprojPath, len: projectDir.length };
+    }
+  }
+  return best ? { projectDir: best.projectDir, csprojPath: best.csprojPath } : null;
+}
