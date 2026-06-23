@@ -22,6 +22,7 @@ pub fn run() {
         .manage(lsp::LspState::new())
         .manage(search::SearchState::new())
         .manage(agents::AcpState::new())
+        .manage(razor::commands::RazorState::new())
         .invoke_handler(tauri::generate_handler![
             agents::agents_load,
             agents::agents_save,
@@ -82,6 +83,10 @@ pub fn run() {
             lsp::lsp_ensure_system_server,
             lsp::lsp_ensure_razor_server,
             lsp::lsp_ensure_fluent_cshtml_server,
+            razor::commands::razor_prepare,
+            razor::commands::razor_remap_to_generated,
+            razor::commands::razor_remap_to_source,
+            razor::commands::razor_forget,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

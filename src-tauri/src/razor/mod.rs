@@ -22,3 +22,4 @@ pub mod broker;
 pub mod exec;
 #[allow(dead_code)]
 pub mod runtime;
+pub mod commands;
