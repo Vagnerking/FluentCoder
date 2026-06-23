@@ -9,8 +9,11 @@
  */
 import type { MonacoLanguageClient } from "monaco-languageclient";
 import { CSHARP_SERVER_ID, startCsharpServer } from "./csharp";
-import { CSHTML_SERVER_ID, startCshtmlServer } from "./cshtml";
 import { RAZOR_SERVER_ID, startRazorServer } from "./razor";
+import {
+  RAZOR_PROJECTION_SERVER_ID,
+  startRazorProjectionServer,
+} from "./razorProjection";
 import { TS_SERVER_ID, startTypescriptServer } from "./typescript";
 import { NPM_SERVERS, makeNpmServerStarter } from "./npm";
 import { SYSTEM_SERVERS, makeSystemServerStarter } from "./system";
@@ -49,9 +52,12 @@ const BASE_REGISTRY: Record<string, ServerEntry> = {
   typescriptreact: { serverId: TS_SERVER_ID, start: startTypescriptServer },
   javascriptreact: { serverId: TS_SERVER_ID, start: startTypescriptServer },
   // Razor (.razor) is served by the Roslyn cohosting build (C# extension VSIX).
-  // `.cshtml` MVC views use the built-in fluent-cshtml-lsp (no Roslyn dependency).
   aspnetcorerazor: { serverId: RAZOR_SERVER_ID, start: startRazorServer },
-  cshtml: { serverId: CSHTML_SERVER_ID, start: startCshtmlServer },
+  // `.cshtml` is served by the projection broker (ADR 0002) — reached only when
+  // the projection flag is ON (then `languageForFile` maps `.cshtml` → `cshtml`).
+  // With the flag OFF `.cshtml` stays `aspnetcorerazor` (cohost) and this entry
+  // is never hit, so flipping the flag is the single rollback point.
+  cshtml: { serverId: RAZOR_PROJECTION_SERVER_ID, start: startRazorProjectionServer },
 };
 
 // Generate one registry entry per language each npm-based server handles, so

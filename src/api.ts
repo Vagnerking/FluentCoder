@@ -571,14 +571,24 @@ export function ensureFluentCshtmlServer(): Promise<string> {
 
 // ── Razor projection broker (ADR 0002) ────────────────────────────────────────
 
+/** One materialized projection: the `.cshtml` plus the projected `.g.cs`. */
+export interface RazorProjectionInfo {
+  /** `.cshtml` path relative to the user project (as requested). */
+  cshtmlRel: string;
+  /** Absolute `.cshtml` path — the exact key the `razorRemap*` commands use. */
+  cshtmlPath: string;
+  /** Absolute path to the projected C# inside the shadow (Roslyn opens this). */
+  generatedPath: string;
+}
+
 /** Summary returned by {@link razorPrepare}. */
 export interface RazorPrepareResult {
   /** Directory of the generated shadow project. */
   shadowDir: string;
   /** Solution (user + shadow) to open in the Roslyn client. */
   solutionPath: string;
-  /** `.cshtml` (relative) that got a usable projection. */
-  available: string[];
+  /** `.cshtml` that got a usable projection (with its projected `.g.cs` path). */
+  available: RazorProjectionInfo[];
   /** `.cshtml` (relative) requested but with no projection (degraded). */
   missing: string[];
 }

@@ -1489,6 +1489,13 @@ export default function App() {
       }
       try {
         await writeFile(targetPath, file.content);
+        // Notify disk-based language tooling that this file's on-disk content is
+        // now current. The CSHTML projection broker (ADR 0002) regenerates from
+        // disk (`dotnet build`), so it must reprepare on save — not on every
+        // keystroke, which would rebuild from stale disk content.
+        window.dispatchEvent(
+          new CustomEvent("fluent:file-saved", { detail: { path: targetPath } })
+        );
         setOpenFiles((prev) =>
           prev.map((f) =>
             f.path === file.path
@@ -1713,6 +1720,10 @@ export default function App() {
     if (!dest) return;
     try {
       await writeFile(dest, file.content);
+      // Same disk-tooling notification as `saveFile` (Save As also writes disk).
+      window.dispatchEvent(
+        new CustomEvent("fluent:file-saved", { detail: { path: dest } })
+      );
       // Re-point the active tab at the new path and clear its dirty flag.
       setOpenFiles((prev) =>
         prev.map((f) =>

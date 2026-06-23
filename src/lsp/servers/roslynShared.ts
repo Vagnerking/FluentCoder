@@ -35,6 +35,18 @@ export interface WireRoslynStartupOptions {
   /** Workspace root (filesystem path, not URI). */
   rootPath: string;
   context?: ServerStartContext;
+  /**
+   * Explicit solution to `solution/open` (ADR 0002 projection: the broker's
+   * shadow `.sln`). When set, the rootPath scan is skipped and this exact file is
+   * opened — more robust than depending on scan order finding the right `.sln`.
+   */
+  solutionPath?: string;
+  /**
+   * Extra hook fired after the standard `projectInitializationComplete` handling
+   * (reopen/enable/stabilize/repull). The projection starter uses it to `didOpen`
+   * its `.g.cs` and pull diagnostics once the shadow workspace is loaded.
+   */
+  onProjectInitialized?: () => void;
 }
 
 /**
@@ -51,7 +63,7 @@ export function wireRoslynStartup(
   client: MonacoLanguageClient,
   opts: WireRoslynStartupOptions
 ): void {
-  const { serverId, reopenLanguages, rootPath, context } = opts;
+  const { serverId, reopenLanguages, rootPath, context, solutionPath, onProjectInitialized } = opts;
 
   // 1. Configuration pull handler + nudge.
   client.onRequest("workspace/configuration", (params: ConfigurationParams) =>
@@ -82,11 +94,12 @@ export function wireRoslynStartup(
       .catch((err) => {
         lspLog("reopenRoslynDocuments failed; re-pulling diagnostics", String(err));
         repullDiagnostics(client);
-      });
+      })
+      .finally(() => onProjectInitialized?.());
   });
 
   // 3. Workspace loading (fire-and-forget).
-  void openRoslynWorkspace(client, serverId, rootPath, context);
+  void openRoslynWorkspace(client, serverId, rootPath, context, solutionPath);
 }
 
 /** Tracks solution/project info per client so the init-complete handler can report it. */
@@ -125,8 +138,22 @@ async function openRoslynWorkspace(
   client: MonacoLanguageClient,
   serverId: string,
   rootPath: string,
-  context?: ServerStartContext
+  context?: ServerStartContext,
+  solutionPath?: string
 ): Promise<void> {
+  // ADR 0002 projection: open the broker's exact shadow `.sln`, skipping the scan.
+  if (solutionPath) {
+    const uri = toFileUri(solutionPath);
+    roslynWorkspaces.set(client, { solutionPath, projectCount: 2 });
+    context?.onWorkspaceInfo?.({ serverId, solutionPath, projectCount: 2, loaded: false });
+    lspLog("openRoslynWorkspace: solution/open explícito", uri);
+    try {
+      await client.sendNotification("solution/open", { solution: uri });
+    } catch (err) {
+      lspLog("openRoslynWorkspace: solution/open explícito FALHOU", String(err));
+    }
+    return;
+  }
   try {
     lspLog("openRoslynWorkspace: listando arquivos de", rootPath);
     const files = await listProjectFiles(rootPath);

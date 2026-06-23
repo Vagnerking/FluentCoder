@@ -166,11 +166,15 @@ function toMarkers(
  * Idempotent at the call site (guarded by setupMonacoForLsp).
  */
 export function installRazorHtmlLint(monaco: typeof MonacoNs): void {
-  const RAZOR = "aspnetcorerazor";
+  // Both Razor (`.razor` / cohost `.cshtml`) and the projection broker's `cshtml`
+  // id (ADR 0002) pass raw HTML through unchecked, so the markup linter must
+  // cover both. Which id a given `.cshtml` gets is decided by `languageForFile`.
+  const RAZOR_LANGS = new Set(["aspnetcorerazor", "cshtml"]);
+  const isRazor = (model: MonacoNs.editor.ITextModel) => RAZOR_LANGS.has(model.getLanguageId());
   const timers = new Map<string, number>();
 
   const lint = (model: MonacoNs.editor.ITextModel) => {
-    if (model.isDisposed() || model.getLanguageId() !== RAZOR) return;
+    if (model.isDisposed() || !isRazor(model)) return;
     monaco.editor.setModelMarkers(
       model,
       OWNER,
@@ -192,7 +196,7 @@ export function installRazorHtmlLint(monaco: typeof MonacoNs): void {
   };
 
   const attach = (model: MonacoNs.editor.ITextModel) => {
-    if (model.getLanguageId() !== RAZOR) return;
+    if (!isRazor(model)) return;
     lint(model);
     model.onDidChangeContent(() => schedule(model));
   };

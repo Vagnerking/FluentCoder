@@ -37,13 +37,26 @@ fn canonical_key(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/").to_ascii_lowercase()
 }
 
+/// One materialized projection the frontend can serve: the `.cshtml` it came
+/// from plus the projected `.g.cs` the Roslyn client must `didOpen`/address.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RazorProjectionInfo {
+    /// `.cshtml` path relative to the user project (as requested).
+    pub cshtml_rel: String,
+    /// Absolute `.cshtml` path — the exact key the `razor_remap_*` commands use.
+    pub cshtml_path: String,
+    /// Absolute path to the projected C# inside the shadow (what Roslyn opens).
+    pub generated_path: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RazorPrepareResult {
     pub shadow_dir: String,
     pub solution_path: String,
-    /// `.cshtml` (relative) that got a usable projection.
-    pub available: Vec<String>,
+    /// `.cshtml` that got a usable projection (with the projected `.g.cs` path).
+    pub available: Vec<RazorProjectionInfo>,
     /// `.cshtml` (relative) requested but with no projection (degraded).
     pub missing: Vec<String>,
 }
@@ -92,7 +105,11 @@ pub async fn razor_prepare(
         for proj in prepared.projections {
             let abs = Path::new(&user_project_dir).join(&proj.cshtml_rel);
             maps.insert(canonical_key(&abs), proj.source_map);
-            available.push(proj.cshtml_rel.to_string_lossy().to_string());
+            available.push(RazorProjectionInfo {
+                cshtml_rel: proj.cshtml_rel.to_string_lossy().to_string(),
+                cshtml_path: abs.to_string_lossy().to_string(),
+                generated_path: proj.shadow_gcs.to_string_lossy().to_string(),
+            });
         }
     }
 

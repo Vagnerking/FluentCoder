@@ -1,9 +1,29 @@
 # Brick 6 — Frontend (Monaco + Roslyn) para o broker de projeção
 
-> Guia de implementação **a executar com o app rodando** (validação ao vivo). O
-> backend Rust + bridge Tauri estão prontos e provados (ADR 0002); isto é o
-> "last mile" que surge a semântica no editor. Não implementar "no escuro": cada
-> passo deve ser visto funcionando no app + validado com o Codex antes de commit.
+> **STATUS: IMPLEMENTADO atrás da flag `lsp.razorProjection` (default OFF).**
+> Código validado com o Codex (3 rodadas → SOUND), `tsc`/`vite`/vitest/`cargo`
+> verdes, e as partes frágeis cobertas por testes unitários sobre a **forma de
+> resposta MEDIDA** (não suposta) via `tools/razor-lsp-probe/spike-b1d.mjs`.
+> **Falta apenas o ACEITE AO VIVO** (passo do usuário — ver fim do doc): o app
+> não consegue dirigir hover/ctrl+click headless, então a verificação visual é a
+> última etapa, feita ligando a flag e abrindo o fixture.
+>
+> Arquivos: [razorProjection.ts](../src/lsp/servers/razorProjection.ts),
+> [razorProjectionRouting.ts](../src/lsp/servers/razorProjectionRouting.ts) (+ `.test.ts`),
+> [razorProjectionFlag.ts](../src/lsp/razorProjectionFlag.ts),
+> [client.ts](../src/lsp/client.ts) (`suppressGenericBridges`),
+> [roslynShared.ts](../src/lsp/servers/roslynShared.ts) (`solutionPath`/`onProjectInitialized`),
+> [manager.ts](../src/lsp/manager.ts) (serialização start/stop + generation guard),
+> [language.ts](../src/language.ts), [servers/index.ts](../src/lsp/servers/index.ts),
+> [monacoSetup.ts](../src/lsp/monacoSetup.ts), [razorHtmlLint.ts](../src/lint/razorHtmlLint.ts),
+> [App.tsx](../src/App.tsx) (evento `fluent:file-saved`).
+>
+> **Fato MEDIDO que rege o roteamento** (`spike-b1d`): diagnostics e hover voltam
+> em coordenadas do `.g.cs` (CS1061 em `.g.cs` linha 160, não `.cshtml` 15) →
+> **remapear todo range generated→source e descartar os não-mapeáveis**;
+> definition de `@Model.City` aponta ao `WeatherModel.cs` real (passa direto).
+> Reprepare é **on-save** (o broker lê do disco via `dotnet build`), nunca por
+> tecla. Owner de markers: `fluent-cshtml`.
 
 ## Contrato já pronto (Rust, validado)
 - `api.ts`: `razorPrepare({workspaceDir,userProjectDir,userCsprojPath,config,cshtmlRels})
@@ -41,14 +61,26 @@ Registrar (guardar disposables na sessão; selector `language:"cshtml"`):
 - **Reset/lifecycle só funcionam se iniciado via `LspManager`** (⚠️ Codex): registry `cshtml` → este starter dá cobertura de reset. **Todos** os recursos "escondidos" do starter — providers Monaco custom, models/didOpen do `.g.cs` no cliente, timers de pull de diagnostics, debounce — devem ser guardados num conjunto de `IDisposable` da sessão e descartados no disposal do starter (igual ao contrato de `disposeLanguageClientContributions`). Nada pode vazar em restart/StrictMode/troca de workspace.
 - Registry: `cshtml` → este starter; remover/flag o `cshtml`→fluent-cshtml e o `aspnetcorerazor`→cohost p/ `.cshtml`.
 
-## Validação (ao vivo, no app) — gate de cada passo
-Abrir o fixture `tools/razor-lsp-probe/fixtures/SampleMvc` no app e confirmar no `.cshtml`:
-1. erro C# (`@Model.NonExistentProperty`) com squiggle + painel Problemas no `.cshtml`;
-2. hover em `@Model.City` → `string WeatherModel.City`;
-3. ctrl+click em `Model.City` → navega ao `WeatherModel.cs`;
-4. completion após `@Model.`;
-5. trocar workspace / resetar servidores não duplica providers nem vaza processos.
-Rodar também `npm run build`, `npm run test:unit`, `cargo test --lib razor::` e o E2E (tauri-driver). Validar com o Codex (comportamento real, não só código).
+## Aceite AO VIVO — passo do usuário (o que falta)
+O código está pronto e validado estaticamente; só a verificação visual depende de
+interação no app (impossível headless). Para fechar:
+
+1. **Ligar a flag:** no DevTools do app, `localStorage.setItem("lsp.razorProjection","1")` e recarregar a janela. (Desligar = remover a chave ou setar `"0"` → volta ao cohost.)
+2. Abrir a pasta `tools/razor-lsp-probe/fixtures/SampleMvc` (projeto MVC real; `dotnet restore` antes se necessário) e abrir `Views/Home/Index.cshtml`.
+3. Confirmar no `.cshtml` (aguardar o primeiro `razorPrepare`/`dotnet build`, alguns segundos):
+   - erro C# (`@Model.NonExistentProperty`, linha 16) com squiggle + painel Problemas **na linha do `.cshtml`** (owner `fluent-cshtml`);
+   - hover em `@Model.City` → `string WeatherModel.City`;
+   - ctrl+click em `Model.City` → navega ao `WeatherModel.cs`;
+   - completion após `@Model.`;
+   - editar+**salvar** atualiza os diagnostics (reprepare on-save);
+   - "Resetar Servidores de Código" / trocar workspace não duplica providers nem vaza processos.
+
+Já verde sem o app: `npx tsc --noEmit`, `npm run test:unit` (inclui 13 testes de roteamento sobre a forma medida), `npm run build`, `cargo test --lib razor::`. Falta o E2E (tauri-driver) sobre o fluxo ligado.
+
+### Limitações conhecidas do V1 (documentadas)
+- **Um projeto por sessão:** serve os `.cshtml` do projeto do primeiro `.cshtml` aberto; `.cshtml` de outro `.csproj` no mesmo workspace ficam sem semântica (multi-projeto = trabalho futuro).
+- **Semântica "as of last save":** o broker regenera do disco (`dotnet build`), então diagnostics/hover/def refletem o último save, não o buffer sujo.
+- **HTML/TagHelpers:** fora do brick 6 (Fase C — delegação HTML).
 
 ## Notas
 - Latência: V1 gera projeção on-save (`dotnet build`); fast path futuro = sidecar .NET com o source generator (sem build).

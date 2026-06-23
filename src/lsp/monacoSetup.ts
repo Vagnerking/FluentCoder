@@ -29,8 +29,30 @@ export function setupMonacoForLsp(monaco: Monaco): void {
   disableBuiltinTsWorker(monaco);
   registerReactLanguages(monaco);
   registerRazorLanguage(monaco);
+  registerCshtmlProjectionLanguage(monaco);
   installRazorHtmlLint(monaco);
   ensureCsharpLanguage(monaco);
+}
+
+/**
+ * Registers the `cshtml` language id used by the projection broker (ADR 0002).
+ * Reuses the Razor Monarch grammar/config so `.cshtml` keeps its syntax colors
+ * when the projection flag routes it to id `cshtml` instead of `aspnetcorerazor`.
+ *
+ * No file-extension claim: the model language is chosen explicitly by
+ * `languageForFile`, so we must not let Monaco auto-detection fight over
+ * `.cshtml` between this id and `aspnetcorerazor`. Harmless (unused) when the
+ * projection flag is OFF. Idempotent.
+ */
+function registerCshtmlProjectionLanguage(monaco: Monaco): void {
+  if (cshtmlRegistered) return;
+  const known = monaco.languages.getLanguages().some((l) => l.id === CSHTML_LANGUAGE_ID);
+  if (!known) {
+    monaco.languages.register({ id: CSHTML_LANGUAGE_ID, aliases: ["CSHTML", "Razor"] });
+  }
+  monaco.languages.setLanguageConfiguration(CSHTML_LANGUAGE_ID, razorLanguageConfiguration());
+  monaco.languages.setMonarchTokensProvider(CSHTML_LANGUAGE_ID, razorMonarch());
+  cshtmlRegistered = true;
 }
 
 /**
@@ -138,7 +160,11 @@ function registerReactLanguages(monaco: Monaco): void {
  * the documents we open — it keys Razor handling off this exact language id. */
 export const RAZOR_LANGUAGE_ID = "aspnetcorerazor";
 
+/** Monaco language id for `.cshtml` under the projection broker (ADR 0002). */
+export const CSHTML_LANGUAGE_ID = "cshtml";
+
 let razorRegistered = false;
+let cshtmlRegistered = false;
 
 /**
  * Registers the `razor` language + Monarch tokenizer (ISSUE-29). Monaco ships no
@@ -163,7 +189,15 @@ export function registerRazorLanguage(monaco: Monaco): void {
     });
   }
 
-  monaco.languages.setLanguageConfiguration(RAZOR_LANGUAGE_ID, {
+  monaco.languages.setLanguageConfiguration(RAZOR_LANGUAGE_ID, razorLanguageConfiguration());
+
+  monaco.languages.setMonarchTokensProvider(RAZOR_LANGUAGE_ID, razorMonarch());
+  razorRegistered = true;
+}
+
+/** Bracket/comment/auto-close configuration shared by `aspnetcorerazor` and `cshtml`. */
+function razorLanguageConfiguration(): MonacoNS.languages.LanguageConfiguration {
+  return {
     comments: { blockComment: ["@*", "*@"] },
     brackets: [
       ["{", "}"],
@@ -187,10 +221,7 @@ export function registerRazorLanguage(monaco: Monaco): void {
       { open: "'", close: "'" },
       { open: "<", close: ">" },
     ],
-  });
-
-  monaco.languages.setMonarchTokensProvider(RAZOR_LANGUAGE_ID, razorMonarch());
-  razorRegistered = true;
+  };
 }
 
 /** Minimal Monarch grammar for Razor (`@`-transitions, C# blocks, HTML). */
