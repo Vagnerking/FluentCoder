@@ -1,0 +1,10 @@
+# Build artifacts of the sample fixture (restored locally, not committed)
+fixtures/**/bin/
+fixtures/**/obj/
+
+# Captured LSP transcripts (evidence is summarized into docs/ instead)
+capture/
+
+# The sample solution IS committed (the probe prefers solution/open, like the app),
+# overriding the repo-root `*.sln` ignore.
+!fixtures/**/*.sln
