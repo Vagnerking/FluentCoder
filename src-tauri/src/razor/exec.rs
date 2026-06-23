@@ -24,13 +24,15 @@ pub fn materialize(plan: &BrokerPlan) -> io::Result<()> {
     fs::write(&plan.shadow_csproj_path, &plan.shadow_csproj_content)?;
 
     for pf in &plan.projections {
-        // Only copy what the SDK actually emitted (a .cshtml with no generated
-        // output, or a failed emit, simply has no projection yet).
         if pf.emitted_gcs.exists() {
             if let Some(parent) = pf.shadow_gcs.parent() {
                 fs::create_dir_all(parent)?;
             }
             fs::copy(&pf.emitted_gcs, &pf.shadow_gcs)?;
+        } else if pf.shadow_gcs.exists() {
+            // No fresh projection this run — remove any STALE copy so we never
+            // serve outdated C# (Roslyn would otherwise analyze old generated code).
+            fs::remove_file(&pf.shadow_gcs)?;
         }
     }
 
@@ -219,73 +221,37 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// End-to-end of the Rust pipeline (derive → plan → emit → materialize) against
-    /// the real SampleMvc fixture. Shells out to `dotnet` (slow) → `#[ignore]`;
-    /// run with: `cargo test --lib razor::exec::tests::e2e -- --ignored`.
     #[test]
-    #[ignore = "integration: runs dotnet (slow)"]
-    fn e2e_materialize_real_sample_mvc() {
-        use crate::razor::{broker, derive};
-        use std::process::Command;
+    fn materialize_removes_stale_projection_when_emit_missing() {
+        let root = std::env::temp_dir().join("fluent_razor_exec_stale_test");
+        let _ = fs::remove_dir_all(&root);
+        let shadow_dir = root.join(".fluent-razor").join("shadow");
+        let shadow_gcs = shadow_dir.join("projected").join("Views/Index_cshtml.g.cs");
+        fs::create_dir_all(shadow_gcs.parent().unwrap()).unwrap();
+        fs::write(&shadow_gcs, "// STALE generated").unwrap(); // leftover from a prior run
 
-        let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("tools/razor-lsp-probe/fixtures/SampleMvc");
-        let user_csproj = fixture.join("SampleMvc.csproj");
-        assert!(user_csproj.exists(), "fixture missing: {user_csproj:?}");
+        let plan = BrokerPlan {
+            shadow_dir: shadow_dir.clone(),
+            shadow_csproj_path: shadow_dir.join("ShadowRazor.csproj"),
+            shadow_csproj_content: "<Project/>".to_string(),
+            user_csproj_path: root.join("App").join("App.csproj"),
+            solution_path: shadow_dir.join("RazorShadow.sln"),
+            emit_command: ("dotnet".into(), vec![]),
+            emit_cwd: root.clone(),
+            projections: vec![ProjectionFile {
+                cshtml_rel: PathBuf::from("Views/Index.cshtml"),
+                emitted_gcs: root.join("does-not-exist.g.cs"), // emit produced nothing
+                shadow_gcs: shadow_gcs.clone(),
+            }],
+        };
+        fs::create_dir_all(plan.user_csproj_path.parent().unwrap()).unwrap();
+        fs::write(&plan.user_csproj_path, "<Project/>").unwrap();
 
-        // derive TFM + framework refs from the real project
-        let (p, args) = derive::derive_command(&user_csproj.to_string_lossy());
-        let out = Command::new(&p)
-            .args(&args)
-            .current_dir(&fixture)
-            .output()
-            .expect("dotnet derive");
-        let derived = derive::parse_derived(&String::from_utf8_lossy(&out.stdout))
-            .expect("parse derived");
-        assert_eq!(derived.tfm, "net8.0");
-        assert!(derived
-            .framework_references
-            .iter()
-            .any(|f| f == "Microsoft.AspNetCore.App"));
+        materialize(&plan).unwrap();
+        assert!(!shadow_gcs.exists(), "stale projection must be removed");
 
-        // plan
-        let ws = std::env::temp_dir().join("fluent_razor_e2e_ws");
-        let _ = fs::remove_dir_all(&ws);
-        let rels = vec![PathBuf::from("Views/Home/Index.cshtml")];
-        let plan = broker::plan(&broker::BrokerInputs {
-            workspace_dir: &ws,
-            user_project_dir: &fixture,
-            user_csproj_path: &user_csproj,
-            derived: &derived,
-            config: "Debug",
-            root_namespace: Some("SampleMvc"),
-            cshtml_rels: &rels,
-        });
-
-        // emit (build the user project → emits the .g.cs; returns non-zero on the
-        // deliberate CS1061 but still emits the generator output)
-        let (ep, eargs) = &plan.emit_command;
-        Command::new(ep)
-            .args(eargs)
-            .current_dir(&plan.emit_cwd)
-            .output()
-            .expect("dotnet emit");
-
-        // materialize
-        materialize(&plan).expect("materialize");
-
-        // assert the Rust pipeline produced a working shadow
-        assert!(plan.shadow_csproj_path.exists());
-        assert!(plan.solution_path.exists());
-        let pf = &plan.projections[0];
-        assert!(pf.emitted_gcs.exists(), "emitted missing: {:?}", pf.emitted_gcs);
-        assert!(pf.shadow_gcs.exists(), "shadow .g.cs missing: {:?}", pf.shadow_gcs);
-        let gcs = fs::read_to_string(&pf.shadow_gcs).unwrap();
-        assert!(gcs.contains("Model.City"), "projected C# missing Model.City");
-        assert!(gcs.contains("#line"), "projected C# missing #line maps");
-
-        let _ = fs::remove_dir_all(&ws);
+        let _ = fs::remove_dir_all(&root);
     }
+    // (end-to-end against the real fixture lives in `runtime.rs`, which exercises
+    // the full derive→plan→emit→materialize→source-map pipeline.)
 }
