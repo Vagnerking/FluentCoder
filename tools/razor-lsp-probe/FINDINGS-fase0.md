@@ -82,7 +82,18 @@ Alavancas testadas no probe — **todas falharam** (mesma exceção server-side)
 
 O fix do #12069 (PR #12079 "Initialize feature flags in OOP early") é **host-side do Visual Studio** e "não adiciona um passo client-side que um cliente LSP headless possa invocar" — consistente com a falha empírica. Não há VSIX/RazorExtension casada mais nova que valha a pena (a estável é a 2.144.9; a Crashdummyy 5.9.0-1.26322.12 é Roslyn-only → skew com a RazorExtension 26306/26314).
 
-**Decisão (Codex + Claude):** acionar o critério de pivô do gate → **Opção B, variante b1**: rodar o **próprio `Microsoft.CodeAnalysis.Razor.Compiler`** para emitir o `.g.cs` projetado (com `#line`/source maps), alimentar o **Roslyn C# LSP padrão** (que sabidamente funciona para `.cs`) e remapear diagnostics/hover/definition/completion de volta ao `.cshtml` via [projection.rs](../../src-tauri/src/cshtml/projection.rs). Rejeitada b2 (codegen à mão — frágil demais). Gate de sucesso do spike b1: gerar `.g.cs` de Index.cshtml, confirmar `@model`/`Model.City` no C# gerado, alimentar o Roslyn padrão e provar hover/completion em `Model.City` + remapear 1 diagnóstico.
+**Decisão (Codex + Claude):** acionar o critério de pivô do gate → **Opção B, variante b1**: rodar o **próprio `Microsoft.CodeAnalysis.Razor.Compiler`** para emitir o `.g.cs` projetado (com `#line`/source maps), alimentar o **Roslyn C# LSP padrão** (que sabidamente funciona para `.cs`) e remapear diagnostics/hover/definition/completion de volta ao `.cshtml` via [projection.rs](../../src-tauri/src/cshtml/projection.rs). Rejeitada b2 (codegen à mão — frágil demais).
+
+### Spike b1 — RESULTADO: ✅ VIÁVEL (provado end-to-end)
+- **Codegen + source map:** `dotnet build` da fixture emite `obj/.../generated/.../Index_cshtml.g.cs` tipado (`RazorPage<SampleMvc.Models.WeatherModel>`) com `#line (8,13)-(8,23) "...Index.cshtml"` antes de cada `Model.City`/`Model.Kind`/etc. O compilador C# já reporta o erro proposital em **`Index.cshtml(16,15)` CS1061** (mapeado pelo `#line`).
+- **Roslyn padrão dá semântica real no projetado:** "shadow project" (`fixtures/Shadow/`, SDK plain + `FrameworkReference Microsoft.AspNetCore.App` + link de `WeatherModel.cs` + o `.g.cs`) compila e, via LSP no Roslyn standalone (`spike-b1.mjs`):
+  - `textDocument/diagnostic` → **CS1061** (o erro proposital);
+  - hover em `Model.City` → **`string WeatherModel.City { get; set; }`**;
+  - definition em `Model.City` → alvo **`WeatherModel.cs`**.
+- **Conclusão:** a cadeia `.cshtml` → Razor compiler → `.g.cs`+`#line` → Roslyn C# padrão → hover/def/diagnostics → remap p/ `.cshtml` funciona, sem depender do serviço OOP do cohost.
+- **Becos sem saída descartados no spike:** `workspace/diagnostic` no Roslyn standalone (não expõe diag de doc gerado e *trava* a request — evitar).
+
+**Próximo (b1-full):** broker no app — gerar/sincronizar a projeção ao vivo (rodar o Razor compiler ou source generator), manter uma "shadow compilation" com as refs do projeto do usuário, encaminhar hover/def/completion/diagnostics/semanticTokens e remapear ranges pelos `#line`. Evitar duplicação com o gerador do SDK (shadow project sem Razor SDK, ou substituir o doc gerado).
 
 ## Referências
 dotnet/razor#12069 (generator no outputs on first load) · dotnet/roslyn#82535 (flags razor não documentados) · dotnet/roslyn#83993 / #83878 (fix) · dotnet/vscode-csharp#9308 (wrong ALC com SDK antigo) · dotnet/razor#11834, #12332 (cohost exige generator + AdditionalFiles) · seblyng/roslyn.nvim (cohost OSS sem DevKit, min 5.8.0-1.26262.10).

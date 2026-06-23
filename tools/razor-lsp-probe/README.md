@@ -34,7 +34,27 @@ node tools/razor-lsp-probe/probe.mjs --roslyn "<...>\extension\.roslyn"
   contract input for Fase C / HTML delegation).
 - `server-logs/` — the cohost's own `--extensionLogDirectory` output.
 
-The durable Fase 0 conclusion is summarized into `docs/` and reviewed with Codex.
+The durable Fase 0 conclusion is summarized into `FINDINGS-fase0.md` and reviewed with Codex.
+
+## b1 spike (Option B feasibility) — `spike-b1.mjs`
+
+Proves the in-house projection path: the real Razor compiler emits a projected
+`.g.cs` with `#line` maps; the plain standalone Roslyn C# LSP gives real
+diagnostics/hover/definition on it (remappable to `.cshtml`). Uses the
+`fixtures/Shadow` project (plain SDK, no Razor generator, references the app
+model + the projected `.g.cs`).
+
+```powershell
+# 1. produce the projected C# (writes obj/.../generated/.../Index_cshtml.g.cs)
+dotnet build tools/razor-lsp-probe/fixtures/SampleMvc/SampleMvc.csproj -p:EmitCompilerGeneratedFiles=true
+# 2. copy it where the shadow project expects it (git-ignored, has machine #line paths)
+#    -> tools/razor-lsp-probe/fixtures/Shadow/projected/Index_cshtml.g.cs
+# 3. run the spike
+node tools/razor-lsp-probe/spike-b1.mjs
+```
+
+Result (FINDINGS-fase0.md): hover on `Model.City` → `string WeatherModel.City { get; set; }`;
+definition → `WeatherModel.cs`; diagnostics → `CS1061`. Gate met.
 
 ## What it probes
 
