@@ -568,3 +568,61 @@ export function ensureSystemLspServer(serverId: string): Promise<LspLaunchInfo> 
 export function ensureFluentCshtmlServer(): Promise<string> {
   return invoke<string>("lsp_ensure_fluent_cshtml_server");
 }
+
+// ── Razor projection broker (ADR 0002) ────────────────────────────────────────
+
+/** Summary returned by {@link razorPrepare}. */
+export interface RazorPrepareResult {
+  /** Directory of the generated shadow project. */
+  shadowDir: string;
+  /** Solution (user + shadow) to open in the Roslyn client. */
+  solutionPath: string;
+  /** `.cshtml` (relative) that got a usable projection. */
+  available: string[];
+  /** `.cshtml` (relative) requested but with no projection (degraded). */
+  missing: string[];
+}
+
+/** A remapped 0-based LSP position. */
+export interface RazorRemapPos {
+  line: number;
+  character: number;
+}
+
+/**
+ * Prepare projection serving: generates the projected C# for `cshtmlRels`
+ * (relative to `userProjectDir`), materializes the shadow project + solution, and
+ * caches one source map per `.cshtml`. Runs `dotnet` off the UI thread.
+ */
+export function razorPrepare(opts: {
+  workspaceDir: string;
+  userProjectDir: string;
+  userCsprojPath: string;
+  config: string;
+  cshtmlRels: string[];
+}): Promise<RazorPrepareResult> {
+  return invoke<RazorPrepareResult>("razor_prepare", opts);
+}
+
+/** Map a `.cshtml` position to the projected C#. `null` if unmapped/no map. */
+export function razorRemapToGenerated(
+  cshtmlPath: string,
+  line: number,
+  character: number
+): Promise<RazorRemapPos | null> {
+  return invoke<RazorRemapPos | null>("razor_remap_to_generated", { cshtmlPath, line, character });
+}
+
+/** Map a projected-C# position back to the `.cshtml`. `null` if synthetic/no map. */
+export function razorRemapToSource(
+  cshtmlPath: string,
+  line: number,
+  character: number
+): Promise<RazorRemapPos | null> {
+  return invoke<RazorRemapPos | null>("razor_remap_to_source", { cshtmlPath, line, character });
+}
+
+/** Drop a `.cshtml`'s cached source map (on close). */
+export function razorForget(cshtmlPath: string): Promise<void> {
+  return invoke<void>("razor_forget", { cshtmlPath });
+}

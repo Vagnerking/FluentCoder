@@ -38,6 +38,7 @@ fn canonical_key(p: &Path) -> String {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RazorPrepareResult {
     pub shadow_dir: String,
     pub solution_path: String,
