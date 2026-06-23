@@ -103,5 +103,9 @@ Testou-se a **opção (b)** (reusar o doc *source-generated* do próprio Roslyn 
 - sincroniza on open/change do `.cshtml` (e `_ViewImports`/model/refs).
 Riscos: montar o shadow com as refs exatas do projeto do usuário (arbitrário); custo de regeneração ao vivo; precisão do mapeamento `#line` (validar no pipeline integrado, não às cegas).
 
+### Progresso de implementação (bricks)
+- **Brick 1 — source-map `#line`** ✅ (commit `b8e89e8`): `src-tauri/src/razor/sourcemap.rs`, mapeamento bidirecional gerado↔`.cshtml`, 11 testes, validado pelo Codex.
+- **Brick 2 — shadow project (em curso).** Insight empírico: o shadow deve **referenciar o projeto do usuário via `ProjectReference` e ser carregado num WORKSPACE Roslyn** (modelo semântico a partir do source, tolerante a erros), **não** via `dotnet build` — porque `dotnet build` compila a dependência e trava no primeiro erro do projeto do usuário (ex.: o CS1061 proposital). Validar o brick 2 num harness Roslyn-LSP (estilo `spike-b1.mjs`), não em build batch.
+
 ## Referências
 dotnet/razor#12069 (generator no outputs on first load) · dotnet/roslyn#82535 (flags razor não documentados) · dotnet/roslyn#83993 / #83878 (fix) · dotnet/vscode-csharp#9308 (wrong ALC com SDK antigo) · dotnet/razor#11834, #12332 (cohost exige generator + AdditionalFiles) · seblyng/roslyn.nvim (cohost OSS sem DevKit, min 5.8.0-1.26262.10).
