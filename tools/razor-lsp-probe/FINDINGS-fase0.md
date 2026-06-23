@@ -108,5 +108,16 @@ Riscos: montar o shadow com as refs exatas do projeto do usuário (arbitrário);
 - **Brick 2 — shadow project** ✅ (validado por `spike-b1c.mjs` + gerador em `src-tauri/src/razor/shadow.rs`, 6 testes). O shadow é `Microsoft.NET.Sdk` plain (sem Razor SDK) que **`ProjectReference`-a o projeto do usuário** (tipos a partir do source) **+ declara `FrameworkReference` próprio** (NÃO herdado transitivamente — sem `Microsoft.AspNetCore.App` dá 44× CS0234 em `Microsoft.AspNetCore`) **+ compila o `.g.cs` projetado**. Carregado com o projeto do usuário num **único workspace Roslyn (`solution/open`)** — nunca `dotnet build` (que travaria no erro do projeto do usuário). Resultado no harness (2 projetos no `.sln`, doc projetado aberto): `textDocument/diagnostic` → 1× **CS1061** (só o erro real, zero ruído de framework), hover `Model.City` → **`string WeatherModel.City`**, definition → **`WeatherModel.cs`**.
   Pendente do brick 2 (produção): derivar `FrameworkReference`/TFM do `.csproj` do usuário e gerar o `.g.cs` projetado ao vivo (rodar o Razor source generator).
 
+### Brick 6 — wire-shape do resultado MEDIDO (spike-b1d) — insumo do frontend
+Antes de implementar o roteamento de diagnostics/hover/definition no Monaco, capturei a **forma exata da resposta** do Roslyn standalone para o `.g.cs` projetado (`spike-b1d.mjs`, solução de 2 projetos, doc projetado aberto). Decisão de design baseada em medição, não em suposição:
+
+| request | resultado medido | roteamento |
+|---|---|---|
+| `textDocument/diagnostic` (CS1061) | `range` em **coords do `.g.cs`** (linha 160 0-based; **não** `.cshtml` linha 15). Sem `uri` por item, sem `relatedInformation`. | **remapear** generated→source via `#line` e **descartar** ranges não-mapeáveis (sintéticos) |
+| `textDocument/hover` @Model.City | contents corretos (`string WeatherModel.City`) + `.range` em coords do `.g.cs` (linha 85) | remapear o range; contents passam direto |
+| `textDocument/definition` @Model.City | alvo = `WeatherModel.cs` (arquivo real) | passa direto; só remapear alvos dentro do próprio `.g.cs` |
+
+→ Implementado em [src/lsp/servers/razorProjectionRouting.ts](../../src/lsp/servers/razorProjectionRouting.ts) (lógica pura, 13 testes usando estas coordenadas medidas) + [src/lsp/servers/razorProjection.ts](../../src/lsp/servers/razorProjection.ts) (starter). Owner de markers `fluent-cshtml`. **Atrás da flag `lsp.razorProjection` (default OFF)** — ponto único de rollback; com a flag OFF `.cshtml`→cohost (comportamento atual inalterado), `.razor` sempre cohost. Validado código a código com o Codex (3 rodadas → SOUND): sem colisão com o cliente `csharp` real (`suppressGenericBridges` + selector não-casante), `didOpen` manual do `.g.cs` após `projectInitializationComplete`, lifecycle 100% disposável via `LspManager` (race de start/stop serializada + generation guard), reprepare on-save (broker lê do disco). **Falta o aceite ao vivo (hover/ctrl+click/squiggle visual) — passo do usuário** (ver `docs/razor-brick6-frontend.md`).
+
 ## Referências
 dotnet/razor#12069 (generator no outputs on first load) · dotnet/roslyn#82535 (flags razor não documentados) · dotnet/roslyn#83993 / #83878 (fix) · dotnet/vscode-csharp#9308 (wrong ALC com SDK antigo) · dotnet/razor#11834, #12332 (cohost exige generator + AdditionalFiles) · seblyng/roslyn.nvim (cohost OSS sem DevKit, min 5.8.0-1.26262.10).
