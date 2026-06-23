@@ -10,3 +10,5 @@
 pub mod sourcemap;
 #[allow(dead_code)]
 pub mod shadow;
+#[allow(dead_code)]
+pub mod remap;

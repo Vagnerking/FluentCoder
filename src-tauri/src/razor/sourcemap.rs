@@ -181,10 +181,10 @@ impl RazorSourceMap {
         if dl == 0 && p.col < r.gen_start.col {
             return None;
         }
-        let line = r.src_start.line + dl;
+        let line = r.src_start.line.saturating_add(dl);
         let col = if dl == 0 {
             // first line: shift by the start-column delta
-            r.src_start.col + (p.col - r.gen_start.col)
+            r.src_start.col.saturating_add(p.col - r.gen_start.col)
         } else {
             p.col // subsequent lines are verbatim, columns align 1:1
         };
@@ -202,17 +202,77 @@ impl RazorSourceMap {
     pub fn to_generated(&self, p: Pos) -> Option<Pos> {
         let r = self.region_for_source(p)?;
         let dl = p.line - r.src_start.line;
-        let line = r.gen_start.line + dl;
+        let line = r.gen_start.line.saturating_add(dl);
         // Don't map past the generated region's extent.
         if line > r.gen_end_line {
             return None;
         }
         let col = if dl == 0 {
-            r.gen_start.col + p.col.saturating_sub(r.src_start.col)
+            r.gen_start.col.saturating_add(p.col.saturating_sub(r.src_start.col))
         } else {
             p.col
         };
         Some(Pos::new(line, col))
+    }
+
+    // ── range mapping (same-region enforced, exclusive-end aware) ───────────
+
+    fn gen_region_index(&self, p: Pos) -> Option<usize> {
+        self.regions
+            .iter()
+            .position(|r| p.line >= r.gen_start.line && p.line <= r.gen_end_line)
+    }
+
+    fn src_region_index(&self, p: Pos) -> Option<usize> {
+        self.regions
+            .iter()
+            .position(|r| p.ge(r.src_start) && p.le(r.src_end))
+    }
+
+    /// Map an exclusive `[.., end)` endpoint within `region`: try `end`, else
+    /// `end-1` then re-add a column. Both attempts must stay in the SAME region.
+    fn map_excl_end<RI, MP>(&self, end: Pos, region: usize, region_index: RI, map: MP) -> Option<Pos>
+    where
+        RI: Fn(Pos) -> Option<usize>,
+        MP: Fn(Pos) -> Option<Pos>,
+    {
+        if region_index(end) == Some(region) {
+            if let Some(p) = map(end) {
+                return Some(p);
+            }
+        }
+        if end.col > 1 {
+            let prev = Pos::new(end.line, end.col - 1);
+            if region_index(prev) == Some(region) {
+                if let Some(p) = map(prev) {
+                    return Some(Pos::new(p.line, p.col.saturating_add(1)));
+                }
+            }
+        }
+        None
+    }
+
+    /// Map a generated range `[start, end)` to source, requiring both endpoints in
+    /// the SAME mapped region so the span never bridges synthetic C#.
+    pub fn to_source_range(&self, start: Pos, end: Pos) -> Option<(Pos, Pos)> {
+        if (end.line, end.col) < (start.line, start.col) {
+            return None; // reversed range
+        }
+        let region = self.gen_region_index(start)?;
+        let s = self.to_source(start)?;
+        let e = self.map_excl_end(end, region, |p| self.gen_region_index(p), |p| self.to_source(p))?;
+        Some((s, e))
+    }
+
+    /// Source -> generated counterpart of [`to_source_range`].
+    pub fn to_generated_range(&self, start: Pos, end: Pos) -> Option<(Pos, Pos)> {
+        if (end.line, end.col) < (start.line, start.col) {
+            return None; // reversed range
+        }
+        let region = self.src_region_index(start)?;
+        let s = self.to_generated(start)?;
+        let e = self.map_excl_end(end, region, |p| self.src_region_index(p), |p| self.to_generated(p))?;
+        Some((s, e))
     }
 
     /// Number of mapped regions for the target (diagnostics/testing).
@@ -421,6 +481,29 @@ Model.City
         assert_eq!(m.to_source(Pos::new(3, 5)), Some(Pos::new(11, 5)));
         // reverse for line N+1 (was broken before: classic src_end was line N only)
         assert_eq!(m.to_generated(Pos::new(11, 5)), Some(Pos::new(3, 5)));
+    }
+
+    #[test]
+    fn to_source_range_same_region_full_span() {
+        let m = map();
+        // generated `Model.City` [(5,1),(5,11)) -> source [(8,13),(8,23))
+        let (s, e) = m.to_source_range(Pos::new(5, 1), Pos::new(5, 11)).unwrap();
+        assert_eq!(s, Pos::new(8, 13));
+        assert_eq!(e, Pos::new(8, 23));
+    }
+
+    #[test]
+    fn to_source_range_cross_region_is_none() {
+        let m = map();
+        // start in region 1 (gen line 5), end in region 2 (gen line 11) -> reject
+        assert_eq!(m.to_source_range(Pos::new(5, 1), Pos::new(11, 2)), None);
+    }
+
+    #[test]
+    fn to_source_range_reversed_is_none() {
+        let m = map();
+        // end before start (within one region) must be rejected, not silently swapped
+        assert_eq!(m.to_source_range(Pos::new(5, 7), Pos::new(5, 1)), None);
     }
 
     #[test]
