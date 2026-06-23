@@ -54,6 +54,10 @@ pub struct BrokerPlan {
     pub shadow_dir: PathBuf,
     pub shadow_csproj_path: PathBuf,
     pub shadow_csproj_content: String,
+    /// The user `.csproj` (the shadow references it; the solution opens both).
+    pub user_csproj_path: PathBuf,
+    /// Solution that ties user + shadow projects into one Roslyn workspace.
+    pub solution_path: PathBuf,
     /// `dotnet build` command that emits the projections.
     pub emit_command: (String, Vec<String>),
     /// cwd to run `emit_command` in (the user project dir) — required so `dotnet`
@@ -113,10 +117,13 @@ pub fn plan(inputs: &BrokerInputs) -> BrokerPlan {
         })
         .collect();
 
+    let solution_path = shadow_dir.join("RazorShadow.sln");
     BrokerPlan {
         shadow_dir,
         shadow_csproj_path,
         shadow_csproj_content,
+        user_csproj_path: inputs.user_csproj_path.to_path_buf(),
+        solution_path,
         emit_command: emit_command(inputs.user_csproj_path, inputs.config),
         emit_cwd: inputs.user_project_dir.to_path_buf(),
         projections,

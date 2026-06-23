@@ -18,3 +18,5 @@ pub mod projection_gen;
 pub mod derive;
 #[allow(dead_code)]
 pub mod broker;
+#[allow(dead_code)]
+pub mod exec;
