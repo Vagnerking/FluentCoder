@@ -93,7 +93,15 @@ O fix do #12069 (PR #12079 "Initialize feature flags in OOP early") é **host-si
 - **Conclusão:** a cadeia `.cshtml` → Razor compiler → `.g.cs`+`#line` → Roslyn C# padrão → hover/def/diagnostics → remap p/ `.cshtml` funciona, sem depender do serviço OOP do cohost.
 - **Becos sem saída descartados no spike:** `workspace/diagnostic` no Roslyn standalone (não expõe diag de doc gerado e *trava* a request — evitar).
 
-**Próximo (b1-full):** broker no app — gerar/sincronizar a projeção ao vivo (rodar o Razor compiler ou source generator), manter uma "shadow compilation" com as refs do projeto do usuário, encaminhar hover/def/completion/diagnostics/semanticTokens e remapear ranges pelos `#line`. Evitar duplicação com o gerador do SDK (shadow project sem Razor SDK, ou substituir o doc gerado).
+### Arquitetura do b1-full — decidida (spike-b1b)
+Testou-se a **opção (b)** (reusar o doc *source-generated* do próprio Roslyn standalone, que já roda o gerador Razor ao carregar o projeto): **descartada**. O Roslyn não expõe o doc gerado por LSP padrão — `workspace/symbol "Views_Home_Index"` → 0 resultados (só símbolos de `.cs` reais); `workspace/diagnostic` trava. Acessar docs source-generated exige o protocolo custom do Roslyn (usado internamente pelo cohost/devkit), não disponível trivialmente.
+
+→ **b1-full usa a opção (a): "shadow compilation" própria** (provada pelo spike-b1). O broker:
+- gera o `.g.cs` projetado (rodar o Razor compiler/source generator; v1 pode usar `EmitCompilerGeneratedFiles` on-save, live depois);
+- mantém um **shadow project** que `ProjectReference`-a o(s) projeto(s) do usuário (herda refs/tipos; a classe Razor gerada do usuário é `internal sealed` → sem colisão) + `FrameworkReference` apropriado, **sem o Razor SDK** (evita duplicar o gerador), contendo os `.g.cs` projetados;
+- carrega o shadow numa instância Roslyn própria, encaminha hover/def/completion/diagnostics/semanticTokens e **remapeia ranges pelos `#line`** (o mapa vem do compilador; rejeitar trechos sintéticos);
+- sincroniza on open/change do `.cshtml` (e `_ViewImports`/model/refs).
+Riscos: montar o shadow com as refs exatas do projeto do usuário (arbitrário); custo de regeneração ao vivo; precisão do mapeamento `#line` (validar no pipeline integrado, não às cegas).
 
 ## Referências
 dotnet/razor#12069 (generator no outputs on first load) · dotnet/roslyn#82535 (flags razor não documentados) · dotnet/roslyn#83993 / #83878 (fix) · dotnet/vscode-csharp#9308 (wrong ALC com SDK antigo) · dotnet/razor#11834, #12332 (cohost exige generator + AdditionalFiles) · seblyng/roslyn.nvim (cohost OSS sem DevKit, min 5.8.0-1.26262.10).
