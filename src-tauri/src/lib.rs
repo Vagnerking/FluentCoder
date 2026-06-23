@@ -4,6 +4,7 @@ mod file_index;
 mod fs_commands;
 mod git;
 mod lsp;
+mod razor;
 mod runner;
 mod search;
 mod session;

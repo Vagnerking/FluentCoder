@@ -1,0 +1,10 @@
+//! Razor (.cshtml/.razor) language support — Option B projection broker.
+//!
+//! Per [ADR 0002](../../../docs/adr/0002-cshtml-projection-roslyn.md): the Razor
+//! compiler projects `.cshtml` to C# (`.g.cs`); the standard Roslyn C# LSP
+//! analyzes that projection; this module maps positions/results back to the
+//! `.cshtml`. Independent of the (retiring) homegrown `cshtml` engine.
+
+// Foundational brick: consumed by the projection broker in a later slice.
+#[allow(dead_code)]
+pub mod sourcemap;
