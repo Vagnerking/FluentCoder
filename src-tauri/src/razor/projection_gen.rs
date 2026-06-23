@@ -50,7 +50,7 @@ pub struct GenContext<'a> {
 /// The generated C# filename for a `.cshtml` file name: the Razor SDK replaces
 /// `.` with `_` and appends `.g.cs` (e.g. `Index.cshtml` -> `Index_cshtml.g.cs`,
 /// `_ViewImports.cshtml` -> `_ViewImports_cshtml.g.cs`).
-fn generated_file_name(cshtml_file_name: &str) -> String {
+pub fn generated_file_name(cshtml_file_name: &str) -> String {
     format!("{}.g.cs", cshtml_file_name.replace('.', "_"))
 }
 
@@ -84,13 +84,18 @@ pub fn generated_path_for(
 }
 
 /// Build the `dotnet` command (program + args) that emits generator output for
-/// `project_path`. Returns `("dotnet", [..])`. Executing it is brick 5.
-pub fn emit_command(project_path: &Path) -> (String, Vec<String>) {
+/// `project_path` in `config`. Returns `("dotnet", [..])`. `-c <config>` must
+/// match the `config` used by [`generated_path_for`] or the emitted files land in
+/// a different `obj/<config>` tree. Executing it (with cwd = project dir, for
+/// `global.json` SDK selection) is brick 5.
+pub fn emit_command(project_path: &Path, config: &str) -> (String, Vec<String>) {
     (
         "dotnet".to_string(),
         vec![
             "build".to_string(),
             project_path.to_string_lossy().to_string(),
+            "-c".to_string(),
+            config.to_string(),
             "-p:EmitCompilerGeneratedFiles=true".to_string(),
             // keep it quiet + don't fail the broker on the user's own C# errors:
             // the generator still emits its output even when the compile fails.
@@ -145,10 +150,13 @@ mod tests {
 
     #[test]
     fn emit_command_requests_generated_files() {
-        let (prog, args) = emit_command(Path::new("C:/proj/App/App.csproj"));
+        let (prog, args) = emit_command(Path::new("C:/proj/App/App.csproj"), "Release");
         assert_eq!(prog, "dotnet");
         assert_eq!(args[0], "build");
         assert!(args.iter().any(|a| a == "-p:EmitCompilerGeneratedFiles=true"));
         assert!(args.iter().any(|a| a.contains("App.csproj")));
+        // config must be passed so the emitted obj/<config> tree matches generated_path_for
+        let ci = args.iter().position(|a| a == "-c").expect("-c present");
+        assert_eq!(args[ci + 1], "Release");
     }
 }
