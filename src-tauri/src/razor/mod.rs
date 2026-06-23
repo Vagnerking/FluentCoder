@@ -14,3 +14,5 @@ pub mod shadow;
 pub mod remap;
 #[allow(dead_code)]
 pub mod projection_gen;
+#[allow(dead_code)]
+pub mod derive;
