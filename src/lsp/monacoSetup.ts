@@ -32,6 +32,31 @@ export function setupMonacoForLsp(monaco: Monaco): void {
   registerCshtmlProjectionLanguage(monaco);
   installRazorHtmlLint(monaco);
   ensureCsharpLanguage(monaco);
+  installShikiRazorColorsLazily(monaco);
+}
+
+/**
+ * Upgrades `.cshtml`/`.razor` coloring from the Monarch grammar to Shiki's real
+ * TextMate grammar, loaded lazily on the first Razor model (Shiki pulls a WASM
+ * engine; no point loading it for a TS-only session). Idempotent + best-effort —
+ * `installShikiRazorColors` keeps the Monarch grammar if Shiki can't load.
+ */
+function installShikiRazorColorsLazily(monaco: Monaco): void {
+  const RAZOR_IDS = new Set([RAZOR_LANGUAGE_ID, CSHTML_LANGUAGE_ID]);
+  const isRazor = (m: MonacoNS.editor.ITextModel) => RAZOR_IDS.has(m.getLanguageId());
+  const trigger = () => {
+    void import("./shikiRazor").then((mod) => mod.installShikiRazorColors());
+  };
+  if (monaco.editor.getModels().some(isRazor)) {
+    trigger();
+    return;
+  }
+  const sub = monaco.editor.onDidCreateModel((model) => {
+    if (isRazor(model)) {
+      sub.dispose();
+      trigger();
+    }
+  });
 }
 
 /**
