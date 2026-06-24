@@ -48,6 +48,9 @@ const SCOPE_TO_TYPE: ReadonlyArray<readonly [string, string]> = [
   ["entity.name.type", "type"],
   ["entity.name.function", "function"],
   ["entity.name.namespace", "namespace"],
+  // Local/field/range variables (`entity.name.variable.local.cs`, etc.) are the
+  // light-blue variable color in VS Code dark+, not the default foreground.
+  ["entity.name.variable", "variable"],
   ["support.type", "type"],
   ["support.class", "type"],
   ["support.function", "function"],
