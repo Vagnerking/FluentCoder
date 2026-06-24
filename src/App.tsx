@@ -33,6 +33,10 @@ import { StatusBar } from "./components/StatusBar";
 import { TerminalPanel, type PanelTab } from "./components/TerminalPanel";
 import { QuickOpen } from "./components/QuickOpen";
 import { CommandPalette, type Command } from "./components/CommandPalette";
+import {
+  RAZOR_PROJECTION_FLAG_KEY,
+  isRazorProjectionEnabled,
+} from "./lsp/razorProjectionFlag";
 import { AboutDialog } from "./components/AboutDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { AgentsPanel } from "./components/AgentsPanel";
@@ -475,6 +479,23 @@ export default function App() {
         detail: "Build",
         run: () => {
           if (rootPath) void runBuildDiagnostics(rootPath);
+        },
+      },
+      {
+        id: "razor.toggleProjection",
+        title: isRazorProjectionEnabled()
+          ? "Razor: desligar projeção .cshtml (voltar ao cohost)"
+          : "Razor: ligar projeção .cshtml (experimental)",
+        detail: "Razor",
+        run: () => {
+          // Flip the ADR-0002 projection flag and reload so `.cshtml` re-opens
+          // under the chosen engine. No DevTools needed (release has none).
+          if (isRazorProjectionEnabled()) {
+            localStorage.removeItem(RAZOR_PROJECTION_FLAG_KEY);
+          } else {
+            localStorage.setItem(RAZOR_PROJECTION_FLAG_KEY, "1");
+          }
+          location.reload();
         },
       },
     ],

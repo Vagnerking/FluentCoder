@@ -63,8 +63,14 @@ const CONFIG = "Debug";
  * surfaces semantics "as of last save", like build-based diagnostics.
  */
 const REPREPARE_DEBOUNCE_MS = 500;
-/** Backoff for re-pulling diagnostics (Roslyn streams; first pulls can be empty). */
-const DIAGNOSTIC_RETRY_MS = [600, 1500, 3000];
+/**
+ * Backoff for re-pulling diagnostics. The shadow's Roslyn returns empty until its
+ * background compilation finishes (seconds after `projectInitializationComplete`),
+ * so the schedule must outlast that warmup — early-only retries miss the result
+ * and the squiggle never appears. Each pull re-publishes, so a late non-empty
+ * result corrects an earlier empty one.
+ */
+const DIAGNOSTIC_RETRY_MS = [800, 2000, 4000, 7000, 11000, 16000, 22000];
 
 /** A `.cshtml` being served, paired with its projected `.g.cs`. */
 interface ProjectionDoc {
@@ -166,6 +172,7 @@ export async function startRazorProjectionServer(
 
   // 3. Session state + disposables (all torn down on manager.stop).
   const docs = new Map<string, ProjectionDoc>(); // key: canonicalFileUriKey(cshtmlUri)
+  const sentText = new Map<string, string>(); // gcsUri -> last text synced to Roslyn
   const disposables: monaco.IDisposable[] = [];
   const reprepareTimers = new Map<string, number>();
   let disposed = false;
@@ -182,21 +189,21 @@ export async function startRazorProjectionServer(
     );
   };
 
-  /** Register/refresh a doc from a prepared projection + didOpen its `.g.cs`. */
+  /**
+   * Sync a prepared projection's `.g.cs` into the Roslyn client and cache its
+   * source map binding. The standalone Roslyn throws an NRE and shuts its request
+   * queue down when it receives a `textDocument/didChange` for the projected file
+   * (observed live), so we NEVER send didChange: a first sync is a `didOpen`, and
+   * any later content change is a clean `didClose` + `didOpen`. Identical content
+   * is a no-op — so a duplicate `projectInitializationComplete` (Roslyn can send
+   * it more than once) doesn't re-sync and churn the server.
+   */
   const openProjection = async (info: RazorProjectionInfo): Promise<void> => {
     const model = inProjectModelFor(info.cshtmlPath);
     if (!model) return; // closed meanwhile
     const cshtmlUri = model.uri.toString();
     const key = canonicalFileUriKey(cshtmlUri);
     const gcsUri = toFileUri(info.generatedPath);
-    const existing = docs.get(key);
-    const doc: ProjectionDoc = {
-      cshtmlPath: info.cshtmlPath,
-      cshtmlUri,
-      gcsUri,
-      gcsVersion: (existing?.gcsVersion ?? 0) + 1,
-    };
-    docs.set(key, doc);
     let text = "";
     try {
       text = await readGenerated(info.generatedPath);
@@ -204,21 +211,29 @@ export async function startRazorProjectionServer(
       lspLog("razor projection: read .g.cs failed", info.generatedPath, String(err));
       return;
     }
-    const method = existing ? "textDocument/didChange" : "textDocument/didOpen";
+
+    const existing = docs.get(key);
+    docs.set(key, {
+      cshtmlPath: info.cshtmlPath,
+      cshtmlUri,
+      gcsUri,
+      gcsVersion: (existing?.gcsVersion ?? 0) + 1,
+    });
+
+    if (sentText.get(gcsUri) === text) return; // already in sync — no-op
+    const wasOpen = sentText.has(gcsUri);
     try {
-      if (existing) {
-        await client.sendNotification("textDocument/didChange", {
-          textDocument: { uri: gcsUri, version: doc.gcsVersion },
-          contentChanges: [{ text }],
-        });
-      } else {
-        await client.sendNotification("textDocument/didOpen", {
-          textDocument: { uri: gcsUri, languageId: "csharp", version: doc.gcsVersion, text },
-        });
+      if (wasOpen) {
+        // Re-sync via close+open (NEVER didChange — it crashes Roslyn's queue).
+        await client.sendNotification("textDocument/didClose", { textDocument: { uri: gcsUri } });
       }
-      lspLog("razor projection: sent", method, gcsUri.slice(-60));
+      await client.sendNotification("textDocument/didOpen", {
+        textDocument: { uri: gcsUri, languageId: "csharp", version: 1, text },
+      });
+      sentText.set(gcsUri, text);
+      lspLog("razor projection: synced", wasOpen ? "reopen" : "open", gcsUri.slice(-60));
     } catch (err) {
-      lspLog("razor projection: didOpen/didChange failed", String(err));
+      lspLog("razor projection: didOpen/didClose failed", String(err));
     }
   };
 
@@ -247,17 +262,33 @@ export async function startRazorProjectionServer(
     }
   };
 
-  /** Pull diagnostics for every doc, with a short backoff (streamed results). */
-  const pullAllDiagnostics = (): void => {
+  /** Pull diagnostics for every open doc once. */
+  const pullAllOnce = (): void => {
     for (const doc of docs.values()) void pullDiagnostics(doc);
+  };
+
+  /** Pull now, then on a backoff that outlasts the shadow's compilation warmup. */
+  const pullAllDiagnostics = (): void => {
+    pullAllOnce();
     DIAGNOSTIC_RETRY_MS.forEach((ms) => {
       const t = window.setTimeout(() => {
         if (disposed) return;
-        for (const doc of docs.values()) void pullDiagnostics(doc);
+        pullAllOnce();
       }, ms);
       disposables.push({ dispose: () => window.clearTimeout(t) });
     });
   };
+
+  // Roslyn requests `workspace/diagnostic/refresh` the instant its background
+  // compilation completes — the exact moment to re-pull, so the squiggle appears
+  // as soon as it's ready instead of waiting on a timed retry. The generic
+  // diagnostics bridge is suppressed here, so nothing else owns this handler.
+  disposables.push(
+    client.onRequest("workspace/diagnostic/refresh", () => {
+      pullAllOnce();
+      return null;
+    })
+  );
 
   // 4. Monaco providers for `.cshtml` (forward to the `.g.cs`, remap results).
   const sel: monaco.languages.LanguageSelector = CSHTML_PROJECTION_LANGUAGE_ID;
@@ -349,6 +380,7 @@ export async function startRazorProjectionServer(
     const doc = docs.get(key);
     if (!doc) return;
     docs.delete(key);
+    sentText.delete(doc.gcsUri);
     void client.sendNotification("textDocument/didClose", { textDocument: { uri: doc.gcsUri } }).catch(() => {});
     void razorForget(doc.cshtmlPath).catch(() => {});
     const model = monaco.editor.getModel(monaco.Uri.parse(doc.cshtmlUri));
