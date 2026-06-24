@@ -1103,6 +1103,7 @@ version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
  "futures-util",
+ "globset",
  "grep-matcher",
  "grep-regex",
  "grep-searcher",

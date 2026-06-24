@@ -20,6 +20,7 @@ import type {
   AgentStore,
   RevertPoint,
 } from "./agents/types";
+import { getFilesExcludeGlobs } from "./settings/filesExclude";
 
 /** Raw shape returned by the Rust `git_status` (snake_case from serde). */
 interface RawGitStatus {
@@ -49,9 +50,16 @@ export async function pickSavePath(defaultName?: string): Promise<string | null>
   return typeof selected === "string" ? selected : null;
 }
 
-/** Lists the immediate children of `path` and maps them to `FileNode`s. */
+/**
+ * Lists the immediate children of `path` and maps them to `FileNode`s. Entries
+ * matching the active `files.exclude` globs (e.g. `bin`/`obj`/`.git`) are hidden
+ * by the backend, so the tree mirrors VS Code's exclusion behavior.
+ */
 export async function readDir(path: string): Promise<FileNode[]> {
-  const entries = await invoke<RawDirEntry[]>("read_dir", { path });
+  const entries = await invoke<RawDirEntry[]>("read_dir", {
+    path,
+    exclude: getFilesExcludeGlobs(),
+  });
   return entries.map((e) => ({
     name: e.name,
     path: e.path,
