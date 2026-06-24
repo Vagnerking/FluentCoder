@@ -403,6 +403,13 @@ export function EditorPane({
     editorRef.current = editorInstance;
     monacoRef.current = monaco;
 
+    // v10 (#77): força a aplicação do tema custom. Na stack @codingame a prop
+    // `theme` do @monaco-editor/react nem sempre aplica o tema definido em
+    // beforeMount (o serviço de tema do VS Code intercepta), deixando o editor
+    // no tema default claro → C# em azul/preto sobre fundo escuro = "apagado".
+    // Reaplicar aqui, após o define + mount, garante o fluent-acrylic-dark.
+    monaco.editor.setTheme("fluent-acrylic-dark");
+
     editorInstance.onDidChangeCursorPosition((e) => {
       const line = e.position.lineNumber;
       onCursorChange(line, e.position.column);
