@@ -205,10 +205,42 @@ export async function startRazorProjectionServer(
 
   // 3. Session state + disposables (all torn down on manager.stop).
   const docs = new Map<string, ProjectionDoc>(); // key: canonicalFileUriKey(cshtmlUri)
-  const sentText = new Map<string, string>(); // gcsUri -> last text synced to Roslyn
+  const sentText = new Map<string, string>(); // gcsUri -> text CURRENTLY open in Roslyn
   const disposables: monaco.IDisposable[] = [];
   const reprepareTimers = new Map<string, number>();
   let disposed = false;
+
+  // Per-`.g.cs` mutation queue. EVERY close/open of a generated doc — the normal
+  // sync (openProjection) AND the provisional-completion swap — runs through here,
+  // serialized per gcsUri, so the two never interleave and `sentText` always
+  // reflects exactly what Roslyn has open. didChange crashes this Roslyn, so all
+  // content changes are close+open.
+  const genChain = new Map<string, Promise<unknown>>();
+  const mutateGenerated = <T>(gcsUri: string, op: () => Promise<T>): Promise<T> => {
+    const prev = genChain.get(gcsUri) ?? Promise.resolve();
+    const next = prev.then(op, op);
+    genChain.set(gcsUri, next.then(() => undefined, () => undefined));
+    return next;
+  };
+
+  /** Make Roslyn's open copy of `gcsUri` exactly `text` (close+open). Idempotent. */
+  const setGeneratedText = (gcsUri: string, text: string): Promise<void> =>
+    mutateGenerated(gcsUri, async () => {
+      if (disposed) return;
+      if (sentText.get(gcsUri) === text) return; // already in sync
+      const wasOpen = sentText.has(gcsUri);
+      // While the close/open is in flight `sentText` is unknown; clear it so a
+      // mid-way `didOpen` rejection can't leave it claiming the wrong text (the
+      // next op then re-opens from scratch). Set it true only after didOpen lands.
+      sentText.delete(gcsUri);
+      if (wasOpen) {
+        await client.sendNotification("textDocument/didClose", { textDocument: { uri: gcsUri } });
+      }
+      await client.sendNotification("textDocument/didOpen", {
+        textDocument: { uri: gcsUri, languageId: "csharp", version: 1, text },
+      });
+      sentText.set(gcsUri, text);
+    });
 
   const remapToSourceFor =
     (cshtmlPath: string): RemapFn =>
@@ -253,18 +285,9 @@ export async function startRazorProjectionServer(
       gcsVersion: (existing?.gcsVersion ?? 0) + 1,
     });
 
-    if (sentText.get(gcsUri) === text) return; // already in sync — no-op
-    const wasOpen = sentText.has(gcsUri);
+    // Re-sync through the per-gcsUri queue (never didChange — it crashes Roslyn).
     try {
-      if (wasOpen) {
-        // Re-sync via close+open (NEVER didChange — it crashes Roslyn's queue).
-        await client.sendNotification("textDocument/didClose", { textDocument: { uri: gcsUri } });
-      }
-      await client.sendNotification("textDocument/didOpen", {
-        textDocument: { uri: gcsUri, languageId: "csharp", version: 1, text },
-      });
-      sentText.set(gcsUri, text);
-      lspLog("razor projection: synced", wasOpen ? "reopen" : "open", gcsUri.slice(-60));
+      await setGeneratedText(gcsUri, text);
     } catch (err) {
       lspLog("razor projection: didOpen/didClose failed", String(err));
     }
@@ -343,6 +366,116 @@ export async function startRazorProjectionServer(
   const docFor = (model: monaco.editor.ITextModel): ProjectionDoc | undefined =>
     docs.get(canonicalFileUriKey(model.uri.toString()));
 
+  // 0-based (line,character) → absolute offset in `text` (UTF-16 units).
+  const offsetOf = (text: string, line: number, character: number): number => {
+    let off = 0;
+    for (let l = 0; l < line; l++) {
+      const nl = text.indexOf("\n", off);
+      if (nl < 0) return text.length;
+      off = nl + 1;
+    }
+    return Math.min(off + character, text.length);
+  };
+
+  /**
+   * Member completion right after a `.` in a Razor C# expression. Returns the raw
+   * LSP items, or null when this isn't a member-completion position (caller falls
+   * back to the normal path). See the big comment at the call site.
+   */
+  const provisionalDotCompletion = async (
+    doc: ProjectionDoc,
+    model: monaco.editor.ITextModel,
+    position: monaco.IPosition,
+    token: monaco.CancellationToken
+  ): Promise<unknown[] | null> => {
+    // Trigger only when the char immediately left of the caret is `.` (member
+    // access). `@Model.Ci|` (`.` further left) goes through the normal path once
+    // the projection already has `Model.Ci`; we target the bare-dot case.
+    if (position.column < 2) return null;
+    const before = model.getValueInRange({
+      startLineNumber: position.lineNumber,
+      startColumn: position.column - 1,
+      endLineNumber: position.lineNumber,
+      endColumn: position.column,
+    });
+    if (before !== ".") return null;
+
+    // Map the expression END (the char just before the `.`) into the .g.cs — lands
+    // at the end of the projected expression (e.g. after `Model`).
+    const gen = await razorRemapToGenerated(
+      doc.cshtmlPath,
+      position.lineNumber - 1,
+      position.column - 2
+    );
+    if (!gen || token.isCancellationRequested || disposed) return null;
+
+    const gcsUri = doc.gcsUri;
+    // The whole swap→complete→restore is ONE queued op, so it can't interleave
+    // with openProjection/forgetDoc on this gcsUri. `original` is captured INSIDE
+    // the op (after waiting) so a reprepare that ran while we queued is respected.
+    return mutateGenerated(gcsUri, async (): Promise<unknown[] | null> => {
+      if (token.isCancellationRequested || disposed) return null;
+      const original = sentText.get(gcsUri);
+      if (original == null) return null; // not open — caller falls back
+
+      const insertAt = offsetOf(original, gen.line, gen.character);
+      // Insertion-point guard: only inject after a plausible expression end (ident
+      // char, `)`, `]`, `>`) so we never split a token or inject into junk.
+      const prevChar = original[insertAt - 1] ?? "";
+      if (!/[A-Za-z0-9_)\]>]/.test(prevChar)) return null;
+      const nextChar = original[insertAt] ?? "";
+      const provisional =
+        nextChar === "."
+          ? original
+          : original.slice(0, insertAt) + "." + original.slice(insertAt);
+      const changed = provisional !== original;
+      // Complete just after the (existing or injected) dot.
+      const dotEnd = insertAt + 1;
+      const head = provisional.slice(0, dotEnd);
+      const compLine = head.match(/\n/g)?.length ?? 0;
+      const compChar = dotEnd - (head.lastIndexOf("\n") + 1);
+
+      try {
+        if (changed) {
+          sentText.delete(gcsUri); // unknown during the swap (see setGeneratedText)
+          await client.sendNotification("textDocument/didClose", { textDocument: { uri: gcsUri } });
+          await client.sendNotification("textDocument/didOpen", {
+            textDocument: { uri: gcsUri, languageId: "csharp", version: 1, text: provisional },
+          });
+          sentText.set(gcsUri, provisional); // keep the invariant truthful
+        }
+        const res = await client.sendRequest<
+          { items?: unknown[]; isIncomplete?: boolean } | unknown[] | null
+        >("textDocument/completion", {
+          textDocument: { uri: gcsUri },
+          position: { line: compLine, character: compChar },
+          context: { triggerKind: 2, triggerCharacter: "." },
+        });
+        if (token.isCancellationRequested) return null; // canceled mid-flight
+        return !res ? [] : Array.isArray(res) ? res : res.items ?? [];
+      } catch (err) {
+        lspLog("razor projection: provisional completion failed", String(err));
+        return null;
+      } finally {
+        // Restore the real generated text so diagnostics/hover see disk again.
+        // We're still inside the queued op, so nothing else touched this gcsUri.
+        // Restore whenever we changed it and aren't already back at `original`.
+        if (changed && !disposed && sentText.get(gcsUri) !== original) {
+          try {
+            sentText.delete(gcsUri);
+            await client.sendNotification("textDocument/didClose", { textDocument: { uri: gcsUri } });
+            await client.sendNotification("textDocument/didOpen", {
+              textDocument: { uri: gcsUri, languageId: "csharp", version: 1, text: original },
+            });
+            sentText.set(gcsUri, original);
+          } catch {
+            /* best-effort restore */
+          }
+        }
+      }
+    });
+  };
+
   disposables.push(
     monaco.languages.registerHoverProvider(sel, {
       provideHover: async (model, position, token) => {
@@ -410,6 +543,28 @@ export async function startRazorProjectionServer(
         if (htmlRegionAt(model, position) === "html") {
           return htmlComplete(monaco, model, position) ?? { suggestions: [] };
         }
+        const word = model.getWordUntilPosition(position);
+        const range: monaco.IRange = {
+          startLineNumber: position.lineNumber,
+          endLineNumber: position.lineNumber,
+          startColumn: word.startColumn,
+          endColumn: word.endColumn,
+        };
+
+        // MEMBER COMPLETION after a `.` ("provisional completion"): the real Razor
+        // compiler projects an INCOMPLETE expression `@Model.` as bare `Model` —
+        // it drops the trailing dot — so Roslyn sees no member access and returns
+        // nothing. We rebind the .g.cs in-memory with the dot injected at the
+        // expression end, complete there, then restore. didChange crashes this
+        // Roslyn, so we use the same didClose+didOpen lifecycle as openProjection.
+        const dotItems = await provisionalDotCompletion(doc, model, position, token);
+        if (dotItems) {
+          return {
+            suggestions: dotItems.map((it) => toCompletion(it as Record<string, unknown>, range)),
+            incomplete: true,
+          };
+        }
+
         const gen = await razorRemapToGenerated(doc.cshtmlPath, position.lineNumber - 1, position.column - 1);
         if (!gen) return { suggestions: [] };
         const res = await client.sendRequest<
@@ -421,13 +576,6 @@ export async function startRazorProjectionServer(
         );
         if (token.isCancellationRequested || !res) return { suggestions: [] };
         const items = Array.isArray(res) ? res : res.items ?? [];
-        const word = model.getWordUntilPosition(position);
-        const range: monaco.IRange = {
-          startLineNumber: position.lineNumber,
-          endLineNumber: position.lineNumber,
-          startColumn: word.startColumn,
-          endColumn: word.endColumn,
-        };
         return {
           suggestions: items.map((it) => toCompletion(it as Record<string, unknown>, range)),
           incomplete: Array.isArray(res) ? false : Boolean(res.isIncomplete),
@@ -479,8 +627,17 @@ export async function startRazorProjectionServer(
     const doc = docs.get(key);
     if (!doc) return;
     docs.delete(key);
-    sentText.delete(doc.gcsUri);
-    void client.sendNotification("textDocument/didClose", { textDocument: { uri: doc.gcsUri } }).catch(() => {});
+    // Close through the per-gcsUri queue so it can't interleave with a sync or a
+    // provisional swap; clearing sentText inside keeps the invariant truthful.
+    // (genChain keeps one entry per distinct .g.cs ever opened — bounded by the
+    // file count, so no unbounded growth; cleared wholesale on dispose.)
+    const closingUri = doc.gcsUri;
+    void mutateGenerated(closingUri, async () => {
+      if (sentText.has(closingUri)) {
+        await client.sendNotification("textDocument/didClose", { textDocument: { uri: closingUri } }).catch(() => {});
+        sentText.delete(closingUri);
+      }
+    });
     void razorForget(doc.cshtmlPath).catch(() => {});
     const model = monaco.editor.getModel(monaco.Uri.parse(doc.cshtmlUri));
     if (model && !model.isDisposed()) monaco.editor.setModelMarkers(model, DIAGNOSTICS_OWNER, []);
@@ -569,6 +726,8 @@ export async function startRazorProjectionServer(
       for (const t of reprepareTimers.values()) window.clearTimeout(t);
       reprepareTimers.clear();
       for (const key of [...docs.keys()]) forgetDoc(key);
+      genChain.clear(); // drop the per-gcsUri mutation queues
+      sentText.clear();
       forgetAllHtmlVirtual(); // drop any leftover virtual-HTML cache on stop
       // Belt-and-suspenders: drop EVERY store entry this server owns, in case a
       // doc lifecycle edge was missed or the docs map was incomplete at stop —
