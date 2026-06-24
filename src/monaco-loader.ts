@@ -1,59 +1,54 @@
 /**
- * Unifies the Monaco instance and wires its web workers — must be imported once
- * at app entry, BEFORE any `@monaco-editor/react` editor mounts.
+ * Unifies the Monaco instance and boots the VS Code services — must be imported
+ * once at app entry, BEFORE any `@monaco-editor/react` editor mounts.
  *
- * Why this exists: `@monaco-editor/react` defaults to loading Monaco from a CDN,
- * creating editor models in a SEPARATE Monaco instance from the npm
- * `monaco-editor` package that our LSP layer imports (`src/lsp/client.ts` →
- * `MonacoServices.install(monaco)`). With two instances, the language client
- * watches an empty `monaco.editor.getModels()` and never sends `textDocument/
- * didOpen` — so no C#/TS IntelliSense. `loader.config({ monaco })` forces
- * `@monaco-editor/react` to use the SAME npm instance, so models and the LSP
- * client share one world.
+ * ──────────────────────────────────────────────────────────────────────────
+ * SINGLE-INSTANCE CONTRACT (the critical risk of the v10 migration)
+ * ──────────────────────────────────────────────────────────────────────────
+ * `@monaco-editor/react` defaults to loading Monaco from a CDN, which would be a
+ * DIFFERENT Monaco instance than the one our LSP layer imports. With two
+ * instances the language client watches an empty `monaco.editor.getModels()`,
+ * never sends `textDocument/didOpen`, and no IntelliSense ever appears.
  *
- * Using the npm Monaco (instead of the CDN build) means we must also supply the
- * editor/language web workers ourselves; Vite bundles them via the `?worker`
- * imports below.
+ * On the v10 stack `monaco-editor` is aliased (package.json) to
+ * `@codingame/monaco-vscode-editor-api`, so `import * as monaco from
+ * "monaco-editor"` already resolves to the `@codingame` build everywhere.
+ * `loader.config({ monaco })` then points `@monaco-editor/react` at that SAME
+ * instance — editor and LSP share one Monaco, one model registry, one provider
+ * registry.
+ *
+ * ──────────────────────────────────────────────────────────────────────────
+ * INITIALIZATION ORDER
+ * ──────────────────────────────────────────────────────────────────────────
+ * `@codingame`'s `initialize()` must run exactly once and BEFORE the first
+ * editor is created (documented constraint). We start it here at module load
+ * and only hand Monaco to `@monaco-editor/react` (via `loader.config`) AFTER it
+ * resolves, so the first `<Editor>` can never mount against uninitialized
+ * services. `whenMonacoReady` lets the UI gate its first editor on the same
+ * promise. The web workers are configured inside `ensureVscodeServices()` via
+ * the v10 worker factory (no more `MonacoEnvironment.getWorker` returning the
+ * vanilla json/css/html/ts workers — those language services are now provided
+ * by real LSP servers, and the embedded TS worker is disabled on purpose).
  */
 import * as monaco from "monaco-editor";
 import { loader } from "@monaco-editor/react";
 import { installWindowsFileUriSerialization } from "./lsp/uri";
+import { ensureVscodeServices } from "./lsp/vscodeServices";
 
-import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
-import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
-import cssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
-import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
-import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
-
-// Must happen before @monaco-editor/react creates the first model. Otherwise
-// Roslyn receives file:///c%3A/... and treats project files as miscellaneous.
+// Must happen before any model is created. Otherwise Roslyn receives
+// file:///c%3A/... and treats project files as miscellaneous. Applied to the
+// shared `@codingame` Monaco instance (the alias target), so editor + LSP both
+// serialize Windows file URIs as file:///c:/... .
 installWindowsFileUriSerialization(monaco);
 
-// Monaco asks for a worker by language label; return the matching bundled one.
-// (The TS/JS worker's own IntelliSense is disabled elsewhere for LSP-backed
-// languages, but the worker is still needed for tokenization/basic services.)
-self.MonacoEnvironment = {
-  getWorker(_workerId: string, label: string) {
-    switch (label) {
-      case "json":
-        return new jsonWorker();
-      case "css":
-      case "scss":
-      case "less":
-        return new cssWorker();
-      case "html":
-      case "handlebars":
-      case "razor":
-      case "aspnetcorerazor":
-        return new htmlWorker();
-      case "typescript":
-      case "javascript":
-        return new tsWorker();
-      default:
-        return new editorWorker();
-    }
-  },
-};
-
-// Point @monaco-editor/react at the npm instance instead of its CDN default.
-loader.config({ monaco });
+/**
+ * Resolves once the VS Code services are initialized and `@monaco-editor/react`
+ * has been pointed at the shared Monaco instance. The first editor must await
+ * this (see `EditorPane`). Boots the services exactly once (idempotent — shared
+ * with the LSP client bootstrap in `src/lsp/vscodeServices.ts`).
+ */
+export const whenMonacoReady: Promise<void> = ensureVscodeServices().then(() => {
+  // Point @monaco-editor/react at the @codingame instance instead of its CDN
+  // default — AFTER initialize() so no editor can mount before services exist.
+  loader.config({ monaco });
+});

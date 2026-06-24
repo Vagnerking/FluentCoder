@@ -1,6 +1,7 @@
 import Editor, { BeforeMount, OnMount } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { whenMonacoReady } from "../monaco-loader";
 import type {
   BlameHunk,
   EditorActionsApi,
@@ -91,6 +92,20 @@ export function EditorPane({
 }: EditorPaneProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
+  // The v10 `@codingame` services must finish `initialize()` before the first
+  // editor mounts (documented constraint) — `whenMonacoReady` also points
+  // `@monaco-editor/react` at the shared Monaco instance. Gate the <Editor> on
+  // it so the editor never mounts against a CDN/uninitialized Monaco.
+  const [monacoReady, setMonacoReady] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    void whenMonacoReady.then(() => {
+      if (alive) setMonacoReady(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
   // This editor's own reveal fn + actions api, set on mount. Kept internally so
   // we can (re)bind them to the parent's refs whenever THIS pane becomes the
   // active group — Monaco panes are not remounted on group switch, so binding
@@ -471,6 +486,20 @@ export function EditorPane({
         <div className="editor-empty-inner">
           <h2>Fluent Coder</h2>
           <p>Abra uma pasta pelo menu Arquivo (ou Ctrl+K Ctrl+O) para começar.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Hold the editor back until the @codingame services are initialized. Without
+  // this the first <Editor> could call monaco.editor.create() before
+  // initialize() resolves (which the v10 stack forbids) or against the CDN
+  // Monaco (breaking the single-instance contract → empty getModels(), no LSP).
+  if (!monacoReady) {
+    return (
+      <div className="editor-empty">
+        <div className="editor-empty-inner">
+          <p>Carregando editor…</p>
         </div>
       </div>
     );

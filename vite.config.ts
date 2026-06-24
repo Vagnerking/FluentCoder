@@ -40,6 +40,16 @@ export default defineConfig(async () => ({
     ],
   },
 
+  // The v10 worker factory loads its workers as ES modules
+  // (`new Worker(url, { type: "module" })` — editor/textmate/extension-host
+  // workers). Rollup's default worker output format is `iife`, which cannot be
+  // code-split, and those workers DO split (they import shared @codingame
+  // chunks) — hence the build error "UMD and IIFE output formats are not
+  // supported for code-splitting builds". Emit ES-module workers instead.
+  worker: {
+    format: "es",
+  },
+
   build: {
     // Don't inline the Material icon SVGs as base64 in the JS bundle — there
     // are ~1200 of them and inlining loads them all at startup, hurting cold

@@ -100,12 +100,34 @@ function ensureCsharpLanguage(monaco: Monaco): void {
 }
 
 /**
+ * Minimal shape of the standalone TS/JS language contribution we touch. It is an
+ * OPTIONAL part of Monaco's API: the vanilla `monaco-editor` bundle ships it,
+ * but the v10 `@codingame/monaco-vscode-editor-api` build does NOT (TS/JS
+ * IntelliSense there comes from the real `typescript-language-server` instead).
+ * So `monaco.languages.typescript` is absent from the v10 type surface — we read
+ * it through a narrow cast and the runtime `if (!ts)` guard makes its absence a
+ * no-op (nothing to disable when the embedded worker was never bundled).
+ */
+interface TsDefaults {
+  setDiagnosticsOptions(opts: unknown): void;
+  setEagerModelSync(enabled: boolean): void;
+  setExtraLibs(libs: unknown[]): void;
+}
+interface MonacoTypescriptApi {
+  typescriptDefaults: TsDefaults;
+  javascriptDefaults: TsDefaults;
+}
+
+/**
  * Turns OFF the embedded TS/JS worker's diagnostics, suggestions, and
  * completion provider. Syntax highlighting (Monarch tokenizer) stays intact.
+ * On the v10 stack the embedded worker isn't bundled at all, so this is a
+ * defensive no-op there — the real LSP server is the single source either way.
  */
 function disableBuiltinTsWorker(monaco: Monaco): void {
-  const ts = monaco.languages.typescript;
-  if (!ts) return; // defensive: TS contribution might be tree-shaken out
+  const ts = (monaco.languages as unknown as { typescript?: MonacoTypescriptApi })
+    .typescript;
+  if (!ts) return; // v10 @codingame build (or tree-shaken vanilla): nothing to disable
 
   const off = {
     noSemanticValidation: true,
