@@ -121,8 +121,14 @@ sealed class ProjectSession
     private readonly IIncrementalGenerator _generator;
     // The ONE options provider the driver references; refreshed every request.
     private readonly EditorConfigOptions _options = new();
-    // Live AdditionalText handles, keyed by absolute path, so we can ReplaceAdditionalText.
-    private readonly Dictionary<string, AdditionalText> _texts = new(StringComparer.OrdinalIgnoreCase);
+    // Live AdditionalText handles, keyed by a NORMALIZED path (backslashes, lower)
+    // so the same `.cshtml` sent with `/` vs `\` (or different case) is treated as
+    // ONE file — else the Razor generator throws on a duplicate hintName.
+    private readonly Dictionary<string, AdditionalText> _texts = new(StringComparer.Ordinal);
+
+    /// Canonical key for a path: backslashes, lowercased — matches how two forms of
+    /// the same file must collapse to one AdditionalText.
+    private static string NormKey(string path) => path.Replace('/', '\\').ToLowerInvariant();
     // Last globals signature the driver was built/run against — a change forces a
     // driver rebuild (incremental gen wouldn't otherwise notice a globals-only edit).
     private string _globalsSig = "";
@@ -202,12 +208,13 @@ sealed class ProjectSession
     private void ReplaceSharedIfChanged(string? path, string? text)
     {
         if (path is null || text is null) return;
-        if (_texts.TryGetValue(path, out var old) && old.GetText()?.ToString() == text) return;
+        var nk = NormKey(path);
+        if (_texts.TryGetValue(nk, out var old) && old.GetText()?.ToString() == text) return;
         var fresh = new InMemoryText(path, text);
         _driver = old is not null
             ? _driver.ReplaceAdditionalText(old, fresh)
             : _driver.AddAdditionalTexts(System.Collections.Immutable.ImmutableArray.Create<AdditionalText>(fresh));
-        _texts[path] = fresh;
+        _texts[nk] = fresh;
     }
 
     /// Re-emit `cshtmlPath` with `text`; returns the generated C#.
@@ -216,7 +223,8 @@ sealed class ProjectSession
         // A globals-only change (e.g. RootNamespace/TFM after a .csproj edit) needs
         // a fresh driver, or the incremental generator reuses stale output.
         RebuildDriverIfGlobalsChanged();
-        if (_texts.TryGetValue(cshtmlPath, out var old) && old.GetText()?.ToString() == text)
+        var nk = NormKey(cshtmlPath);
+        if (_texts.TryGetValue(nk, out var old) && old.GetText()?.ToString() == text)
         {
             // Unchanged — still run to fetch the cached output.
             _driver = _driver.RunGenerators(_compilation);
@@ -226,7 +234,7 @@ sealed class ProjectSession
         _driver = old is not null
             ? _driver.ReplaceAdditionalText(old, fresh)
             : _driver.AddAdditionalTexts(System.Collections.Immutable.ImmutableArray.Create<AdditionalText>(fresh));
-        _texts[cshtmlPath] = fresh;
+        _texts[nk] = fresh;
         _driver = _driver.RunGenerators(_compilation);
         return ReadGenerated(cshtmlPath);
     }
@@ -235,11 +243,18 @@ sealed class ProjectSession
         Request req, string? targetPath, string targetText)
     {
         var list = new List<AdditionalText>();
+        // DEDUP by path: the Razor generator throws (duplicate hintName) if the
+        // same `.cshtml` is added twice. This happens when the target file IS one
+        // of the shared imports (e.g. the user opened `_ViewStart.cshtml` itself,
+        // or the project's `_ViewStart`/`_ViewImports` also appears as a target).
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         void add(string? path, string? text)
         {
             if (path is null || text is null) return;
+            var nk = NormKey(path);
+            if (!seen.Add(nk)) return; // already added (same file, any path form)
             var t = new InMemoryText(path, text);
-            _texts[path] = t;
+            _texts[nk] = t;
             list.Add(t);
         }
         add(req.ViewImportsPath, req.ViewImportsText);
@@ -262,6 +277,13 @@ sealed class ProjectSession
             foreach (var src in gen.GeneratedSources)
                 if (src.HintName.Contains(stem, StringComparison.OrdinalIgnoreCase))
                     return src.SourceText.ToString();
+        // Diagnose an empty result: what DID the generator produce, and why?
+        var hints = result.Results.SelectMany(r => r.GeneratedSources).Select(s => s.HintName).ToList();
+        var diags = result.Results.SelectMany(r => r.Diagnostics).Select(d => d.ToString()).Take(5).ToList();
+        Sidecar.Log($"ReadGenerated EMPTY for '{Path.GetFileName(cshtmlPath)}' (want *{wantSuffix}); " +
+                    $"hints=[{string.Join(", ", hints)}]; refs={_compilation.References.Count()}; " +
+                    $"texts=[{string.Join(", ", _texts.Keys.Select(Path.GetFileName))}]; " +
+                    $"diags=[{string.Join(" | ", diags)}]");
         return "";
     }
 

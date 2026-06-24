@@ -336,7 +336,9 @@ impl Sidecar {
             .arg(strip_extended_prefix(&dll.to_string_lossy()))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            // Inherit stderr so the sidecar's `[razor:sidecar]` logging surfaces in
+            // the host process output (diagnostics for empty/failed emits).
+            .stderr(Stdio::inherit());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;

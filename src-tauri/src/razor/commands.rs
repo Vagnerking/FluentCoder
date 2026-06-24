@@ -315,6 +315,7 @@ pub async fn razor_emit_live(
     let generated = match state.sidecar.emit(&ctx.inputs, &ctx.cshtml_abs, &text) {
         Ok(g) => g,
         Err(e) => {
+            eprintln!("[razor:live] emit FAILED: {e}");
             return Ok(EmitLiveResult {
                 generated_text: String::new(),
                 generation: 0,
@@ -323,6 +324,12 @@ pub async fn razor_emit_live(
             });
         }
     };
+    eprintln!(
+        "[razor:live] emit OK: buf={}ch gcs={}ch hasModelDot={}",
+        text.len(),
+        generated.len(),
+        generated.contains("Model.")
+    );
 
     // Parse the map from the EXACT text we return, PARK it as pending under a fresh
     // generation, and return the text+gen. The frontend commits the pending map

@@ -1,6 +1,53 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { scanRazorMarkup } from "./razorHtmlLint.ts";
+import { scanRazorMarkup, scanIncompleteRazorExpressions } from "./razorHtmlLint.ts";
+
+test("incomplete: @Model. (trailing dot) is flagged on the dot", () => {
+  const src = "<p>@Model.</p>";
+  const r = scanIncompleteRazorExpressions(src);
+  assert.equal(r.length, 1);
+  assert.match(r[0].message, /incompleta/i);
+  assert.equal(src.slice(r[0].start, r[0].end), "."); // range = the trailing dot
+});
+
+test("incomplete: @Model.City (complete member) is clean", () => {
+  assert.equal(scanIncompleteRazorExpressions("<p>@Model.City</p>").length, 0);
+});
+
+test("incomplete: nested @Model.A. (trailing dot after a member) is flagged", () => {
+  assert.equal(scanIncompleteRazorExpressions("@Model.A. ").length, 1);
+});
+
+test("incomplete: multiple exprs, none trailing-dot, is clean", () => {
+  assert.equal(scanIncompleteRazorExpressions("<h1>@greeting, @Model.City</h1>").length, 0);
+});
+
+test("incomplete: @{ code. } block is NOT flagged (Roslyn owns C# blocks)", () => {
+  assert.equal(scanIncompleteRazorExpressions("@{ var x = a. }").length, 0);
+});
+
+test("incomplete: @(expr.) parenthesized is NOT flagged here", () => {
+  assert.equal(scanIncompleteRazorExpressions("@(Model.)").length, 0);
+});
+
+test("incomplete: @@ escape and @* *@ comment are ignored", () => {
+  assert.equal(scanIncompleteRazorExpressions("a@@b @* x. *@").length, 0);
+});
+
+test("incomplete: trailing dot at end-of-buffer is flagged", () => {
+  assert.equal(scanIncompleteRazorExpressions("<p>@Model.").length, 1);
+});
+
+test("incomplete: email literal (Razor's @-exception) is NOT flagged", () => {
+  // `@` preceded by a text char is literal, not a transition.
+  assert.equal(scanIncompleteRazorExpressions("<p>Contato: suporte@example.com.</p>").length, 0);
+  assert.equal(scanIncompleteRazorExpressions("foo@bar.").length, 0);
+});
+
+test("incomplete: @Model. at start of a line/after whitespace IS flagged", () => {
+  // A real transition (preceded by whitespace) still flags.
+  assert.equal(scanIncompleteRazorExpressions("texto @Model.").length, 1);
+});
 
 test("flags a stray closing tag (typo'd </dabbr>)", () => {
   const r = scanRazorMarkup('<abbr title="Phone">P:</dabbr>');
