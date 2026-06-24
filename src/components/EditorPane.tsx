@@ -547,10 +547,20 @@ export function EditorPane({
         // entries don't overlap into an unreadable, doubled list.
         suggestFontSize: 13,
         suggestLineHeight: 22,
-        // Render LSP semantic tokens. Literal `true` (not 'configuredByTheme')
-        // because the standalone theme flag is hardcoded off; this turns the
-        // type/method/param coloring on, resolved via the theme `rules` above.
-        "semanticHighlighting.enabled": true,
+        // Semantic highlighting DESLIGADO na stack monaco-languageclient v10.
+        // Motivo (comprovado por experimento — ver docs/migration): a stack
+        // `@codingame/monaco-vscode-api` resolve as cores de semantic tokens
+        // pelo serviço de tema do VS Code (que exige theme/textmate
+        // service-overrides + `semanticTokenColors`), NÃO pelas `rules` do
+        // `defineTheme` standalone. Com o flag ligado, os semantic tokens do
+        // Roslyn sobrescreviam a camada Monarch e ficavam SEM cor — deixando o
+        // C# inteiro apagado. Com ele desligado, a tokenização léxica do grammar
+        // Monarch (`csharpMonarch` em monacoSetup.ts) volta a colorir keywords,
+        // tipos e strings, resolvida pelas `rules` do tema (que funcionam).
+        // Trade-off aceito: perde a classificação semântica fina do Roslyn
+        // (class vs struct vs enum, método vs variável). Reativar exige o
+        // caminho de tema VS Code completo (follow-up).
+        "semanticHighlighting.enabled": false,
       }}
     />
   );

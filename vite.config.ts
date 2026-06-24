@@ -28,14 +28,28 @@ export default defineConfig(async () => ({
   // The `@codingame/monaco-vscode-api` stack ships hundreds of ESM modules that
   // import each other deeply and rely on `new URL(..., import.meta.url)` worker
   // resolution. esbuild's dep pre-bundling rewrites those URLs and routinely
-  // chokes on the cyclic graph, so we exclude the whole stack from optimization
-  // and let Vite serve the source ESM directly (the official guidance for this
-  // package). No `vscode` shim to pre-bundle anymore either.
+  // chokes on the cyclic graph, so we EXCLUDE the whole `@codingame` stack and
+  // let Vite serve its source ESM directly (the official guidance for it).
+  //
+  // BUT `monaco-languageclient` itself must be INCLUDED (pre-bundled): it does
+  // `import { BaseLanguageClient } from "vscode-languageclient/browser.js"`, and
+  // `vscode-languageclient` (+ `vscode-jsonrpc`, the protocol pkg) are CommonJS.
+  // Served raw, Vite's cjs→esm interop can't surface that named export and the
+  // app dies at load with "does not provide an export named 'BaseLanguageClient'"
+  // (blank screen). Pre-bundling lets esbuild resolve the CJS interop and expose
+  // the named exports. We list the CJS deps explicitly so esbuild folds them in.
   optimizeDeps: {
+    include: [
+      "monaco-languageclient",
+      "vscode-languageclient",
+      "vscode-languageclient/browser.js",
+      "vscode-jsonrpc",
+      "vscode-languageserver-protocol",
+      "vscode-ws-jsonrpc",
+    ],
     exclude: [
       "@codingame/monaco-vscode-api",
       "@codingame/monaco-vscode-editor-api",
-      "monaco-languageclient",
       "vscode",
     ],
   },
