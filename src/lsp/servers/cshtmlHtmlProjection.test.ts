@@ -142,7 +142,7 @@ test("regionAt: a tag/attribute position is HTML, an @expr position is Razor", (
   assert.equal(regionAt(mask, at(src, "Name")), "razor");
 });
 
-test("regionAt: caret just after typed HTML still classifies as HTML (left-bias)", () => {
+test("regionAt: caret just after typed HTML still classifies as HTML (left-char wins)", () => {
   const src = `<di`;
   const { mask } = buildVirtualHtml(src);
   assert.equal(regionAt(mask, src.length), "html");
@@ -152,6 +152,22 @@ test("regionAt: caret right after an @expr classifies as Razor", () => {
   const src = `@Mod`;
   const { mask } = buildVirtualHtml(src);
   assert.equal(regionAt(mask, src.length), "razor");
+});
+
+test("regionAt: caret after `@Model.` before `</p>` is Razor, not HTML (member completion)", () => {
+  // THE BUG: `<p>@Model.|</p>` — the caret's NEXT char is the HTML `<` of `</p>`,
+  // but the user is completing a C# member. Left char (`.`, blanked Razor) wins.
+  const src = `<p>@Model.</p>`;
+  const { mask } = buildVirtualHtml(src);
+  const caret = src.indexOf("@Model.") + "@Model.".length; // right after the dot
+  assert.equal(regionAt(mask, caret), "razor");
+});
+
+test("regionAt: caret after `@Model.` mid-expression (before `City`) is Razor", () => {
+  const src = `<p>@Model.City</p>`;
+  const { mask } = buildVirtualHtml(src);
+  const caret = src.indexOf("@Model.") + "@Model.".length;
+  assert.equal(regionAt(mask, caret), "razor");
 });
 
 test("regionAt: real HTML whitespace is HTML, not Razor (the `<div |` attribute spot)", () => {

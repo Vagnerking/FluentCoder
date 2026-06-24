@@ -235,18 +235,24 @@ export type Region = "html" | "razor";
 
 /**
  * Classifies the offset in the `.cshtml` as HTML or Razor using the region MASK
- * (not the blanked text): `mask[i] === 1` means real HTML. This is the fix for the
- * "blank == space" ambiguity — real HTML whitespace (e.g. the space in `<div |`,
- * a prime attribute-completion spot) has `mask=1`, while a blanked Razor region
- * has `mask=0`, even though both render as a space in `html`.
+ * (not the blanked text): `mask[i] === 1` means real HTML. The mask fixes the
+ * "blank == space" ambiguity — real HTML whitespace (e.g. the space in `<div |`)
+ * has `mask=1`, while a blanked Razor region has `mask=0`, though both render as a
+ * space in `html`.
  *
- * Left-biased: when the caret sits just AFTER HTML (cursor after `<di`, or after
- * the space in `<div `), we also consider the offset to the left so completion
- * fires. Razor only when both the current and left offsets are non-HTML.
+ * LEFT-CHAR WINS: completion/hover act on the token immediately BEFORE the caret,
+ * so the char to the left decides the region. This is what makes `@Model.|</p>`
+ * resolve to Razor (C# member completion) even though the next char is the HTML
+ * `<` of `</p>`: the left char `.` is the blanked Razor region. At the very start
+ * of the document (no left char) we use the char at the offset instead.
+ *   `<di|`        → left `i` HTML  → html
+ *   `<div |>`     → left ` ` HTML  → html (attribute spot)
+ *   `@Model.|</p>`→ left `.` Razor → razor  (the bug this fixes)
+ *   `@Mod|`       → left `d` Razor → razor
  */
 export function regionAt(mask: Uint8Array, offset: number): Region {
   const isHtml = (idx: number): boolean =>
     idx >= 0 && idx < mask.length && mask[idx] === 1;
-  if (isHtml(offset) || isHtml(offset - 1)) return "html";
-  return "razor";
+  const probe = offset > 0 ? offset - 1 : 0;
+  return isHtml(probe) ? "html" : "razor";
 }
