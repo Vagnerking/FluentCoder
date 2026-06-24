@@ -39,6 +39,14 @@ import { lspLog } from "../debug";
 import { canonicalFileUriKey, fromFileUri, toFileUri } from "../uri";
 import { setDiagnostics, clearServerDiagnostics } from "../diagnosticsStore";
 import type { Problem } from "../../types";
+import {
+  htmlComplete,
+  htmlHover,
+  htmlTagComplete,
+  htmlRegionAt,
+  forgetHtmlVirtual,
+  forgetAllHtmlVirtual,
+} from "./cshtmlHtmlService";
 import { wireRoslynStartup } from "./roslynShared";
 import { ROSLYN_INIT_OPTIONS } from "./csharp";
 import {
@@ -340,6 +348,14 @@ export async function startRazorProjectionServer(
       provideHover: async (model, position, token) => {
         const doc = docFor(model);
         if (!doc) return null;
+        // Region-gated, mutually exclusive: in an HTML region we answer from the
+        // HTML service and RETURN (even if it has no hover → null), so C# is never
+        // queried for an HTML position. Only a Razor/C# region falls through to
+        // the .g.cs projection. (Gating on `htmlHover` truthiness alone would let
+        // C# run when HTML simply had no hover for that tag.)
+        if (htmlRegionAt(model, position) === "html") {
+          return htmlHover(model, position);
+        }
         const gen = await razorRemapToGenerated(doc.cshtmlPath, position.lineNumber - 1, position.column - 1);
         if (!gen) return null;
         const res = await client.sendRequest<{ contents?: unknown; range?: LspRange } | null>(
@@ -388,6 +404,12 @@ export async function startRazorProjectionServer(
       provideCompletionItems: async (model, position, _context, token) => {
         const doc = docFor(model);
         if (!doc) return { suggestions: [] };
+        // Region-gated, mutually exclusive (same discipline as hover): an HTML
+        // region is answered by the HTML service and RETURNS; only a Razor/C#
+        // region falls through to the .g.cs projection. No double suggestions.
+        if (htmlRegionAt(model, position) === "html") {
+          return htmlComplete(monaco, model, position) ?? { suggestions: [] };
+        }
         const gen = await razorRemapToGenerated(doc.cshtmlPath, position.lineNumber - 1, position.column - 1);
         if (!gen) return { suggestions: [] };
         const res = await client.sendRequest<
@@ -414,6 +436,44 @@ export async function startRazorProjectionServer(
     })
   );
 
+  // Auto-close HTML tags: when the user types `>` or `/` in an HTML region of a
+  // `.cshtml`, insert the matching close tag (e.g. `<div>` → `</div>`), mirroring
+  // VS Code's `html.autoClosingTags`. The HTML service computes the snippet from
+  // the virtual HTML; we insert it via snippetController2 so the caret lands at
+  // `$0`. Attached per editor (the content event + caret live on the instance).
+  const attachAutoClose = (ed: monaco.editor.ICodeEditor): void => {
+    const sub = ed.onDidChangeModelContent((e) => {
+      if (disposed || e.isFlush || e.changes.length !== 1) return;
+      const ch = e.changes[0];
+      if (ch.text !== ">" && ch.text !== "/") return;
+      const model = ed.getModel();
+      if (!model || model.getLanguageId() !== CSHTML_PROJECTION_LANGUAGE_ID) return;
+      const pos = ed.getPosition();
+      if (!pos || !docFor(model)) return;
+      const snippet = htmlTagComplete(model, pos);
+      if (!snippet) return;
+      // Defer a tick so the snippet insert doesn't fight the in-progress edit.
+      const contrib = ed.getContribution("snippetController2") as
+        | (monaco.editor.IEditorContribution & { insert?: (t: string) => void })
+        | null;
+      const uri = model.uri.toString();
+      const version = model.getVersionId();
+      window.setTimeout(() => {
+        // Guard against the user switching tab/model/caret within the tick — only
+        // insert if everything is still exactly as it was when `>`/`/` was typed.
+        if (disposed || model.isDisposed()) return;
+        if (ed.getModel() !== model || model.uri.toString() !== uri) return;
+        if (model.getVersionId() !== version) return;
+        const now = ed.getPosition();
+        if (!now || now.lineNumber !== pos.lineNumber || now.column !== pos.column) return;
+        contrib?.insert?.(snippet);
+      }, 0);
+    });
+    disposables.push(sub);
+  };
+  for (const ed of monaco.editor.getEditors()) attachAutoClose(ed);
+  disposables.push(monaco.editor.onDidCreateEditor(attachAutoClose));
+
   // 5. Lifecycle: watch model open/close/change to (re)prepare and clean up.
   const forgetDoc = (key: string): void => {
     const doc = docs.get(key);
@@ -427,6 +487,7 @@ export async function startRazorProjectionServer(
     // Drop this file's store entry too, so a closed `.cshtml` stops coloring the
     // explorer (empty list clears the key).
     setDiagnostics(RAZOR_PROJECTION_SERVER_ID, doc.cshtmlPath, []);
+    forgetHtmlVirtual(doc.cshtmlUri); // release the cached virtual HTML doc
   };
 
   const scheduleReprepare = (): void => {
@@ -508,6 +569,7 @@ export async function startRazorProjectionServer(
       for (const t of reprepareTimers.values()) window.clearTimeout(t);
       reprepareTimers.clear();
       for (const key of [...docs.keys()]) forgetDoc(key);
+      forgetAllHtmlVirtual(); // drop any leftover virtual-HTML cache on stop
       // Belt-and-suspenders: drop EVERY store entry this server owns, in case a
       // doc lifecycle edge was missed or the docs map was incomplete at stop —
       // server stop/reset must clear this owner's diagnostics (CSHTML lifecycle
