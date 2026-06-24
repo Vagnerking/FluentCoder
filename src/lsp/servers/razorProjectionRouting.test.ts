@@ -100,6 +100,25 @@ test("isPhantomSelfAmbiguity: false for any non-CS0229 code", () => {
   assert.equal(isPhantomSelfAmbiguity(CS1061), false);
 });
 
+test("isPhantomSelfAmbiguity: locale-agnostic (pt-BR 'Ambiguidade entre … e …')", () => {
+  // The surrounding words are localized; only the quoted symbols are stable.
+  const ptBrSelf: LspDiagnostic = {
+    ...PHANTOM_CS0229,
+    message: "Ambiguidade entre 'Views_X.Url' e 'Views_X.Url'",
+  };
+  assert.equal(isPhantomSelfAmbiguity(ptBrSelf), true);
+  const ptBrReal: LspDiagnostic = {
+    ...PHANTOM_CS0229,
+    message: "Ambiguidade entre 'A.Foo' e 'B.Foo'",
+  };
+  assert.equal(isPhantomSelfAmbiguity(ptBrReal), false);
+});
+
+test("isPhantomSelfAmbiguity: false when the message lacks exactly two quoted symbols", () => {
+  assert.equal(isPhantomSelfAmbiguity({ ...PHANTOM_CS0229, message: "no quotes here" }), false);
+  assert.equal(isPhantomSelfAmbiguity({ ...PHANTOM_CS0229, message: "only 'one' symbol" }), false);
+});
+
 test("routeDiagnostics DROPS the phantom self-ambiguity CS0229", async () => {
   assert.deepEqual(await routeDiagnostics([PHANTOM_CS0229], remapToSource), []);
 });

@@ -141,12 +141,17 @@ export async function remapRangeToMonaco(
  * project's Razor generation per-workspace — `Directory.Solution.props` isn't
  * honored by its per-project MSBuild load, and a metadata reference still carries
  * the page classes — so we filter the phantom at the diagnostic boundary.)
+ *
+ * LOCALE-AGNOSTIC: CS0229's message always cites the two ambiguous members in
+ * single quotes (`'A' ... 'B'`), but the surrounding words ("Ambiguity between …
+ * and …") are localized (pt-BR: "Ambiguidade entre … e …"). So we extract the
+ * quoted symbols rather than matching an English word — phantom iff EXACTLY two
+ * quoted symbols and they are identical.
  */
 export function isPhantomSelfAmbiguity(d: LspDiagnostic): boolean {
   if (String(d.code) !== "CS0229") return false;
-  // Match `... between '<a>' and '<b>'` and treat a==b as the phantom.
-  const m = /between\s+'([^']+)'\s+and\s+'([^']+)'/i.exec(d.message);
-  return m != null && m[1] === m[2];
+  const quoted = [...d.message.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  return quoted.length === 2 && quoted[0] === quoted[1];
 }
 
 /**

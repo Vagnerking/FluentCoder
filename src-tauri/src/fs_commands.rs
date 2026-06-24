@@ -225,7 +225,18 @@ fn workspace_relative(entry: &Path, workspace_root: Option<&str>) -> Option<Stri
     let root_norm = path_for_frontend(Path::new(root)).replace('\\', "/");
     let entry_norm = path_for_frontend(entry).replace('\\', "/");
     let root_trimmed = root_norm.trim_end_matches('/');
-    let rest = entry_norm.strip_prefix(root_trimmed)?.trim_start_matches('/');
+    let after = entry_norm.strip_prefix(root_trimmed)?;
+    // Require a DIRECTORY-BOUNDARY after the prefix, else a sibling with a shared
+    // prefix leaks in: root `/src/App` would wrongly match `/src/AppOther/x`
+    // (`strip_prefix` → `Other/x`). Only an exact match (empty) or a `/`-separated
+    // descendant is genuinely under the root.
+    if after.is_empty() {
+        return None; // the root itself, not "relative to itself"
+    }
+    if !after.starts_with('/') {
+        return None; // shared-prefix sibling, not a descendant
+    }
+    let rest = after.trim_start_matches('/');
     if rest.is_empty() {
         None
     } else {
@@ -611,6 +622,13 @@ mod tests {
         // An entry outside the root → None.
         let outside = if cfg!(windows) { r"C:\other\x" } else { "/other/x" };
         assert_eq!(workspace_relative(Path::new(outside), Some(root)), None);
+        // A SIBLING sharing the root's prefix is NOT under it (directory boundary).
+        let sibling = if cfg!(windows) { r"C:\src\AppOther\x" } else { "/src/AppOther/x" };
+        assert_eq!(
+            workspace_relative(Path::new(sibling), Some(root)),
+            None,
+            "shared-prefix sibling must not be treated as a descendant"
+        );
     }
 
     #[test]
