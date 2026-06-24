@@ -26,6 +26,20 @@ use serde::{Deserialize, Serialize};
 /// here on first use into the app cache.
 const SIDECAR_SUBDIR: &str = "tools/razor-sidecar";
 
+/// Strip Windows' `\\?\` (and `\\?\UNC\`) extended-length prefix from a path
+/// string. `fs::canonicalize`/`resource_dir` produce these, but `dotnet`/MSBuild
+/// mishandle them (the `?` gets URL-mangled and glob imports fail). No-op on
+/// non-Windows / unprefixed paths.
+fn strip_extended_prefix(p: &str) -> String {
+    if let Some(rest) = p.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    if let Some(rest) = p.strip_prefix(r"\\?\") {
+        return rest.to_string();
+    }
+    p.to_string()
+}
+
 /// One file fed to the generator as an AdditionalText (path + base64 TargetPath).
 #[derive(Serialize, Clone)]
 pub struct FileSpec {
@@ -174,24 +188,42 @@ impl Sidecar {
         let _build_guard = self.build_lock.lock().map_err(|_| "build lock poisoned".to_string())?;
         if !dll.exists() {
             std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
-            let status = Command::new("dotnet")
+            // Strip Windows' `\\?\` extended-length prefix: MSBuild mangles it
+            // (`%3f`) and its `$(MSBuildProjectExtensionsPath)` glob import then
+            // can't resolve, failing the build (error MSB4019).
+            let csproj_arg = strip_extended_prefix(&csproj.to_string_lossy());
+            let out_arg = strip_extended_prefix(&out.to_string_lossy());
+            let cwd = strip_extended_prefix(&src.to_string_lossy());
+            eprintln!("[razor:sidecar] building {csproj_arg} -> {out_arg}");
+            let output = Command::new("dotnet")
                 .args([
                     "build",
-                    &csproj.to_string_lossy(),
+                    &csproj_arg,
                     "-c",
                     "Release",
                     "-o",
-                    &out.to_string_lossy(),
-                    "-v:quiet",
+                    &out_arg,
                     "-nologo",
                 ])
-                .current_dir(&src)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
+                .current_dir(&cwd)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
                 .map_err(|e| format!("sidecar build spawn failed: {e}"))?;
-            if !status.success() || !dll.exists() {
-                return Err("sidecar build failed".to_string());
+            if !output.status.success() || !dll.exists() {
+                let so = String::from_utf8_lossy(&output.stdout);
+                let se = String::from_utf8_lossy(&output.stderr);
+                let tail: String = so
+                    .lines()
+                    .chain(se.lines())
+                    .rev()
+                    .take(8)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                return Err(format!("sidecar build failed: {tail}"));
             }
         }
         if let Ok(mut guard) = self.dll.lock() {
@@ -301,7 +333,7 @@ impl Sidecar {
             .ok_or_else(|| "sidecar dll not built (call ensure_built first)".to_string())?;
         let mut cmd = Command::new("dotnet");
         cmd.arg("exec")
-            .arg(&dll)
+            .arg(strip_extended_prefix(&dll.to_string_lossy()))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
