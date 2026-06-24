@@ -134,9 +134,3 @@ export function resolveFolderIconName(
   folderCache.set(cacheKey, icon);
   return icon;
 }
-
-/** Clears resolution caches — call if associations are customized at runtime. */
-export function clearIconCache(): void {
-  fileCache.clear();
-  folderCache.clear();
-}

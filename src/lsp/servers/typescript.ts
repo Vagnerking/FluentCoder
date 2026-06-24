@@ -8,10 +8,22 @@
  * tsconfig/jsconfig, path aliases, `node_modules` and `@types` are resolved by
  * the server itself from `rootUri` — no extra config needed (ISSUE-35).
  */
-import { ensureTsServer, startLspServer } from "../../api";
+import { ensureTsServer, startLspServer, sshLspStart } from "../../api";
+import { getActiveRemote } from "../../remote/host";
 import { createLanguageClient, type RunningClient } from "../client";
 
 export const TS_SERVER_ID = "typescript";
+
+/**
+ * Remote launch command (issue #8, Phase 6): run the server ON THE POSIX HOST.
+ * Prefer a globally-installed `typescript-language-server`; fall back to `npx`
+ * (needs npm). `exec` replaces the shell so a channel close kills the server.
+ * Windows SSH hosts are intentionally unsupported until shell detection exists.
+ */
+const TS_REMOTE_COMMAND =
+  "if command -v typescript-language-server >/dev/null 2>&1; then " +
+  "exec typescript-language-server --stdio; " +
+  "else exec npx --yes typescript-language-server --stdio; fi";
 
 /** localStorage key for the TS version preference (project vs editor). */
 export const TS_PREFER_EDITOR_KEY = "lsp.ts.preferEditor";
@@ -39,8 +51,18 @@ function toFileUri(rootPath: string): string {
 export async function startTypescriptServer(
   rootPath: string
 ): Promise<RunningClient> {
-  const { program, args } = await ensureTsServer(rootPath, preferEditorVersion());
-  await startLspServer(TS_SERVER_ID, program, args, rootPath);
+  const remote = getActiveRemote();
+  // The TypeScript version to use, passed to the server via initializationOptions
+  // (current typescript-language-server has no `--tsserver-path` CLI flag).
+  let tsserverPath: string | undefined;
+  if (remote) {
+    // Run the server on the host; the local WS bridge is identical to local.
+    await sshLspStart(remote.connId, TS_SERVER_ID, TS_REMOTE_COMMAND, rootPath);
+  } else {
+    const info = await ensureTsServer(rootPath, preferEditorVersion());
+    tsserverPath = info.tsserverPath;
+    await startLspServer(TS_SERVER_ID, info.program, info.args, rootPath);
+  }
 
   return createLanguageClient({
     serverId: TS_SERVER_ID,
@@ -54,6 +76,7 @@ export async function startTypescriptServer(
     rootUri: toFileUri(rootPath),
     initializationOptions: {
       hostInfo: "fluent-coder",
+      ...(tsserverPath ? { tsserver: { path: tsserverPath } } : {}),
       preferences: {
         includeInlayParameterNameHints: "none",
         importModuleSpecifierPreference: "shortest",

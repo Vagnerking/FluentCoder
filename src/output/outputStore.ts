@@ -32,16 +32,6 @@ export function appendOutput(channel: string, message: string): void {
   notify();
 }
 
-/** Clears one channel (or all channels when no name is given). */
-export function clearOutput(channel?: string): void {
-  if (channel) {
-    if (channels.delete(channel)) notify();
-  } else if (channels.size) {
-    channels.clear();
-    notify();
-  }
-}
-
 /** Monotonic version — the stable snapshot for `useSyncExternalStore`. */
 export function outputVersion(): number {
   return version;

@@ -22,7 +22,71 @@ export interface RawDirEntry {
  * selector (ISSUE-70) lets the user pick which one, and `OpenFile.mode` records
  * the choice so the App can route the buffer to the right view.
  */
-export type OpenMode = "text" | "image";
+export type OpenMode = "text" | "image" | "video" | "audio" | "graph";
+
+/** One file in the workspace "context graph" (Obsidian-style map). */
+export interface GraphNode {
+  /** Absolute path — node id + what a click opens. */
+  id: string;
+  /** File name (the node label). */
+  name: string;
+  /** Path relative to the root, `/`-normalised (shown on hover). */
+  rel: string;
+  /** `"markdown"` or `"code"` — drives the colour + filter. */
+  kind: "markdown" | "code";
+}
+
+/** A directed connection between two graph nodes. */
+export interface GraphEdge {
+  source: string;
+  target: string;
+  /** `"link"` | `"wikilink"` | `"import"`. */
+  kind: "link" | "wikilink" | "import";
+}
+
+/** The full context graph returned by the Rust `build_context_graph` command. */
+export interface GraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+/** A resolved outgoing link in the knowledge index, with line + context snippet. */
+export interface IndexLink {
+  target: string;
+  relation: "link" | "wikilink" | "import";
+  line: number;
+  snippet: string;
+}
+
+/** A markdown heading (outline entry) in the knowledge index. */
+export interface Heading {
+  level: number;
+  text: string;
+  line: number;
+}
+
+/** One file in the knowledge index (the base the agents/MCP consume). */
+export interface KnowledgeFile {
+  path: string;
+  name: string;
+  rel: string;
+  kind: "markdown" | "code";
+  outgoing: IndexLink[];
+  tags: string[];
+  headings: Heading[];
+}
+
+/** The richer knowledge index from the Rust `build_knowledge_index` command. */
+export interface KnowledgeIndex {
+  files: KnowledgeFile[];
+}
+
+/** How to register the local knowledge MCP server in an MCP client (Claude Code). */
+export interface McpConfig {
+  exe: string;
+  claudeAdd: string;
+  jsonConfig: string;
+}
 
 /** A file currently open in the editor. */
 export interface OpenFile {
@@ -103,6 +167,8 @@ export interface Session {
   openTabs: OpenTab[];
   /** Absolute path of the tab that was active, or null. */
   activePath: string | null;
+  /** Editor split grid as a JSON blob (tree + per-group tabs); null ⇒ flat. */
+  layout?: string | null;
 }
 
 /** Search toggles + glob filters, mirroring the Rust `SearchOptions`. */
@@ -173,10 +239,12 @@ export interface ProjectFile {
 /** A changed path in `git status`, mirroring the Rust `GitFileStatus`. */
 export interface GitFileStatus {
   path: string;
-  /** Two-letter porcelain code, e.g. " M", "A ", "??". */
+  /** Two-letter porcelain code, e.g. " M", "A ", "??", "UU". */
   code: string;
   staged: boolean;
   untracked: boolean;
+  /** Unmerged (merge/rebase conflict). */
+  conflicted: boolean;
 }
 
 /** Overall repo state, mirroring the Rust `GitStatus`. */
@@ -186,7 +254,15 @@ export interface GitStatus {
   behind: number;
   isRepo: boolean;
   hasUpstream: boolean;
+  /** Count of unmerged (conflicted) paths — non-zero during a merge/rebase. */
+  conflicted: number;
   files: GitFileStatus[];
+}
+
+/** One stash entry, mirroring the Rust `GitStashEntry`. */
+export interface GitStashEntry {
+  index: number;
+  message: string;
 }
 
 /** One commit in the history list, mirroring the Rust `GitCommit`. */

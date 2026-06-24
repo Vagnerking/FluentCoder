@@ -19,6 +19,14 @@ Um editor de código desktop no estilo VSCode, construído com **Tauri 2**, **Re
   - **Razor Components (`.razor`)** — realce léxico, com lifecycle separado do
     CSHTML na arquitetura alvo.
 - **Sessão persistente**: reabre a última pasta aberta ao iniciar o app.
+- **Remote SSH**: abre workspaces remotos com SFTP, terminal, busca, Git e LSP
+  TypeScript/JavaScript, usando senha, chave privada ou ssh-agent.
+
+### Compatibilidade do Remote SSH
+
+O host remoto precisa oferecer um shell **POSIX** (Linux, macOS ou BSD). Busca,
+Git, runner e LSP remoto usam comandos como `sh`, `find`, `grep`, `cd` e `exec`.
+Hosts Windows com `cmd.exe` ou PowerShell como shell SSH ainda não são suportados.
 
 ## Stack
 

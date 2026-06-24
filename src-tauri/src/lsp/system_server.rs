@@ -45,8 +45,7 @@ pub fn spec_for(server_id: &str) -> Option<SystemServerSpec> {
             label: "Go",
             command: "gopls",
             args: &[],
-            install_hint:
-                "Instale o Go e rode `go install golang.org/x/tools/gopls@latest`.",
+            install_hint: "Instale o Go e rode `go install golang.org/x/tools/gopls@latest`.",
         },
         _ => return None,
     })
@@ -55,8 +54,12 @@ pub fn spec_for(server_id: &str) -> Option<SystemServerSpec> {
 /// Locates the SDK's language-server executable on the PATH and builds the launch
 /// command. Errors with an actionable install hint when it isn't found.
 pub fn resolve_system_server(spec: &SystemServerSpec) -> Result<LaunchInfo, String> {
-    let program = which::which(spec.command)
-        .map_err(|_| format!("`{}` não encontrado no PATH. {}", spec.command, spec.install_hint))?;
+    let program = which::which(spec.command).map_err(|_| {
+        format!(
+            "`{}` não encontrado no PATH. {}",
+            spec.command, spec.install_hint
+        )
+    })?;
     Ok(LaunchInfo {
         program: program.to_string_lossy().to_string(),
         args: spec.args.iter().map(|s| s.to_string()).collect(),

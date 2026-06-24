@@ -10,3 +10,13 @@ declare module "monaco-editor/esm/vs/platform/commands/common/commands.js" {
   /** Service identifier (decorator) resolvable via a command handler accessor. */
   export const ICommandService: unknown;
 }
+
+/**
+ * The Vite config aliases the bare "vscode" specifier to monaco-languageclient's
+ * VS Code compatibility shim (the same live singleton `vscode-languageclient`
+ * consumes). TypeScript can't see that alias, so declare just the slice we touch
+ * in `src/lsp/client.ts` to patch the shim's "unsupported" provider registrations.
+ */
+declare module "vscode" {
+  export const languages: Record<string, unknown>;
+}

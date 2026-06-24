@@ -30,10 +30,12 @@ pub struct BuildDiagnostic {
 /// Async so it runs off the UI thread. Returns an empty list (not an error) when
 /// there's nothing to report; only a failure to launch `dotnet` is an error.
 #[tauri::command]
-pub async fn csharp_build_diagnostics(
-    root_path: String,
-) -> Result<Vec<BuildDiagnostic>, String> {
-    let program = if cfg!(windows) { "dotnet.exe" } else { "dotnet" };
+pub async fn csharp_build_diagnostics(root_path: String) -> Result<Vec<BuildDiagnostic>, String> {
+    let program = if cfg!(windows) {
+        "dotnet.exe"
+    } else {
+        "dotnet"
+    };
     let output = tokio::process::Command::new(program)
         .args(["build", "-nologo", "-clp:NoSummary", "-v", "q"])
         .current_dir(&root_path)
@@ -230,7 +232,8 @@ mod tests {
     #[test]
     fn parses_nuget_restore_error_attached_to_project() {
         // A NuGet restore failure: top-level, no line/col, project as the source.
-        let text = "C:\\proj\\App.csproj : error NU1101: Unable to find package Foo [C:\\proj\\App.sln]";
+        let text =
+            "C:\\proj\\App.csproj : error NU1101: Unable to find package Foo [C:\\proj\\App.sln]";
         let d = parse_diagnostics(text);
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].path, "C:\\proj\\App.csproj");
@@ -245,8 +248,7 @@ mod tests {
     fn parses_top_level_msbuild_error_attaches_to_project_suffix() {
         // `MSBUILD` source with a project in the trailing suffix: attach to the
         // project so the workspace filter can keep it.
-        let text =
-            "MSBUILD : error MSB4236: The SDK 'X' was not found. [C:\\proj\\App.csproj]";
+        let text = "MSBUILD : error MSB4236: The SDK 'X' was not found. [C:\\proj\\App.csproj]";
         let d = parse_diagnostics(text);
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].path, "C:\\proj\\App.csproj");
@@ -271,7 +273,8 @@ mod tests {
     fn located_form_is_not_double_counted_as_top_level() {
         // A located line also contains "): error " but NOT " : error " — ensure
         // it parses once, via the located path, with its line/column intact.
-        let text = "C:\\proj\\a.cs(7,3): error CS0103: The name 'y' does not exist [C:\\proj\\a.csproj]";
+        let text =
+            "C:\\proj\\a.cs(7,3): error CS0103: The name 'y' does not exist [C:\\proj\\a.csproj]";
         let d = parse_diagnostics(text);
         assert_eq!(d.len(), 1);
         assert_eq!(d[0].line, 7);

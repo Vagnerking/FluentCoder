@@ -21,6 +21,13 @@ pub struct ProjectFile {
     rel: String,
 }
 
+impl ProjectFile {
+    /// Builds an entry from already-resolved parts (used by the remote/SSH lister).
+    pub fn new(path: String, name: String, rel: String) -> Self {
+        ProjectFile { path, name, rel }
+    }
+}
+
 /// Safety cap so a pathological project (or an accidental scan of a huge tree)
 /// can't produce a multi-hundred-MB payload or stall the UI.
 const MAX_FILES: usize = 20_000;

@@ -130,6 +130,7 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
   return (
     <div className="quick-open-backdrop" onMouseDown={onClose}>
       <div className="quick-open" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="quick-pick-title">Paleta de comandos</div>
         <input
           ref={inputRef}
           className="quick-open-input"

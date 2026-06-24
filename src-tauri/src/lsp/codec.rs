@@ -3,7 +3,9 @@
 //! Deliberately minimal — no `lsp-server`/`async-lsp` crate — so the dependency
 //! surface stays small. Reusable by every language server (C#, Razor, TS).
 
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{
+    AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt,
+};
 
 /// Reads one complete LSP message and returns its JSON body as a `String`.
 ///
@@ -46,7 +48,10 @@ where
     }
 
     let len = content_length.ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "missing Content-Length header")
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "missing Content-Length header",
+        )
     })?;
 
     let mut buf = vec![0u8; len];

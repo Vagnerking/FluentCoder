@@ -2,6 +2,9 @@ import { useState } from "react";
 import { createPortal } from "react-dom";
 import { Codicon } from "../icons/codicons/Codicon";
 import type { IconAction } from "../icons/codicons/codicon-map";
+import type { GitStatus } from "../types";
+import { GitStatusItem } from "./GitStatusItem";
+import { languageLabel } from "../language";
 
 /** Status of a single language server, surfaced in the status bar (ISSUE-28). */
 export interface LspServerStatus {
@@ -22,8 +25,28 @@ interface StatusBarProps {
   fileName: string | null;
   /** Current git branch of the open folder, or null when not a repo. */
   branch: string | null;
+  /** Full git status (ahead/behind/conflicts) — drives the sync indicator. */
+  gitStatus?: GitStatus | null;
+  /** A git operation is running (spinner + disabled actions). */
+  gitBusy?: boolean;
+  /** Periodic background fetch is on. */
+  autoFetch?: boolean;
+  /** Epoch ms of the last successful fetch. */
+  lastFetch?: number | null;
   /** Opens the branch picker (issue #16). Omitted ⇒ branch isn't clickable. */
   onClickBranch?: () => void;
+  onGitSync?: () => void;
+  onGitFetch?: () => void;
+  onGitPull?: () => void;
+  onGitPush?: () => void;
+  onGitPublish?: () => void;
+  onToggleAutoFetch?: () => void;
+  /** `user@host` when attached to a remote SSH host (issue #8), else null. */
+  remoteHost?: string | null;
+  /** Opens the connection-management menu (clicking the SSH chip when remote). */
+  onManageRemote?: () => void;
+  /** Opens a new remote connection (clicking the launcher when local). */
+  onOpenRemote?: () => void;
   /** Editor tab size, reflected from the editor options. */
   tabSize: number;
   /** Live diagnostic counts from Monaco markers. */
@@ -37,6 +60,8 @@ interface StatusBarProps {
   onShowProblems?: () => void;
   /** Opens the TypeScript version selector (project vs editor) for the TS server. */
   onSelectTsVersion?: () => void;
+  /** Opens the language-mode picker for the active file (VS Code's "Change Language Mode"). */
+  onSelectLanguage?: () => void;
 }
 
 /** Maps an LSP status to a codicon + label. */
@@ -63,7 +88,20 @@ export function StatusBar({
   column,
   fileName,
   branch,
+  gitStatus,
+  gitBusy,
+  autoFetch,
+  lastFetch,
   onClickBranch,
+  onGitSync,
+  onGitFetch,
+  onGitPull,
+  onGitPush,
+  onGitPublish,
+  onToggleAutoFetch,
+  remoteHost,
+  onManageRemote,
+  onOpenRemote,
   tabSize,
   errorCount,
   warningCount,
@@ -71,30 +109,10 @@ export function StatusBar({
   onRestartLsp,
   onShowProblems,
   onSelectTsVersion,
+  onSelectLanguage,
 }: StatusBarProps) {
-  // Friendly language names (VSCode-style) so the status bar reads nicely —
-  // e.g. "ASP.NET Razor" instead of the raw id "aspnetcorerazor".
-  const LANGUAGE_LABELS: Record<string, string> = {
-    aspnetcorerazor: "ASP.NET Razor",
-    csharp: "C#",
-    typescript: "TypeScript",
-    typescriptreact: "TypeScript JSX",
-    javascript: "JavaScript",
-    javascriptreact: "JavaScript JSX",
-    cpp: "C++",
-    css: "CSS",
-    scss: "SCSS",
-    less: "Less",
-    html: "HTML",
-    json: "JSON",
-    yaml: "YAML",
-    dockerfile: "Dockerfile",
-    shell: "Shell Script",
-  };
-  const langDisplay = language
-    ? (LANGUAGE_LABELS[language] ??
-        language.charAt(0).toUpperCase() + language.slice(1))
-    : "";
+  // Friendly language name (VSCode-style), shared with the language-mode picker.
+  const langDisplay = languageLabel(language);
 
   // The LSP actions menu (Restart, …) anchored above the clicked server item.
   const [lspMenu, setLspMenu] = useState<{
@@ -106,15 +124,67 @@ export function StatusBar({
   return (
     <div className="status-bar">
       <div className="status-left">
-        {branch && (
+        {remoteHost ? (
           <span
-            className="status-item"
-            onClick={onClickBranch}
-            title={onClickBranch ? "Trocar de branch" : undefined}
-            role={onClickBranch ? "button" : undefined}
+            className="status-item status-remote"
+            title={`Conectado via SSH a ${remoteHost}.\nClique para gerenciar a conexão.`}
+            role={onManageRemote ? "button" : undefined}
+            tabIndex={onManageRemote ? 0 : undefined}
+            onClick={onManageRemote}
+            onKeyDown={(e) => {
+              if (onManageRemote && (e.key === "Enter" || e.key === " ")) {
+                e.preventDefault();
+                onManageRemote();
+              }
+            }}
           >
-            <Codicon name="gitBranch" /> {branch}
+            <Codicon name="remote" /> SSH: {remoteHost}
           </span>
+        ) : onOpenRemote ? (
+          // Always-present remote launcher (VS Code's bottom-left `><`): click to
+          // open a remote (SSH) connection. Shows the local/neutral state.
+          <span
+            className="status-item status-remote-local"
+            title="Abrir uma conexão remota (SSH)"
+            aria-label="Abrir uma conexão remota"
+            role="button"
+            tabIndex={0}
+            onClick={onOpenRemote}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onOpenRemote();
+              }
+            }}
+          >
+            <Codicon name="remote" />
+          </span>
+        ) : null}
+        {gitStatus?.isRepo ? (
+          <GitStatusItem
+            status={gitStatus}
+            busy={!!gitBusy}
+            autoFetch={!!autoFetch}
+            lastFetch={lastFetch ?? null}
+            onClickBranch={onClickBranch}
+            onSync={onGitSync ?? (() => {})}
+            onFetch={onGitFetch ?? (() => {})}
+            onPull={onGitPull ?? (() => {})}
+            onPush={onGitPush ?? (() => {})}
+            onPublish={onGitPublish ?? (() => {})}
+            onToggleAutoFetch={onToggleAutoFetch ?? (() => {})}
+          />
+        ) : (
+          branch && (
+            <span
+              className="status-item"
+              onClick={onClickBranch}
+              title={onClickBranch ? "Trocar de branch" : undefined}
+              role={onClickBranch ? "button" : undefined}
+            >
+              <Codicon name="gitBranch" /> {branch}
+            </span>
+          )
         )}
         <span
           className={`status-item status-diagnostics${
@@ -198,13 +268,37 @@ export function StatusBar({
       </div>
       <div className="status-right">
         {fileName && (
-          <span className="status-item">
+          <span className="status-item status-cursor">
             Ln {line}, Col {column}
           </span>
         )}
-        {langDisplay && <span className="status-item">{langDisplay}</span>}
-        {fileName && <span className="status-item">UTF-8</span>}
-        {fileName && <span className="status-item">Tab Size: {tabSize}</span>}
+        {langDisplay && (
+          <span
+            className={`status-item status-language${
+              onSelectLanguage ? " status-clickable" : ""
+            }`}
+            title={onSelectLanguage ? "Selecionar modo de linguagem" : undefined}
+            role={onSelectLanguage ? "button" : undefined}
+            tabIndex={onSelectLanguage ? 0 : undefined}
+            onClick={onSelectLanguage}
+            onKeyDown={
+              onSelectLanguage
+                ? (e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onSelectLanguage();
+                    }
+                  }
+                : undefined
+            }
+          >
+            {langDisplay}
+          </span>
+        )}
+        {fileName && <span className="status-item status-encoding">UTF-8</span>}
+        {fileName && (
+          <span className="status-item status-tabsize">Tab Size: {tabSize}</span>
+        )}
       </div>
 
       {lspMenu &&

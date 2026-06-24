@@ -180,9 +180,10 @@ function registerReactLanguages(monaco: Monaco): void {
   ensure("javascriptreact", "javascript", [".jsx"]);
 }
 
-/** Monaco language id for `.cshtml` / `.razor`. Matches `language.ts`. Uses the
- * VS Code id `aspnetcorerazor` so the Roslyn Razor cohost (issue #11) recognizes
- * the documents we open — it keys Razor handling off this exact language id. */
+/** Monaco language id for `.razor` components. Matches `language.ts`.
+ * Uses the VS Code id `aspnetcorerazor` so the Roslyn Razor cohost recognizes
+ * the documents we open — it keys Razor handling off this exact language id.
+ * `.cshtml` uses a separate `cshtml` id (see monacoSetupCshtml.ts). */
 export const RAZOR_LANGUAGE_ID = "aspnetcorerazor";
 
 /** Monaco language id for `.cshtml` under the projection broker (ADR 0002). */
@@ -208,9 +209,9 @@ export function registerRazorLanguage(monaco: Monaco): void {
   if (!known) {
     monaco.languages.register({
       id: RAZOR_LANGUAGE_ID,
-      extensions: [".cshtml", ".razor"],
-      aliases: ["Razor", "CSHTML"],
-      mimetypes: ["text/x-cshtml"],
+      extensions: [".razor"],
+      aliases: ["Razor"],
+      mimetypes: ["text/x-razor"],
     });
   }
 

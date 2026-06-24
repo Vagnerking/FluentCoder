@@ -17,6 +17,7 @@
  */
 import type { MonacoLanguageClient } from "monaco-languageclient";
 import { ensureRazorServer, startLspServer } from "../../api";
+import { getActiveRemote } from "../../remote/host";
 import { createLanguageClient } from "../client";
 import { toFileUri } from "../uri";
 import { wireRoslynStartup } from "./roslynShared";
@@ -36,6 +37,9 @@ export async function startRazorServer(
   rootPath: string,
   context?: ServerStartContext
 ): Promise<MonacoLanguageClient> {
+  if (getActiveRemote()) {
+    throw new Error("Razor remoto ainda não é suportado.");
+  }
   const command = await ensureRazorServer();
   const [program, ...args] = command.split("\n").filter((s) => s.length > 0);
   if (!program) {

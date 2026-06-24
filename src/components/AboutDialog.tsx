@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import pkg from "../../package.json";
+import { useModalDismiss } from "./useModalDismiss";
 
 interface AboutDialogProps {
   /** "about" shows app name/version/link; "shortcuts" lists the keybindings. */
@@ -46,7 +47,7 @@ export function AboutDialog({ mode, onClose }: AboutDialogProps) {
   const title = mode === "about" ? "Sobre" : "Atalhos de Teclado";
 
   return (
-    <div className="about-backdrop" onMouseDown={onClose}>
+    <div className="about-backdrop" {...useModalDismiss(onClose)}>
       <div
         className="about-dialog"
         role="dialog"
@@ -54,7 +55,6 @@ export function AboutDialog({ mode, onClose }: AboutDialogProps) {
         aria-label={title}
         tabIndex={-1}
         ref={surfaceRef}
-        onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="about-header">
           <span className="about-title">{title}</span>
