@@ -554,6 +554,14 @@ export function EditorPane({
         // entries don't overlap into an unreadable, doubled list.
         suggestFontSize: 13,
         suggestLineHeight: 22,
+        // Desliga as sugestões baseadas em palavras do documento (os itens com
+        // ícone `abc`). Na stack @codingame/v10 elas vêm LIGADAS por default e
+        // poluíam o autocomplete do `.cshtml`: ao digitar `@Model` apareciam
+        // palavras soltas do arquivo em vez (ou antes) dos membros C# do Roslyn,
+        // e enquanto a completion da projeção (mais lenta) ainda não respondia,
+        // só o lixo `abc` aparecia. Com isso off, só os providers reais
+        // (Roslyn via projeção + HTML) preenchem o widget.
+        wordBasedSuggestions: "off",
         // Semantic highlighting DESLIGADO na stack monaco-languageclient v10.
         // Motivo (comprovado por experimento — ver docs/migration): a stack
         // `@codingame/monaco-vscode-api` resolve as cores de semantic tokens
