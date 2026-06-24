@@ -115,7 +115,11 @@ export function TreeNode({
   const isSelectedDirectory = node.isDir && node.path === selectedDirectory;
   const isFocused = node.path === focusedPath;
   const isCut = cutPath === node.path;
-  const deco = node.isDir ? undefined : decorationFor(node.path);
+  // Files get the full decoration (git color/badge + diagnostics). Folders only
+  // get a diagnostic decoration propagated from a descendant (deco.dir) — never
+  // git, and never a badge — mirroring VSCode's folder tinting.
+  const rawDeco = decorationFor(node.path);
+  const deco = node.isDir ? (rawDeco?.dir ? rawDeco : undefined) : rawDeco;
   const beingRenamed = renameTarget?.path === node.path;
 
   if (beingRenamed) {

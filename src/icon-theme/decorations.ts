@@ -68,9 +68,60 @@ export function buildDecorations(
     } else if (existing?.kind !== "error") {
       map.set(key, { kind: "warning", badge: existing?.badge });
     }
+    // Propagate the diagnostic color UP to every ancestor folder (like VSCode):
+    // a folder containing a broken file is tinted red/yellow. Folders carry the
+    // color only — never a git badge — so they're decorated separately here, and
+    // error still outranks warning at each level.
+    propagateToAncestors(map, key, decoKey(rootPath ?? ""), p.severity);
   }
 
   return map;
+}
+
+/**
+ * Tints every ancestor directory of `fileKey` (up to and including `rootKey`)
+ * with `severity`, error outranking a previously-set warning. Ancestor entries
+ * are color-only (no badge) and flagged `dir: true` so the tree knows a folder
+ * decoration is a propagated diagnostic, not a git state.
+ */
+function propagateToAncestors(
+  map: Map<string, FileDecoration>,
+  fileKey: string,
+  rootKey: string,
+  severity: "error" | "warning",
+): void {
+  let dir = parentDir(fileKey);
+  // Walk up while still inside the workspace root. The strict boundary check
+  // (not a bare `startsWith`) keeps a file OUTSIDE the root — markers can come
+  // from any open Monaco model — from creating out-of-root ancestor entries, and
+  // prevents a sibling root like `…/proj-other` from matching `…/proj`. With no
+  // folder open (rootKey === "") we stop at whatever boundary parentDir reaches.
+  while (dir && isInsideOrSame(dir, rootKey)) {
+    const existing = map.get(dir);
+    if (existing?.kind === "error") break; // a stronger sibling already tinted up
+    if (severity === "error" || existing?.kind !== "warning") {
+      map.set(dir, { kind: severity, dir: true });
+    }
+    if (dir === rootKey) break;
+    const next = parentDir(dir);
+    if (next === dir) break; // reached the top (drive root)
+    dir = next;
+  }
+}
+
+/** Parent directory of a normalized key, or "" at the root. */
+function parentDir(key: string): string {
+  const i = key.lastIndexOf("/");
+  return i <= 0 ? "" : key.slice(0, i);
+}
+
+/**
+ * Whether `key` is `rootKey` itself or a path nested under it. Boundary-aware so
+ * `c:/proj-other` is NOT considered inside `c:/proj`. `rootKey === ""` (no folder
+ * open) matches everything — we just propagate up to the drive boundary then.
+ */
+function isInsideOrSame(key: string, rootKey: string): boolean {
+  return rootKey === "" || key === rootKey || key.startsWith(`${rootKey}/`);
 }
 
 /** Normalizes a path for decoration lookup (separators + Windows drive case agnostic). */

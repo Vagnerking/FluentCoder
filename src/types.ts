@@ -263,6 +263,13 @@ export interface FileDecoration {
     | "warning";
   /** Short git letter shown at the end of the row (M, A, U…); omitted for none. */
   badge?: string;
+  /**
+   * True when this is a folder decoration propagated up from a descendant's
+   * error/warning diagnostic (VSCode tints ancestor folders). Folder decorations
+   * are color-only — never a git badge — so the tree renders them differently
+   * from file decorations.
+   */
+  dir?: boolean;
 }
 
 /** A diagnostic shown in the Problems tab, derived from Monaco markers. */
