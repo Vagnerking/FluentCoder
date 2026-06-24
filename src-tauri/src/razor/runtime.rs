@@ -25,6 +25,19 @@ use super::sourcemap::RazorSourceMap;
 /// first run; tune via [`prepare_with_timeout`].
 pub const DEFAULT_DOTNET_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// True if `a` is at least as new as `b` (by modified time). Conservative: any
+/// missing/unreadable mtime returns false, so callers re-do the work rather than
+/// trust a stale artifact.
+fn is_newer_or_equal(a: &Path, b: &Path) -> bool {
+    match (
+        std::fs::metadata(a).and_then(|m| m.modified()),
+        std::fs::metadata(b).and_then(|m| m.modified()),
+    ) {
+        (Ok(ta), Ok(tb)) => ta >= tb,
+        _ => false,
+    }
+}
+
 /// Run a command capturing stdout, killing it (and erroring) if it exceeds
 /// `timeout`. Prevents a hung `dotnet` from blocking the caller forever.
 fn run_capturing(program: &str, args: &[String], cwd: &Path, timeout: Duration) -> io::Result<Vec<u8>> {
@@ -114,7 +127,13 @@ pub fn prepare_with_timeout(
     cshtml_rels: &[PathBuf],
     timeout: Duration,
 ) -> io::Result<PreparedShadow> {
+    // Each `dotnet` spawn costs ~1-1.5s (CLI + MSBuild). We time every step and
+    // skip the ones whose output is already current, so re-opening a `.cshtml`
+    // doesn't pay the full pipeline again. Timings go to stderr ([razor:timing]).
+    let started = Instant::now();
+
     // 1. derive TFM + framework references from the user project (MSBuild eval).
+    let t = Instant::now();
     let (dprog, dargs) = derive::derive_command(&user_csproj_path.to_string_lossy());
     let derive_out = run_capturing(&dprog, &dargs, user_project_dir, timeout)?;
     let derived = derive::parse_derived(&String::from_utf8_lossy(&derive_out)).ok_or_else(|| {
@@ -123,6 +142,7 @@ pub fn prepare_with_timeout(
             "could not derive TargetFramework (multi-targeting? pass an explicit TFM)",
         )
     })?;
+    eprintln!("[razor:timing] derive {:?}", t.elapsed());
 
     // 2. plan.
     let plan = broker::plan(&BrokerInputs {
@@ -135,24 +155,63 @@ pub fn prepare_with_timeout(
         cshtml_rels,
     });
 
-    // 3. emit the projected .g.cs (tolerate non-zero exit — generator still emits).
-    let (eprog, eargs) = &plan.emit_command;
-    let _ = run_capturing(eprog, eargs, &plan.emit_cwd, timeout)?;
+    // 3. emit the projected .g.cs. Skip the `dotnet build` when every projection
+    //    is already newer than ALL of its inputs (re-open with no edit) — the
+    //    emitted files are still current. Inputs that change generated text: the
+    //    `.cshtml` itself, the `.csproj` (refs/SDK), and the project-level
+    //    `_ViewImports`/`_ViewStart` (usings/inherits/inject/TagHelpers). Any
+    //    newer input forces a rebuild. (Deeply-nested `_ViewImports` aren't
+    //    tracked here — a V1 edge; reprepare is `.cshtml`-save scoped.)
+    let mut global_inputs: Vec<PathBuf> = vec![user_csproj_path.to_path_buf()];
+    for rel in [
+        "Views/_ViewImports.cshtml",
+        "Views/_ViewStart.cshtml",
+        "_ViewImports.cshtml",
+        "_ViewStart.cshtml",
+    ] {
+        let p = user_project_dir.join(rel);
+        if p.exists() {
+            global_inputs.push(p);
+        }
+    }
+    let emit_current = plan.projections.iter().all(|pf| {
+        pf.emitted_gcs.exists() && {
+            let cshtml = user_project_dir.join(&pf.cshtml_rel);
+            is_newer_or_equal(&pf.emitted_gcs, &cshtml)
+                && global_inputs.iter().all(|g| is_newer_or_equal(&pf.emitted_gcs, g))
+        }
+    });
+    if emit_current {
+        eprintln!("[razor:timing] emit SKIPPED (projections up-to-date)");
+    } else {
+        let t = Instant::now();
+        let (eprog, eargs) = &plan.emit_command;
+        let _ = run_capturing(eprog, eargs, &plan.emit_cwd, timeout)?;
+        eprintln!("[razor:timing] emit {:?}", t.elapsed());
+    }
 
     // 4. materialize the shadow (write csproj, copy/remove-stale projections, .sln).
+    let t = Instant::now();
     exec::materialize(&plan)?;
+    eprintln!("[razor:timing] materialize {:?}", t.elapsed());
 
-    // 4.5 restore the freshly-written shadow so Roslyn can load it. Roslyn's LSP
-    // does NOT restore on its own — it only asks the client via
-    // `workspace/_roslyn_projectNeedsRestore`; without `obj/project.assets.json`
-    // the shadow loads with unresolved refs and yields no diagnostics. Restore is
-    // compile-free, so the user's deliberate C# errors don't block it. Tolerate a
-    // non-zero exit (offline/degraded) — Roslyn will surface any real ref gap.
-    let restore_args = vec![
-        "restore".to_string(),
-        plan.shadow_csproj_path.to_string_lossy().to_string(),
-    ];
-    let _ = run_capturing("dotnet", &restore_args, &plan.shadow_dir, timeout);
+    // 4.5 restore the shadow so Roslyn can load it (it won't restore itself; it
+    //     only asks via `workspace/_roslyn_projectNeedsRestore`). The shadow's
+    //     deps (FrameworkReference + ProjectReference) are stable, so once
+    //     `obj/project.assets.json` exists we skip the costly restore — it
+    //     persists in the temp shadow across app restarts.
+    let assets = plan.shadow_dir.join("obj").join("project.assets.json");
+    if assets.exists() {
+        eprintln!("[razor:timing] restore SKIPPED (shadow already restored)");
+    } else {
+        let t = Instant::now();
+        let restore_args = vec![
+            "restore".to_string(),
+            plan.shadow_csproj_path.to_string_lossy().to_string(),
+        ];
+        let _ = run_capturing("dotnet", &restore_args, &plan.shadow_dir, timeout);
+        eprintln!("[razor:timing] restore {:?}", t.elapsed());
+    }
 
     // 5. build a source map per materialized projection; record any that are missing.
     let mut projections = Vec::new();
@@ -172,6 +231,7 @@ pub fn prepare_with_timeout(
         });
     }
 
+    eprintln!("[razor:timing] prepare TOTAL {:?}", started.elapsed());
     Ok(PreparedShadow {
         plan,
         projections,
