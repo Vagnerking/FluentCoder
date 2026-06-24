@@ -19,14 +19,18 @@
  * are returned so the manager can tear them down when the client stops.
  */
 import * as monaco from "monaco-editor";
-// Internal Monaco service identifier. `editor.action.showReferences` /
-// `peekLocations` are `CommandsRegistry` commands (NOT editor actions), so they
-// can only be executed through the command service — there is no public
+// VS Code service identifier. `editor.action.showReferences` / `peekLocations`
+// are `CommandsRegistry` commands (NOT editor actions), so they can only be
+// executed through the command service — there is no public
 // `monaco.editor.executeCommand`. The command handler we register receives a
 // service accessor, and resolving `ICommandService` from it is exactly how
-// Monaco's own gotoSymbol handlers delegate (goToCommands.js). The path is
-// stable across the 0.5x line; it's deep-imported deliberately.
-import { ICommandService } from "monaco-editor/esm/vs/platform/commands/common/commands.js";
+// Monaco's own gotoSymbol handlers delegate (goToCommands.js).
+//
+// On the v10 stack the service identifier lives in
+// `@codingame/monaco-vscode-api/services` (the old vanilla deep import
+// `monaco-editor/esm/vs/platform/commands/common/commands.js` is NOT a valid
+// specifier of `@codingame/monaco-vscode-editor-api`).
+import { ICommandService } from "@codingame/monaco-vscode-api/services";
 import type { MonacoLanguageClient } from "monaco-languageclient";
 import type { DocumentSelector } from "vscode-languageclient";
 import { lspLog } from "./debug";

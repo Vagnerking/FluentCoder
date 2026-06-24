@@ -664,43 +664,26 @@ function installSemanticTokensBridge(
 
     // Roslyn initially returns frozen/partial semantic classifications while
     // projects are loading. It later asks the client to invalidate semantic
-    // tokens through this request. The compatibility feature's provider was
-    // disposed above, so route the refresh to our direct Monaco provider.
+    // tokens through this request. The native SemanticTokensFeature was
+    // neutralized before start() (see disableNativeClientFeature), so route the
+    // refresh to our direct Monaco provider — we are the only provider now.
     client.onRequest("workspace/semanticTokens/refresh", () => {
       lspLog("semantic tokens refresh requested by", serverId);
       fireRefreshNowAndDeferred();
       return null;
     });
 
-    // DIAG: Roslyn doesn't send semanticTokens/refresh when cross-file types
-    // upgrade from `variable` to their real classification — but it DOES drive
-    // diagnostics via pull (workspace/diagnostic/refresh) once background/full-
-    // solution compilation completes, which is the same "refs resolved" moment.
-    // Observe the DiagnosticFeature's change event (non-destructive — does NOT
-    // override the feature's own refresh handler) to confirm it fires after
-    // projectInitializationComplete, so we can hang a token re-pull off it.
+    // DIAG: which token-refresh paths the server announced. On v10 the native
+    // DiagnosticFeature is neutralized (the manual diagnostics bridge owns pull),
+    // so we no longer observe its change emitter — the manual bridge's
+    // `workspace/diagnostic/refresh` handler is the live signal for "refs likely
+    // resolved", and `stabilizeSemanticTokens` already re-pulls tokens on a
+    // backoff until classification settles.
     lspLog(
       "DIAG diagnosticProvider capability",
       serverId,
       client.initializeResult?.capabilities.diagnosticProvider
     );
-    try {
-      const diagFeature = client.getFeature("textDocument/diagnostic") as
-        | { onDidChangeDiagnosticsEmitter?: { event: monaco.IEvent<void> } }
-        | undefined;
-      const emitter = diagFeature?.onDidChangeDiagnosticsEmitter;
-      if (emitter) {
-        contributions.push(
-          emitter.event(() =>
-            lspLog("DIAG diagnostics changed (refs likely resolved)", serverId)
-          )
-        );
-      } else {
-        lspLog("DIAG diagnostic feature has no onDidChangeDiagnosticsEmitter", serverId);
-      }
-    } catch (err) {
-      lspLog("DIAG diagnostic-feature observe FAILED", String(err));
-    }
 
     contributions.push({ dispose: refresh.dispose });
     clientContributions.set(client, {
