@@ -12,6 +12,7 @@ import {
   relativize,
   isAncestorDir,
   pickProjectForCshtml,
+  isPhantomSelfAmbiguity,
   type LspDiagnostic,
   type RemapFn,
 } from "./razorProjectionRouting.ts";
@@ -69,6 +70,48 @@ test("routeDiagnostics keeps only the mappable ones in a mixed batch", async () 
   const markers = await routeDiagnostics([synthetic, CS1061], remapToSource);
   assert.equal(markers.length, 1);
   assert.equal(markers[0].code, "CS1061");
+});
+
+// --- phantom self-ambiguity (CS0229) from the duplicated Razor page class ---
+
+const PHANTOM_CS0229: LspDiagnostic = {
+  // remappable range so it would otherwise become a marker
+  range: { start: { line: 160, character: 6 }, end: { line: 160, character: 25 } },
+  severity: 1,
+  code: "CS0229",
+  message:
+    "Ambiguity between 'Views_AlteracaoVencimento__Grid.Url' and 'Views_AlteracaoVencimento__Grid.Url'",
+};
+
+test("isPhantomSelfAmbiguity: true when CS0229 names the SAME symbol twice", () => {
+  assert.equal(isPhantomSelfAmbiguity(PHANTOM_CS0229), true);
+});
+
+test("isPhantomSelfAmbiguity: false for a REAL ambiguity (two different symbols)", () => {
+  const real: LspDiagnostic = {
+    ...PHANTOM_CS0229,
+    message: "Ambiguity between 'A.Foo' and 'B.Foo'",
+  };
+  assert.equal(isPhantomSelfAmbiguity(real), false);
+});
+
+test("isPhantomSelfAmbiguity: false for any non-CS0229 code", () => {
+  assert.equal(isPhantomSelfAmbiguity({ ...PHANTOM_CS0229, code: "CS1061" }), false);
+  assert.equal(isPhantomSelfAmbiguity(CS1061), false);
+});
+
+test("routeDiagnostics DROPS the phantom self-ambiguity CS0229", async () => {
+  assert.deepEqual(await routeDiagnostics([PHANTOM_CS0229], remapToSource), []);
+});
+
+test("routeDiagnostics keeps a REAL CS0229 (distinct symbols)", async () => {
+  const real: LspDiagnostic = {
+    ...PHANTOM_CS0229,
+    message: "Ambiguity between 'A.Foo' and 'B.Foo'",
+  };
+  const markers = await routeDiagnostics([real], remapToSource);
+  assert.equal(markers.length, 1);
+  assert.equal(markers[0].code, "CS0229");
 });
 
 test("routeDiagnostics filters VS-custom tags, keeps standard ones", async () => {

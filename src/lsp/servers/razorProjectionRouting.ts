@@ -126,9 +126,35 @@ export async function remapRangeToMonaco(
 }
 
 /**
+ * A phantom CS0229 caused by the projection architecture, NOT the user's code.
+ *
+ * A `Microsoft.NET.Sdk.Web` user project loaded in the Roslyn workspace generates
+ * its Razor page classes (`AspNetCoreGeneratedDocument.Views_*`) in its OWN
+ * compilation, while the shadow project ALSO compiles the same class from the
+ * projected `.g.cs`. The duplicate type makes every inherited `[RazorInject]`
+ * member ambiguous *with itself* — Roslyn reports `CS0229 Ambiguity between
+ * 'T.Member' and 'T.Member'` where BOTH sides are the SAME qualified name. That is
+ * always a false positive here. A REAL ambiguity (two DIFFERENT members) keeps its
+ * distinct names, so we only drop the self-ambiguous case.
+ *
+ * (The standalone Roslyn LSP offers no supported way to suppress the user
+ * project's Razor generation per-workspace — `Directory.Solution.props` isn't
+ * honored by its per-project MSBuild load, and a metadata reference still carries
+ * the page classes — so we filter the phantom at the diagnostic boundary.)
+ */
+export function isPhantomSelfAmbiguity(d: LspDiagnostic): boolean {
+  if (String(d.code) !== "CS0229") return false;
+  // Match `... between '<a>' and '<b>'` and treat a==b as the phantom.
+  const m = /between\s+'([^']+)'\s+and\s+'([^']+)'/i.exec(d.message);
+  return m != null && m[1] === m[2];
+}
+
+/**
  * Route projected-`.g.cs` diagnostics to `.cshtml` Monaco markers: remap every
- * range generated→source and DROP any that doesn't map (synthetic C#). The
- * returned `tags` (if any) use Monaco's `MarkerTag` numbering, which matches LSP.
+ * range generated→source and DROP any that doesn't map (synthetic C#). Also drops
+ * the phantom self-ambiguity CS0229 from the duplicated Razor page class (see
+ * {@link isPhantomSelfAmbiguity}). The returned `tags` (if any) use Monaco's
+ * `MarkerTag` numbering, which matches LSP.
  */
 export async function routeDiagnostics(
   items: readonly LspDiagnostic[],
@@ -136,6 +162,7 @@ export async function routeDiagnostics(
 ): Promise<RoutedMarker[]> {
   const markers: RoutedMarker[] = [];
   for (const d of items) {
+    if (isPhantomSelfAmbiguity(d)) continue; // architecture artifact, not user code
     const range = await remapRangeToMonaco(d.range, remapToSource);
     if (!range) continue; // unmappable → synthetic scaffolding, not user code
     const tags = standardTags(d.tags);
