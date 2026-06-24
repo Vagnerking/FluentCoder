@@ -48,18 +48,20 @@ export function buildDecorations(
 ): Map<string, FileDecoration> {
   const map = new Map<string, FileDecoration>();
 
-  // Git state first; diagnostics override it below.
+  // Git state first; diagnostics override it below. Keys go through `decoKey`
+  // (slash + drive-letter normalization) so they match the lookup in
+  // `decorationFor` — otherwise a `C:/…` marker path vs a `c:/…` tree path would
+  // never line up on Windows and the decoration would silently not render.
   if (git?.isRepo && rootPath) {
     for (const f of git.files) {
-      const abs = `${rootPath}/${f.path}`.replace(/\\/g, "/");
-      map.set(abs, gitDecoration(f));
+      map.set(decoKey(`${rootPath}/${f.path}`), gitDecoration(f));
     }
   }
 
   // Diagnostics outrank git: a file with errors shows the error color/badge.
   for (const p of problems) {
     if (p.severity === "info") continue;
-    const key = p.path.replace(/\\/g, "/");
+    const key = decoKey(p.path);
     const existing = map.get(key);
     if (p.severity === "error") {
       map.set(key, { kind: "error", badge: existing?.badge });
