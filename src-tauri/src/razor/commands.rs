@@ -324,12 +324,19 @@ pub async fn razor_emit_live(
             });
         }
     };
-    eprintln!(
-        "[razor:live] emit OK: buf={}ch gcs={}ch hasModelDot={}",
-        text.len(),
-        generated.len(),
-        generated.contains("Model.")
-    );
+    if generated.is_empty() {
+        // The sidecar ran but produced nothing (e.g. a generator error on a
+        // transient invalid buffer). Don't blank Roslyn's view with empty text —
+        // return ok:false so the caller KEEPS the last good projection. The next
+        // valid edit re-emits a real `.g.cs`.
+        eprintln!("[razor:live] emit produced EMPTY .g.cs for {}", ctx.cshtml_abs);
+        return Ok(EmitLiveResult {
+            generated_text: String::new(),
+            generation: 0,
+            ok: false,
+            error: Some("sidecar produced empty .g.cs".to_string()),
+        });
+    }
 
     // Parse the map from the EXACT text we return, PARK it as pending under a fresh
     // generation, and return the text+gen. The frontend commits the pending map

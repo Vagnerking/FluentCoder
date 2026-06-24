@@ -823,7 +823,12 @@ export async function startRazorProjectionServer(
       }
       if (disposed || model.isDisposed() || docs.get(key) !== doc) return false;
       if (!res.ok) {
-        liveBroken = true; // sidecar down / no context → degrade to on-save
+        // An empty `.g.cs` (transient ungeneratable buffer) is NOT a broken
+        // sidecar: keep the last good projection, don't latch/reprepare — the next
+        // valid keystroke re-emits. A real failure (sidecar down / no context)
+        // degrades to the on-save path.
+        if (res.error === "sidecar produced empty .g.cs") return false;
+        liveBroken = true;
         scheduleReprepare();
         return false;
       }
