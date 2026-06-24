@@ -44,6 +44,7 @@ pub fn run() {
             search::cancel_search,
             search::build_search_index,
             file_index::list_project_files,
+            file_index::has_dotnet_project,
             git::git_branch,
             git::git_branches,
             git::git_checkout,

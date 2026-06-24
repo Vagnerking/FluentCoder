@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { hasDotnetProject } from "../api";
 import { LspManager, lspLanguageIds } from "./manager";
 import { serverIdForLanguage } from "./servers";
 import type { LspWorkspaceInfo } from "./servers";
@@ -76,8 +77,11 @@ export function useLspManager(
       if (manager.isActive(serverId)) return;
       setStatus(serverId, "starting");
       try {
-        await manager.start(language, root, setWorkspaceInfo);
-        setStatus(serverId, "ready");
+        // Only mark "ready" when a client was actually registered. A stale start
+        // (workspace switched during startup) resolves `false` and must NOT flip
+        // the new/empty workspace's status to ready.
+        const started = await manager.start(language, root, setWorkspaceInfo);
+        if (started) setStatus(serverId, "ready");
       } catch (err) {
         setStatus(serverId, "error", err instanceof Error ? err.message : String(err));
       }
@@ -137,6 +141,27 @@ export function useLspManager(
     // Servers for languages that left the tab set stay warm until the workspace
     // changes (handled above).
   }, [rootPath, openedLanguages, manager, startLanguage]);
+
+  // Warm-start the C# Roslyn when a folder containing a .sln/.csproj opens, so the
+  // first .cs/.cshtml opens against an already-loading solution (matches VS Code).
+  // The detection (`hasDotnetProject`) is async + runs off the backend main
+  // thread, and the server starts in its own process — nothing blocks the UI. The
+  // `manager.start` is idempotent, so it coexists with the on-open start; the
+  // Razor projection stays per-view (it needs an open `.cshtml` to project).
+  useEffect(() => {
+    if (!rootPath) return;
+    let cancelled = false;
+    void hasDotnetProject(rootPath)
+      .then((has) => {
+        if (has && !cancelled) void startLanguage("csharp", rootPath);
+      })
+      .catch(() => {
+        /* detection failed — fall back to the lazy on-open start */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [rootPath, startLanguage]);
 
   // Best-effort teardown on window close.
   useEffect(() => {

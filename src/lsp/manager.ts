@@ -50,19 +50,24 @@ export class LspManager {
    * Starts the server for `language` rooted at `rootPath`. Idempotent: a no-op
    * if a client for that server is already running. Serialized per server id, so
    * it cleanly follows any in-flight start/stop for the same server.
+   *
+   * Resolves to `true` only when a client was actually registered. `false` means
+   * skipped (already running) or discarded as stale (a workspace switch/reset
+   * raced it) — callers must NOT report "ready" in that case, or a stale start
+   * would mark a server ready for the wrong (or empty) workspace.
    */
   async start(
     language: string,
     rootPath: string,
     onWorkspaceInfo?: (info: LspWorkspaceInfo) => void
-  ): Promise<void> {
+  ): Promise<boolean> {
     const entry = SERVER_REGISTRY[language];
-    if (!entry) return;
+    if (!entry) return false;
     const { serverId, start } = entry;
-    await this.enqueue(serverId, async () => {
+    return this.enqueue(serverId, async (): Promise<boolean> => {
       if (this.clients.has(serverId)) {
         lspLog("manager.start SKIP (already running)", serverId);
-        return;
+        return false;
       }
       lspLog("manager.start BEGIN", { language, serverId });
       const startGen = this.generations.get(serverId) ?? 0;
@@ -81,10 +86,11 @@ export class LspManager {
         disposeLanguageClientContributions(client);
         await client.stop().catch(() => {});
         await stopLspServer(serverId).catch(() => {});
-        return;
+        return false;
       }
       this.clients.set(serverId, client);
       lspLog("manager.start DONE", serverId);
+      return true;
     });
   }
 

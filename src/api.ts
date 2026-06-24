@@ -199,6 +199,15 @@ export function listProjectFiles(root: string): Promise<ProjectFile[]> {
   return invoke<ProjectFile[]>("list_project_files", { root });
 }
 
+/**
+ * Whether `root` contains a `.sln`/`.csproj` (bounded depth). Async + off the
+ * main thread on the backend (early-exit walk), so it never stalls the UI. Used
+ * to warm-start the C# Roslyn on folder open.
+ */
+export function hasDotnetProject(root: string): Promise<boolean> {
+  return invoke<boolean>("has_dotnet_project", { root });
+}
+
 /** Returns the current git branch for `path`, or null if not a repo. */
 export function gitBranch(path: string): Promise<string | null> {
   return invoke<string | null>("git_branch", { path });
