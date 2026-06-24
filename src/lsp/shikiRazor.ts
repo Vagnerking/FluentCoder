@@ -72,6 +72,17 @@ function mapScopes(scopes: readonly string[]): string {
   return "";
 }
 
+/**
+ * A `.`-chain member (`variable.other...property`) — every segment AFTER the
+ * first object in `A.B.C`. The C# grammar scopes the first segment `…object` and
+ * each following segment `…object.property`, so this matches the intermediate and
+ * tail members but never the leading object or a standalone variable.
+ */
+function isMemberProperty(scopes: readonly string[]): boolean {
+  const deepest = scopes[scopes.length - 1] ?? "";
+  return /^variable\.other\..*property/.test(deepest);
+}
+
 /** Monaco `IState` wrapping the TextMate rule stack across lines. */
 class RazorTmState implements monaco.languages.IState {
   constructor(readonly ruleStack: StateStack) {}
@@ -118,10 +129,29 @@ export async function installShikiRazorColors(): Promise<void> {
         return { tokens: [{ startIndex: 0, scopes: "" }], endState: state };
       }
       const result = grammar.tokenizeLine(line, ruleStack, 500);
-      const tokens = result.tokens.map((t) => ({
-        startIndex: t.startIndex,
-        scopes: mapScopes(t.scopes),
-      }));
+      const raw = result.tokens;
+      const tokenText = (i: number) =>
+        line.slice(raw[i].startIndex, raw[i].endIndex).trim();
+      /** Index of the next non-whitespace token after `i`, or -1. */
+      const nextMeaningful = (i: number): number => {
+        for (let j = i + 1; j < raw.length; j++) {
+          if (tokenText(j) !== "") return j;
+        }
+        return -1;
+      };
+      const tokens = raw.map((t, i) => {
+        let type = mapScopes(t.scopes);
+        // The LAST member of a `.`-chain (the property, e.g. `City` in
+        // `Model.Address.City`) gets the type/green color. The grammar can't tell
+        // tail from intermediate (both are `…object.property`), so the tail is the
+        // member NOT immediately followed by a `.` accessor.
+        if (isMemberProperty(t.scopes)) {
+          const n = nextMeaningful(i);
+          const followedByDot = n !== -1 && tokenText(n) === ".";
+          if (!followedByDot) type = "type";
+        }
+        return { startIndex: t.startIndex, scopes: type };
+      });
       return { tokens, endState: new RazorTmState(result.ruleStack) };
     },
   };
