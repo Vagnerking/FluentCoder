@@ -97,6 +97,11 @@ pub fn emit_command(project_path: &Path, config: &str) -> (String, Vec<String>) 
             "-c".to_string(),
             config.to_string(),
             "-p:EmitCompilerGeneratedFiles=true".to_string(),
+            // Skip the per-build restore check (~0.4s): the project is restored by
+            // the session's first derive (a restoring `dotnet build`). If assets are
+            // stale/removed mid-session this emit degrades — tolerated, since the
+            // broker treats a non-zero emit as a missing projection, not a crash.
+            "--no-restore".to_string(),
             // keep it quiet + don't fail the broker on the user's own C# errors:
             // the generator still emits its output even when the compile fails.
             "-v:quiet".to_string(),

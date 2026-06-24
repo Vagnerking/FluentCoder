@@ -11,15 +11,80 @@
 //! Process execution (dotnet) lives here; it is exercised by the `#[ignore]`
 //! end-to-end test below against the real SampleMvc fixture.
 
+use std::collections::HashMap;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant, SystemTime};
 
 use super::broker::{self, BrokerInputs, BrokerPlan};
-use super::derive;
+use super::derive::{self, DerivedRefs};
 use super::exec;
 use super::sourcemap::RazorSourceMap;
+
+/// Per-project cache of derived TFM/framework refs, keyed by the `.csproj` path
+/// and invalidated by a fingerprint (see [`derive_inputs_fingerprint`]). The
+/// derive is a `dotnet` MSBuild eval (~0.6s); re-preparing on save (same session)
+/// reuses it instead of re-spawning `dotnet`.
+static DERIVE_CACHE: OnceLock<Mutex<HashMap<String, (SystemTime, DerivedRefs)>>> = OnceLock::new();
+
+/// Newest modified time among the files that can change the derived TFM/refs: the
+/// `.csproj` plus the MSBuild import files MSBuild discovers by walking up
+/// (`Directory.Build.props`/`.targets`, `Directory.Packages.props`, `global.json`).
+/// `None` if the `.csproj` mtime is unreadable (caller then re-derives, uncached).
+fn derive_inputs_fingerprint(csproj: &Path, project_dir: &Path) -> Option<SystemTime> {
+    let mut newest = std::fs::metadata(csproj).and_then(|m| m.modified()).ok()?;
+    const IMPORTS: [&str; 4] = [
+        "Directory.Build.props",
+        "Directory.Build.targets",
+        "Directory.Packages.props",
+        "global.json",
+    ];
+    let mut dir = Some(project_dir);
+    while let Some(d) = dir {
+        for name in IMPORTS {
+            if let Ok(m) = std::fs::metadata(d.join(name)).and_then(|m| m.modified()) {
+                if m > newest {
+                    newest = m;
+                }
+            }
+        }
+        dir = d.parent();
+    }
+    Some(newest)
+}
+
+/// Derive (or reuse the cached) refs for `csproj`. Re-derives when any derive
+/// input changed since the cache entry, or when there is no usable fingerprint.
+fn derive_cached(csproj: &Path, project_dir: &Path, timeout: Duration) -> io::Result<DerivedRefs> {
+    let key = csproj.to_string_lossy().replace('\\', "/").to_ascii_lowercase();
+    let mtime = derive_inputs_fingerprint(csproj, project_dir);
+    let cache = DERIVE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(mt) = mtime {
+        if let Ok(guard) = cache.lock() {
+            if let Some((cached_mt, refs)) = guard.get(&key) {
+                if *cached_mt == mt {
+                    return Ok(refs.clone());
+                }
+            }
+        }
+    }
+    let (dprog, dargs) = derive::derive_command(&csproj.to_string_lossy());
+    let out = run_capturing(&dprog, &dargs, project_dir, timeout)?;
+    let derived = derive::parse_derived(&String::from_utf8_lossy(&out)).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "could not derive TargetFramework (multi-targeting? pass an explicit TFM)",
+        )
+    })?;
+    if let Some(mt) = mtime {
+        if let Ok(mut guard) = cache.lock() {
+            guard.insert(key, (mt, derived.clone()));
+        }
+    }
+    Ok(derived)
+}
 
 /// Default timeout for a `dotnet` invocation (derive/emit). Builds can be slow on
 /// first run; tune via [`prepare_with_timeout`].
@@ -132,16 +197,9 @@ pub fn prepare_with_timeout(
     // doesn't pay the full pipeline again. Timings go to stderr ([razor:timing]).
     let started = Instant::now();
 
-    // 1. derive TFM + framework references from the user project (MSBuild eval).
+    // 1. derive TFM + framework references (cached per project; ~0.6s on a miss).
     let t = Instant::now();
-    let (dprog, dargs) = derive::derive_command(&user_csproj_path.to_string_lossy());
-    let derive_out = run_capturing(&dprog, &dargs, user_project_dir, timeout)?;
-    let derived = derive::parse_derived(&String::from_utf8_lossy(&derive_out)).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "could not derive TargetFramework (multi-targeting? pass an explicit TFM)",
-        )
-    })?;
+    let derived = derive_cached(user_csproj_path, user_project_dir, timeout)?;
     eprintln!("[razor:timing] derive {:?}", t.elapsed());
 
     // 2. plan.
