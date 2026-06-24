@@ -47,7 +47,7 @@ export interface VirtualHtml {
  */
 function scanBalancedEnd(chars: string[], open: number, n: number): number {
   const openCh = chars[open];
-  const closeCh = openCh === "{" ? "}" : ")";
+  const closeCh = openCh === "{" ? "}" : openCh === "[" ? "]" : ")";
   let j = open + 1;
   let depth = 1;
   while (j < n && depth > 0) {
@@ -157,10 +157,33 @@ export function buildVirtualHtml(cshtml: string): VirtualHtml {
         i += 2;
         continue;
       }
-      // `@Model.Foo`, `@ViewData["x"]`, `@if`… — blank the expression run up to
-      // the next whitespace or `<` (a tag re-enters markup).
+      // `@Model.Foo`, `@ViewData["x"]`, `@Model.Where(x => x.Y)`… — a Razor IMPLICIT
+      // expression: `@` + identifier, then repeated `.member`, `(...)`, `[...]`. The
+      // `(...)`/`[...]` segments are BALANCED (quote/comment-aware) and may contain
+      // spaces and lambdas — so the run does NOT stop at the first space when that
+      // space is inside parentheses (the `@Model.First(x => x.` bug, where the tail
+      // after the space was wrongly left as HTML). Outside a bracket segment, the
+      // run ends at the first char that can't continue it.
+      // Bound the scan to the current line: a Razor implicit expression is
+      // single-line for region purposes, and an UNCLOSED `(` (the user is still
+      // typing `@Model.First(x => x.`) must NOT blank the rest of the file — only
+      // up to the line end. `scanBalancedEnd` would otherwise run to EOF.
+      let lineEnd = i + 1;
+      while (lineEnd < n && chars[lineEnd] !== "\n") lineEnd++;
       let j = i + 1;
-      while (j < n && !/[\s<]/.test(chars[j])) j++;
+      while (j < n) {
+        const ch = chars[j];
+        if (/[A-Za-z0-9_.]/.test(ch)) { j++; continue; }
+        if (ch === "(" || ch === "[") {
+          const end = scanBalancedEnd(chars, j, n);
+          // Closed on this line → continue the run past it; unclosed (ran past the
+          // line) → clamp to line end (incomplete expr being typed).
+          j = end <= lineEnd ? end : lineEnd;
+          if (j >= lineEnd) break;
+          continue;
+        }
+        break; // whitespace / `<` / operator outside a bracket → end of implicit expr
+      }
       blank(chars, mask, i, j);
       i = j;
       continue;

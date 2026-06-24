@@ -206,6 +206,37 @@ test("regionAt: caret after `@Model.` mid-expression (before `City`) is Razor", 
   assert.equal(regionAt(mask, caret), "razor");
 });
 
+test("regionAt: caret inside a lambda in an implicit expression is Razor (the `(x => x.` bug)", () => {
+  // THE BUG: the implicit-expression scanner stopped at the FIRST space (inside the
+  // parens, before `=>`), leaving the lambda tail classified as HTML → member
+  // completion fell through to the HTML service. The `(...)` segment must be
+  // consumed whole, spaces and all.
+  const src = `@Model.FirstOrDefault(x => x.)`;
+  const { mask } = buildVirtualHtml(src);
+  const caret = src.indexOf("x.") + "x.".length; // right after the inner dot
+  assert.equal(regionAt(mask, caret), "razor");
+  // the whole expression is blanked (no HTML leaked from inside the parens)
+  const out = buildVirtualHtml(src).html;
+  assert.ok(!out.includes("FirstOrDefault"), `expr blanked, got: ${out}`);
+});
+
+test("regionAt: INCOMPLETE implicit expr with unclosed `(` only blanks its line", () => {
+  // While typing `@Model.First(x => x.` the `(` is unclosed — the scan must NOT run
+  // to EOF and blank the HTML below; it clamps to the line end.
+  const src = `@Model.FirstOrDefault(x => x.\n<p>after</p>`;
+  const out = buildVirtualHtml(src).html;
+  assert.ok(out.trimStart().endsWith("<p>after</p>"), `HTML below survives, got: ${JSON.stringify(out)}`);
+  const { mask } = buildVirtualHtml(src);
+  const caret = src.indexOf("x.") + "x.".length;
+  assert.equal(regionAt(mask, caret), "razor", "caret in the lambda is Razor");
+});
+
+test("buildVirtualHtml: indexer `@Model[0].` and chained calls stay Razor", () => {
+  const src = `@Model.Where(x => x.A).Select(y => y.B)`;
+  const out = buildVirtualHtml(src).html;
+  assert.ok(!out.includes("Where") && !out.includes("Select"), `chained calls blanked, got: ${out}`);
+});
+
 test("regionAt: real HTML whitespace is HTML, not Razor (the `<div |` attribute spot)", () => {
   // Codex regression: a real space after a tag name is a prime attribute-completion
   // position. It must classify HTML even though blanked Razor is also a space.

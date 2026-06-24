@@ -89,7 +89,6 @@ Já verde sem o app: `npx tsc --noEmit`, `npm run test:unit` (inclui 13 testes d
 - **Um projeto por sessão:** serve os `.cshtml` do projeto do primeiro `.cshtml` aberto; `.cshtml` de outro `.csproj` no mesmo workspace ficam sem semântica (multi-projeto = trabalho futuro).
 - **Semântica "as of last save":** o broker regenera do disco (`dotnet build`), então diagnostics/hover/def refletem o último save, não o buffer sujo.
 - **HTML/TagHelpers:** fora do brick 6 (Fase C — delegação HTML).
-- **Completion dentro de lambda/parênteses de expressão implícita complexa:** casos como `@Model.FirstOrDefault(x => x.|` (member access dentro de uma expressão implícita incompleta com parênteses abertos/lambda) caem no fallback word-based do Monaco — a projeção não mapeia o ponto interno. Member access direto (`@Model.Prop`) funciona; dentro de um bloco explícito `@( ... )`/`@{ ... }` o Roslyn cobre. Atacar no futuro.
 
 ## Notas
 - Latência: V1 gera projeção on-save (`dotnet build`); fast path futuro = sidecar .NET com o source generator (sem build).
