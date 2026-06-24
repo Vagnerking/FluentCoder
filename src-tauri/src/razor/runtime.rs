@@ -142,6 +142,18 @@ pub fn prepare_with_timeout(
     // 4. materialize the shadow (write csproj, copy/remove-stale projections, .sln).
     exec::materialize(&plan)?;
 
+    // 4.5 restore the freshly-written shadow so Roslyn can load it. Roslyn's LSP
+    // does NOT restore on its own — it only asks the client via
+    // `workspace/_roslyn_projectNeedsRestore`; without `obj/project.assets.json`
+    // the shadow loads with unresolved refs and yields no diagnostics. Restore is
+    // compile-free, so the user's deliberate C# errors don't block it. Tolerate a
+    // non-zero exit (offline/degraded) — Roslyn will surface any real ref gap.
+    let restore_args = vec![
+        "restore".to_string(),
+        plan.shadow_csproj_path.to_string_lossy().to_string(),
+    ];
+    let _ = run_capturing("dotnet", &restore_args, &plan.shadow_dir, timeout);
+
     // 5. build a source map per materialized projection; record any that are missing.
     let mut projections = Vec::new();
     let mut missing = Vec::new();

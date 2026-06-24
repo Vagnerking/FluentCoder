@@ -37,6 +37,31 @@ fn canonical_key(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/").to_ascii_lowercase()
 }
 
+/// Stable FNV-1a hex of a normalized path — names the per-project shadow dir.
+fn path_hash(p: &Path) -> String {
+    let s = canonical_key(p);
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
+/// Where the broker materializes its shadow project for `user_project_dir`.
+///
+/// MUST live OUTSIDE the user's source tree: if the shadow's projected `.g.cs`
+/// sat under the opened folder (the common case where the workspace IS the
+/// project), the user project's SDK would glob it and hit duplicate-type errors
+/// for the Razor page class. The OS temp dir, keyed per project, is always safe
+/// and is reused across prepares (incremental). The frontend's `workspace_dir`
+/// is no longer used to place the shadow.
+fn shadow_workspace_for(user_project_dir: &Path) -> PathBuf {
+    std::env::temp_dir()
+        .join("fluent-razor")
+        .join(path_hash(user_project_dir))
+}
+
 /// One materialized projection the frontend can serve: the `.cshtml` it came
 /// from plus the projected `.g.cs` the Roslyn client must `didOpen`/address.
 #[derive(Serialize)]
@@ -72,17 +97,22 @@ pub struct RemapPos {
 #[tauri::command]
 pub async fn razor_prepare(
     state: State<'_, RazorState>,
+    // Kept for the binding's shape, but the shadow is materialized in the OS temp
+    // dir (see `shadow_workspace_for`) — NEVER inside the opened folder, which
+    // would let the user project's SDK glob the projected `.g.cs`.
     workspace_dir: String,
     user_project_dir: String,
     user_csproj_path: String,
     config: String,
     cshtml_rels: Vec<String>,
 ) -> Result<RazorPrepareResult, String> {
+    let _ = workspace_dir;
     let project_dir = user_project_dir.clone();
     let prepared = tauri::async_runtime::spawn_blocking(move || {
         let rels: Vec<PathBuf> = cshtml_rels.iter().map(PathBuf::from).collect();
+        let shadow_ws = shadow_workspace_for(Path::new(&project_dir));
         runtime::prepare(
-            Path::new(&workspace_dir),
+            &shadow_ws,
             Path::new(&project_dir),
             Path::new(&user_csproj_path),
             &config,
@@ -169,5 +199,21 @@ mod tests {
             canonical_key(Path::new("C:\\WS\\Views\\Index.cshtml")),
             canonical_key(Path::new("c:/ws/views/index.cshtml"))
         );
+    }
+
+    #[test]
+    fn shadow_workspace_is_outside_project_and_stable() {
+        let proj = Path::new("C:\\src\\SampleMvc");
+        let ws = shadow_workspace_for(proj);
+        // Never inside the user's source tree (else the SDK globs the projection).
+        assert!(
+            !ws.starts_with(proj),
+            "shadow workspace must not be under the project: {ws:?}"
+        );
+        assert!(ws.starts_with(std::env::temp_dir()));
+        // Stable per project, Windows-insensitive (same project → same shadow).
+        assert_eq!(ws, shadow_workspace_for(Path::new("c:/src/samplemvc")));
+        // Distinct projects → distinct shadows.
+        assert_ne!(ws, shadow_workspace_for(Path::new("C:\\src\\Other")));
     }
 }
