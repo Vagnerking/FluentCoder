@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@monaco-editor/react": "^4.6.0",
+    "@shikijs/monaco": "^3.23.0",
     "@tauri-apps/api": "^2.1.1",
     "@tauri-apps/plugin-dialog": "^2.2.0",
     "@vscode/codicons": "^0.0.45",
@@ -25,10 +26,13 @@
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
+    "shiki": "^3.23.0",
     "tslib": "^2.6.2",
+    "vscode-html-languageservice": "^5.6.2",
     "vscode-jsonrpc": "~8.0.2",
     "vscode-languageclient": "~8.0.2",
     "vscode-languageserver-protocol": "^3.17.5",
+    "vscode-languageserver-textdocument": "^1.0.12",
     "vscode-ws-jsonrpc": "^3.0.0"
   },
   "devDependencies": {

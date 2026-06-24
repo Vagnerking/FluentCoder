@@ -31,6 +31,85 @@ export interface RawMarker {
   message: string;
 }
 
+/**
+ * Finds INCOMPLETE Razor implicit expressions — an `@expr` (e.g. `@Model.`) that
+ * ends in a trailing `.` with no member after it. The real Razor compiler drops
+ * the dangling dot when it projects to C# (`@Model.` → bare `Model`), so Roslyn
+ * never sees an error; this gives the same "Identifier expected" signal VS Code
+ * shows. Char-offset range covers the trailing `.`.
+ *
+ * Scope (conservative, to avoid noise): only implicit `@ident(.ident)*\.` runs.
+ * `@( )`/`@{ }` C# blocks are NOT checked here (incomplete C# inside them is the
+ * Roslyn projection's job); `@@`, `@*…*@`, and `@:` are skipped.
+ */
+export function scanIncompleteRazorExpressions(text: string): RawMarker[] {
+  const markers: RawMarker[] = [];
+  const n = text.length;
+  let i = 0;
+  while (i < n) {
+    if (text[i] !== "@") {
+      i++;
+      continue;
+    }
+    // Razor's email/literal exception: `@` is a transition only when it ISN'T
+    // preceded by a non-whitespace text char. `suporte@example.com.` is literal
+    // text (the `@` follows `e`), not an expression — don't flag its trailing dot.
+    const prev = text[i - 1];
+    if (prev !== undefined && /[A-Za-z0-9_]/.test(prev)) {
+      i++;
+      continue;
+    }
+    const next = text[i + 1];
+    // Skip the constructs that aren't implicit expressions.
+    if (next === "@") { i += 2; continue; } // `@@` escape
+    if (next === "*") { const e = text.indexOf("*@", i + 2); i = e < 0 ? n : e + 2; continue; }
+    if (next === ":") {
+      // `@:` turns the REST OF THE LINE into literal markup — a later `@expr.`
+      // on the same line (e.g. `@: @Model.`) is text, not an implicit expression,
+      // so consume to end-of-line instead of just the `@:`.
+      i += 2;
+      while (i < n && text[i] !== "\n") i++;
+      continue;
+    } // `@:` line-markup transition
+    if (next === "{" || next === "(") {
+      // Skip the balanced C# block — Roslyn owns its errors.
+      const open = next, close = open === "{" ? "}" : ")";
+      let j = i + 2, depth = 1;
+      while (j < n && depth > 0) {
+        if (text[j] === open) depth++;
+        else if (text[j] === close) depth--;
+        j++;
+      }
+      i = j;
+      continue;
+    }
+    // Implicit expression: `@` then an identifier run with `.`/`(`/`[` members.
+    // Walk it, remembering the last char, until a char that ends the expression.
+    let j = i + 1;
+    if (!/[A-Za-z_]/.test(text[j] ?? "")) { i++; continue; } // `@` not starting an ident
+    // Consume `ident` then repeated `.ident` / call/index. Stop at the first char
+    // that can't continue an implicit expression.
+    while (j < n) {
+      const ch = text[j];
+      if (/[A-Za-z0-9_.]/.test(ch)) { j++; continue; }
+      // Razor implicit expressions also allow `(...)` and `[...]` segments; treat a
+      // `(`/`[` as continuing only if balanced — but for the trailing-dot check we
+      // only care about a run ending in `.`, so stop here.
+      break;
+    }
+    // `j` is just past the implicit run. If the run ends with `.`, it's incomplete.
+    if (j > i + 1 && text[j - 1] === ".") {
+      markers.push({
+        start: j - 1,
+        end: j,
+        message: "Expressão Razor incompleta: esperado um membro após '.'.",
+      });
+    }
+    i = j;
+  }
+  return markers;
+}
+
 /** Scans `text` and returns stray-close-tag findings as char-offset ranges. */
 export function scanRazorMarkup(text: string): RawMarker[] {
   const markers: RawMarker[] = [];
@@ -172,11 +251,10 @@ export function installRazorHtmlLint(monaco: typeof MonacoNs): void {
 
   const lint = (model: MonacoNs.editor.ITextModel) => {
     if (model.isDisposed() || !LINTED_LANGUAGES.has(model.getLanguageId())) return;
-    monaco.editor.setModelMarkers(
-      model,
-      OWNER,
-      toMarkers(monaco, model, scanRazorMarkup(model.getValue()))
-    );
+    const text = model.getValue();
+    // Markup stray-tag scan + incomplete Razor expression (`@Model.`) scan.
+    const raws = [...scanRazorMarkup(text), ...scanIncompleteRazorExpressions(text)];
+    monaco.editor.setModelMarkers(model, OWNER, toMarkers(monaco, model, raws));
   };
 
   const schedule = (model: MonacoNs.editor.ITextModel) => {

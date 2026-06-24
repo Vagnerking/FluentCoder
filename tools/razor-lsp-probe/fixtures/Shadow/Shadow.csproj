@@ -1,0 +1,27 @@
+<!-- b1 spike "shadow" project: compiles the Razor-projected .g.cs with the right
+     references (ASP.NET Core + the app's model), WITHOUT the Razor SDK (so the
+     generator doesn't also run and duplicate the type). Proves Roslyn gives real
+     C# semantics on the projected document, which the b1 broker then remaps to
+     the .cshtml via the #line directives the Razor compiler emitted. -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>SampleMvc</RootNamespace>
+    <!-- This is a plain SDK project; no .cshtml here, so no Razor generator. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- the app's model so SampleMvc.Models.WeatherModel resolves (outside the
+         project dir, so it is not auto-included). The projected .g.cs under
+         projected/ is auto-included by the SDK's default Compile glob. -->
+    <Compile Include="..\SampleMvc\Models\WeatherModel.cs" Link="WeatherModel.cs" />
+  </ItemGroup>
+
+</Project>

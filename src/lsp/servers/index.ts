@@ -10,9 +10,10 @@
 import type { MonacoLanguageClient } from "monaco-languageclient";
 import { CSHARP_SERVER_ID, startCsharpServer } from "./csharp";
 import { RAZOR_SERVER_ID, startRazorServer } from "./razor";
-// cshtml server (fluent-cshtml) is intentionally not registered here yet.
-// The engine will be wired in issue #38; until then, .cshtml files use the
-// Monarch tokenizer and the razorHtmlLint static marker pass without an LSP client.
+import {
+  RAZOR_PROJECTION_SERVER_ID,
+  startRazorProjectionServer,
+} from "./razorProjection";
 import { TS_SERVER_ID, startTypescriptServer } from "./typescript";
 import { NPM_SERVERS, makeNpmServerStarter } from "./npm";
 import { SYSTEM_SERVERS, makeSystemServerStarter } from "./system";
@@ -43,17 +44,20 @@ export interface ServerEntry {
   start: ServerStarter;
 }
 
-/** Hand-written adapters (C#, TS/JS, Razor). */
+/** Hand-written adapters (C#, TS/JS, Razor, CSHTML). */
 const BASE_REGISTRY: Record<string, ServerEntry> = {
   csharp: { serverId: CSHARP_SERVER_ID, start: startCsharpServer },
   typescript: { serverId: TS_SERVER_ID, start: startTypescriptServer },
   javascript: { serverId: TS_SERVER_ID, start: startTypescriptServer },
   typescriptreact: { serverId: TS_SERVER_ID, start: startTypescriptServer },
   javascriptreact: { serverId: TS_SERVER_ID, start: startTypescriptServer },
-  // Razor (.cshtml/.razor) is served by the Roslyn cohosting build (C# extension
-  // VSIX) started as a separate LSP session. The standalone C# server (above) does
-  // not include the Razor extension; the cohosting build does. Two servers, two ids.
+  // Razor (.razor) is served by the Roslyn cohosting build (C# extension VSIX).
   aspnetcorerazor: { serverId: RAZOR_SERVER_ID, start: startRazorServer },
+  // `.cshtml` is served by the projection broker (ADR 0002) — reached only when
+  // the projection flag is ON (then `languageForFile` maps `.cshtml` → `cshtml`).
+  // With the flag OFF `.cshtml` stays `aspnetcorerazor` (cohost) and this entry
+  // is never hit, so flipping the flag is the single rollback point.
+  cshtml: { serverId: RAZOR_PROJECTION_SERVER_ID, start: startRazorProjectionServer },
 };
 
 // Generate one registry entry per language each npm-based server handles, so

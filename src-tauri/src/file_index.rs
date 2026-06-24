@@ -47,6 +47,54 @@ pub fn list_project_files(root: String) -> Result<Vec<ProjectFile>, String> {
     Ok(out)
 }
 
+/// Whether `root` (or a non-skipped subdir, bounded depth) contains a `.sln` or
+/// `.csproj`. Used to decide whether to warm-start the C# Roslyn on folder open.
+///
+/// `async` + `spawn_blocking`: the directory walk runs on the blocking pool, NEVER
+/// the main thread, so opening a large folder can't stall the UI. Early-exits on
+/// the first match, so the common case (solution at the root) returns instantly.
+#[tauri::command]
+pub async fn has_dotnet_project(root: String) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || find_dotnet(Path::new(&root), 0))
+        .await
+        .map_err(|e| format!("has_dotnet_project join error: {e}"))
+}
+
+/// Depth-bounded search for a `.sln`/`.csproj`, files first (so a root-level
+/// solution short-circuits before descending), skipping the heavy dirs.
+fn find_dotnet(dir: &Path, depth: usize) -> bool {
+    if depth > 8 {
+        return false;
+    }
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return false,
+    };
+    let mut subdirs: Vec<std::path::PathBuf> = Vec::new();
+    for entry in entries.flatten() {
+        let file_type = match entry.file_type() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if file_type.is_file() {
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if name.ends_with(".sln") || name.ends_with(".csproj") {
+                return true;
+            }
+        } else if file_type.is_dir() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let lower = name.to_ascii_lowercase();
+            // Skip the shared heavy dirs AND build outputs (a project's `.csproj`
+            // is never inside bin/obj). Skipping them only here keeps Quick
+            // Open/search behavior unchanged (they still index bin/obj).
+            if !is_skipped_dir(&name) && lower != "bin" && lower != "obj" {
+                subdirs.push(entry.path());
+            }
+        }
+    }
+    subdirs.iter().any(|d| find_dotnet(d, depth + 1))
+}
+
 fn walk(root: &Path, dir: &Path, out: &mut Vec<ProjectFile>) {
     if out.len() >= MAX_FILES {
         return;

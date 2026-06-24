@@ -47,6 +47,15 @@ export interface LspClientConfig {
   deferSemanticTokens?: boolean;
   /** Called when the underlying connection closes (propagated to the manager). */
   onClosed?: () => void;
+  /**
+   * Projection mode (ADR 0002): skip the generic semantic-tokens / references /
+   * diagnostics bridges. Those auto-register Monaco providers for the client's
+   * selector; a second Roslyn client over a `csharp` selector would then compete
+   * with the real C# client on every `.cs` model. The CSHTML projection client
+   * drives its requests manually via `sendRequest` instead, so it wants only the
+   * transport — no global providers. See `servers/razorProjection.ts`.
+   */
+  suppressGenericBridges?: boolean;
 }
 
 /**
@@ -246,35 +255,42 @@ export async function createLanguageClient(
   }
   lspLog("client.start() RESOLVED for", config.serverId, "state=", client.state);
 
-  installSemanticTokensBridge(
-    client,
-    config.serverId,
-    config.documentSelector,
-    config.deferSemanticTokens ?? false
-  );
+  // Projection clients (ADR 0002) want only the transport: their `.g.cs` is not
+  // a Monaco model and their results are remapped to the `.cshtml` manually, so
+  // the generic bridges would only register colliding providers for `csharp`.
+  if (config.suppressGenericBridges) {
+    lspLog("generic bridges suppressed (projection mode) for", config.serverId);
+  } else {
+    installSemanticTokensBridge(
+      client,
+      config.serverId,
+      config.documentSelector,
+      config.deferSemanticTokens ?? false
+    );
 
-  // "Find All References" / "Peek References" (Shift+F12, context menu, and the
-  // Roslyn "N references" CodeLens). Registered after semantic tokens so the two
-  // sets of disposables are merged under the same client entry.
-  addClientContributions(
-    client,
-    installReferencesBridge(client, config.serverId, config.documentSelector)
-  );
+    // "Find All References" / "Peek References" (Shift+F12, context menu, and the
+    // Roslyn "N references" CodeLens). Registered after semantic tokens so the two
+    // sets of disposables are merged under the same client entry.
+    addClientContributions(
+      client,
+      installReferencesBridge(client, config.serverId, config.documentSelector)
+    );
 
-  // Diagnostics → Monaco markers (issue #10): pull for Roslyn
-  // (`textDocument/diagnostic`), push for TS/Razor (`publishDiagnostics`). Owned
-  // by serverId so markers de-duplicate per server, and feed the Problems panel.
-  const diagnostics = installDiagnosticsBridge(
-    client,
-    config.serverId,
-    config.documentSelector,
-    config.diagnosticMode,
-    config.diagnosticIdentifiers
-  );
-  addClientContributions(client, diagnostics.disposables);
-  mergeClientContributions(client, {
-    repullDiagnostics: diagnostics.repull,
-  });
+    // Diagnostics → Monaco markers (issue #10): pull for Roslyn
+    // (`textDocument/diagnostic`), push for TS/Razor (`publishDiagnostics`). Owned
+    // by serverId so markers de-duplicate per server, and feed the Problems panel.
+    const diagnostics = installDiagnosticsBridge(
+      client,
+      config.serverId,
+      config.documentSelector,
+      config.diagnosticMode,
+      config.diagnosticIdentifiers
+    );
+    addClientContributions(client, diagnostics.disposables);
+    mergeClientContributions(client, {
+      repullDiagnostics: diagnostics.repull,
+    });
+  }
 
   // Diagnostic: what models exist and what are their scheme/language? The client
   // only sends didOpen for models whose URI scheme + languageId match the
@@ -343,6 +359,20 @@ function mergeClientContributions(
   } else {
     clientContributions.set(client, { disposables: [], ...extra });
   }
+}
+
+/**
+ * Registers extra disposables under a client's contribution entry so
+ * {@link disposeLanguageClientContributions} tears them down when the manager
+ * stops the client. The CSHTML projection starter (ADR 0002) uses this to own
+ * its Monaco providers, diagnostic timers, and `.g.cs` state — nothing leaks on
+ * restart / "Resetar Servidores de Código" / workspace switch / StrictMode.
+ */
+export function registerClientDisposables(
+  client: MonacoLanguageClient,
+  disposables: monaco.IDisposable[]
+): void {
+  addClientContributions(client, disposables);
 }
 
 /** Requests Monaco to discard cached semantic tokens and ask Roslyn again. */

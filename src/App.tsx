@@ -40,6 +40,10 @@ import { StatusBar } from "./components/StatusBar";
 import { TerminalPanel, type PanelTab } from "./components/TerminalPanel";
 import { QuickOpen } from "./components/QuickOpen";
 import { CommandPalette, type Command } from "./components/CommandPalette";
+import {
+  RAZOR_PROJECTION_FLAG_KEY,
+  isRazorProjectionEnabled,
+} from "./lsp/razorProjectionFlag";
 import { AboutDialog } from "./components/AboutDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { AgentsPanel } from "./components/AgentsPanel";
@@ -78,6 +82,7 @@ import {
   pickSavePath,
   readDir,
   readFile,
+  setExplorerWorkspaceRoot,
   sessionLoad,
   sessionSetLastFolder,
   sessionSetOpenFiles,
@@ -637,7 +642,13 @@ export default function App() {
     const seen = new Set<string>();
     const merged: Problem[] = [];
     for (const p of [...problems, ...allStoredProblems()]) {
-      const key = `${p.path}|${p.line}|${p.column}|${p.severity}|${p.message}`;
+      // Canonicalize the path in the dedup key (decoKey: slashes + drive-letter
+      // case). The same diagnostic can arrive twice — as a Monaco marker (path
+      // from the model URI, e.g. `c:\…`) and from the workspace store (path the
+      // server keyed on, e.g. `C:/…`); without canonicalization the Problems
+      // panel would list each `.cshtml` diagnostic twice. (The Razor projection
+      // mirrors its `.cshtml` diagnostics into both.)
+      const key = `${decoKey(p.path)}|${p.line}|${p.column}|${p.severity}|${p.message}`;
       if (seen.has(key)) continue;
       seen.add(key);
       merged.push(p);
@@ -891,6 +902,23 @@ export default function App() {
           if (rootPath) void runBuildDiagnostics(rootPath);
         },
       },
+      {
+        id: "razor.toggleProjection",
+        title: isRazorProjectionEnabled()
+          ? "Razor: desligar projeção .cshtml (voltar ao cohost)"
+          : "Razor: ligar projeção .cshtml (experimental)",
+        detail: "Razor",
+        run: () => {
+          // Flip the ADR-0002 projection flag and reload so `.cshtml` re-opens
+          // under the chosen engine. No DevTools needed (release has none).
+          if (isRazorProjectionEnabled()) {
+            localStorage.removeItem(RAZOR_PROJECTION_FLAG_KEY);
+          } else {
+            localStorage.setItem(RAZOR_PROJECTION_FLAG_KEY, "1");
+          }
+          location.reload();
+        },
+      },
     ],
     [restartAllLsp, rootPath]
   );
@@ -923,6 +951,10 @@ export default function App() {
       // search index and local-session persistence are local-only (later phases),
       // so they're skipped here. The remote attachment must already be set.
       const remote = isRemoteActive();
+      // Anchor prefix-based `files.exclude` globs (e.g. `src/generated`) to the
+      // opened folder. Remote listings go over SFTP (never the `read_dir` command),
+      // so there's no local root to anchor against.
+      setExplorerWorkspaceRoot(remote ? null : folder);
       try {
         const entries = await readDir(folder);
         // Now that the folder is confirmed to open, drop the previous project's
@@ -2216,6 +2248,13 @@ export default function App() {
       }
       try {
         await writeFile(targetPath, file.content);
+        // Notify disk-based language tooling that this file's on-disk content is
+        // now current. The CSHTML projection broker (ADR 0002) regenerates from
+        // disk (`dotnet build`), so it must reprepare on save — not on every
+        // keystroke, which would rebuild from stale disk content.
+        window.dispatchEvent(
+          new CustomEvent("fluent:file-saved", { detail: { path: targetPath } })
+        );
         // Clear dirty (and follow the rename, for untitled buffers) in EVERY
         // group holding this file — it may be open in more than one split.
         setLayout((l) =>
@@ -2815,6 +2854,11 @@ export default function App() {
     if (!dest) return;
     try {
       await writeFile(dest, file.content);
+      // Same disk-tooling notification as `saveFile` (Save As also writes disk).
+      window.dispatchEvent(
+        new CustomEvent("fluent:file-saved", { detail: { path: dest } })
+      );
+      // Re-point the buffer at the new path + clear dirty in EVERY group.
       setLayout((current) =>
         patchFileEverywhere(current, file.path, {
           path: dest,

@@ -26,6 +26,7 @@ import type {
   AgentStore,
   RevertPoint,
 } from "./agents/types";
+import { getFilesExcludeGlobs } from "./settings/filesExclude";
 
 /** Raw shape returned by the Rust `git_status` (snake_case from serde). */
 interface RawGitStatus {
@@ -64,9 +65,25 @@ interface RemoteDirEntry {
 }
 
 /**
+ * The opened folder's root path, used to evaluate prefix-anchored `files.exclude`
+ * globs (e.g. `src/generated`, `foo/bar` subtree) against each entry's
+ * workspace-relative path. Set on folder open; basename patterns (globstar `bin`)
+ * work regardless. Module-scoped so the `readDir(path)` call sites stay unchanged.
+ */
+let explorerWorkspaceRoot: string | null = null;
+
+/** Records the opened folder so `readDir` can anchor `files.exclude` globs. */
+export function setExplorerWorkspaceRoot(root: string | null): void {
+  explorerWorkspaceRoot = root;
+}
+
+/**
  * Lists the immediate children of `path` and maps them to `FileNode`s. When a
  * remote SSH session is attached, the listing comes from the host over SFTP
- * (issue #8); otherwise from the local filesystem.
+ * (issue #8); otherwise from the local filesystem, where entries matching the
+ * active `files.exclude` globs (e.g. `bin`/`obj`/`.git`, or prefix-anchored ones
+ * like `src/generated`) are hidden by the backend so the tree mirrors VS Code's
+ * exclusion behavior.
  */
 export async function readDir(path: string): Promise<FileNode[]> {
   const remote = getActiveRemote();
@@ -77,7 +94,11 @@ export async function readDir(path: string): Promise<FileNode[]> {
     });
     return entries.map((e) => ({ name: e.name, path: e.path, isDir: e.isDir }));
   }
-  const entries = await invoke<RawDirEntry[]>("read_dir", { path });
+  const entries = await invoke<RawDirEntry[]>("read_dir", {
+    path,
+    exclude: getFilesExcludeGlobs(),
+    workspaceRoot: explorerWorkspaceRoot,
+  });
   return entries.map((e) => ({
     name: e.name,
     path: e.path,
@@ -375,6 +396,15 @@ export function listProjectFiles(root: string): Promise<ProjectFile[]> {
       root,
     });
   return invoke<ProjectFile[]>("list_project_files", { root });
+}
+
+/**
+ * Whether `root` contains a `.sln`/`.csproj` (bounded depth). Async + off the
+ * main thread on the backend (early-exit walk), so it never stalls the UI. Used
+ * to warm-start the C# Roslyn on folder open.
+ */
+export function hasDotnetProject(root: string): Promise<boolean> {
+  return invoke<boolean>("has_dotnet_project", { root });
 }
 
 /** Builds the workspace "context graph" (markdown links + code imports) for the
@@ -1026,4 +1056,113 @@ export function ensureNpmLspServer(serverId: string): Promise<LspLaunchInfo> {
  */
 export function ensureSystemLspServer(serverId: string): Promise<LspLaunchInfo> {
   return invoke<LspLaunchInfo>("lsp_ensure_system_server", { serverId });
+}
+
+// ── Razor projection broker (ADR 0002) ────────────────────────────────────────
+
+/** One materialized projection: the `.cshtml` plus the projected `.g.cs`. */
+export interface RazorProjectionInfo {
+  /** `.cshtml` path relative to the user project (as requested). */
+  cshtmlRel: string;
+  /** Absolute `.cshtml` path — the exact key the `razorRemap*` commands use. */
+  cshtmlPath: string;
+  /** Absolute path to the projected C# inside the shadow (Roslyn opens this). */
+  generatedPath: string;
+}
+
+/** Summary returned by {@link razorPrepare}. */
+export interface RazorPrepareResult {
+  /** Directory of the generated shadow project. */
+  shadowDir: string;
+  /** Solution (user + shadow) to open in the Roslyn client. */
+  solutionPath: string;
+  /** `.cshtml` that got a usable projection (with its projected `.g.cs` path). */
+  available: RazorProjectionInfo[];
+  /** `.cshtml` (relative) requested but with no projection (degraded). */
+  missing: string[];
+}
+
+/** A remapped 0-based LSP position. */
+export interface RazorRemapPos {
+  line: number;
+  character: number;
+}
+
+/**
+ * Prepare projection serving: generates the projected C# for `cshtmlRels`
+ * (relative to `userProjectDir`), materializes the shadow project + solution, and
+ * caches one source map per `.cshtml`. Runs `dotnet` off the UI thread.
+ */
+export function razorPrepare(opts: {
+  workspaceDir: string;
+  userProjectDir: string;
+  userCsprojPath: string;
+  config: string;
+  cshtmlRels: string[];
+}): Promise<RazorPrepareResult> {
+  return invoke<RazorPrepareResult>("razor_prepare", opts);
+}
+
+/** Map a `.cshtml` position to the projected C#. `null` if unmapped/no map. */
+export function razorRemapToGenerated(
+  cshtmlPath: string,
+  line: number,
+  character: number
+): Promise<RazorRemapPos | null> {
+  return invoke<RazorRemapPos | null>("razor_remap_to_generated", { cshtmlPath, line, character });
+}
+
+/** Map a projected-C# position back to the `.cshtml`. `null` if synthetic/no map. */
+export function razorRemapToSource(
+  cshtmlPath: string,
+  line: number,
+  character: number
+): Promise<RazorRemapPos | null> {
+  return invoke<RazorRemapPos | null>("razor_remap_to_source", { cshtmlPath, line, character });
+}
+
+/** Drop a `.cshtml`'s cached source map (on close). */
+export function razorForget(cshtmlPath: string): Promise<void> {
+  return invoke<void>("razor_forget", { cshtmlPath });
+}
+
+/** Result of a live emit (per-keystroke projection via the sidecar). */
+export interface RazorEmitLiveResult {
+  /** The fresh projected C# — feed straight into Roslyn (didOpen). */
+  generatedText: string;
+  /** Generation this was applied under (drop stale out-of-order responses). */
+  generation: number;
+  /** False when the live path is unavailable — caller falls back to reprepare. */
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Live re-emit of a `.cshtml`'s projection from in-memory `text` via the sidecar
+ * (~ms, no `dotnet build`). Reparses the `#line` map and PARKS it as pending under
+ * `generation`. The caller must, after syncing Roslyn with `generatedText`, call
+ * {@link razorCommitLiveMap} to promote that map to active — so remapping never
+ * runs ahead of the `.g.cs` Roslyn has open. `ok:false` ⇒ fall back to reprepare.
+ */
+export function razorEmitLive(cshtmlPath: string, text: string): Promise<RazorEmitLiveResult> {
+  return invoke<RazorEmitLiveResult>("razor_emit_live", { cshtmlPath, text });
+}
+
+/**
+ * Promote the pending live map for `cshtmlPath` (from {@link razorEmitLive}) to
+ * active, once Roslyn has the matching `generation`'s `.g.cs` open. No-op if a
+ * newer emit superseded it. Returns true if committed.
+ */
+export function razorCommitLiveMap(cshtmlPath: string, generation: number): Promise<boolean> {
+  return invoke<boolean>("razor_commit_live_map", { cshtmlPath, generation });
+}
+
+/** Warm the live sidecar for `cshtmlPath` so the first keystroke is fast. */
+export function razorWarm(cshtmlPath: string): Promise<void> {
+  return invoke<void>("razor_warm", { cshtmlPath });
+}
+
+/** Build the live sidecar binary on first use. Returns false on soft-fail. */
+export function razorEnsureSidecar(): Promise<boolean> {
+  return invoke<boolean>("razor_ensure_sidecar");
 }

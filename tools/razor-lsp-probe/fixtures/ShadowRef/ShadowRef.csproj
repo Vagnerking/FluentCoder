@@ -1,0 +1,24 @@
+<!-- b1-full brick 2: generalized shadow project. Plain SDK (no Razor SDK), and it
+     ProjectReferences the USER project to inherit all its types/refs from source.
+     Loaded together with the user project in a Roslyn workspace (solution/open) —
+     NOT dotnet-built — so the semantic model tolerates user-project errors. -->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>SampleMvc</RootNamespace>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- user types (WeatherModel, controllers, etc.) from source -->
+    <ProjectReference Include="..\SampleMvc\SampleMvc.csproj" />
+    <!-- ASP.NET Core (RazorPage<T>, Html helpers, TagHelpers) — NOT inherited
+         transitively from the user project, so the shadow declares it itself.
+         The broker derives this from the user project's framework refs. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+</Project>

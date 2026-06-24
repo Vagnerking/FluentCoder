@@ -3517,8 +3517,13 @@ button .codicon { pointer-events: none; }
 .deco-error     { color: #f14c4c; }   /* has error diagnostic */
 .deco-warning   { color: #cca700; }   /* has warning diagnostic */
 
-/* The active row keeps its accent label; the badge still shows state. */
-.tree-row.active .tree-label[class*="deco-"] { color: var(--text); }
+/* The active row keeps its accent label for GIT states; the badge still shows
+   state. Diagnostics are the exception: a selected/active file with an error or
+   warning stays red/yellow (like VSCode), so a broken file is never disguised as
+   "fine" just because it's the open tab/row. */
+.tree-row.active .tree-label[class*="deco-"]:not(.deco-error):not(.deco-warning) {
+  color: var(--text);
+}
 
 /* ---- Tabs: file icon + dirty dot ---- */
 .tab-icon { margin-right: 2px; }

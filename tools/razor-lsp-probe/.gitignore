@@ -1,0 +1,15 @@
+# Build artifacts of the sample fixture (restored locally, not committed)
+fixtures/**/bin/
+fixtures/**/obj/
+
+# Captured LSP transcripts (evidence is summarized into docs/ instead)
+capture/
+
+# Razor-projected C# for the b1 shadow spikes — generated artifacts (carry
+# machine-absolute #line paths); regenerate locally per the README.
+fixtures/Shadow/projected/
+fixtures/ShadowRef/projected/
+
+# The sample solution IS committed (the probe prefers solution/open, like the app),
+# overriding the repo-root `*.sln` ignore.
+!fixtures/**/*.sln

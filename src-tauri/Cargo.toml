@@ -5,6 +5,7 @@ description = "Fluent Coder — a VSCode-like code editor built with Tauri"
 authors = ["Vagner Araújo <gnerprocs@gmail.com>"]
 edition = "2021"
 license = "GPL-3.0-only"
+default-run = "fluent-coder"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -30,6 +31,12 @@ portable-pty = "0.9"
 trash = "5"
 # Workspace search: ripgrep-compatible walking and incremental file scanning.
 ignore = "0.4"
+# Glob matching for the explorer's `files.exclude` (VS Code-style `**/bin` etc).
+# Already in the lock as a transitive dep of `ignore`, so no new download.
+globset = "0.4"
+# Base64 for the Razor live sidecar's `TargetPath` AdditionalFiles metadata.
+# Already in the lock (transitive), so no new download.
+base64 = "0.21"
 grep-regex = "0.1"
 grep-searcher = "0.1"
 # `Matcher` trait — used to locate match column ranges within a line for highlight.

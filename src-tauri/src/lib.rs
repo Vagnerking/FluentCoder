@@ -1,11 +1,11 @@
 mod agents;
-pub mod cshtml;
 mod file_index;
 mod fs_commands;
 mod git;
 mod graph;
 mod lsp;
 mod mcp;
+mod razor;
 mod runner;
 mod search;
 mod session;
@@ -54,6 +54,7 @@ pub fn run() {
         .manage(lsp::LspState::new())
         .manage(search::SearchState::new())
         .manage(agents::AcpState::new())
+        .manage(razor::commands::RazorState::new())
         .manage(ssh::SshState::new())
         .manage(window::WindowPlacementState::new())
         .manage(window::WindowHandoffState::new())
@@ -79,6 +80,7 @@ pub fn run() {
             search::cancel_search,
             search::build_search_index,
             file_index::list_project_files,
+            file_index::has_dotnet_project,
             graph::build_context_graph,
             graph::build_knowledge_index,
             graph::build_context_bundle,
@@ -142,6 +144,14 @@ pub fn run() {
             lsp::lsp_ensure_npm_server,
             lsp::lsp_ensure_system_server,
             lsp::lsp_ensure_razor_server,
+            razor::commands::razor_prepare,
+            razor::commands::razor_emit_live,
+            razor::commands::razor_commit_live_map,
+            razor::commands::razor_warm,
+            razor::commands::razor_ensure_sidecar,
+            razor::commands::razor_remap_to_generated,
+            razor::commands::razor_remap_to_source,
+            razor::commands::razor_forget,
             ssh::ssh_connect,
             ssh::ssh_list_dir,
             ssh::ssh_read_file,
@@ -223,6 +233,7 @@ pub fn run() {
                     app.state::<terminal::TerminalState>().shutdown_all();
                     app.state::<agents::AcpState>().shutdown_all();
                     app.state::<lsp::LspState>().shutdown_all();
+                    app.state::<razor::commands::RazorState>().shutdown_sidecar();
                     app.state::<ssh::SshState>().shutdown_all();
                     eprintln!("[exit] teardown done — forcing process exit");
                     std::process::exit(0);
@@ -233,6 +244,7 @@ pub fn run() {
                     app.state::<terminal::TerminalState>().shutdown_all();
                     app.state::<agents::AcpState>().shutdown_all();
                     app.state::<lsp::LspState>().shutdown_all();
+                    app.state::<razor::commands::RazorState>().shutdown_sidecar();
                     app.state::<ssh::SshState>().shutdown_all();
                     eprintln!("[exit] teardown done — forcing process exit");
                     std::process::exit(0);

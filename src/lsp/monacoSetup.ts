@@ -13,7 +13,6 @@
 import type { Monaco } from "@monaco-editor/react";
 import type * as MonacoNS from "monaco-editor";
 import { installRazorHtmlLint } from "../lint/razorHtmlLint";
-import { registerCshtmlLanguage } from "./monacoSetupCshtml";
 // `monaco-editor`'s ESM API does not automatically bundle every basic-language
 // contribution. Register C#'s lazy Monarch loader explicitly; otherwise Roslyn
 // semantic tokens color symbols, but lexical-only tokens such as `if` and
@@ -30,9 +29,55 @@ export function setupMonacoForLsp(monaco: Monaco): void {
   disableBuiltinTsWorker(monaco);
   registerReactLanguages(monaco);
   registerRazorLanguage(monaco);
-  registerCshtmlLanguage(monaco);
+  registerCshtmlProjectionLanguage(monaco);
   installRazorHtmlLint(monaco);
   ensureCsharpLanguage(monaco);
+  installShikiRazorColorsLazily(monaco);
+}
+
+/**
+ * Upgrades `.cshtml`/`.razor` coloring from the Monarch grammar to Shiki's real
+ * TextMate grammar, loaded lazily on the first Razor model (Shiki pulls a WASM
+ * engine; no point loading it for a TS-only session). Idempotent + best-effort —
+ * `installShikiRazorColors` keeps the Monarch grammar if Shiki can't load.
+ */
+function installShikiRazorColorsLazily(monaco: Monaco): void {
+  const RAZOR_IDS = new Set([RAZOR_LANGUAGE_ID, CSHTML_LANGUAGE_ID]);
+  const isRazor = (m: MonacoNS.editor.ITextModel) => RAZOR_IDS.has(m.getLanguageId());
+  const trigger = () => {
+    void import("./shikiRazor").then((mod) => mod.installShikiRazorColors());
+  };
+  if (monaco.editor.getModels().some(isRazor)) {
+    trigger();
+    return;
+  }
+  const sub = monaco.editor.onDidCreateModel((model) => {
+    if (isRazor(model)) {
+      sub.dispose();
+      trigger();
+    }
+  });
+}
+
+/**
+ * Registers the `cshtml` language id used by the projection broker (ADR 0002).
+ * Reuses the Razor Monarch grammar/config so `.cshtml` keeps its syntax colors
+ * when the projection flag routes it to id `cshtml` instead of `aspnetcorerazor`.
+ *
+ * No file-extension claim: the model language is chosen explicitly by
+ * `languageForFile`, so we must not let Monaco auto-detection fight over
+ * `.cshtml` between this id and `aspnetcorerazor`. Harmless (unused) when the
+ * projection flag is OFF. Idempotent.
+ */
+function registerCshtmlProjectionLanguage(monaco: Monaco): void {
+  if (cshtmlRegistered) return;
+  const known = monaco.languages.getLanguages().some((l) => l.id === CSHTML_LANGUAGE_ID);
+  if (!known) {
+    monaco.languages.register({ id: CSHTML_LANGUAGE_ID, aliases: ["CSHTML", "Razor"] });
+  }
+  monaco.languages.setLanguageConfiguration(CSHTML_LANGUAGE_ID, razorLanguageConfiguration());
+  monaco.languages.setMonarchTokensProvider(CSHTML_LANGUAGE_ID, razorMonarch());
+  cshtmlRegistered = true;
 }
 
 /**
@@ -141,7 +186,11 @@ function registerReactLanguages(monaco: Monaco): void {
  * `.cshtml` uses a separate `cshtml` id (see monacoSetupCshtml.ts). */
 export const RAZOR_LANGUAGE_ID = "aspnetcorerazor";
 
+/** Monaco language id for `.cshtml` under the projection broker (ADR 0002). */
+export const CSHTML_LANGUAGE_ID = "cshtml";
+
 let razorRegistered = false;
+let cshtmlRegistered = false;
 
 /**
  * Registers the `razor` language + Monarch tokenizer (ISSUE-29). Monaco ships no
@@ -166,7 +215,15 @@ export function registerRazorLanguage(monaco: Monaco): void {
     });
   }
 
-  monaco.languages.setLanguageConfiguration(RAZOR_LANGUAGE_ID, {
+  monaco.languages.setLanguageConfiguration(RAZOR_LANGUAGE_ID, razorLanguageConfiguration());
+
+  monaco.languages.setMonarchTokensProvider(RAZOR_LANGUAGE_ID, razorMonarch());
+  razorRegistered = true;
+}
+
+/** Bracket/comment/auto-close configuration shared by `aspnetcorerazor` and `cshtml`. */
+function razorLanguageConfiguration(): MonacoNS.languages.LanguageConfiguration {
+  return {
     comments: { blockComment: ["@*", "*@"] },
     brackets: [
       ["{", "}"],
@@ -190,10 +247,7 @@ export function registerRazorLanguage(monaco: Monaco): void {
       { open: "'", close: "'" },
       { open: "<", close: ">" },
     ],
-  });
-
-  monaco.languages.setMonarchTokensProvider(RAZOR_LANGUAGE_ID, razorMonarch());
-  razorRegistered = true;
+  };
 }
 
 /** Minimal Monarch grammar for Razor (`@`-transitions, C# blocks, HTML). */

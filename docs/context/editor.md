@@ -143,6 +143,8 @@ deve refletir a categoria correta fornecida pelo Roslyn.
 
 ## C# / Roslyn: dois servidores (standalone C# + cohosting Razor)
 
+> ⚠️ **Parcialmente supersedido por [ADR 0002](../adr/0002-cshtml-projection-roslyn.md) (23/06/2026).** O **cohosting** para `.cshtml`/`.razor` (servidor `"razor"`, id Monaco `aspnetcorerazor`) está sendo **aposentado**: o cohost não entrega semântica `.cshtml` headless nesta versão (gerador Razor não executa no processo OOP). A semântica `.cshtml` passa a vir do **broker de projeção C# + Roslyn padrão** (Opção B; id `cshtml`, owner `fluent-cshtml`). **Continua válido** abaixo: o servidor **standalone C#** (`serverId "csharp"`, `.cs`) e suas regras. As linhas de cohosting/`aspnetcorerazor` abaixo permanecem como histórico até a migração concluir; não tratar como contrato atual para `.cshtml`.
+
 O app roda **dois processos Roslyn distintos**:
 
 | Servidor | Build | `serverId` | Arquivos | Por quê |

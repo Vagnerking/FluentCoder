@@ -1514,7 +1514,9 @@ name = "fluent-coder"
 version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
+ "base64 0.21.7",
  "futures-util",
+ "globset",
  "grep-matcher",
  "grep-regex",
  "grep-searcher",

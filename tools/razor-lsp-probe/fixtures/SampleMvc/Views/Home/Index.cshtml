@@ -1,0 +1,20 @@
+@model SampleMvc.Models.WeatherModel
+@{
+    var greeting = "Olá";
+}
+<!DOCTYPE html>
+<html>
+<head>
+    <title>@Model.City</title>
+</head>
+<body>
+    <h1>@greeting, @Model.City</h1>
+    <p>Temperatura: @Model.TemperatureC C (@Model.TemperatureF F)</p>
+    <p>Tipo: @Model.Kind</p>
+
+    @* PROBE: a linha abaixo tem um erro de C# proposital (membro inexistente) *@
+    <p>@Model.NonExistentProperty</p>
+
+    <a asp-controller="Home" asp-action="Index">Início</a>
+</body>
+</html>

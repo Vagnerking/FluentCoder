@@ -1,5 +1,9 @@
 # CSHTML — contratos de integração
 
+> ⚠️ **Direção atualizada por [ADR 0002](../adr/0002-cshtml-projection-roslyn.md) (23/06/2026):** a semântica `.cshtml` vem da **projeção C# + Roslyn padrão** (não do motor homegrown sem Roslyn). Mudança em relação a este documento: o **Roslyn e o compilador Razor do SDK são permitidos** para a semântica (eram proibidos); os métodos privados de cohost `razor/*`/`_vs_*` e o serviço OOP do cohost **continuam proibidos**. **Mantêm-se** as identidades reservadas: id Monaco `cshtml` e owner de markers/diagnósticos `fluent-cshtml` para `.cshtml` (agora servidos pelo broker de projeção). O id `aspnetcorerazor` era transitório do experimento de cohosting e foi **aposentado** para `.cshtml`. As demais regras abaixo (ranges sempre no `.cshtml`, ownership de markers, lifecycle/reset, dedup com `dotnet-build`, separação `.cshtml`×`.razor`) **continuam normativas**.
+>
+> ⚠️ **Estado atual (Fase E concluída):** o **motor homegrown foi REMOVIDO** — não existem mais o binário `fluent-cshtml-lsp`, o `lsp/fluent_cshtml.rs`, o command `lsp_ensure_fluent_cshtml_server`, o adapter `src/lsp/servers/cshtml.ts` nem a biblioteca Rust `src-tauri/src/cshtml/`. As seções abaixo que descrevem **arquivos** desse motor são **históricas**. O serviço `.cshtml` é hoje: broker Rust `src-tauri/src/razor/` + cliente `src/lsp/servers/razorProjection.ts` (semântica C#), mais `src/lsp/servers/cshtmlHtmlProjection.ts` + `cshtmlHtmlService.ts` (IntelliSense de HTML nas regiões HTML, via `vscode-html-languageservice` in-process — **Fase C**). O owner `fluent-cshtml` permanece como nome do owner de diagnósticos, **não** como servidor.
+
 Este documento é normativo para qualquer alteração relacionada a `.cshtml`.
 Leia também:
 
@@ -23,25 +27,61 @@ O id transitório `aspnetcorerazor` não deve ser usado em código novo.
 
 ## Limites de módulos
 
-Estrutura alvo:
+### Estrutura atual (pós-ADR 0002, Fase E concluída)
+
+O serviço `.cshtml` é hoje a projeção C# + Roslyn padrão:
+
+```text
+src-tauri/src/razor/        # broker de projeção (sourcemap, shadow, broker,
+                            # exec, runtime, sidecar, commands)
+
+src/lsp/servers/
+├── razorProjection.ts      # cliente de projeção C# (Roslyn standalone) + lifecycle
+├── cshtmlHtmlProjection.ts # projeção HTML virtual (Fase C)
+└── cshtmlHtmlService.ts    # IntelliSense HTML via vscode-html-languageservice
+
+tools/razor-sidecar/        # sidecar .NET (source generator Razor in-memory)
+```
+
+A direção de dependência definida no ADR não pode ser violada, mesmo que os
+nomes mudem.
+
+### Estrutura histórica (motor homegrown — REMOVIDO na Fase E)
+
+> ⚠️ A árvore abaixo descreve o motor homegrown sem Roslyn, **removido** por
+> [ADR 0002](../adr/0002-cshtml-projection-roslyn.md). É mantida apenas como
+> referência histórica; **nenhum** destes arquivos existe mais no repositório.
 
 ```text
 src-tauri/src/cshtml/
-├── core/                 # domínio: texto, AST, símbolos, diagnósticos
-├── application/          # casos de uso e portas
-├── infrastructure/       # parsers, filesystem, projetos e metadata
-└── adapters/
-    └── lsp/              # LSP 3.17/JSON-RPC
+├── ast.rs          # nós da AST: NodeKind, Node, ParseTree
+├── binding.rs      # binding @model/@inject/escopos → BindingContext
+├── document.rs     # DocumentStore, Snapshot, StoreError
+├── engine.rs       # CshtmlEngine — API pública incremental
+├── hardening.rs    # CancelToken, BoundedCache, DiagMetrics, WorkspaceSession
+├── harness.rs      # corpus de conformidade e golden tests
+├── intellisense.rs # completion, hover, definition, semantic tokens
+├── lint.rs         # CshtmlLinter, regras FCRZ0001–0009, DiagnosticProvider
+├── metadata.rs     # leitor ECMA-335 sem Roslyn, MetadataCache
+├── mod.rs
+├── parser.rs       # parser Razor incremental com recuperação de erro
+├── projection.rs   # projeção HTML/C# e source maps
+├── semantics.rs    # SymbolIndex, parse_csharp_symbols
+├── types.rs        # Snapshot, TextRange, TextPosition, DiagnosticKind
+├── views.rs        # ViewGraph, TagHelperIndex, validate_sections
+└── workspace.rs    # ProjectContext, DocumentContext, WorkspaceCache
 
-src/lsp/cshtml/
-├── client.ts             # start/stop e transporte
-├── monaco.ts             # providers, markers e conversões
-└── protocol.ts           # DTOs da borda, se necessários
+src-tauri/src/bin/
+└── fluent_cshtml_lsp.rs  # servidor LSP 3.17 stdio (processo isolado)
+
+src-tauri/src/lsp/
+└── fluent_cshtml.rs      # resolve_launch() para o binário CSHTML
+
+src/lsp/servers/
+└── cshtml.ts             # startCshtmlServer(), CSHTML_SERVER_ID
 ```
 
-Os nomes podem mudar, mas a direção de dependência definida no ADR não pode.
-
-Regras:
+Regras (continuam normativas para a estrutura atual):
 
 - parser/linter não acessam Monaco;
 - parser/linter não acessam filesystem diretamente;
