@@ -138,6 +138,10 @@ mod tests {
         DerivedRefs {
             tfm: "net8.0".to_string(),
             framework_references: vec!["Microsoft.AspNetCore.App".to_string()],
+            reference_paths: Vec::new(),
+            root_namespace: None,
+            using_microsoft_net_sdk_web: true,
+            razor_lang_version: "8.0".to_string(),
         }
     }
 

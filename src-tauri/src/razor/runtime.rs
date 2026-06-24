@@ -159,6 +159,8 @@ pub struct PreparedShadow {
     /// failed/produced nothing). Lets the caller show "Razor projection
     /// unavailable" — distinct from "no .cshtml requested".
     pub missing: Vec<PathBuf>,
+    /// The derived TFM/refs/globals — the live sidecar's project inputs.
+    pub derived: DerivedRefs,
 }
 
 /// Prepare projection serving: derive → plan → emit → materialize → parse maps.
@@ -209,7 +211,7 @@ pub fn prepare_with_timeout(
         user_csproj_path,
         derived: &derived,
         config,
-        root_namespace: None, // V1: shadow root namespace not derived (minor)
+        root_namespace: derived.root_namespace.as_deref(),
         cshtml_rels,
     });
 
@@ -294,6 +296,7 @@ pub fn prepare_with_timeout(
         plan,
         projections,
         missing,
+        derived,
     })
 }
 

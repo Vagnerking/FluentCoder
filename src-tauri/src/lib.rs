@@ -83,6 +83,9 @@ pub fn run() {
             lsp::lsp_ensure_system_server,
             lsp::lsp_ensure_razor_server,
             razor::commands::razor_prepare,
+            razor::commands::razor_emit_live,
+            razor::commands::razor_warm,
+            razor::commands::razor_ensure_sidecar,
             razor::commands::razor_remap_to_generated,
             razor::commands::razor_remap_to_source,
             razor::commands::razor_forget,
@@ -106,6 +109,7 @@ pub fn run() {
                     app.state::<terminal::TerminalState>().shutdown_all();
                     app.state::<agents::AcpState>().shutdown_all();
                     app.state::<lsp::LspState>().shutdown_all();
+                    app.state::<razor::commands::RazorState>().shutdown_sidecar();
                     eprintln!("[exit] teardown done — forcing process exit");
                     std::process::exit(0);
                 }
@@ -114,6 +118,7 @@ pub fn run() {
                     app.state::<terminal::TerminalState>().shutdown_all();
                     app.state::<agents::AcpState>().shutdown_all();
                     app.state::<lsp::LspState>().shutdown_all();
+                    app.state::<razor::commands::RazorState>().shutdown_sidecar();
                     eprintln!("[exit] teardown done — forcing process exit");
                     std::process::exit(0);
                 }

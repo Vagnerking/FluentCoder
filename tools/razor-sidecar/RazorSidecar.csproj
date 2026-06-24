@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Live Razor projection sidecar (ADR 0002, "fast path"). A long-lived process
+    that hosts the REAL Razor source generator and re-emits a `.cshtml`'s `.g.cs`
+    from IN-MEMORY text in ~tens of ms (warm), so the editor validates per
+    keystroke instead of paying the ~1s `dotnet build` on save.
+
+    Protocol: newline-delimited JSON (NDJSON) over stdio — one request object per
+    line in, one response object per line out. stderr is for logging only.
+
+    Built on first use into the app cache (not shipped prebuilt) so the host
+    Roslyn version can match the user's SDK band. Pinned here to the band proven
+    by the spike (8.0.421 → Microsoft.CodeAnalysis 4.9.x); the Razor.Compiler.dll
+    binds to this version or its types fail to load.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>RazorSidecar</AssemblyName>
+    <RootNamespace>RazorSidecar</RootNamespace>
+    <!-- The app launches it via `dotnet exec RazorSidecar.dll`. -->
+    <RollForward>LatestMinor</RollForward>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Must match the Microsoft.CodeAnalysis the SDK's Razor generator references
+         (8.0.421 → 4.9.0.0). Mismatch → ReflectionTypeLoadException on the
+         generator. See tools/razor-lsp-probe/sidecar-spike/README-findings.md. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.9.2" />
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+</Project>

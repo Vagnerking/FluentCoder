@@ -11,24 +11,51 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
+use base64::Engine;
 use serde::Serialize;
 use tauri::State;
 
 use super::remap::{self, LspPos};
 use super::runtime;
+use super::sidecar::{FileSpec, ProjectInputs, Sidecar};
 use super::sourcemap::RazorSourceMap;
 
-/// App-managed broker state: one source map per open `.cshtml` (canonical key).
+/// Everything the live sidecar needs to re-emit ONE `.cshtml` from buffer text.
+/// Captured at `razor_prepare` so a keystroke `razor_emit_live` needs no re-derive.
+#[derive(Clone)]
+struct ProjectionContext {
+    inputs: ProjectInputs,
+    /// Absolute `.cshtml` path (the file to re-emit).
+    cshtml_abs: String,
+}
+
+/// App-managed broker state.
 #[derive(Default)]
 pub struct RazorState {
+    /// One source map per open `.cshtml` (canonical key).
     maps: Mutex<HashMap<String, RazorSourceMap>>,
+    /// Per-`.cshtml` live-emit context (refs/globals/files) captured at prepare.
+    contexts: Mutex<HashMap<String, ProjectionContext>>,
+    /// Monotonic generation stamped on each installed map; returned to the caller
+    /// so it can drop stale out-of-order responses. (Ordering of concurrent emits
+    /// for one `.cshtml` is enforced by the frontend coalescing one in-flight emit
+    /// per file — see the Etapa 3 wiring; the sidecar also serializes responses.)
+    generation: AtomicU64,
+    /// The live emit process host.
+    sidecar: Sidecar,
 }
 
 impl RazorState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Kill the live sidecar process (app teardown / reset).
+    pub fn shutdown_sidecar(&self) {
+        self.sidecar.shutdown();
     }
 }
 
@@ -129,14 +156,81 @@ pub async fn razor_prepare(
         .map(|p| p.to_string_lossy().to_string())
         .collect();
 
+    // Shared per-project file specs: every .cshtml that got a projection + the
+    // project-level _ViewImports/_ViewStart, each with its base64 TargetPath.
+    let proj_dir_path = Path::new(&user_project_dir);
+    let mut shared_files: Vec<FileSpec> = Vec::new();
+    let mut view_imports: Option<(String, String)> = None;
+    let mut view_start: Option<(String, String)> = None;
+    for rel in ["Views/_ViewImports.cshtml", "_ViewImports.cshtml"] {
+        let p = proj_dir_path.join(rel);
+        if p.exists() {
+            if let Ok(text) = std::fs::read_to_string(&p) {
+                shared_files.push(FileSpec {
+                    path: p.to_string_lossy().to_string(),
+                    target_path_b64: target_path_b64(rel),
+                });
+                view_imports = Some((p.to_string_lossy().to_string(), text));
+            }
+            break;
+        }
+    }
+    for rel in ["Views/_ViewStart.cshtml", "_ViewStart.cshtml"] {
+        let p = proj_dir_path.join(rel);
+        if p.exists() {
+            if let Ok(text) = std::fs::read_to_string(&p) {
+                shared_files.push(FileSpec {
+                    path: p.to_string_lossy().to_string(),
+                    target_path_b64: target_path_b64(rel),
+                });
+                view_start = Some((p.to_string_lossy().to_string(), text));
+            }
+            break;
+        }
+    }
+
+    let d = &prepared.derived;
     let mut available = Vec::new();
     {
         let mut maps = state.maps.lock().map_err(|_| "razor state poisoned".to_string())?;
+        let mut contexts = state.contexts.lock().map_err(|_| "razor state poisoned".to_string())?;
         for proj in prepared.projections {
             let abs = Path::new(&user_project_dir).join(&proj.cshtml_rel);
-            maps.insert(canonical_key(&abs), proj.source_map);
+            let key = canonical_key(&abs);
+            let rel_str = proj.cshtml_rel.to_string_lossy().to_string();
+
+            // Per-cshtml file list = shared + this file (its own TargetPath).
+            let mut files = shared_files.clone();
+            files.push(FileSpec {
+                path: abs.to_string_lossy().to_string(),
+                target_path_b64: target_path_b64(&rel_str),
+            });
+
+            let inputs = ProjectInputs {
+                project_dir: user_project_dir.clone(),
+                references: d.reference_paths.clone(),
+                root_namespace: d.root_namespace.clone(),
+                razor_lang_version: if d.razor_lang_version.is_empty() {
+                    "8.0".to_string()
+                } else {
+                    d.razor_lang_version.clone()
+                },
+                using_microsoft_net_sdk_web: d.using_microsoft_net_sdk_web,
+                tfm: d.tfm.clone(),
+                view_imports_path: view_imports.as_ref().map(|(p, _)| p.clone()),
+                view_imports_text: view_imports.as_ref().map(|(_, t)| t.clone()),
+                view_start_path: view_start.as_ref().map(|(p, _)| p.clone()),
+                view_start_text: view_start.as_ref().map(|(_, t)| t.clone()),
+                files,
+            };
+            contexts.insert(
+                key.clone(),
+                ProjectionContext { inputs, cshtml_abs: abs.to_string_lossy().to_string() },
+            );
+
+            maps.insert(key, proj.source_map);
             available.push(RazorProjectionInfo {
-                cshtml_rel: proj.cshtml_rel.to_string_lossy().to_string(),
+                cshtml_rel: rel_str,
                 cshtml_path: abs.to_string_lossy().to_string(),
                 generated_path: proj.shadow_gcs.to_string_lossy().to_string(),
             });
@@ -149,6 +243,116 @@ pub async fn razor_prepare(
         available,
         missing,
     })
+}
+
+/// Base64 of the project-relative path with backslash separators — the
+/// `build_metadata.AdditionalFiles.TargetPath` the Razor generator reads (it
+/// derives the generated class name + route from this). MUST be `\`-separated.
+fn target_path_b64(rel: &str) -> String {
+    let backslashed = rel.replace('/', "\\");
+    base64::engine::general_purpose::STANDARD.encode(backslashed.as_bytes())
+}
+
+/// Result of a live emit: the fresh projected C# + the generation it was applied
+/// under. The frontend feeds `generated_text` straight into Roslyn (didOpen) and
+/// uses `generation`/`ok` to drop stale out-of-order responses.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmitLiveResult {
+    pub generated_text: String,
+    pub generation: u64,
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Re-emit `cshtml_path`'s projection from the in-memory `text` via the live
+/// sidecar (no `dotnet build`), reparse the `#line` map, and install it under a
+/// fresh generation — atomically, so the returned text and the cached map are the
+/// same generation. The caller didOpens `generated_text` into Roslyn and re-pulls
+/// diagnostics. Returns `ok:false` (never errs hard) so the caller can fall back
+/// to the on-save `dotnet build` path without surfacing an exception.
+#[tauri::command]
+pub async fn razor_emit_live(
+    state: State<'_, RazorState>,
+    cshtml_path: String,
+    text: String,
+) -> Result<EmitLiveResult, String> {
+    let key = canonical_key(Path::new(&cshtml_path));
+    let ctx = {
+        let contexts = state.contexts.lock().map_err(|_| "razor state poisoned".to_string())?;
+        match contexts.get(&key) {
+            Some(c) => c.clone(),
+            None => {
+                // No prepared context (e.g. before the first prepare) — let the
+                // caller fall back to reprepare.
+                return Ok(EmitLiveResult {
+                    generated_text: String::new(),
+                    generation: 0,
+                    ok: false,
+                    error: Some("no projection context (reprepare first)".to_string()),
+                });
+            }
+        }
+    };
+
+    // Sidecar call (fast ~ms). Runs on Tauri's async worker, not the UI thread.
+    let generated = match state.sidecar.emit(&ctx.inputs, &ctx.cshtml_abs, &text) {
+        Ok(g) => g,
+        Err(e) => {
+            return Ok(EmitLiveResult {
+                generated_text: String::new(),
+                generation: 0,
+                ok: false,
+                error: Some(e),
+            });
+        }
+    };
+
+    // Parse the map from the EXACT text we return, then install under a fresh
+    // generation. The map + the returned text are intrinsically the same gen.
+    let map = RazorSourceMap::parse(&generated, &cshtml_path);
+    let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    {
+        let mut maps = state.maps.lock().map_err(|_| "razor state poisoned".to_string())?;
+        maps.insert(key, map);
+    }
+    Ok(EmitLiveResult { generated_text: generated, generation, ok: true, error: None })
+}
+
+/// Warm the live sidecar for `cshtml_path` (pays the cold generator cost up front
+/// so the first keystroke is fast). Best-effort; errors are swallowed.
+#[tauri::command]
+pub async fn razor_warm(state: State<'_, RazorState>, cshtml_path: String) -> Result<(), String> {
+    let key = canonical_key(Path::new(&cshtml_path));
+    let ctx = {
+        let contexts = state.contexts.lock().map_err(|_| "razor state poisoned".to_string())?;
+        contexts.get(&key).cloned()
+    };
+    if let Some(ctx) = ctx {
+        // Warm with the current on-disk text (the buffer may differ, but warming
+        // primes the driver/TagHelper scan regardless of exact content).
+        let seed = std::fs::read_to_string(&ctx.cshtml_abs).unwrap_or_default();
+        let _ = state.sidecar.warm(&ctx.inputs, &ctx.cshtml_abs, &seed);
+    }
+    Ok(())
+}
+
+/// Build the live sidecar binary on first use (off the UI thread). `workspace_root`
+/// is the repo root (has `tools/razor-sidecar`); cache is the app data dir.
+#[tauri::command]
+pub async fn razor_ensure_sidecar(
+    state: State<'_, RazorState>,
+    workspace_root: String,
+    cache_dir: String,
+) -> Result<bool, String> {
+    match state.sidecar.ensure_built(Path::new(&workspace_root), Path::new(&cache_dir)) {
+        Ok(_) => Ok(true),
+        Err(e) => {
+            eprintln!("[razor:sidecar] build failed: {e}");
+            Ok(false) // soft-fail: the caller stays on the dotnet-build path
+        }
+    }
 }
 
 /// Map a `.cshtml` position (0-based LSP) to the projected C#. `None` if unmapped
@@ -181,11 +385,15 @@ pub fn razor_remap_to_source(
         .map(|p| RemapPos { line: p.line, character: p.character })
 }
 
-/// Drop a document's cached source map (on `.cshtml` close).
+/// Drop a document's cached source map + live-emit context (on `.cshtml` close).
 #[tauri::command]
 pub fn razor_forget(state: State<'_, RazorState>, cshtml_path: String) {
+    let key = canonical_key(Path::new(&cshtml_path));
     if let Ok(mut maps) = state.maps.lock() {
-        maps.remove(&canonical_key(Path::new(&cshtml_path)));
+        maps.remove(&key);
+    }
+    if let Ok(mut contexts) = state.contexts.lock() {
+        contexts.remove(&key);
     }
 }
 

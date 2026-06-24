@@ -644,3 +644,33 @@ export function razorRemapToSource(
 export function razorForget(cshtmlPath: string): Promise<void> {
   return invoke<void>("razor_forget", { cshtmlPath });
 }
+
+/** Result of a live emit (per-keystroke projection via the sidecar). */
+export interface RazorEmitLiveResult {
+  /** The fresh projected C# — feed straight into Roslyn (didOpen). */
+  generatedText: string;
+  /** Generation this was applied under (drop stale out-of-order responses). */
+  generation: number;
+  /** False when the live path is unavailable — caller falls back to reprepare. */
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Live re-emit of a `.cshtml`'s projection from in-memory `text` via the sidecar
+ * (~ms, no `dotnet build`). Reparses the `#line` map and installs it atomically.
+ * Never throws hard: `ok:false` means fall back to the on-save reprepare path.
+ */
+export function razorEmitLive(cshtmlPath: string, text: string): Promise<RazorEmitLiveResult> {
+  return invoke<RazorEmitLiveResult>("razor_emit_live", { cshtmlPath, text });
+}
+
+/** Warm the live sidecar for `cshtmlPath` so the first keystroke is fast. */
+export function razorWarm(cshtmlPath: string): Promise<void> {
+  return invoke<void>("razor_warm", { cshtmlPath });
+}
+
+/** Build the live sidecar binary on first use. Returns false on soft-fail. */
+export function razorEnsureSidecar(workspaceRoot: string, cacheDir: string): Promise<boolean> {
+  return invoke<boolean>("razor_ensure_sidecar", { workspaceRoot, cacheDir });
+}
