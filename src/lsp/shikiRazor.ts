@@ -19,70 +19,10 @@
 import * as monaco from "monaco-editor";
 import { createHighlighter } from "shiki";
 import { INITIAL, type IGrammar, type StateStack } from "@shikijs/vscode-textmate";
+import { mapScopes, isMemberProperty } from "./shikiScopeMap";
 
 /** Monaco language ids that get Shiki coloring (`.razor` cohost + `.cshtml` projection). */
 const RAZOR_LANG_IDS = ["aspnetcorerazor", "cshtml"];
-
-/**
- * TextMate scope prefix → Monaco token type. Checked most-specific first against
- * each token's scope stack (deepest scope wins). The mapped types match rules the
- * `fluent-acrylic-dark` theme (or its vs-dark base) already colors.
- */
-const SCOPE_TO_TYPE: ReadonlyArray<readonly [string, string]> = [
-  ["comment", "comment"],
-  ["constant.numeric", "number"],
-  ["constant.character", "string"],
-  ["constant.language", "keyword"],
-  ["constant", "constant"],
-  ["string", "string"],
-  ["keyword.operator", "operator"],
-  // ALL control keywords are purple in VS Code dark+: C# flow (if/return/…) AND
-  // the Razor transitions/directives (`@`, `@{`, `@model`, the `}` codeblock
-  // close) — all scoped `keyword.control.*`. Mapped to `controlKeyword` (C586C0).
-  ["keyword.control", "controlKeyword"],
-  ["keyword", "keyword"],
-  ["storage.modifier", "modifier"],
-  ["storage.type", "keyword"],
-  ["entity.name.tag", "tag"],
-  ["entity.other.attribute-name", "attribute.name"],
-  ["entity.name.type", "type"],
-  ["entity.name.function", "function"],
-  ["entity.name.namespace", "namespace"],
-  // Local/field/range variables (`entity.name.variable.local.cs`, etc.) are the
-  // light-blue variable color in VS Code dark+, not the default foreground.
-  ["entity.name.variable", "variable"],
-  ["support.type", "type"],
-  ["support.class", "type"],
-  ["support.function", "function"],
-  ["variable.parameter", "parameter"],
-  ["variable.language", "keyword"],
-  ["variable", "variable"],
-  ["meta.tag", "tag"],
-  ["punctuation.definition.tag", "delimiter.html"],
-  ["punctuation.definition.string", "string"],
-  ["punctuation", "delimiter"],
-];
-
-function mapScopes(scopes: readonly string[]): string {
-  for (let i = scopes.length - 1; i >= 0; i--) {
-    const s = scopes[i];
-    for (const [prefix, type] of SCOPE_TO_TYPE) {
-      if (s === prefix || s.startsWith(`${prefix}.`)) return type;
-    }
-  }
-  return "";
-}
-
-/**
- * A `.`-chain member (`variable.other...property`) — every segment AFTER the
- * first object in `A.B.C`. The C# grammar scopes the first segment `…object` and
- * each following segment `…object.property`, so this matches the intermediate and
- * tail members but never the leading object or a standalone variable.
- */
-function isMemberProperty(scopes: readonly string[]): boolean {
-  const deepest = scopes[scopes.length - 1] ?? "";
-  return /^variable\.other\..*property/.test(deepest);
-}
 
 /** Monaco `IState` wrapping the TextMate rule stack across lines. */
 class RazorTmState implements monaco.languages.IState {
