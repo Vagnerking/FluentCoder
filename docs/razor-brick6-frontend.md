@@ -31,7 +31,15 @@
 - Posições são **0-based LSP**. `solutionPath` é uma `.sln` (user + shadow) pronta p/ `solution/open`.
 - Provado e2e: o `.g.cs` projetado dá hover/def/diagnostics reais no Roslyn padrão; `#line` mapeia ao `.cshtml`.
 
-## Passos (ordem; validar cada um no app)
+## Passos (plano original — TODOS IMPLEMENTADOS)
+
+> ℹ️ As subseções 6.1–6.4 são o **plano de design** que guiou a implementação e
+> **já estão concluídas** (ver STATUS no topo). Estão preservadas em forma
+> imperativa como registro do desenho original e dos avisos do Codex; **não** são
+> uma checklist pendente. O comportamento atual é o descrito aqui, com as
+> ressalvas em "Limitações conhecidas do V1". Para o estado vigente do serviço,
+> ver [cshtml-language-service.md](context/cshtml-language-service.md) e
+> [ADR 0002](adr/0002-cshtml-projection-roslyn.md).
 
 ### 6.1 — Language id `.cshtml` → `cshtml` (ADR 0002) — ATÔMICO com 6.2
 Hoje `.cshtml`→`aspnetcorerazor`→cohost ([language.ts:28](../src/language.ts#L28), [index.ts:53](../src/lsp/servers/index.ts#L53)). Trocar `.cshtml`→`cshtml` **só** junto com registrar o novo server (senão `.cshtml` cai no `fluent-cshtml` homegrown morto). Registrar o language id `cshtml` no Monaco ([monacoSetup.ts](../src/lsp/monacoSetup.ts)) com a gramática (Monarch atual ou Shiki da Fase A). Atrás de **feature flag** (ponto único de rollback) — manter `aspnetcorerazor`→cohost como fallback até verde. **Completar a migração (⚠️ Codex):** atualizar TAMBÉM `monacoSetup.ts` (registro da linguagem/grammar), `src/lint/razorHtmlLint.ts` (`installRazorHtmlLint` hoje só mira `aspnetcorerazor` — se deve continuar lintando `.cshtml`, incluir `cshtml`), labels de status, e **manter `.razor`→`aspnetcorerazor`** (Blazor segue no cohost). `.cshtml` e `.razor` divergem aqui.
@@ -81,6 +89,7 @@ Já verde sem o app: `npx tsc --noEmit`, `npm run test:unit` (inclui 13 testes d
 - **Um projeto por sessão:** serve os `.cshtml` do projeto do primeiro `.cshtml` aberto; `.cshtml` de outro `.csproj` no mesmo workspace ficam sem semântica (multi-projeto = trabalho futuro).
 - **Semântica "as of last save":** o broker regenera do disco (`dotnet build`), então diagnostics/hover/def refletem o último save, não o buffer sujo.
 - **HTML/TagHelpers:** fora do brick 6 (Fase C — delegação HTML).
+- **Completion dentro de lambda/parênteses de expressão implícita complexa:** casos como `@Model.FirstOrDefault(x => x.|` (member access dentro de uma expressão implícita incompleta com parênteses abertos/lambda) caem no fallback word-based do Monaco — a projeção não mapeia o ponto interno. Member access direto (`@Model.Prop`) funciona; dentro de um bloco explícito `@( ... )`/`@{ ... }` o Roslyn cobre. Atacar no futuro.
 
 ## Notas
 - Latência: V1 gera projeção on-save (`dotnet build`); fast path futuro = sidecar .NET com o source generator (sem build).

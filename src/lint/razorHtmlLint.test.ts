@@ -49,6 +49,19 @@ test("incomplete: @Model. at start of a line/after whitespace IS flagged", () =>
   assert.equal(scanIncompleteRazorExpressions("texto @Model.").length, 1);
 });
 
+test("incomplete: @: makes the rest of the line literal — trailing dot NOT flagged", () => {
+  // `@:` is a line-markup transition: everything after it (including `@Model.`)
+  // is literal markup, so the dangling dot must not be reported.
+  assert.equal(scanIncompleteRazorExpressions("@: @Model.").length, 0);
+  assert.equal(scanIncompleteRazorExpressions("<p>@: texto @Model. fim</p>").length, 0);
+});
+
+test("incomplete: @: only consumes its own line — next line still scanned", () => {
+  // The literal-markup escape ends at the newline; a `@Model.` on the FOLLOWING
+  // line is a real implicit expression again.
+  assert.equal(scanIncompleteRazorExpressions("@: literal @Model.\n@Model.").length, 1);
+});
+
 test("flags a stray closing tag (typo'd </dabbr>)", () => {
   const r = scanRazorMarkup('<abbr title="Phone">P:</dabbr>');
   assert.equal(r.length, 1);

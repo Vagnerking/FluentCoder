@@ -63,7 +63,14 @@ export function scanIncompleteRazorExpressions(text: string): RawMarker[] {
     // Skip the constructs that aren't implicit expressions.
     if (next === "@") { i += 2; continue; } // `@@` escape
     if (next === "*") { const e = text.indexOf("*@", i + 2); i = e < 0 ? n : e + 2; continue; }
-    if (next === ":") { i += 2; continue; } // `@:` line-markup transition
+    if (next === ":") {
+      // `@:` turns the REST OF THE LINE into literal markup — a later `@expr.`
+      // on the same line (e.g. `@: @Model.`) is text, not an implicit expression,
+      // so consume to end-of-line instead of just the `@:`.
+      i += 2;
+      while (i < n && text[i] !== "\n") i++;
+      continue;
+    } // `@:` line-markup transition
     if (next === "{" || next === "(") {
       // Skip the balanced C# block — Roslyn owns its errors.
       const open = next, close = open === "{" ? "}" : ")";

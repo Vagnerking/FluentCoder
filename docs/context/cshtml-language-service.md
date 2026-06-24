@@ -27,7 +27,30 @@ O id transitório `aspnetcorerazor` não deve ser usado em código novo.
 
 ## Limites de módulos
 
-Estrutura implementada (estado atual da milestone #1):
+### Estrutura atual (pós-ADR 0002, Fase E concluída)
+
+O serviço `.cshtml` é hoje a projeção C# + Roslyn padrão:
+
+```text
+src-tauri/src/razor/        # broker de projeção (sourcemap, shadow, broker,
+                            # exec, runtime, sidecar, commands)
+
+src/lsp/servers/
+├── razorProjection.ts      # cliente de projeção C# (Roslyn standalone) + lifecycle
+├── cshtmlHtmlProjection.ts # projeção HTML virtual (Fase C)
+└── cshtmlHtmlService.ts    # IntelliSense HTML via vscode-html-languageservice
+
+tools/razor-sidecar/        # sidecar .NET (source generator Razor in-memory)
+```
+
+A direção de dependência definida no ADR não pode ser violada, mesmo que os
+nomes mudem.
+
+### Estrutura histórica (motor homegrown — REMOVIDO na Fase E)
+
+> ⚠️ A árvore abaixo descreve o motor homegrown sem Roslyn, **removido** por
+> [ADR 0002](../adr/0002-cshtml-projection-roslyn.md). É mantida apenas como
+> referência histórica; **nenhum** destes arquivos existe mais no repositório.
 
 ```text
 src-tauri/src/cshtml/
@@ -58,9 +81,7 @@ src/lsp/servers/
 └── cshtml.ts             # startCshtmlServer(), CSHTML_SERVER_ID
 ```
 
-Os nomes podem mudar, mas a direção de dependência definida no ADR não pode.
-
-Regras:
+Regras (continuam normativas para a estrutura atual):
 
 - parser/linter não acessam Monaco;
 - parser/linter não acessam filesystem diretamente;

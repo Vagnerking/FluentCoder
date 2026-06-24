@@ -745,6 +745,7 @@ export async function startRazorProjectionServer(
     if (t) window.clearTimeout(t);
     liveTimers.delete(key);
     syncChains.delete(key);
+    liveBroken.delete(key);
   };
 
   const scheduleReprepare = (): void => {
@@ -796,7 +797,10 @@ export async function startRazorProjectionServer(
   //     fresh without a provider call); providers also force-sync on demand.
   const LIVE_DEBOUNCE_MS = 150;
   const liveTimers = new Map<string, number>(); // key → debounce timer
-  let liveBroken = false; // sidecar unavailable → providers/edits use on-save path
+  // PER-DOC "live broken" flag: a sidecar failure on ONE `.cshtml` must not relax
+  // freshness checks for healthy tabs (which would let them serve hover/def against
+  // a stale projection). Keyed by the same canonical doc key as `docs`/`liveTimers`.
+  const liveBroken = new Map<string, boolean>(); // key → sidecar broke for this doc
 
   /**
    * Re-emit + open + commit the projection for `doc` at the buffer's CURRENT
@@ -817,7 +821,7 @@ export async function startRazorProjectionServer(
         res = await razorEmitLive(doc.cshtmlPath, text);
       } catch (err) {
         lspLog("razor projection: live emit failed", String(err));
-        liveBroken = true;
+        liveBroken.set(key, true);
         scheduleReprepare();
         return false;
       }
@@ -828,11 +832,11 @@ export async function startRazorProjectionServer(
         // valid keystroke re-emits. A real failure (sidecar down / no context)
         // degrades to the on-save path.
         if (res.error === "sidecar produced empty .g.cs") return false;
-        liveBroken = true;
+        liveBroken.set(key, true);
         scheduleReprepare();
         return false;
       }
-      liveBroken = false;
+      liveBroken.set(key, false);
       // Open the fresh `.g.cs` in Roslyn, THEN commit its map — both inside this
       // serialized op, so nothing observes a half-applied snapshot.
       await setGeneratedText(doc.gcsUri, res.generatedText);
@@ -856,14 +860,14 @@ export async function startRazorProjectionServer(
     doc: ProjectionDoc,
     model: monaco.editor.ITextModel
   ): Promise<boolean> => {
-    if (model.getVersionId() === doc.committedSourceVersion) return true;
     const key = canonicalFileUriKey(model.uri.toString());
-    // Attempt a sync even when `liveBroken` — the sidecar may have recovered, and
-    // this lets a provider call self-heal (syncLive clears `liveBroken` on success).
-    // If it still can't sync (returns false), degrade to the last on-save
-    // projection rather than blocking the provider entirely.
+    if (model.getVersionId() === doc.committedSourceVersion) return true;
+    // Attempt a sync even when this doc is `liveBroken` — the sidecar may have
+    // recovered, and this lets a provider call self-heal (syncLive clears the flag
+    // for this doc on success). If it still can't sync (returns false), degrade to
+    // the last on-save projection for THIS doc rather than blocking the provider.
     const fresh = await syncLive(key, model);
-    return fresh || liveBroken;
+    return fresh || Boolean(liveBroken.get(key));
   };
 
   /**
@@ -883,7 +887,8 @@ export async function startRazorProjectionServer(
     reqVersion: number
   ): boolean => {
     if (docFor(model) !== doc || model.getVersionId() !== reqVersion) return false;
-    return liveBroken || doc.committedSourceVersion === snap;
+    const key = canonicalFileUriKey(model.uri.toString());
+    return Boolean(liveBroken.get(key)) || doc.committedSourceVersion === snap;
   };
 
   const scheduleLiveEmit = (model: monaco.editor.ITextModel): void => {
@@ -1023,8 +1028,13 @@ function toCompletion(
   range: monaco.IRange
 ): monaco.languages.CompletionItem {
   const label = typeof it.label === "string" ? it.label : String(it.label ?? "");
+  // Roslyn returns `textEditText` (+ itemDefaults.editRange) rather than
+  // `insertText`, and the `label` carries display-only generics decoration
+  // (`First<>`). Prefer the real insertion text so we don't type `First<>` into
+  // the buffer; fall back to the label with the trailing `<>` stripped.
+  const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
   const insertText =
-    typeof it.insertText === "string" ? (it.insertText as string) : label;
+    str(it.textEditText) ?? str(it.insertText) ?? label.replace(/<>$/, "");
   return {
     label,
     kind: completionKind(typeof it.kind === "number" ? (it.kind as number) : undefined),
@@ -1057,5 +1067,10 @@ function completionKind(lsp?: number): monaco.languages.CompletionItemKind {
     16: K.Color, 17: K.File, 18: K.Reference, 19: K.Folder, 20: K.EnumMember,
     21: K.Constant, 22: K.Struct, 23: K.Event, 24: K.Operator, 25: K.TypeParameter,
   };
-  return (lsp != null && byLsp[lsp]) || K.Text;
+  // NB: must NOT use `|| K.Text` — Monaco's `Method` enum value is 0 (falsy), so
+  // `(... && byLsp[lsp]) || K.Text` would map every Method to Text (the `abc`
+  // icon). Methods are the common case after `@Model.`, so check explicitly.
+  if (lsp == null) return K.Text;
+  const mapped = byLsp[lsp];
+  return mapped === undefined ? K.Text : mapped;
 }

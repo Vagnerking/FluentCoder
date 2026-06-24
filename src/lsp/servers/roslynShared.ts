@@ -151,6 +151,10 @@ async function openRoslynWorkspace(
       await client.sendNotification("solution/open", { solution: uri });
     } catch (err) {
       lspLog("openRoslynWorkspace: solution/open explícito FALHOU", String(err));
+      // Same recovery as the scan-based paths below: without this, a rejected
+      // solution/open leaves the client stuck with deferred semantic tokens
+      // forever (the projection broker always goes through `solutionPath`).
+      enableLanguageClientSemanticTokens(client);
     }
     return;
   }

@@ -72,12 +72,24 @@ fn derive_cached(csproj: &Path, project_dir: &Path, timeout: Duration) -> io::Re
     }
     let (dprog, dargs) = derive::derive_command(&csproj.to_string_lossy());
     let out = run_capturing(&dprog, &dargs, project_dir, timeout)?;
-    let derived = derive::parse_derived(&String::from_utf8_lossy(&out)).ok_or_else(|| {
+    let mut derived = derive::parse_derived(&String::from_utf8_lossy(&out)).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            "could not derive TargetFramework (multi-targeting? pass an explicit TFM)",
+            "could not derive a TargetFramework (no TargetFramework or TargetFrameworks)",
         )
     })?;
+    // Multi-targeting: the first eval had no active TFM, so `ReferencePath` came
+    // back empty. Re-derive pinned to the selected TFM (`-f`) to resolve that
+    // framework's real references — without this the live sidecar's compilation
+    // would be missing assemblies for multi-target projects.
+    if derived.multi_target_selected {
+        let (p, a) = derive::derive_command_for_tfm(&csproj.to_string_lossy(), Some(&derived.tfm));
+        if let Ok(out2) = run_capturing(&p, &a, project_dir, timeout) {
+            if let Some(d2) = derive::parse_derived(&String::from_utf8_lossy(&out2)) {
+                derived = d2;
+            }
+        }
+    }
     if let Some(mt) = mtime {
         if let Ok(mut guard) = cache.lock() {
             guard.insert(key, (mt, derived.clone()));
@@ -112,12 +124,15 @@ fn run_capturing(program: &str, args: &[String], cwd: &Path, timeout: Duration) 
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()?;
-    // Drain stdout on a thread so a full pipe buffer can't deadlock the child.
+    // Drain stdout on a thread so a full pipe buffer can't deadlock the child. The
+    // thread sends the captured bytes over a channel when stdout reaches EOF —
+    // letting us wait for it with a DEADLINE rather than an unbounded `join()`.
     let mut stdout = child.stdout.take().expect("piped stdout");
-    let reader = std::thread::spawn(move || {
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = stdout.read_to_end(&mut buf);
-        buf
+        let _ = tx.send(buf); // ignore: receiver may be gone (we timed out)
     });
     let deadline = Instant::now() + timeout;
     loop {
@@ -127,11 +142,9 @@ fn run_capturing(program: &str, args: &[String], cwd: &Path, timeout: Duration) 
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait(); // reap the killed child
-            // Detach the stdout-drain thread instead of joining: a `dotnet`
-            // descendant (e.g. VBCSCompiler) may still hold the pipe, and joining
-            // could block past the timeout. Dropping the handle lets it finish on
-            // its own without blocking us.
-            drop(reader);
+            // The reader thread is detached (we hold only `rx`): a `dotnet`
+            // descendant (e.g. VBCSCompiler) may still hold the pipe, so we never
+            // block on it — dropping `rx` lets it finish on its own.
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!("`{program}` timed out after {}s", timeout.as_secs()),
@@ -139,7 +152,19 @@ fn run_capturing(program: &str, args: &[String], cwd: &Path, timeout: Duration) 
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    Ok(reader.join().unwrap_or_default())
+    // The child exited cleanly, but stdout EOF can still lag if a descendant kept
+    // the write end open. Wait for the reader only until the deadline — never
+    // unboundedly (the bug: a held pipe would make `join()` hang past the timeout).
+    // On timeout, return what the child produced as far as we know (usually empty),
+    // detaching the reader rather than blocking `prepare()` forever.
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    match rx.recv_timeout(remaining.max(Duration::from_millis(1))) {
+        Ok(buf) => Ok(buf),
+        Err(_) => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("`{program}` exited but its stdout stayed open past the timeout"),
+        )),
+    }
 }
 
 /// A materialized projection ready to serve.
@@ -235,10 +260,15 @@ pub fn prepare_with_timeout(
         }
     }
     let emit_current = plan.projections.iter().all(|pf| {
-        pf.emitted_gcs.exists() && {
-            let cshtml = user_project_dir.join(&pf.cshtml_rel);
-            is_newer_or_equal(&pf.emitted_gcs, &cshtml)
-                && global_inputs.iter().all(|g| is_newer_or_equal(&pf.emitted_gcs, g))
+        // Use whichever emit location actually holds the file (pinned or the obj
+        // fallback the SDK may have used instead).
+        match exec::resolve_emitted(pf) {
+            Some(emitted) => {
+                let cshtml = user_project_dir.join(&pf.cshtml_rel);
+                is_newer_or_equal(emitted, &cshtml)
+                    && global_inputs.iter().all(|g| is_newer_or_equal(emitted, g))
+            }
+            None => false,
         }
     });
     if emit_current {

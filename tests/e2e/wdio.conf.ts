@@ -37,6 +37,31 @@ const sessionFile = path.join(
 )
 let previousSession: string | null = null
 
+/**
+ * Recursively look for the Razor-generated `.g.cs` of `Index.cshtml` under `dir`
+ * (the project's `obj/`). The exact path depends on the active TFM/config
+ * (`obj/Debug/<tfm>/generated/.../Index_cshtml.g.cs`), so we scan instead of
+ * hard-coding it. Returns the first match, or null if none exists.
+ */
+function findGeneratedIndexCs(dir: string): string | null {
+  let entries: fs.Dirent[]
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return null // obj/ doesn't exist → emit never ran
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      const found = findGeneratedIndexCs(full)
+      if (found) return found
+    } else if (/Index.*\.g\.cs$/i.test(entry.name)) {
+      return full
+    }
+  }
+  return null
+}
+
 export const config: WebdriverIO.Config = {
   // tauri-driver expõe um servidor WebDriver em 127.0.0.1:4444 por padrão.
   hostname: '127.0.0.1',
@@ -93,11 +118,25 @@ export const config: WebdriverIO.Config = {
       // Run from the project dir with a RELATIVE csproj so the space in the repo
       // path ("Projetos Pessoais") doesn't get split into two args by the shell
       // (which caused MSB1008 "Only one project can be specified").
-      spawnSync(
+      const r = spawnSync(
         'dotnet',
         ['build', 'SampleMvc.csproj', '-c', 'Debug', '-p:EmitCompilerGeneratedFiles=true'],
         { cwd: sampleMvc, stdio: 'inherit', shell: os.platform() === 'win32' },
       )
+      // Fail FAST. The exit status is unreliable here (the deliberate CS1061 makes
+      // the compile fail), so we can't gate on `r.status`. But `r.error` means the
+      // SDK/dotnet couldn't even launch, and a missing `.g.cs` means restore/emit
+      // never ran — both would otherwise surface minutes later as an opaque test
+      // timeout, hiding the real cause.
+      if (r.error) {
+        throw new Error(`SampleMvc warm-up: dotnet não pôde ser executado: ${r.error.message}`)
+      }
+      if (!findGeneratedIndexCs(path.join(sampleMvc, 'obj'))) {
+        throw new Error(
+          'SampleMvc warm-up: nenhum Index*.g.cs foi gerado em obj/ — restore/emit ' +
+            'do Razor falhou antes do CS1061. Verifique o SDK .NET e o csproj.',
+        )
+      }
     }
   },
 

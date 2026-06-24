@@ -146,6 +146,13 @@ sealed class ProjectSession
     public void Apply(Request req)
     {
         _options.Update(req);
+        // The full hierarchical `_ViewImports`/`_ViewStart` chain rides in `files`
+        // (each with its text). Register/refresh every one so subfolder/Area views
+        // get their nearest imports/layout. The singular fields are kept for
+        // back-compat but are a subset of the chain.
+        foreach (var f in req.Files ?? new())
+            if (f.Text is not null)
+                ReplaceSharedIfChanged(f.Path, f.Text);
         ReplaceSharedIfChanged(req.ViewImportsPath, req.ViewImportsText);
         ReplaceSharedIfChanged(req.ViewStartPath, req.ViewStartText);
     }
@@ -257,6 +264,11 @@ sealed class ProjectSession
             _texts[nk] = t;
             list.Add(t);
         }
+        // The hierarchical import/viewstart chain (each FileSpec with text), then
+        // the singular fields (a subset, deduped by path), then the target last.
+        foreach (var f in req.Files ?? new())
+            if (f.Text is not null)
+                add(f.Path, f.Text);
         add(req.ViewImportsPath, req.ViewImportsText);
         add(req.ViewStartPath, req.ViewStartText);
         if (targetPath is not null) add(targetPath, targetText);
@@ -265,27 +277,52 @@ sealed class ProjectSession
 
     private string ReadGenerated(string cshtmlPath)
     {
-        string wantSuffix = Path.GetFileName(cshtmlPath).Replace('.', '_') + ".g.cs";
         var result = _driver.GetRunResult();
-        foreach (var gen in result.Results)
-            foreach (var src in gen.GeneratedSources)
-                if (src.HintName.EndsWith(wantSuffix, StringComparison.OrdinalIgnoreCase))
-                    return src.SourceText.ToString();
-        // Fallback: a contains-match on the stem, else the first source.
-        string stem = Path.GetFileNameWithoutExtension(cshtmlPath);
-        foreach (var gen in result.Results)
-            foreach (var src in gen.GeneratedSources)
-                if (src.HintName.Contains(stem, StringComparison.OrdinalIgnoreCase))
-                    return src.SourceText.ToString();
-        // Diagnose an empty result: what DID the generator produce, and why?
+
+        // PRIMARY: match by the file's full TargetPath. The Razor generator derives
+        // the hintName from the AdditionalText's TargetPath (project-relative, e.g.
+        // `Views\Home\Index.cshtml`) by replacing separators/dots — so two views
+        // that share a stem (`Views/Home/Index.cshtml` vs
+        // `Areas/Admin/Views/Home/Index.cshtml`) get DISTINCT hintNames. Matching by
+        // the full sanitized target path (not just the filename) is what keeps us
+        // from returning another view's `.g.cs`.
+        string? wantPathSuffix = _options.SanitizedTargetSuffix(cshtmlPath);
+        if (wantPathSuffix is not null)
+        {
+            foreach (var gen in result.Results)
+                foreach (var src in gen.GeneratedSources)
+                    if (Sanitize(src.HintName).EndsWith(wantPathSuffix, StringComparison.OrdinalIgnoreCase))
+                        return src.SourceText.ToString();
+        }
+
+        // FALLBACK: filename-only suffix. Only safe when exactly ONE generated
+        // source ends with it — otherwise an ambiguous stem could return the wrong
+        // view, which is the bug we're avoiding, so we bail to empty instead.
+        string wantFileSuffix = Path.GetFileName(cshtmlPath).Replace('.', '_') + ".g.cs";
+        var fileMatches = result.Results
+            .SelectMany(r => r.GeneratedSources)
+            .Where(s => s.HintName.EndsWith(wantFileSuffix, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (fileMatches.Count == 1)
+            return fileMatches[0].SourceText.ToString();
+
+        // Diagnose an empty/ambiguous result: what DID the generator produce, and why?
         var hints = result.Results.SelectMany(r => r.GeneratedSources).Select(s => s.HintName).ToList();
         var diags = result.Results.SelectMany(r => r.Diagnostics).Select(d => d.ToString()).Take(5).ToList();
-        Sidecar.Log($"ReadGenerated EMPTY for '{Path.GetFileName(cshtmlPath)}' (want *{wantSuffix}); " +
+        Sidecar.Log($"ReadGenerated EMPTY for '{Path.GetFileName(cshtmlPath)}' " +
+                    $"(want path *{wantPathSuffix ?? "(no TargetPath)"} or unique *{wantFileSuffix}, " +
+                    $"got {fileMatches.Count} filename matches); " +
                     $"hints=[{string.Join(", ", hints)}]; refs={_compilation.References.Count()}; " +
                     $"texts=[{string.Join(", ", _texts.Keys.Select(Path.GetFileName))}]; " +
                     $"diags=[{string.Join(" | ", diags)}]");
         return "";
     }
+
+    /// Sanitize a hintName/target path the way the Razor generator names sources:
+    /// separators and dots collapse to `_`. Lets us compare a hintName against an
+    /// expected TargetPath suffix regardless of `/` vs `\`.
+    private static string Sanitize(string s) =>
+        s.Replace('/', '_').Replace('\\', '_').Replace('.', '_');
 
     // ── Load the Razor generator from the resolved SDK ────────────────────────
     private static IIncrementalGenerator LoadRazorGenerator()
@@ -299,29 +336,75 @@ sealed class ProjectSession
 
     /// Locate `Microsoft.CodeAnalysis.Razor.Compiler.dll` in the installed SDKs.
     /// Prefers the band matching the pinned Roslyn (8.0.x); falls back to newest.
+    /// Portable across Windows/macOS/Linux and custom .NET installs: honors an
+    /// explicit override, then `DOTNET_ROOT`, then the running runtime's own dotnet
+    /// root, then the OS default — instead of assuming `%ProgramFiles%\dotnet`.
     private static string ResolveRazorCompilerDll()
     {
-        // Allow an explicit override (the Rust host can pass the exact SDK path).
+        // 1. Explicit override (the Rust host can pass the exact DLL path).
         string? overridePath = Environment.GetEnvironmentVariable("RAZOR_COMPILER_DLL");
         if (!string.IsNullOrEmpty(overridePath) && File.Exists(overridePath)) return overridePath;
 
-        string sdksRoot = Path.Combine(
-            Environment.GetEnvironmentVariable("ProgramFiles") ?? @"C:\Program Files",
-            "dotnet", "sdk");
-        if (!Directory.Exists(sdksRoot))
-            throw new Exception($"dotnet sdk dir not found: {sdksRoot}");
+        // 2. Try each candidate `dotnet` root for an `sdk/` dir, in priority order.
+        var tried = new List<string>();
+        foreach (var sdksRoot in DotnetSdkRoots())
+        {
+            tried.Add(sdksRoot);
+            if (!Directory.Exists(sdksRoot)) continue;
+            var candidates = Directory.GetDirectories(sdksRoot)
+                .Select(d => Path.Combine(d,
+                    "Sdks", "Microsoft.NET.Sdk.Razor", "source-generators",
+                    "Microsoft.CodeAnalysis.Razor.Compiler.dll"))
+                .Where(File.Exists)
+                .ToList();
+            if (candidates.Count == 0) continue;
+            // Prefer 8.0.x (matches the pinned Roslyn 4.9.x); else newest. Match the
+            // `8.0.` band with an OS-agnostic separator so it works on Linux/macOS too.
+            var pinned = candidates.FirstOrDefault(p =>
+                p.Contains($"{Path.DirectorySeparatorChar}8.0.", StringComparison.OrdinalIgnoreCase) ||
+                p.Contains("/8.0.", StringComparison.OrdinalIgnoreCase));
+            return pinned ?? candidates.OrderByDescending(p => p).First();
+        }
+        throw new Exception(
+            $"no Razor.Compiler.dll under any dotnet SDK dir (tried: {string.Join(", ", tried)}). " +
+            "Set DOTNET_ROOT or RAZOR_COMPILER_DLL.");
+    }
 
-        var candidates = Directory.GetDirectories(sdksRoot)
-            .Select(d => Path.Combine(d,
-                "Sdks", "Microsoft.NET.Sdk.Razor", "source-generators",
-                "Microsoft.CodeAnalysis.Razor.Compiler.dll"))
-            .Where(File.Exists)
-            .ToList();
-        if (candidates.Count == 0)
-            throw new Exception($"no Razor.Compiler.dll under {sdksRoot}");
-        // Prefer 8.0.x (matches the pinned Roslyn 4.9.x); else newest.
-        var pinned = candidates.FirstOrDefault(p => p.Contains(@"\8.0.", StringComparison.OrdinalIgnoreCase));
-        return pinned ?? candidates.OrderByDescending(p => p).First();
+    /// Candidate `dotnet/sdk` directories, most-specific first: DOTNET_ROOT
+    /// (+ x64 variant), the running runtime's dotnet root, then the OS default.
+    private static IEnumerable<string> DotnetSdkRoots()
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        IEnumerable<string> FromRoot(string? root)
+        {
+            if (string.IsNullOrEmpty(root)) yield break;
+            var sdk = Path.Combine(root, "sdk");
+            if (seen.Add(sdk)) yield return sdk;
+        }
+
+        foreach (var s in FromRoot(Environment.GetEnvironmentVariable("DOTNET_ROOT"))) yield return s;
+        foreach (var s in FromRoot(Environment.GetEnvironmentVariable("DOTNET_ROOT(x64)"))) yield return s;
+
+        // The runtime we're executing under lives at `<dotnetRoot>/shared/Microsoft.NETCore.App/<ver>`;
+        // walk up to `<dotnetRoot>`. This finds the active install even when it's
+        // not on a default path (e.g. a user-local or CI dotnet).
+        string runtimeDir = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory();
+        var sharedApp = Directory.GetParent(runtimeDir.TrimEnd(Path.DirectorySeparatorChar))?.Parent?.Parent?.FullName;
+        foreach (var s in FromRoot(sharedApp)) yield return s;
+
+        // OS defaults, last.
+        if (OperatingSystem.IsWindows())
+        {
+            foreach (var s in FromRoot(Path.Combine(
+                Environment.GetEnvironmentVariable("ProgramFiles") ?? @"C:\Program Files", "dotnet")))
+                yield return s;
+        }
+        else
+        {
+            foreach (var root in new[] { "/usr/lib/dotnet", "/usr/share/dotnet", "/usr/local/share/dotnet" })
+                foreach (var s in FromRoot(root)) yield return s;
+        }
     }
 }
 
@@ -380,6 +463,29 @@ sealed class EditorConfigOptions : AnalyzerConfigOptionsProvider
         return digits.Length > 0 ? "v" + digits : "v8.0";
     }
 
+    /// The fully-sanitized hintName suffix expected for `path`'s generated source,
+    /// derived from its `TargetPath` (e.g. `Views\Home\Index.cshtml` →
+    /// `views_home_index_cshtml_g_cs`). `null` if no TargetPath is known for the
+    /// file. Used by ReadGenerated to disambiguate same-stem views in subfolders/Areas.
+    public string? SanitizedTargetSuffix(string path)
+    {
+        if (!_perFile.TryGetValue(path, out var meta)) return null;
+        if (!meta.TryGetValue("build_metadata.AdditionalFiles.TargetPath", out var b64)) return null;
+        string targetPath;
+        try
+        {
+            targetPath = Encoding.UTF8.GetString(Convert.FromBase64String(b64));
+        }
+        catch
+        {
+            return null;
+        }
+        // The generator names the source `<sanitized TargetPath>.g.cs`; sanitize the
+        // whole thing (including `.g.cs`) so it lines up with Sanitize(hintName).
+        return (targetPath.Replace('/', '_').Replace('\\', '_').Replace('.', '_') + "_g_cs")
+            .ToLowerInvariant();
+    }
+
     public override AnalyzerConfigOptions GlobalOptions => new Map(_globals);
     public override AnalyzerConfigOptions GetOptions(SyntaxTree tree) => new Map(_globals);
     public override AnalyzerConfigOptions GetOptions(AdditionalText textFile) =>
@@ -425,6 +531,10 @@ record FileSpec
 {
     public string Path { get; init; } = "";
     public string TargetPathB64 { get; init; } = "";
+    /// In-memory content for files the generator must read besides the edited
+    /// target — the hierarchical `_ViewImports`/`_ViewStart` chain. Null for the
+    /// target itself (its text arrives via the request's `CshtmlText`).
+    public string? Text { get; init; }
 }
 
 record Response

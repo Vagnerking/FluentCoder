@@ -61,6 +61,42 @@ test("buildVirtualHtml: nested braces in @{ } are fully consumed (depth-aware)",
   assert.ok(out.trimStart().startsWith("<p>after</p>"), "block fully blanked");
 });
 
+test("buildVirtualHtml: a `)` inside a C# string in @(...) does NOT close early", () => {
+  // `@(")")` — the `)` is inside the string literal; the block ends at the real `)`.
+  const src = `@(")")<p>after</p>`;
+  const out = vh(src);
+  assert.ok(out.trimStart().startsWith("<p>after</p>"), `block fully blanked, got: ${out}`);
+  assert.ok(!out.includes('"'), "the C# string was blanked, not leaked into HTML");
+});
+
+test("buildVirtualHtml: a `}` inside a C# string in @{ } does NOT close early", () => {
+  const src = `@{ var s = "}"; }<p>after</p>`;
+  const out = vh(src);
+  assert.ok(out.trimStart().startsWith("<p>after</p>"), `block fully blanked, got: ${out}`);
+  assert.ok(!out.includes("var s"), "C# blanked");
+});
+
+test("buildVirtualHtml: a close paren inside a verbatim string does NOT close early", () => {
+  const src = `@(@")")<p>after</p>`;
+  const out = vh(src);
+  assert.ok(out.trimStart().startsWith("<p>after</p>"), `block fully blanked, got: ${out}`);
+});
+
+test("buildVirtualHtml: a `}` in a `//` comment inside @{ } does NOT close early", () => {
+  const src = `@{ // }\n var x = 1; }<p>after</p>`;
+  const out = vh(src);
+  assert.ok(out.trimEnd().endsWith("<p>after</p>"), `block fully blanked, got: ${out}`);
+  assert.ok(!out.includes("var x"), "C# blanked past the comment");
+});
+
+test("buildVirtualHtml: a `)` in a C# string inside an attribute @(...) does NOT close early", () => {
+  const src = `<div class="@(")")">x</div>`;
+  const out = vh(src);
+  // The tag structure survives and the `)` in the string didn't end the expr early.
+  assert.ok(out.startsWith(`<div class="`), `got: ${out}`);
+  assert.ok(out.includes(`">x</div>`), `tag intact, got: ${out}`);
+});
+
 test("buildVirtualHtml: @@ escape is blanked (not treated as a Razor transition)", () => {
   assert.equal(vh(`<p>a@@b</p>`), `<p>a  b</p>`);
 });

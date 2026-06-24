@@ -65,11 +65,25 @@ interface RemoteDirEntry {
 }
 
 /**
+ * The opened folder's root path, used to evaluate prefix-anchored `files.exclude`
+ * globs (e.g. `src/generated`, `foo/bar` subtree) against each entry's
+ * workspace-relative path. Set on folder open; basename patterns (globstar `bin`)
+ * work regardless. Module-scoped so the `readDir(path)` call sites stay unchanged.
+ */
+let explorerWorkspaceRoot: string | null = null;
+
+/** Records the opened folder so `readDir` can anchor `files.exclude` globs. */
+export function setExplorerWorkspaceRoot(root: string | null): void {
+  explorerWorkspaceRoot = root;
+}
+
+/**
  * Lists the immediate children of `path` and maps them to `FileNode`s. When a
  * remote SSH session is attached, the listing comes from the host over SFTP
  * (issue #8); otherwise from the local filesystem, where entries matching the
- * active `files.exclude` globs (e.g. `bin`/`obj`/`.git`) are hidden by the
- * backend so the tree mirrors VS Code's exclusion behavior.
+ * active `files.exclude` globs (e.g. `bin`/`obj`/`.git`, or prefix-anchored ones
+ * like `src/generated`) are hidden by the backend so the tree mirrors VS Code's
+ * exclusion behavior.
  */
 export async function readDir(path: string): Promise<FileNode[]> {
   const remote = getActiveRemote();
@@ -83,6 +97,7 @@ export async function readDir(path: string): Promise<FileNode[]> {
   const entries = await invoke<RawDirEntry[]>("read_dir", {
     path,
     exclude: getFilesExcludeGlobs(),
+    workspaceRoot: explorerWorkspaceRoot,
   });
   return entries.map((e) => ({
     name: e.name,

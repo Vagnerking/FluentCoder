@@ -82,6 +82,7 @@ import {
   pickSavePath,
   readDir,
   readFile,
+  setExplorerWorkspaceRoot,
   sessionLoad,
   sessionSetLastFolder,
   sessionSetOpenFiles,
@@ -950,6 +951,10 @@ export default function App() {
       // search index and local-session persistence are local-only (later phases),
       // so they're skipped here. The remote attachment must already be set.
       const remote = isRemoteActive();
+      // Anchor prefix-based `files.exclude` globs (e.g. `src/generated`) to the
+      // opened folder. Remote listings go over SFTP (never the `read_dir` command),
+      // so there's no local root to anchor against.
+      setExplorerWorkspaceRoot(remote ? null : folder);
       try {
         const entries = await readDir(folder);
         // Now that the folder is confirmed to open, drop the previous project's

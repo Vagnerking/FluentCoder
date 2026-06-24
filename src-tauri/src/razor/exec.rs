@@ -12,10 +12,24 @@ use std::hash::{Hash, Hasher};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-use super::broker::BrokerPlan;
+use super::broker::{BrokerPlan, ProjectionFile};
 
 /// C# SDK-style project type GUID (used in the generated `.sln`).
 const CSHARP_PROJECT_TYPE: &str = "9A19103F-16F7-4668-BE54-9A1E7A4F7556";
+
+/// The emit location that ACTUALLY has the `.g.cs` after a build: the pinned
+/// `CompilerGeneratedFilesOutputPath` if it exists, else the default obj-layout
+/// fallback (some SDKs ignore the pin). `None` if neither exists (emit produced
+/// nothing for this file).
+pub fn resolve_emitted(pf: &ProjectionFile) -> Option<&Path> {
+    if pf.emitted_gcs.exists() {
+        Some(&pf.emitted_gcs)
+    } else if pf.emitted_gcs_fallback.exists() {
+        Some(&pf.emitted_gcs_fallback)
+    } else {
+        None
+    }
+}
 
 /// Materialize the plan: create the shadow project, copy projected `.g.cs`, and
 /// write the solution. Idempotent (overwrites). Does NOT run `dotnet` or Roslyn.
@@ -24,11 +38,11 @@ pub fn materialize(plan: &BrokerPlan) -> io::Result<()> {
     fs::write(&plan.shadow_csproj_path, &plan.shadow_csproj_content)?;
 
     for pf in &plan.projections {
-        if pf.emitted_gcs.exists() {
+        if let Some(emitted) = resolve_emitted(pf) {
             if let Some(parent) = pf.shadow_gcs.parent() {
                 fs::create_dir_all(parent)?;
             }
-            fs::copy(&pf.emitted_gcs, &pf.shadow_gcs)?;
+            fs::copy(emitted, &pf.shadow_gcs)?;
         } else if pf.shadow_gcs.exists() {
             // No fresh projection this run — remove any STALE copy so we never
             // serve outdated C# (Roslyn would otherwise analyze old generated code).
@@ -203,6 +217,7 @@ mod tests {
             projections: vec![ProjectionFile {
                 cshtml_rel: PathBuf::from("Views/Home/Index.cshtml"),
                 emitted_gcs: emitted.clone(),
+                emitted_gcs_fallback: proj_dir.join("nonexistent-fallback.g.cs"),
                 shadow_gcs: shadow_dir.join("projected").join("Views/Home/Index_cshtml.g.cs"),
             }],
         };
@@ -217,6 +232,74 @@ mod tests {
         let sln = fs::read_to_string(&plan.solution_path).unwrap();
         assert!(sln.contains("ShadowRazor.csproj"));
         assert!(sln.contains("App.csproj"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_emitted_prefers_pinned_then_fallback_then_none() {
+        let root = std::env::temp_dir().join("fluent_razor_resolve_emitted");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let pinned = root.join("pinned.g.cs");
+        let fallback = root.join("fallback.g.cs");
+        let mk = |p: &Path, f: &Path| ProjectionFile {
+            cshtml_rel: PathBuf::from("Views/Index.cshtml"),
+            emitted_gcs: p.to_path_buf(),
+            emitted_gcs_fallback: f.to_path_buf(),
+            shadow_gcs: root.join("projected/Views/Index_cshtml.g.cs"),
+        };
+
+        // Neither exists → None.
+        assert!(resolve_emitted(&mk(&pinned, &fallback)).is_none());
+
+        // Only the fallback exists (SDK ignored the pin) → fallback.
+        fs::write(&fallback, "// fb").unwrap();
+        assert_eq!(resolve_emitted(&mk(&pinned, &fallback)), Some(fallback.as_path()));
+
+        // Pinned exists → pinned wins (preferred).
+        fs::write(&pinned, "// pin").unwrap();
+        assert_eq!(resolve_emitted(&mk(&pinned, &fallback)), Some(pinned.as_path()));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn materialize_falls_back_to_obj_layout_when_pin_missing() {
+        // The SDK ignored CompilerGeneratedFilesOutputPath and emitted to the obj
+        // fallback: materialize must still copy it into the shadow.
+        let root = std::env::temp_dir().join("fluent_razor_exec_fallback");
+        let _ = fs::remove_dir_all(&root);
+        let ws = root.join("ws");
+        let proj_dir = ws.join("App");
+        fs::create_dir_all(&proj_dir).unwrap();
+        let user_csproj = proj_dir.join("App.csproj");
+        fs::write(&user_csproj, "<Project/>").unwrap();
+
+        let fallback = proj_dir.join("obj/Debug/net8.0/generated/Views/Index_cshtml.g.cs");
+        fs::create_dir_all(fallback.parent().unwrap()).unwrap();
+        fs::write(&fallback, "// from obj fallback").unwrap();
+
+        let shadow_dir = ws.join(".fluent-razor").join("shadow");
+        let shadow_gcs = shadow_dir.join("projected").join("Views/Index_cshtml.g.cs");
+        let plan = BrokerPlan {
+            shadow_dir: shadow_dir.clone(),
+            shadow_csproj_path: shadow_dir.join("ShadowRazor.csproj"),
+            shadow_csproj_content: "<Project/>".to_string(),
+            user_csproj_path: user_csproj.clone(),
+            solution_path: shadow_dir.join("RazorShadow.sln"),
+            emit_command: ("dotnet".into(), vec![]),
+            emit_cwd: proj_dir.clone(),
+            projections: vec![ProjectionFile {
+                cshtml_rel: PathBuf::from("Views/Index.cshtml"),
+                emitted_gcs: shadow_dir.join("generated/Views/Index_cshtml.g.cs"), // pin: empty
+                emitted_gcs_fallback: fallback.clone(),
+                shadow_gcs: shadow_gcs.clone(),
+            }],
+        };
+
+        materialize(&plan).unwrap();
+        assert_eq!(fs::read_to_string(&shadow_gcs).unwrap(), "// from obj fallback");
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -241,6 +324,7 @@ mod tests {
             projections: vec![ProjectionFile {
                 cshtml_rel: PathBuf::from("Views/Index.cshtml"),
                 emitted_gcs: root.join("does-not-exist.g.cs"), // emit produced nothing
+                emitted_gcs_fallback: root.join("also-missing.g.cs"),
                 shadow_gcs: shadow_gcs.clone(),
             }],
         };

@@ -38,6 +38,61 @@ export interface VirtualHtml {
 }
 
 /**
+ * Find the end of a balanced `@{...}` / `@(...)` C# block, QUOTE-AWARE. Given the
+ * index `open` of the opening `{`/`(`, returns the index just past its matching
+ * close. Delimiters inside C# string/char literals and comments are IGNORED, so
+ * `@(")")` and `@{ var s = "}"; }` don't terminate early (the bug a naive depth
+ * counter hits). Handles `"..."`, `'...'`, verbatim `@"..."` (where `""` escapes a
+ * quote), C# line comments (slash-slash), and C# block comments (slash-star).
+ */
+function scanBalancedEnd(chars: string[], open: number, n: number): number {
+  const openCh = chars[open];
+  const closeCh = openCh === "{" ? "}" : ")";
+  let j = open + 1;
+  let depth = 1;
+  while (j < n && depth > 0) {
+    const ch = chars[j];
+    // String/char literals — skip their contents so braces/parens inside don't count.
+    if (ch === '"' || ch === "'") {
+      // Verbatim string: `@"..."` where `""` is an escaped quote (no `\` escapes).
+      const verbatim = ch === '"' && chars[j - 1] === "@";
+      const quote = ch;
+      j++;
+      while (j < n) {
+        if (verbatim) {
+          if (chars[j] === '"') {
+            if (chars[j + 1] === '"') { j += 2; continue; } // escaped `""`
+            j++;
+            break;
+          }
+          j++;
+        } else {
+          if (chars[j] === "\\") { j += 2; continue; } // escaped char
+          if (chars[j] === quote) { j++; break; }
+          j++;
+        }
+      }
+      continue;
+    }
+    // Comments — `//` to EOL, `/* */` to its close.
+    if (ch === "/" && chars[j + 1] === "/") {
+      while (j < n && chars[j] !== "\n") j++;
+      continue;
+    }
+    if (ch === "/" && chars[j + 1] === "*") {
+      j += 2;
+      while (j < n && !(chars[j] === "*" && chars[j + 1] === "/")) j++;
+      j += 2;
+      continue;
+    }
+    if (ch === openCh) depth++;
+    else if (ch === closeCh) depth--;
+    j++;
+  }
+  return j;
+}
+
+/**
  * Blank `[from, to)` of `chars` to spaces (keeping newlines) AND mark those
  * offsets as Razor (mask 0) — they are not HTML.
  */
@@ -87,17 +142,10 @@ export function buildVirtualHtml(cshtml: string): VirtualHtml {
         i = stop;
         continue;
       }
-      // `@{ code }` / `@( expr )` — depth-aware so nested braces/parens are kept.
+      // `@{ code }` / `@( expr )` — depth-aware AND quote-aware so braces/parens
+      // inside C# strings/comments (e.g. `@(")")`) don't close the block early.
       if (next === "{" || next === "(") {
-        const open = next;
-        const close = open === "{" ? "}" : ")";
-        let j = i + 2;
-        let depth = 1;
-        while (j < n && depth > 0) {
-          if (chars[j] === open) depth++;
-          else if (chars[j] === close) depth--;
-          j++;
-        }
+        const j = scanBalancedEnd(chars, i + 1, n);
         blank(chars, mask, i, j);
         i = j;
         continue;
@@ -211,15 +259,9 @@ function blankInlineRazor(
     return at + 2;
   }
   if (next === "(" || next === "{") {
-    const open = next;
-    const close = open === "(" ? ")" : "}";
-    let j = at + 2;
-    let depth = 1;
-    while (j < n && depth > 0) {
-      if (chars[j] === open) depth++;
-      else if (chars[j] === close) depth--;
-      j++;
-    }
+    // Quote-aware (shared with the main loop) so `@(")")` inside an attribute value
+    // doesn't terminate at the `)` embedded in the C# string.
+    const j = scanBalancedEnd(chars, at + 1, n);
     blank(chars, mask, at, j);
     return j;
   }

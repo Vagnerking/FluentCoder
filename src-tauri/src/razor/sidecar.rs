@@ -40,12 +40,74 @@ fn strip_extended_prefix(p: &str) -> String {
     p.to_string()
 }
 
+/// A stable fingerprint of the sidecar SOURCE (so a changed `Program.cs`/`.csproj`
+/// or a new app version invalidates a cached build). Hashes the app crate version
+/// plus every source file's path + length + mtime under `src`. Cheap (no full file
+/// reads) yet catches edits, additions, and removals.
+fn build_fingerprint(src: &Path) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut mix = |bytes: &[u8]| {
+        for b in bytes {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    // App version: an upgrade changes the protocol/binary expectations.
+    mix(env!("CARGO_PKG_VERSION").as_bytes());
+
+    // Every source file under the sidecar dir, sorted for a deterministic order.
+    let mut entries: Vec<PathBuf> = Vec::new();
+    collect_source_files(src, &mut entries);
+    entries.sort();
+    for path in entries {
+        mix(path.to_string_lossy().as_bytes());
+        if let Ok(meta) = std::fs::metadata(&path) {
+            mix(&meta.len().to_le_bytes());
+            if let Ok(mtime) = meta.modified() {
+                if let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH) {
+                    mix(&dur.as_nanos().to_le_bytes());
+                }
+            }
+        }
+    }
+    format!("{h:016x}")
+}
+
+/// Recursively collect source files under `dir`, skipping build outputs
+/// (`bin`/`obj`) which are derived, not source.
+fn collect_source_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        if path.is_dir() {
+            if name == "bin" || name == "obj" {
+                continue;
+            }
+            collect_source_files(&path, out);
+        } else {
+            out.push(path);
+        }
+    }
+}
+
+/// True if `path` holds exactly `want` (the recorded fingerprint matches).
+fn fingerprint_matches(path: &Path, want: &str) -> bool {
+    std::fs::read_to_string(path).map(|s| s == want).unwrap_or(false)
+}
+
 /// One file fed to the generator as an AdditionalText (path + base64 TargetPath).
+/// `text` carries the in-memory content for files the generator must read besides
+/// the edited target — the hierarchical `_ViewImports`/`_ViewStart` chain. When
+/// `None`, the FileSpec only contributes TargetPath metadata (e.g. for the target
+/// itself, whose text travels in the request's `cshtmlText`).
 #[derive(Serialize, Clone)]
 pub struct FileSpec {
     pub path: String,
     #[serde(rename = "targetPathB64")]
     pub target_path_b64: String,
+    #[serde(rename = "text", skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
 }
 
 /// Project-level inputs shared by `warm` and `emit` (refs + editorconfig globals).
@@ -168,14 +230,12 @@ impl Sidecar {
     /// Resolve the built sidecar DLL, building it on first use into the app cache.
     /// `workspace_root` is the repo root containing `tools/razor-sidecar`; `cache`
     /// is the app data dir to build into. Cached after the first success.
+    ///
+    /// The cached DLL is INVALIDATED when the sidecar source or app version changes:
+    /// without this, an app update could keep running a `.g.cs`-emitting binary built
+    /// from an older `Program.cs`/`.csproj`/protocol. We write a fingerprint of the
+    /// source inputs next to the DLL and rebuild whenever it doesn't match.
     pub fn ensure_built(&self, workspace_root: &Path, cache: &Path) -> Result<PathBuf, String> {
-        if let Ok(guard) = self.dll.lock() {
-            if let Some(p) = guard.as_ref() {
-                if p.exists() {
-                    return Ok(p.clone());
-                }
-            }
-        }
         let src = workspace_root.join(SIDECAR_SUBDIR);
         let csproj = src.join("RazorSidecar.csproj");
         if !csproj.exists() {
@@ -183,10 +243,23 @@ impl Sidecar {
         }
         let out = cache.join("razor-sidecar");
         let dll = out.join("RazorSidecar.dll");
+        let fingerprint_path = out.join(".fingerprint");
+        let want_fingerprint = build_fingerprint(&src);
+
+        // In-process cache: trust it only if the on-disk fingerprint still matches
+        // (a newer app/source build would have rewritten it).
+        if let Ok(guard) = self.dll.lock() {
+            if let Some(p) = guard.as_ref() {
+                if p.exists() && fingerprint_matches(&fingerprint_path, &want_fingerprint) {
+                    return Ok(p.clone());
+                }
+            }
+        }
         // Serialize the build: two concurrent `dotnet build -o <out>` would corrupt
         // the shared output dir. The first builds; the rest see the cached dll.
         let _build_guard = self.build_lock.lock().map_err(|_| "build lock poisoned".to_string())?;
-        if !dll.exists() {
+        let up_to_date = dll.exists() && fingerprint_matches(&fingerprint_path, &want_fingerprint);
+        if !up_to_date {
             std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
             // Strip Windows' `\\?\` extended-length prefix: MSBuild mangles it
             // (`%3f`) and its `$(MSBuildProjectExtensionsPath)` glob import then
@@ -225,6 +298,9 @@ impl Sidecar {
                     .join(" | ");
                 return Err(format!("sidecar build failed: {tail}"));
             }
+            // Record the fingerprint of the source this DLL was built from, so a
+            // later app/source change is detected and triggers a rebuild.
+            let _ = std::fs::write(&fingerprint_path, &want_fingerprint);
         }
         if let Ok(mut guard) = self.dll.lock() {
             *guard = Some(dll.clone());
@@ -390,7 +466,11 @@ mod tests {
             view_imports_text: None,
             view_start_path: None,
             view_start_text: None,
-            files: vec![FileSpec { path: "C:/p/Index.cshtml".into(), target_path_b64: "Vmlld3M=".into() }],
+            files: vec![FileSpec {
+                path: "C:/p/Index.cshtml".into(),
+                target_path_b64: "Vmlld3M=".into(),
+                text: None,
+            }],
         };
         let req = Request {
             id: 7,
@@ -424,5 +504,37 @@ mod tests {
         assert!(ok.ok && ok.generated_text.as_deref() == Some("x"));
         let err: Response = serde_json::from_str(r#"{"id":2,"ok":false,"error":"boom"}"#).unwrap();
         assert!(!err.ok && err.error.as_deref() == Some("boom"));
+    }
+
+    #[test]
+    fn build_fingerprint_changes_when_source_changes() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let id = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let src = std::env::temp_dir().join(format!("fluent-razor-sidecar-fp-{id}"));
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Program.cs"), "// v1").unwrap();
+        std::fs::write(src.join("RazorSidecar.csproj"), "<Project/>").unwrap();
+
+        let fp1 = build_fingerprint(&src);
+        // Same content → same fingerprint (deterministic).
+        assert_eq!(fp1, build_fingerprint(&src));
+
+        // A content change (different length) → different fingerprint.
+        std::fs::write(src.join("Program.cs"), "// v2 changed").unwrap();
+        let fp2 = build_fingerprint(&src);
+        assert_ne!(fp1, fp2, "fingerprint must change when source changes");
+
+        // Build outputs are ignored: an obj/ artifact must not affect the fingerprint.
+        std::fs::create_dir_all(src.join("obj")).unwrap();
+        std::fs::write(src.join("obj").join("junk.cache"), "noise").unwrap();
+        assert_eq!(fp2, build_fingerprint(&src), "obj/ must be ignored");
+
+        // fingerprint_matches round-trips.
+        let fpfile = src.join(".fingerprint");
+        std::fs::write(&fpfile, &fp2).unwrap();
+        assert!(fingerprint_matches(&fpfile, &fp2));
+        assert!(!fingerprint_matches(&fpfile, "deadbeef"));
+
+        let _ = std::fs::remove_dir_all(&src);
     }
 }

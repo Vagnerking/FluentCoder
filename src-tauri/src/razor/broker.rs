@@ -17,7 +17,10 @@
 use std::path::{Path, PathBuf};
 
 use super::derive::DerivedRefs;
-use super::projection_gen::{emit_command, generated_file_name, generated_path_for, GenContext};
+use super::projection_gen::{
+    emit_command_with_output, generated_file_name, generated_path_for, generated_path_for_output,
+    GenContext,
+};
 use super::shadow::{render_shadow_csproj, ShadowSpec};
 
 /// Inputs for planning the broker for one user project.
@@ -42,8 +45,15 @@ pub struct BrokerInputs<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectionFile {
     pub cshtml_rel: PathBuf,
-    /// Where the SDK build emits the `.g.cs` (default obj layout).
+    /// PREFERRED emit location: the broker-pinned `CompilerGeneratedFilesOutputPath`.
+    /// Some SDKs/projects silently IGNORE that override and emit to the default obj
+    /// layout instead (observed on a `Microsoft.NET.Sdk.Web` project), so this may
+    /// not exist after the build — callers fall back to [`emitted_gcs_fallback`].
     pub emitted_gcs: PathBuf,
+    /// FALLBACK emit location: the default `obj/<Config>/<Tfm>/generated` layout,
+    /// used when the SDK ignored the pinned output path. The execution layer reads
+    /// whichever of the two actually exists (see `exec::resolve_emitted`).
+    pub emitted_gcs_fallback: PathBuf,
     /// Where the broker places it inside the shadow project (auto-compiled).
     pub shadow_gcs: PathBuf,
 }
@@ -88,16 +98,24 @@ pub fn plan(inputs: &BrokerInputs) -> BrokerPlan {
     };
     let shadow_csproj_content = render_shadow_csproj(&spec);
 
+    // Pin the generator output to a broker-owned dir (under the shadow), so the
+    // emit lands in a known place regardless of the user project's
+    // obj/BaseIntermediateOutputPath/IntermediateOutputPath layout. The reader
+    // (`generated_path_for_output`) derives the `.g.cs` path from this same root.
+    let generated_output_dir = shadow_dir.join("generated");
+    let projected_root = shadow_dir.join("projected");
     let ctx = GenContext {
         config: inputs.config,
         tfm: &inputs.derived.tfm,
     };
-    let projected_root = shadow_dir.join("projected");
     let projections = inputs
         .cshtml_rels
         .iter()
         .map(|rel| {
-            let emitted_gcs = generated_path_for(inputs.user_project_dir, rel, &ctx);
+            // Preferred: the pinned output dir. Fallback: the user project's default
+            // obj layout (some SDKs ignore the pin and emit there).
+            let emitted_gcs = generated_path_for_output(&generated_output_dir, rel);
+            let emitted_gcs_fallback = generated_path_for(inputs.user_project_dir, rel, &ctx);
             let file = rel
                 .file_name()
                 .map(|f| f.to_string_lossy().to_string())
@@ -112,6 +130,7 @@ pub fn plan(inputs: &BrokerInputs) -> BrokerPlan {
             ProjectionFile {
                 cshtml_rel: rel.clone(),
                 emitted_gcs,
+                emitted_gcs_fallback,
                 shadow_gcs,
             }
         })
@@ -124,7 +143,11 @@ pub fn plan(inputs: &BrokerInputs) -> BrokerPlan {
         shadow_csproj_content,
         user_csproj_path: inputs.user_csproj_path.to_path_buf(),
         solution_path,
-        emit_command: emit_command(inputs.user_csproj_path, inputs.config),
+        emit_command: emit_command_with_output(
+            inputs.user_csproj_path,
+            inputs.config,
+            &generated_output_dir,
+        ),
         emit_cwd: inputs.user_project_dir.to_path_buf(),
         projections,
     }
@@ -142,6 +165,7 @@ mod tests {
             root_namespace: None,
             using_microsoft_net_sdk_web: true,
             razor_lang_version: "8.0".to_string(),
+            multi_target_selected: false,
         }
     }
 
@@ -186,12 +210,23 @@ mod tests {
         let p = plan_for();
         assert_eq!(p.projections.len(), 1);
         let pf = &p.projections[0];
+        // PREFERRED emit is pinned under the shadow's `generated` dir.
         let emitted = pf.emitted_gcs.to_string_lossy().replace('\\', "/");
         assert!(
             emitted.ends_with(
-                "App/obj/Debug/net8.0/generated/Microsoft.CodeAnalysis.Razor.Compiler/Microsoft.NET.Sdk.Razor.SourceGenerators.RazorSourceGenerator/Views/Home/Index_cshtml.g.cs"
+                "shadow/generated/Microsoft.CodeAnalysis.Razor.Compiler/Microsoft.NET.Sdk.Razor.SourceGenerators.RazorSourceGenerator/Views/Home/Index_cshtml.g.cs"
             ),
             "got {emitted}"
+        );
+        assert!(!emitted.contains("/obj/"), "pinned must not use the user obj layout: {emitted}");
+        // FALLBACK emit is the user project's default obj layout (for SDKs that
+        // ignore the pin).
+        let fallback = pf.emitted_gcs_fallback.to_string_lossy().replace('\\', "/");
+        assert!(
+            fallback.ends_with(
+                "App/obj/Debug/net8.0/generated/Microsoft.CodeAnalysis.Razor.Compiler/Microsoft.NET.Sdk.Razor.SourceGenerators.RazorSourceGenerator/Views/Home/Index_cshtml.g.cs"
+            ),
+            "got {fallback}"
         );
         let shadow = pf.shadow_gcs.to_string_lossy().replace('\\', "/");
         assert!(
@@ -207,7 +242,10 @@ mod tests {
         assert_eq!(prog, "dotnet");
         assert!(args.iter().any(|a| a.contains("App.csproj")));
         assert!(args.iter().any(|a| a == "-p:EmitCompilerGeneratedFiles=true"));
-        // config propagated so the build emits into the obj/<config> tree we read
+        // The output root is pinned so the emit lands where we read it.
+        assert!(args.iter().any(|a| a.starts_with("-p:CompilerGeneratedFilesOutputPath=")
+            && a.replace('\\', "/").contains("shadow/generated")));
+        // config propagated so the build emits into the <config> we read
         let ci = args.iter().position(|a| a == "-c").expect("-c present");
         assert_eq!(args[ci + 1], "Debug");
         // cwd is the user project dir (for global.json SDK resolution)

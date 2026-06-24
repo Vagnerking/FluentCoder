@@ -190,10 +190,12 @@ fn path_for_frontend(path: &Path) -> String {
 /// `None` if the list is empty/all-invalid (so the caller skips filtering).
 ///
 /// Patterns follow VS Code's `files.exclude` style — e.g. `**/bin`, `**/obj`,
-/// `**/.git`, `**/*.user`. We test each entry by its NAME (the explorer reads one
-/// directory at a time and has no workspace-relative path here), and `**/`-style
-/// patterns match a bare name because `**` accepts zero path segments. Invalid
-/// globs are skipped rather than failing the whole listing.
+/// `**/.git`, `**/*.user`, but also prefix-anchored ones like `src/generated` or
+/// `foo/bar/**`. We test each entry by BOTH its bare name and its
+/// workspace-relative path (see `read_dir`): `**/`-style patterns match a bare
+/// name because `**` accepts zero leading segments, while prefix-anchored
+/// patterns need the relative path. Invalid globs are skipped rather than
+/// failing the whole listing.
 fn build_exclude_matcher(patterns: &[String]) -> Option<globset::GlobSet> {
     let mut builder = globset::GlobSetBuilder::new();
     let mut any = false;
@@ -213,16 +215,41 @@ fn build_exclude_matcher(patterns: &[String]) -> Option<globset::GlobSet> {
     builder.build().ok()
 }
 
+/// Computes a directory entry's path RELATIVE to `workspace_root`, with `/`
+/// separators (VS Code glob style). `None` if the entry isn't under the root
+/// (e.g. a path outside the opened folder) or no root was provided. Comparison
+/// strips Windows' `\\?\` transport prefix from both sides so an extended-length
+/// `path` still matches a plain root.
+fn workspace_relative(entry: &Path, workspace_root: Option<&str>) -> Option<String> {
+    let root = workspace_root?;
+    let root_norm = path_for_frontend(Path::new(root)).replace('\\', "/");
+    let entry_norm = path_for_frontend(entry).replace('\\', "/");
+    let root_trimmed = root_norm.trim_end_matches('/');
+    let rest = entry_norm.strip_prefix(root_trimmed)?.trim_start_matches('/');
+    if rest.is_empty() {
+        None
+    } else {
+        Some(rest.to_string())
+    }
+}
+
 /// Lists the immediate children of `path`, directories first then files,
 /// each group sorted case-insensitively by name. Children are read lazily:
 /// the explorer calls this again when a folder is expanded.
 ///
 /// `exclude` is the explorer's `files.exclude` glob list (VS Code-style); entries
-/// whose name matches any pattern are hidden from the tree. The compilation is
-/// per-call but cheap (a handful of patterns); the heavy walks (search, Quick
-/// Open) use the separate `walk::SKIP_DIRS` list and are unaffected.
+/// whose name OR workspace-relative path matches any pattern are hidden from the
+/// tree. `workspace_root` (the opened folder) lets prefix-anchored patterns like
+/// `src/generated` or `foo/bar/**` work — without it only basename patterns
+/// (`**/bin`) apply. The compilation is per-call but cheap (a handful of
+/// patterns); the heavy walks (search, Quick Open) use the separate
+/// `walk::SKIP_DIRS` list and are unaffected.
 #[tauri::command]
-pub fn read_dir(path: String, exclude: Option<Vec<String>>) -> Result<Vec<DirEntry>, String> {
+pub fn read_dir(
+    path: String,
+    exclude: Option<Vec<String>>,
+    workspace_root: Option<String>,
+) -> Result<Vec<DirEntry>, String> {
     let read = fs::read_dir(&path).map_err(|e| format!("Falha ao ler '{path}': {e}"))?;
     let matcher = exclude.as_deref().and_then(build_exclude_matcher);
 
@@ -231,15 +258,22 @@ pub fn read_dir(path: String, exclude: Option<Vec<String>>) -> Result<Vec<DirEnt
         let item = item.map_err(|e| e.to_string())?;
         let file_type = item.file_type().map_err(|e| e.to_string())?;
         let name = item.file_name().to_string_lossy().to_string();
-        // Hide entries the user excluded (e.g. bin/obj on a C# project). We match
-        // the entry NAME, since the explorer reads one directory at a time and has
-        // no workspace-relative path here; `**/bin` matches a bare `bin` because
-        // `**` accepts zero leading segments. For directories we also test
-        // `name/` so a subtree pattern like `**/obj/**` hides the `obj` folder
-        // itself (globset matches `obj/` but not bare `obj` for that pattern).
+        // Hide entries the user excluded (e.g. bin/obj on a C# project). Match
+        // BOTH the bare NAME and the workspace-relative path, so `**/bin`
+        // (basename) and `src/generated` / `foo/bar/**` (prefix-anchored) both
+        // work. For directories we also test the trailing-slash form so a subtree
+        // pattern like `**/obj/**` hides the `obj` folder itself (globset matches
+        // `obj/` but not bare `obj` for that pattern).
         if let Some(m) = &matcher {
-            let excluded =
-                m.is_match(&name) || (file_type.is_dir() && m.is_match(format!("{name}/")));
+            let item_path = item.path();
+            let rel = workspace_relative(&item_path, workspace_root.as_deref());
+            let is_dir = file_type.is_dir();
+            let mut excluded = m.is_match(&name) || (is_dir && m.is_match(format!("{name}/")));
+            if !excluded {
+                if let Some(rel) = &rel {
+                    excluded = m.is_match(rel) || (is_dir && m.is_match(format!("{rel}/")));
+                }
+            }
             if excluded {
                 continue;
             }
@@ -513,7 +547,10 @@ pub fn reveal_in_explorer(workspace_root: String, path: String) -> Result<(), St
 
 #[cfg(test)]
 mod tests {
-    use super::{build_exclude_matcher, copy_path, create_file, create_folder, move_path, rename_path};
+    use super::{
+        build_exclude_matcher, copy_path, create_file, create_folder, move_path, rename_path,
+        workspace_relative,
+    };
     use std::fs;
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -553,6 +590,43 @@ mod tests {
         // A malformed glob is skipped, not fatal: a valid one still builds a matcher.
         let m = build_exclude_matcher(&["[".to_string(), "**/bin".to_string()]).expect("matcher");
         assert!(m.is_match("bin"));
+    }
+
+    #[test]
+    fn workspace_relative_computes_forward_slashed_relative_path() {
+        let root = if cfg!(windows) { r"C:\src\App" } else { "/src/App" };
+        let entry = if cfg!(windows) {
+            r"C:\src\App\src\generated"
+        } else {
+            "/src/App/src/generated"
+        };
+        assert_eq!(
+            workspace_relative(Path::new(entry), Some(root)).as_deref(),
+            Some("src/generated")
+        );
+        // No root → None (only basename patterns apply).
+        assert_eq!(workspace_relative(Path::new(entry), None), None);
+        // The root itself is not "relative to itself".
+        assert_eq!(workspace_relative(Path::new(root), Some(root)), None);
+        // An entry outside the root → None.
+        let outside = if cfg!(windows) { r"C:\other\x" } else { "/other/x" };
+        assert_eq!(workspace_relative(Path::new(outside), Some(root)), None);
+    }
+
+    #[test]
+    fn exclude_matcher_handles_prefix_anchored_patterns() {
+        // Prefix-anchored patterns (no leading `**`) only match the
+        // workspace-relative path, which is exactly what `read_dir` now feeds.
+        let m = build_exclude_matcher(&["src/generated".to_string(), "foo/bar/**".to_string()])
+            .expect("matcher");
+        // Bare name `generated` (read at the root) does NOT match — correct, since
+        // the pattern is anchored at `src/`.
+        assert!(!m.is_match("generated"));
+        // The workspace-relative path does match.
+        assert!(m.is_match("src/generated"));
+        assert!(m.is_match("foo/bar/baz.cs"));
+        // A `generated` dir under a different parent is NOT hidden.
+        assert!(!m.is_match("docs/generated"));
     }
 
     fn workspace() -> std::path::PathBuf {

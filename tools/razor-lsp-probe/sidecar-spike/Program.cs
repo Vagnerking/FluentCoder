@@ -12,11 +12,10 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Text;
 
-// ── Inputs (hardcoded to the SampleMvc fixture for the spike) ────────────────
+// ── Inputs (the SampleMvc fixture; SDK/ref paths resolved from the active dotnet) ─
 string fixture = Path.GetFullPath(Path.Combine(
     AppContext.BaseDirectory, "..", "..", "..", "..", "fixtures", "SampleMvc"));
-string sdkRazor = @"C:\Program Files\dotnet\sdk\8.0.421\Sdks\Microsoft.NET.Sdk.Razor\source-generators";
-string generatorDll = Path.Combine(sdkRazor, "Microsoft.CodeAnalysis.Razor.Compiler.dll");
+string generatorDll = ResolveRazorGeneratorDll();
 
 string indexPath = Path.Combine(fixture, "Views", "Home", "Index.cshtml");
 string viewImportsPath = Path.Combine(fixture, "Views", "_ViewImports.cshtml");
@@ -168,11 +167,14 @@ static System.Collections.Immutable.ImmutableArray<AdditionalText> ImmutableArra
     params AdditionalText[] items) =>
     System.Collections.Immutable.ImmutableArray.Create(items);
 
-// Resolve the ASP.NET Core + base framework reference assemblies (the ref packs).
+// Resolve the ASP.NET Core + base framework reference assemblies (the ref packs)
+// from the ACTIVE dotnet install rather than a hardcoded Program Files path.
 static List<MetadataReference> ResolveAspNetCoreRefs()
 {
     var refs = new List<MetadataReference>();
-    string packs = @"C:\Program Files\dotnet\packs";
+    string? dotnetRoot = FindDotnetRoot();
+    if (dotnetRoot is null) return refs;
+    string packs = Path.Combine(dotnetRoot, "packs");
     foreach (var pack in new[] { "Microsoft.AspNetCore.App.Ref", "Microsoft.NETCore.App.Ref" })
     {
         string baseDir = Path.Combine(packs, pack);
@@ -190,6 +192,56 @@ static List<MetadataReference> ResolveAspNetCoreRefs()
             refs.Add(MetadataReference.CreateFromFile(dll));
     }
     return refs;
+}
+
+// Locate the Razor source generator DLL under the active SDK (prefer 8.0.x),
+// instead of assuming `C:\Program Files\dotnet\sdk\8.0.421`. Honors an env override.
+static string ResolveRazorGeneratorDll()
+{
+    string? overridePath = Environment.GetEnvironmentVariable("RAZOR_COMPILER_DLL");
+    if (!string.IsNullOrEmpty(overridePath) && File.Exists(overridePath)) return overridePath;
+
+    string? dotnetRoot = FindDotnetRoot();
+    if (dotnetRoot is null) throw new Exception("could not locate a dotnet install (set DOTNET_ROOT or RAZOR_COMPILER_DLL)");
+    string sdksRoot = Path.Combine(dotnetRoot, "sdk");
+    if (!Directory.Exists(sdksRoot)) throw new Exception($"no sdk dir under {dotnetRoot}");
+
+    var candidates = Directory.GetDirectories(sdksRoot)
+        .Select(d => Path.Combine(d, "Sdks", "Microsoft.NET.Sdk.Razor",
+            "source-generators", "Microsoft.CodeAnalysis.Razor.Compiler.dll"))
+        .Where(File.Exists)
+        .ToList();
+    if (candidates.Count == 0) throw new Exception($"no Razor.Compiler.dll under {sdksRoot}");
+    var pinned = candidates.FirstOrDefault(p =>
+        p.Contains($"{Path.DirectorySeparatorChar}8.0.", StringComparison.OrdinalIgnoreCase) ||
+        p.Contains("/8.0.", StringComparison.OrdinalIgnoreCase));
+    return pinned ?? candidates.OrderByDescending(p => p).First();
+}
+
+// The active dotnet root: DOTNET_ROOT, else the running runtime's root, else OS default.
+static string? FindDotnetRoot()
+{
+    string? env = Environment.GetEnvironmentVariable("DOTNET_ROOT")
+                  ?? Environment.GetEnvironmentVariable("DOTNET_ROOT(x64)");
+    if (!string.IsNullOrEmpty(env) && Directory.Exists(env)) return env;
+
+    // Runtime lives at <root>/shared/Microsoft.NETCore.App/<ver>; walk up to <root>.
+    string runtimeDir = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory();
+    string? root = Directory.GetParent(runtimeDir.TrimEnd(Path.DirectorySeparatorChar))?.Parent?.Parent?.FullName;
+    if (root is not null && Directory.Exists(Path.Combine(root, "sdk"))) return root;
+
+    if (OperatingSystem.IsWindows())
+    {
+        string pf = Path.Combine(
+            Environment.GetEnvironmentVariable("ProgramFiles") ?? @"C:\Program Files", "dotnet");
+        if (Directory.Exists(pf)) return pf;
+    }
+    else
+    {
+        foreach (var r in new[] { "/usr/lib/dotnet", "/usr/share/dotnet", "/usr/local/share/dotnet" })
+            if (Directory.Exists(r)) return r;
+    }
+    return null;
 }
 
 // ── In-memory AdditionalText ─────────────────────────────────────────────────
