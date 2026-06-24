@@ -6,17 +6,14 @@ import { fileURLToPath } from "node:url";
 // @tauri-apps/cli sets these; we honor them so dev works on any host.
 const host = process.env.TAURI_DEV_HOST;
 
-// `vscode-languageclient` (pulled in by monaco-languageclient) does
-// `require("vscode")`, a module that only exists inside a real VS Code
-// extension host. monaco-languageclient@1.x ships a browser shim for it at
-// lib/vscode-compatibility.js; in Node it installs that via a require hook, but
-// Vite/esbuild can't see that hook — so we alias "vscode" to the shim here.
-const vscodeShim = fileURLToPath(
-  new URL(
-    "./node_modules/monaco-languageclient/lib/vscode-compatibility.js",
-    import.meta.url,
-  ),
-);
+// monaco-languageclient v10 runs on `@codingame/monaco-vscode-api`, which
+// REGISTERS the bare `vscode` module itself (its package.json maps the `vscode`
+// import to the real VS Code API surface). So unlike the v1.x line we must NOT
+// alias `vscode` to a hand-written shim — doing so would shadow the package and
+// give `vscode-languageclient` a different singleton than the editor services,
+// breaking the whole stack. The alias is gone on purpose. `monaco-editor` is
+// already redirected to `@codingame/monaco-vscode-editor-api` via package.json,
+// so editor + LSP share one Monaco instance (the single-instance contract).
 
 // Worktrees may share dependencies through a junction/symlink. Vite resolves
 // font URLs to that physical directory, so explicitly allow it in development.
@@ -28,17 +25,19 @@ const dependenciesRoot = realpathSync(
 export default defineConfig(async () => ({
   plugins: [react()],
 
-  resolve: {
-    alias: {
-      // Both copies of vscode-languageclient (top-level and the one nested under
-      // monaco-languageclient) resolve "vscode" to the same compatibility shim.
-      vscode: vscodeShim,
-    },
-  },
-
-  // Pre-bundle the shim so esbuild's dep optimizer resolves "vscode" too.
+  // The `@codingame/monaco-vscode-api` stack ships hundreds of ESM modules that
+  // import each other deeply and rely on `new URL(..., import.meta.url)` worker
+  // resolution. esbuild's dep pre-bundling rewrites those URLs and routinely
+  // chokes on the cyclic graph, so we exclude the whole stack from optimization
+  // and let Vite serve the source ESM directly (the official guidance for this
+  // package). No `vscode` shim to pre-bundle anymore either.
   optimizeDeps: {
-    include: ["vscode-languageclient", "monaco-languageclient"],
+    exclude: [
+      "@codingame/monaco-vscode-api",
+      "@codingame/monaco-vscode-editor-api",
+      "monaco-languageclient",
+      "vscode",
+    ],
   },
 
   build: {
