@@ -10,7 +10,6 @@ pub mod bridge;
 pub mod build;
 pub mod codec;
 pub mod csharp;
-pub mod fluent_cshtml;
 pub mod npm_server;
 pub mod process;
 pub mod system_server;
@@ -238,17 +237,3 @@ pub fn lsp_ensure_system_server(
     system_server::resolve_system_server(&spec)
 }
 
-/// Resolves the launch command for the built-in `fluent-cshtml-lsp` server.
-///
-/// The binary is compiled as a Cargo `[[bin]]` alongside the Tauri app.
-/// In dev, it must be built first with `cargo build --bin fluent-cshtml-lsp`.
-/// Returns `"<program>"` (no args — the binary reads from stdin by default).
-#[tauri::command]
-pub fn lsp_ensure_fluent_cshtml_server(
-    app: AppHandle,
-) -> Result<String, String> {
-    let (program, args) = fluent_cshtml::resolve_launch(&app)?;
-    let mut lines = vec![program];
-    lines.extend(args);
-    Ok(lines.join("\n"))
-}

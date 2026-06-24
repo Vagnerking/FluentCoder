@@ -19,8 +19,8 @@ Adotar a **Opção B (variante b1): projeção C# alimentando o Roslyn C# padrã
 
 1. O **compilador Razor real** (`Microsoft.CodeAnalysis.Razor.Compiler`, o source generator do SDK) produz o C# projetado (`.g.cs`) a partir do `.cshtml`, já com diretivas **`#line (l,c)-(l,c)`** mapeando cada trecho de volta ao `.cshtml` e a base `RazorPage<TModel>` tipada.
 2. Esse C# projetado é analisado pelo **`Microsoft.CodeAnalysis.LanguageServer` (Roslyn) padrão** — o mesmo que o app já usa para `.cs` — dentro de uma compilação com as **referências do projeto do usuário**.
-3. Um **broker** encaminha hover/definition/completion/diagnostics/semanticTokens para o doc projetado e **remapeia ranges** de volta ao `.cshtml` pelos `#line` (reusando/estendendo [projection.rs](../../src-tauri/src/cshtml/projection.rs)); resultados em texto sintético/não-mapeável são descartados (contrato da [cshtml-language-service.md](../context/cshtml-language-service.md)).
-4. O motor homegrown `fluent-cshtml` é **aposentado atrás de feature flag** (ponto único de rollback) e removido após os testes de não regressão.
+3. Um **broker** (módulo Rust `src-tauri/src/razor/` + cliente TS `src/lsp/servers/razorProjection.ts`) encaminha hover/definition/completion/diagnostics/semanticTokens para o doc projetado e **remapeia ranges** de volta ao `.cshtml` pelos `#line` (commands `razor_remap_to_*`); resultados em texto sintético/não-mapeável são descartados (contrato da [cshtml-language-service.md](../context/cshtml-language-service.md)).
+4. O motor homegrown `fluent-cshtml` foi **aposentado atrás da feature flag** (ponto único de rollback) e, após os testes de não regressão, **removido por completo** (Fase E — ver "Estado de implementação" abaixo).
 
 Prova de viabilidade (spike b1, commit `0c2659c`): sobre o `.g.cs` projetado, o Roslyn padrão devolve `textDocument/diagnostic` → **CS1061**, hover em `Model.City` → **`string WeatherModel.City { get; set; }`**, definition → **`WeatherModel.cs`**; e `dotnet build` já reporta o erro em **`Index.cshtml(16,15)`** (mapeado por `#line`).
 
@@ -41,3 +41,13 @@ Prova de viabilidade (spike b1, commit `0c2659c`): sobre o `.g.cs` projetado, o 
 
 ## Migração
 Incremental e reversível por flag única, conforme o checklist da [cshtml-language-service.md](../context/cshtml-language-service.md). O código homegrown só é removido após não-regressão verde.
+
+## Estado de implementação (atualizado)
+
+Implementado e validado ao vivo no `SampleMvc`:
+
+- **Semântica C# (broker de projeção):** diagnostics (CS1061 na linha do `.cshtml`), hover com tipo real, ctrl+click/definition e completion — remapeados pelo `#line`. Diagnósticos pintam o nome do arquivo/aba e propagam a cor para as pastas ancestrais (estilo VS Code), via `diagnosticsStore` com owner `fluent-cshtml`.
+- **Warm-start:** ao abrir uma pasta com `.sln`/`.csproj`, o Roslyn C# sobe em background (detecção async, off-main-thread), então o 1º arquivo abre quente.
+- **Cores (Shiki):** regiões C#/HTML/CSS/Razor coloridas; membro final de cadeia em verde, transições/control em roxo, variáveis locais em azul-claro.
+- **Fase C — HTML nas regiões HTML:** completion/hover/auto-close de HTML via `vscode-html-languageservice` **in-process**, sobre uma **projeção HTML virtual** (regiões Razor apagadas com espaço de mesmo tamanho → offsets idênticos, sem source map; máscara de região distingue HTML real de espaço apagado). Gating por região, mutuamente exclusivo com o C#. Arquivos: `src/lsp/servers/cshtmlHtmlProjection.ts` (puro, testado), `cshtmlHtmlService.ts`, integrados em `razorProjection.ts`. TagHelpers seguem pela semântica do `.g.cs`.
+- **Fase E — homegrown removido:** o servidor LSP caseiro (`fluent-cshtml-lsp` binário, `lsp/fluent_cshtml.rs`, `lsp_ensure_fluent_cshtml_server`, adapter `src/lsp/servers/cshtml.ts`) e a **biblioteca Rust inteira `src-tauri/src/cshtml/`** (parser/semantics/intellisense/metadata/projection caseiros) foram **removidos** — estavam órfãos (o broker `razor/` é independente e usa o `dotnet`). O marker owner `fluent-cshtml` permanece como o nome normativo do owner de diagnósticos do `.cshtml` (não é o servidor removido).
