@@ -36,12 +36,10 @@ const SCOPE_TO_TYPE: ReadonlyArray<readonly [string, string]> = [
   ["constant", "constant"],
   ["string", "string"],
   ["keyword.operator", "operator"],
-  ["keyword.control.flow", "controlKeyword"],
-  ["keyword.control.conditional", "controlKeyword"],
-  ["keyword.control.loop", "controlKeyword"],
-  ["keyword.control.exception", "controlKeyword"],
-  ["keyword.control.cshtml", "keyword"],
-  ["keyword.control.razor", "keyword"],
+  // ALL control keywords are purple in VS Code dark+: C# flow (if/return/…) AND
+  // the Razor transitions/directives (`@`, `@{`, `@model`, the `}` codeblock
+  // close) — all scoped `keyword.control.*`. Mapped to `controlKeyword` (C586C0).
+  ["keyword.control", "controlKeyword"],
   ["keyword", "keyword"],
   ["storage.modifier", "modifier"],
   ["storage.type", "keyword"],
