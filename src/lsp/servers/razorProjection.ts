@@ -26,10 +26,14 @@ import type { MonacoLanguageClient } from "monaco-languageclient";
 import {
   ensureCsharpServer,
   listProjectFiles,
+  razorCommitLiveMap,
+  razorEmitLive,
+  razorEnsureSidecar,
   razorForget,
   razorPrepare,
   razorRemapToGenerated,
   razorRemapToSource,
+  razorWarm,
   readFile,
   startLspServer,
   type RazorProjectionInfo,
@@ -645,6 +649,13 @@ export async function startRazorProjectionServer(
     // explorer (empty list clears the key).
     setDiagnostics(RAZOR_PROJECTION_SERVER_ID, doc.cshtmlPath, []);
     forgetHtmlVirtual(doc.cshtmlUri); // release the cached virtual HTML doc
+    // Drop live-emit bookkeeping for this file.
+    const t = liveTimers.get(key);
+    if (t) window.clearTimeout(t);
+    liveTimers.delete(key);
+    liveInFlight.delete(key);
+    liveDirty.delete(key);
+    lastAppliedGen.delete(key);
   };
 
   const scheduleReprepare = (): void => {
@@ -681,14 +692,98 @@ export async function startRazorProjectionServer(
     }
   };
 
+  // ── LIVE on-change emit (Etapa 3) ──────────────────────────────────────────
+  // The broker's `dotnet build` reads disk → only fresh on save. The sidecar
+  // re-emits the `.g.cs` from the IN-MEMORY buffer in ~ms, so we run it on a short
+  // debounce per keystroke. Per-`.cshtml`: at most one emit in flight (coalesced),
+  // each stamped with the model version; a stale response is dropped. On success
+  // we feed the fresh `.g.cs` to Roslyn (the existing `setGeneratedText` queue) and
+  // re-pull diagnostics; on a soft failure we fall back to the on-save reprepare.
+  const LIVE_DEBOUNCE_MS = 150;
+  const liveTimers = new Map<string, number>(); // key: canonicalFileUriKey(cshtmlUri)
+  const liveInFlight = new Set<string>();
+  const liveDirty = new Map<string, number>(); // key → latest model version awaiting emit
+  const lastAppliedGen = new Map<string, number>(); // key → newest applied generation
+
+  const runLiveEmit = async (key: string, model: monaco.editor.ITextModel): Promise<void> => {
+    if (disposed || model.isDisposed()) return;
+    const doc = docs.get(key);
+    if (!doc) return;
+    if (liveInFlight.has(key)) {
+      // Coalesce: remember we need another pass at the current version.
+      liveDirty.set(key, model.getVersionId());
+      return;
+    }
+    liveInFlight.add(key);
+    const version = model.getVersionId();
+    const text = model.getValue();
+    try {
+      const res = await razorEmitLive(doc.cshtmlPath, text);
+      if (disposed || model.isDisposed()) return;
+      // Drop stale: a newer edit was dispatched, or this generation is older than
+      // one already applied (out-of-order response). The pending map in Rust is
+      // simply not committed — `maps` (what providers read) stays in lockstep.
+      const stillCurrent = docs.get(key) === doc && model.getVersionId() === version;
+      const newerGen = res.generation > (lastAppliedGen.get(key) ?? 0);
+      if (res.ok && stillCurrent && newerGen) {
+        lastAppliedGen.set(key, res.generation);
+        // 1) sync Roslyn with the fresh `.g.cs`, THEN 2) commit the matching map.
+        // Commit unconditionally after the sync: at this instant Roslyn HAS this
+        // generation's text open, so its map is the correct active one. A newer
+        // edit (if any) re-syncs + re-commits its own pair when it completes —
+        // text and map always move together, never one ahead of the other.
+        await setGeneratedText(doc.gcsUri, res.generatedText);
+        if (disposed || model.isDisposed() || docs.get(key) !== doc) return;
+        await razorCommitLiveMap(doc.cshtmlPath, res.generation);
+        doc.gcsVersion += 1;
+        void pullDiagnostics(doc);
+      } else if (!res.ok) {
+        // Live path unavailable (no context / sidecar down) → on-save fallback.
+        scheduleReprepare();
+      }
+    } catch (err) {
+      lspLog("razor projection: live emit failed", String(err));
+      scheduleReprepare();
+    } finally {
+      liveInFlight.delete(key);
+      // If edits arrived mid-flight, fire once more with the current buffer.
+      if (liveDirty.has(key)) {
+        liveDirty.delete(key);
+        const m = monaco.editor.getModel(monaco.Uri.parse(doc.cshtmlUri));
+        if (m && !m.isDisposed()) void runLiveEmit(key, m);
+      }
+    }
+  };
+
+  const scheduleLiveEmit = (model: monaco.editor.ITextModel): void => {
+    const key = canonicalFileUriKey(model.uri.toString());
+    const prev = liveTimers.get(key);
+    if (prev) window.clearTimeout(prev);
+    liveTimers.set(
+      key,
+      window.setTimeout(() => {
+        liveTimers.delete(key);
+        void runLiveEmit(key, model);
+      }, LIVE_DEBOUNCE_MS)
+    );
+  };
+
   const attachModel = (model: monaco.editor.ITextModel): void => {
     if (model.getLanguageId() !== CSHTML_PROJECTION_LANGUAGE_ID || model.uri.scheme !== "file") return;
     if (!inThisProject(fromFileUri(model.uri.toString()))) return; // other project (V1)
     // A newly-opened `.cshtml` matches disk → safe to reprepare immediately.
     scheduleReprepare();
+    // Live re-emit on every (debounced) edit, so detection follows the buffer.
+    const sub = model.onDidChangeContent(() => {
+      if (disposed) return;
+      scheduleLiveEmit(model);
+    });
+    disposables.push(sub);
   };
 
   disposables.push(monaco.editor.onDidCreateModel(attachModel));
+  // Attach to any `.cshtml` already open when the server starts.
+  for (const m of openCshtmlModels()) attachModel(m);
   disposables.push(
     monaco.editor.onWillDisposeModel((model) => forgetDoc(canonicalFileUriKey(model.uri.toString())))
   );
@@ -716,6 +811,21 @@ export async function startRazorProjectionServer(
         for (const info of prepared.available) await openProjection(info);
         pullAllDiagnostics();
       })();
+      // Build + warm the live-emit sidecar in the background so the first
+      // keystroke hits the fast (~ms) path. Best-effort: if the build/warm fails,
+      // the on-change emit soft-fails and we fall back to the on-save reprepare.
+      void (async () => {
+        try {
+          const built = await razorEnsureSidecar();
+          if (!built || disposed) return;
+          for (const info of prepared.available) {
+            await razorWarm(info.cshtmlPath);
+          }
+          lspLog("razor projection: live sidecar warmed", prepared.available.length);
+        } catch (err) {
+          lspLog("razor projection: sidecar warm failed", String(err));
+        }
+      })();
     },
   });
 
@@ -725,6 +835,8 @@ export async function startRazorProjectionServer(
       disposed = true;
       for (const t of reprepareTimers.values()) window.clearTimeout(t);
       reprepareTimers.clear();
+      for (const t of liveTimers.values()) window.clearTimeout(t);
+      liveTimers.clear();
       for (const key of [...docs.keys()]) forgetDoc(key);
       genChain.clear(); // drop the per-gcsUri mutation queues
       sentText.clear();

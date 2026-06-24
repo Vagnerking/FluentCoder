@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use base64::Engine;
 use serde::Serialize;
@@ -35,17 +35,23 @@ struct ProjectionContext {
 /// App-managed broker state.
 #[derive(Default)]
 pub struct RazorState {
-    /// One source map per open `.cshtml` (canonical key).
+    /// The ACTIVE source map per open `.cshtml` — what `razor_remap_*` (hover/
+    /// completion/definition) read. Only ever the map for the `.g.cs` Roslyn has
+    /// open, so remapping stays in lockstep with the projection.
     maps: Mutex<HashMap<String, RazorSourceMap>>,
+    /// PENDING live-emit maps awaiting commit: `key → (generation, map)`. A live
+    /// emit parks its map here; the frontend promotes it to `maps` via
+    /// `razor_commit_live_map` ONLY after it synced Roslyn with the matching text.
+    /// A dropped/stale response never gets committed, so `maps` can't run ahead of
+    /// the `.g.cs` Roslyn actually has open (Codex).
+    pending: Mutex<HashMap<String, (u64, RazorSourceMap)>>,
     /// Per-`.cshtml` live-emit context (refs/globals/files) captured at prepare.
     contexts: Mutex<HashMap<String, ProjectionContext>>,
-    /// Monotonic generation stamped on each installed map; returned to the caller
-    /// so it can drop stale out-of-order responses. (Ordering of concurrent emits
-    /// for one `.cshtml` is enforced by the frontend coalescing one in-flight emit
-    /// per file — see the Etapa 3 wiring; the sidecar also serializes responses.)
+    /// Monotonic generation stamped on each live emit; the frontend uses it to drop
+    /// stale out-of-order responses and to commit the matching pending map.
     generation: AtomicU64,
-    /// The live emit process host.
-    sidecar: Sidecar,
+    /// The live emit process host (Arc so build can run on a blocking task).
+    sidecar: Arc<Sidecar>,
 }
 
 impl RazorState {
@@ -56,6 +62,11 @@ impl RazorState {
     /// Kill the live sidecar process (app teardown / reset).
     pub fn shutdown_sidecar(&self) {
         self.sidecar.shutdown();
+    }
+
+    /// A shared handle to the sidecar (for off-thread build/emit).
+    fn clone_sidecar_ref(&self) -> Arc<Sidecar> {
+        Arc::clone(&self.sidecar)
     }
 }
 
@@ -193,11 +204,15 @@ pub async fn razor_prepare(
     let mut available = Vec::new();
     {
         let mut maps = state.maps.lock().map_err(|_| "razor state poisoned".to_string())?;
+        let mut pending = state.pending.lock().map_err(|_| "razor state poisoned".to_string())?;
         let mut contexts = state.contexts.lock().map_err(|_| "razor state poisoned".to_string())?;
         for proj in prepared.projections {
             let abs = Path::new(&user_project_dir).join(&proj.cshtml_rel);
             let key = canonical_key(&abs);
             let rel_str = proj.cshtml_rel.to_string_lossy().to_string();
+            // A fresh prepare (open/save) is authoritative: drop any in-flight
+            // pending live map so a late live commit can't clobber it.
+            pending.remove(&key);
 
             // Per-cshtml file list = shared + this file (its own TargetPath).
             let mut files = shared_files.clone();
@@ -309,15 +324,47 @@ pub async fn razor_emit_live(
         }
     };
 
-    // Parse the map from the EXACT text we return, then install under a fresh
-    // generation. The map + the returned text are intrinsically the same gen.
+    // Parse the map from the EXACT text we return, PARK it as pending under a fresh
+    // generation, and return the text+gen. The frontend commits the pending map
+    // (razor_commit_live_map) only after it synced Roslyn with this text — so the
+    // ACTIVE map never runs ahead of the `.g.cs` Roslyn has open. A dropped/stale
+    // response simply never commits (and is overwritten by the next pending).
     let map = RazorSourceMap::parse(&generated, &cshtml_path);
     let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
     {
-        let mut maps = state.maps.lock().map_err(|_| "razor state poisoned".to_string())?;
-        maps.insert(key, map);
+        let mut pending = state.pending.lock().map_err(|_| "razor state poisoned".to_string())?;
+        pending.insert(key, (generation, map));
     }
     Ok(EmitLiveResult { generated_text: generated, generation, ok: true, error: None })
+}
+
+/// Promote the pending live map for `cshtml_path` to ACTIVE — called by the
+/// frontend after it synced Roslyn with the matching `generation`'s text. No-op if
+/// the pending entry is for a different (newer) generation (a stale commit).
+#[tauri::command]
+pub fn razor_commit_live_map(
+    state: State<'_, RazorState>,
+    cshtml_path: String,
+    generation: u64,
+) -> Result<bool, String> {
+    let key = canonical_key(Path::new(&cshtml_path));
+    let map = {
+        let mut pending = state.pending.lock().map_err(|_| "razor state poisoned".to_string())?;
+        match pending.get(&key) {
+            // Only commit if the pending map is exactly this generation. Take it out
+            // so a later stale commit for the same gen can't double-apply.
+            Some((g, _)) if *g == generation => pending.remove(&key).map(|(_, m)| m),
+            _ => None,
+        }
+    };
+    match map {
+        Some(m) => {
+            let mut maps = state.maps.lock().map_err(|_| "razor state poisoned".to_string())?;
+            maps.insert(key, m);
+            Ok(true)
+        }
+        None => Ok(false),
+    }
 }
 
 /// Warm the live sidecar for `cshtml_path` (pays the cold generator cost up front
@@ -338,21 +385,69 @@ pub async fn razor_warm(state: State<'_, RazorState>, cshtml_path: String) -> Re
     Ok(())
 }
 
-/// Build the live sidecar binary on first use (off the UI thread). `workspace_root`
-/// is the repo root (has `tools/razor-sidecar`); cache is the app data dir.
+/// Build the live sidecar binary on first use (off the UI thread). The sidecar
+/// source dir is resolved from the app (bundled resource in prod, the repo's
+/// `tools/razor-sidecar` in dev); it builds into the app data dir. Soft-fails
+/// (returns false) so the caller stays on the on-save `dotnet build` path.
 #[tauri::command]
 pub async fn razor_ensure_sidecar(
+    app: tauri::AppHandle,
     state: State<'_, RazorState>,
-    workspace_root: String,
-    cache_dir: String,
 ) -> Result<bool, String> {
-    match state.sidecar.ensure_built(Path::new(&workspace_root), Path::new(&cache_dir)) {
-        Ok(_) => Ok(true),
+    use tauri::Manager;
+    let cache = match app.path().app_data_dir() {
+        Ok(d) => d,
         Err(e) => {
-            eprintln!("[razor:sidecar] build failed: {e}");
-            Ok(false) // soft-fail: the caller stays on the dotnet-build path
+            eprintln!("[razor:sidecar] no app_data_dir: {e}");
+            return Ok(false);
+        }
+    };
+    let src_root = resolve_sidecar_source_root(&app);
+    match src_root {
+        Some(root) => {
+            let s = state.clone_sidecar_ref();
+            // Build off the UI thread (dotnet build can take seconds the first time).
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                s.ensure_built(&root, &cache)
+            })
+            .await
+            .map_err(|e| format!("razor sidecar build join error: {e}"))?;
+            match result {
+                Ok(_) => Ok(true),
+                Err(e) => {
+                    eprintln!("[razor:sidecar] build failed: {e}");
+                    Ok(false)
+                }
+            }
+        }
+        None => {
+            eprintln!("[razor:sidecar] sidecar source not found (resource/dev)");
+            Ok(false)
         }
     }
+}
+
+/// Find the `tools/razor-sidecar` source dir: bundled resource (prod) or the
+/// repo's dir (dev). Returns the dir that CONTAINS `tools/razor-sidecar` (the
+/// `ensure_built` joins `SIDECAR_SUBDIR`).
+fn resolve_sidecar_source_root(app: &tauri::AppHandle) -> Option<PathBuf> {
+    use tauri::Manager;
+    // Prod: bundled under the resource dir (tauri.conf bundles `tools/razor-sidecar`).
+    if let Ok(res) = app.path().resource_dir() {
+        if res.join("tools/razor-sidecar/RazorSidecar.csproj").exists() {
+            return Some(res);
+        }
+    }
+    // Dev: the repo root, found by walking up from the crate dir to a dir that has
+    // `tools/razor-sidecar`.
+    let mut dir = Some(Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf());
+    while let Some(d) = dir {
+        if d.join("tools/razor-sidecar/RazorSidecar.csproj").exists() {
+            return Some(d);
+        }
+        dir = d.parent().map(|p| p.to_path_buf());
+    }
+    None
 }
 
 /// Map a `.cshtml` position (0-based LSP) to the projected C#. `None` if unmapped
@@ -391,6 +486,9 @@ pub fn razor_forget(state: State<'_, RazorState>, cshtml_path: String) {
     let key = canonical_key(Path::new(&cshtml_path));
     if let Ok(mut maps) = state.maps.lock() {
         maps.remove(&key);
+    }
+    if let Ok(mut pending) = state.pending.lock() {
+        pending.remove(&key);
     }
     if let Ok(mut contexts) = state.contexts.lock() {
         contexts.remove(&key);

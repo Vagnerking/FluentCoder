@@ -84,6 +84,7 @@ pub fn run() {
             lsp::lsp_ensure_razor_server,
             razor::commands::razor_prepare,
             razor::commands::razor_emit_live,
+            razor::commands::razor_commit_live_map,
             razor::commands::razor_warm,
             razor::commands::razor_ensure_sidecar,
             razor::commands::razor_remap_to_generated,
