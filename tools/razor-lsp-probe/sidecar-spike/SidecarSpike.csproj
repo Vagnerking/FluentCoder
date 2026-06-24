@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Spike (Etapa 1) for the live Razor projection sidecar.
+
+    Goal: prove we can run the REAL Razor source generator on in-memory .cshtml
+    text via CSharpGeneratorDriver and get a .g.cs that matches `dotnet build`,
+    fast enough for per-keystroke (tens of ms warm). NOT shipped — a measurement
+    harness. The shipped sidecar (later phases) reuses the same driver setup.
+
+    Pinned to the SDK band whose Razor generator built the SampleMvc golden
+    (8.0.421 → Microsoft.CodeAnalysis 4.8.x era). The generator binds to the host
+    Roslyn, so the Microsoft.CodeAnalysis.CSharp version must match that band.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>SidecarSpike</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The 8.0.421 Razor.Compiler.dll references Microsoft.CodeAnalysis 4.9.0.0,
+         so pin the host Roslyn to 4.9.x or the generator's types fail to load. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.9.2" />
+  </ItemGroup>
+
+</Project>
