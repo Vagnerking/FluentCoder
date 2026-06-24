@@ -92,6 +92,11 @@ interface ProjectionDoc {
   cshtmlUri: string; // Monaco model uri
   gcsUri: string; // file:// uri of the projected `.g.cs` (Roslyn addresses this)
   gcsVersion: number; // didOpen/didChange version counter
+  // The Monaco model version that the CURRENTLY committed map + open `.g.cs`
+  // reflect. -1 = unknown (just opened from disk). Providers compare this to the
+  // live model version to detect a stale projection and refresh before querying,
+  // so the map / open `.g.cs` / buffer are always one consistent snapshot.
+  committedSourceVersion: number;
 }
 
 interface LspRange {
@@ -227,11 +232,30 @@ export async function startRazorProjectionServer(
     return next;
   };
 
-  /** Make Roslyn's open copy of `gcsUri` exactly `text` (close+open). Idempotent. */
-  const setGeneratedText = (gcsUri: string, text: string): Promise<void> =>
+  // Per-DOC snapshot queue (keyed by canonicalFileUriKey(cshtmlUri)): serializes
+  // EVERY op that changes the doc's snapshot (map + open `.g.cs` + committed
+  // version) — the live sync, the provider-triggered ensureFresh sync, AND the
+  // authoritative open/save reprepare (openProjection). So no two ever leave the
+  // snapshot half-applied, and a provider never reasons about freshness mid-swap.
+  const syncChains = new Map<string, Promise<unknown>>();
+  const enqueueSync = <T>(key: string, op: () => Promise<T>): Promise<T> => {
+    const prev = syncChains.get(key) ?? Promise.resolve();
+    const next = prev.then(op, op);
+    syncChains.set(key, next.then(() => undefined, () => undefined));
+    return next;
+  };
+
+  /**
+   * Make Roslyn's open copy of `gcsUri` exactly `text` (close+open). Idempotent by
+   * the `sentText` shortcut, EXCEPT when `force` — save/reprepare forces a real
+   * close+open even if `sentText` claims it matches, so a half-applied provisional
+   * swap or a desynced restore can never leave Roslyn on stale text (recovery
+   * boundary).
+   */
+  const setGeneratedText = (gcsUri: string, text: string, force = false): Promise<void> =>
     mutateGenerated(gcsUri, async () => {
       if (disposed) return;
-      if (sentText.get(gcsUri) === text) return; // already in sync
+      if (!force && sentText.get(gcsUri) === text) return; // already in sync
       const wasOpen = sentText.has(gcsUri);
       // While the close/open is in flight `sentText` is unknown; clear it so a
       // mid-way `didOpen` rejection can't leave it claiming the wrong text (the
@@ -273,6 +297,11 @@ export async function startRazorProjectionServer(
     const cshtmlUri = model.uri.toString();
     const key = canonicalFileUriKey(cshtmlUri);
     const gcsUri = toFileUri(info.generatedPath);
+    // The version this disk projection represents: prepare ran on open/save when
+    // buffer == disk, so the model version captured BEFORE any await is the disk
+    // version. If the user edits before the reopen finishes, we DON'T stamp it
+    // fresh (leave -1) so ensureFresh re-syncs to the new buffer.
+    const prepVersion = model.getVersionId();
     let text = "";
     try {
       text = await readGenerated(info.generatedPath);
@@ -281,20 +310,39 @@ export async function startRazorProjectionServer(
       return;
     }
 
-    const existing = docs.get(key);
-    docs.set(key, {
-      cshtmlPath: info.cshtmlPath,
-      cshtmlUri,
-      gcsUri,
-      gcsVersion: (existing?.gcsVersion ?? 0) + 1,
-    });
+    // Run through the per-doc snapshot queue so this authoritative reopen can't
+    // interleave with a live sync / provider ensureFresh for the same doc.
+    await enqueueSync(key, async () => {
+      if (disposed) return;
+      const existing = docs.get(key);
+      const doc: ProjectionDoc = {
+        cshtmlPath: info.cshtmlPath,
+        cshtmlUri,
+        gcsUri,
+        gcsVersion: (existing?.gcsVersion ?? 0) + 1,
+        // -1 until the forced reopen completes — providers treat the doc as stale
+        // (ensureFresh re-syncs) during the open; never publish fresh before Roslyn
+        // actually has the disk text.
+        committedSourceVersion: -1,
+      };
+      docs.set(key, doc);
 
-    // Re-sync through the per-gcsUri queue (never didChange — it crashes Roslyn).
-    try {
-      await setGeneratedText(gcsUri, text);
-    } catch (err) {
-      lspLog("razor projection: didOpen/didClose failed", String(err));
-    }
+      // FORCE a real close+open even if `sentText` claims a match — this is the
+      // hard recovery boundary after any live/provisional desync (never didChange:
+      // it crashes Roslyn). After it, Roslyn definitely has the disk text.
+      try {
+        await setGeneratedText(gcsUri, text, true);
+        // Mark fresh ONLY if the model is STILL at the version this disk projection
+        // represents. If the user typed since (model moved past prepVersion), leave
+        // it stale (-1) so ensureFresh re-syncs to the new buffer — never stamp a
+        // newer buffer version as matching a disk-text projection.
+        if (docs.get(key) === doc && model.getVersionId() === prepVersion) {
+          doc.committedSourceVersion = prepVersion;
+        }
+      } catch (err) {
+        lspLog("razor projection: didOpen/didClose failed", String(err));
+      }
+    });
   };
 
   /** Pull diagnostics for one doc and publish remapped markers to the `.cshtml`. */
@@ -302,9 +350,13 @@ export async function startRazorProjectionServer(
     if (disposed) return;
     let result: { items?: unknown[] } | null = null;
     try {
-      result = await client.sendRequest<{ items?: unknown[] } | null>(
-        "textDocument/diagnostic",
-        { textDocument: { uri: doc.gcsUri } }
+      // Serialize against the provisional-completion swap so diagnostics aren't
+      // pulled from a temporarily-injected `.g.cs`.
+      result = await mutateGenerated(doc.gcsUri, () =>
+        client.sendRequest<{ items?: unknown[] } | null>(
+          "textDocument/diagnostic",
+          { textDocument: { uri: doc.gcsUri } }
+        )
       );
     } catch (err) {
       lspLog("razor projection: diagnostic pull failed", String(err));
@@ -404,23 +456,24 @@ export async function startRazorProjectionServer(
     });
     if (before !== ".") return null;
 
-    // Map the expression END (the char just before the `.`) into the .g.cs — lands
-    // at the end of the projected expression (e.g. after `Model`).
-    const gen = await razorRemapToGenerated(
-      doc.cshtmlPath,
-      position.lineNumber - 1,
-      position.column - 2
-    );
-    if (!gen || token.isCancellationRequested || disposed) return null;
-
     const gcsUri = doc.gcsUri;
-    // The whole swap→complete→restore is ONE queued op, so it can't interleave
-    // with openProjection/forgetDoc on this gcsUri. `original` is captured INSIDE
-    // the op (after waiting) so a reprepare that ran while we queued is respected.
+    // The whole remap→swap→complete→restore is ONE queued op, so it can't
+    // interleave with a live sync / openProjection / forgetDoc on this gcsUri. We
+    // compute `gen` (the expression-end position) INSIDE the op — against the SAME
+    // committed map/text that `original` reflects — so the injected dot lands at
+    // the right offset even if a live emit committed a new generation just before.
     return mutateGenerated(gcsUri, async (): Promise<unknown[] | null> => {
       if (token.isCancellationRequested || disposed) return null;
       const original = sentText.get(gcsUri);
       if (original == null) return null; // not open — caller falls back
+
+      // Map the expression END (the char just before the `.`) into the `.g.cs`.
+      const gen = await razorRemapToGenerated(
+        doc.cshtmlPath,
+        position.lineNumber - 1,
+        position.column - 2
+      );
+      if (!gen || token.isCancellationRequested || disposed) return null;
 
       const insertAt = offsetOf(original, gen.line, gen.character);
       // Insertion-point guard: only inject after a plausible expression end (ident
@@ -493,19 +546,34 @@ export async function startRazorProjectionServer(
         if (htmlRegionAt(model, position) === "html") {
           return htmlHover(model, position);
         }
+        // Sync the projection to the current buffer FIRST, so the map + open
+        // `.g.cs` match what the user sees (no remap against a stale projection).
+        if (token.isCancellationRequested || !(await ensureFresh(doc, model))) return null;
+        const snap = doc.committedSourceVersion;
+        const reqVersion = model.getVersionId();
+        if (token.isCancellationRequested || docFor(model) !== doc) return null;
         const gen = await razorRemapToGenerated(doc.cshtmlPath, position.lineNumber - 1, position.column - 1);
         if (!gen) return null;
-        const res = await client.sendRequest<{ contents?: unknown; range?: LspRange } | null>(
-          "textDocument/hover",
-          { textDocument: { uri: doc.gcsUri }, position: { line: gen.line, character: gen.character } },
-          token
+        // Serialize through the per-gcsUri queue so the request can't run while a
+        // provisional-completion swap has a DIFFERENT `.g.cs` text temporarily open
+        // (it would answer against the injected-dot buffer).
+        const res = await mutateGenerated(doc.gcsUri, () =>
+          client.sendRequest<{ contents?: unknown; range?: LspRange } | null>(
+            "textDocument/hover",
+            { textDocument: { uri: doc.gcsUri }, position: { line: gen.line, character: gen.character } },
+            token
+          )
         );
         if (!res || !res.contents || token.isCancellationRequested) return null;
+        if (!snapshotStable(doc, model, snap, reqVersion)) return null; // superseded
         let range: monaco.IRange | undefined;
         if (res.range) {
           const r = await remapRangeToMonaco(res.range, remapToSourceFor(doc.cshtmlPath));
           range = r ?? undefined;
         }
+        // Re-check AFTER the async remap: a live sync may have committed a newer
+        // map mid-remap, which would land the range in the wrong place.
+        if (!snapshotStable(doc, model, snap, reqVersion)) return null;
         return { contents: toMarkdown(res.contents), range };
       },
     })
@@ -516,20 +584,29 @@ export async function startRazorProjectionServer(
       provideDefinition: async (model, position, token) => {
         const doc = docFor(model);
         if (!doc) return null;
+        if (token.isCancellationRequested || !(await ensureFresh(doc, model))) return null;
+        const snap = doc.committedSourceVersion;
+        const reqVersion = model.getVersionId();
+        if (token.isCancellationRequested || docFor(model) !== doc) return null;
         const gen = await razorRemapToGenerated(doc.cshtmlPath, position.lineNumber - 1, position.column - 1);
         if (!gen) return null;
-        const res = await client.sendRequest<unknown>(
-          "textDocument/definition",
-          { textDocument: { uri: doc.gcsUri }, position: { line: gen.line, character: gen.character } },
-          token
+        // Serialize against the provisional-completion swap (see hover).
+        const res = await mutateGenerated(doc.gcsUri, () =>
+          client.sendRequest<unknown>(
+            "textDocument/definition",
+            { textDocument: { uri: doc.gcsUri }, position: { line: gen.line, character: gen.character } },
+            token
+          )
         );
-        if (token.isCancellationRequested) return null;
+        if (token.isCancellationRequested || !snapshotStable(doc, model, snap, reqVersion)) return null;
         const routed = await routeDefinition(res, {
           projectedUriKey: canonicalFileUriKey(doc.gcsUri),
           cshtmlUri: doc.cshtmlUri,
           remapToSource: remapToSourceFor(doc.cshtmlPath),
           uriKey: canonicalFileUriKey,
         });
+        // Re-check AFTER the async route/remap (see hover).
+        if (!snapshotStable(doc, model, snap, reqVersion)) return null;
         return routed.map((r) => ({ uri: monaco.Uri.parse(r.uri), range: r.range }));
       },
     })
@@ -547,6 +624,15 @@ export async function startRazorProjectionServer(
         if (htmlRegionAt(model, position) === "html") {
           return htmlComplete(monaco, model, position) ?? { suggestions: [] };
         }
+        // Sync the projection to the buffer BEFORE provisional/normal completion so
+        // both work against the current `.g.cs` (the "delete → completion bugs"
+        // fix: provisional must not inject against a stale projection).
+        if (token.isCancellationRequested || !(await ensureFresh(doc, model))) {
+          return { suggestions: [] };
+        }
+        const snap = doc.committedSourceVersion;
+        const reqVersion = model.getVersionId();
+        if (token.isCancellationRequested || docFor(model) !== doc) return { suggestions: [] };
         const word = model.getWordUntilPosition(position);
         const range: monaco.IRange = {
           startLineNumber: position.lineNumber,
@@ -563,6 +649,7 @@ export async function startRazorProjectionServer(
         // Roslyn, so we use the same didClose+didOpen lifecycle as openProjection.
         const dotItems = await provisionalDotCompletion(doc, model, position, token);
         if (dotItems) {
+          if (!snapshotStable(doc, model, snap, reqVersion)) return { suggestions: [] };
           return {
             suggestions: dotItems.map((it) => toCompletion(it as Record<string, unknown>, range)),
             incomplete: true,
@@ -571,14 +658,18 @@ export async function startRazorProjectionServer(
 
         const gen = await razorRemapToGenerated(doc.cshtmlPath, position.lineNumber - 1, position.column - 1);
         if (!gen) return { suggestions: [] };
-        const res = await client.sendRequest<
-          { items?: unknown[]; isIncomplete?: boolean } | unknown[] | null
-        >(
-          "textDocument/completion",
-          { textDocument: { uri: doc.gcsUri }, position: { line: gen.line, character: gen.character } },
-          token
+        // Serialize against the provisional-completion swap (see hover).
+        const res = await mutateGenerated(doc.gcsUri, () =>
+          client.sendRequest<
+            { items?: unknown[]; isIncomplete?: boolean } | unknown[] | null
+          >(
+            "textDocument/completion",
+            { textDocument: { uri: doc.gcsUri }, position: { line: gen.line, character: gen.character } },
+            token
+          )
         );
         if (token.isCancellationRequested || !res) return { suggestions: [] };
+        if (!snapshotStable(doc, model, snap, reqVersion)) return { suggestions: [] };
         const items = Array.isArray(res) ? res : res.items ?? [];
         return {
           suggestions: items.map((it) => toCompletion(it as Record<string, unknown>, range)),
@@ -653,9 +744,7 @@ export async function startRazorProjectionServer(
     const t = liveTimers.get(key);
     if (t) window.clearTimeout(t);
     liveTimers.delete(key);
-    liveInFlight.delete(key);
-    liveDirty.delete(key);
-    lastAppliedGen.delete(key);
+    syncChains.delete(key);
   };
 
   const scheduleReprepare = (): void => {
@@ -692,67 +781,104 @@ export async function startRazorProjectionServer(
     }
   };
 
-  // ── LIVE on-change emit (Etapa 3) ──────────────────────────────────────────
+  // ── LIVE on-change emit + snapshot consistency (Etapa 3, hardened) ─────────
   // The broker's `dotnet build` reads disk → only fresh on save. The sidecar
-  // re-emits the `.g.cs` from the IN-MEMORY buffer in ~ms, so we run it on a short
-  // debounce per keystroke. Per-`.cshtml`: at most one emit in flight (coalesced),
-  // each stamped with the model version; a stale response is dropped. On success
-  // we feed the fresh `.g.cs` to Roslyn (the existing `setGeneratedText` queue) and
-  // re-pull diagnostics; on a soft failure we fall back to the on-save reprepare.
+  // re-emits the `.g.cs` from the IN-MEMORY buffer in ~ms. The hard part is
+  // CONSISTENCY: the source map, the `.g.cs` Roslyn has open, and the buffer must
+  // be ONE snapshot, or hover/def/completion remap against a stale projection
+  // (the "delete NonExistentProperty → everything bugs" report). So:
+  //   • Each `.g.cs` sync (emit→didOpen→commit map→stamp committedSourceVersion)
+  //     is ONE op serialized per doc (`syncChains`), atomic vs other syncs.
+  //   • Providers call `ensureFresh(doc, model)` first: if the buffer moved past
+  //     the committed snapshot, it runs a sync and waits, so the provider always
+  //     queries a snapshot that matches the buffer.
+  //   • Editing just schedules a debounced background sync (keeps diagnostics
+  //     fresh without a provider call); providers also force-sync on demand.
   const LIVE_DEBOUNCE_MS = 150;
-  const liveTimers = new Map<string, number>(); // key: canonicalFileUriKey(cshtmlUri)
-  const liveInFlight = new Set<string>();
-  const liveDirty = new Map<string, number>(); // key → latest model version awaiting emit
-  const lastAppliedGen = new Map<string, number>(); // key → newest applied generation
+  const liveTimers = new Map<string, number>(); // key → debounce timer
+  let liveBroken = false; // sidecar unavailable → providers/edits use on-save path
 
-  const runLiveEmit = async (key: string, model: monaco.editor.ITextModel): Promise<void> => {
-    if (disposed || model.isDisposed()) return;
-    const doc = docs.get(key);
-    if (!doc) return;
-    if (liveInFlight.has(key)) {
-      // Coalesce: remember we need another pass at the current version.
-      liveDirty.set(key, model.getVersionId());
-      return;
-    }
-    liveInFlight.add(key);
-    const version = model.getVersionId();
-    const text = model.getValue();
-    try {
-      const res = await razorEmitLive(doc.cshtmlPath, text);
-      if (disposed || model.isDisposed()) return;
-      // Drop stale: a newer edit was dispatched, or this generation is older than
-      // one already applied (out-of-order response). The pending map in Rust is
-      // simply not committed — `maps` (what providers read) stays in lockstep.
-      const stillCurrent = docs.get(key) === doc && model.getVersionId() === version;
-      const newerGen = res.generation > (lastAppliedGen.get(key) ?? 0);
-      if (res.ok && stillCurrent && newerGen) {
-        lastAppliedGen.set(key, res.generation);
-        // 1) sync Roslyn with the fresh `.g.cs`, THEN 2) commit the matching map.
-        // Commit unconditionally after the sync: at this instant Roslyn HAS this
-        // generation's text open, so its map is the correct active one. A newer
-        // edit (if any) re-syncs + re-commits its own pair when it completes —
-        // text and map always move together, never one ahead of the other.
-        await setGeneratedText(doc.gcsUri, res.generatedText);
-        if (disposed || model.isDisposed() || docs.get(key) !== doc) return;
-        await razorCommitLiveMap(doc.cshtmlPath, res.generation);
-        doc.gcsVersion += 1;
-        void pullDiagnostics(doc);
-      } else if (!res.ok) {
-        // Live path unavailable (no context / sidecar down) → on-save fallback.
+  /**
+   * Re-emit + open + commit the projection for `doc` at the buffer's CURRENT
+   * content, atomically. After it resolves, the map + open `.g.cs` +
+   * `committedSourceVersion` all reflect that exact buffer version. Returns true
+   * if it ended fresh (or was already fresh). Serialized per doc.
+   */
+  const syncLive = (key: string, model: monaco.editor.ITextModel): Promise<boolean> =>
+    enqueueSync(key, async (): Promise<boolean> => {
+      if (disposed || model.isDisposed()) return false;
+      const doc = docs.get(key);
+      if (!doc) return false;
+      const version = model.getVersionId();
+      if (doc.committedSourceVersion === version) return true; // already fresh
+      const text = model.getValue();
+      let res;
+      try {
+        res = await razorEmitLive(doc.cshtmlPath, text);
+      } catch (err) {
+        lspLog("razor projection: live emit failed", String(err));
+        liveBroken = true;
         scheduleReprepare();
+        return false;
       }
-    } catch (err) {
-      lspLog("razor projection: live emit failed", String(err));
-      scheduleReprepare();
-    } finally {
-      liveInFlight.delete(key);
-      // If edits arrived mid-flight, fire once more with the current buffer.
-      if (liveDirty.has(key)) {
-        liveDirty.delete(key);
-        const m = monaco.editor.getModel(monaco.Uri.parse(doc.cshtmlUri));
-        if (m && !m.isDisposed()) void runLiveEmit(key, m);
+      if (disposed || model.isDisposed() || docs.get(key) !== doc) return false;
+      if (!res.ok) {
+        liveBroken = true; // sidecar down / no context → degrade to on-save
+        scheduleReprepare();
+        return false;
       }
-    }
+      liveBroken = false;
+      // Open the fresh `.g.cs` in Roslyn, THEN commit its map — both inside this
+      // serialized op, so nothing observes a half-applied snapshot.
+      await setGeneratedText(doc.gcsUri, res.generatedText);
+      if (disposed || model.isDisposed() || docs.get(key) !== doc) return false;
+      await razorCommitLiveMap(doc.cshtmlPath, res.generation);
+      doc.gcsVersion += 1;
+      // Stamp the version the buffer was at WHEN WE READ IT — if the user typed
+      // more meanwhile, we're still stale and a later sync will catch up.
+      doc.committedSourceVersion = version;
+      void pullDiagnostics(doc);
+      return model.getVersionId() === version;
+    });
+
+  /**
+   * Ensure the projection matches the buffer before a provider queries it. If the
+   * buffer moved past the committed snapshot, run a sync and wait. Returns true
+   * when the snapshot is consistent with the buffer (false ⇒ provider should bail
+   * or, when live is broken, fall through to whatever the on-save state gives).
+   */
+  const ensureFresh = async (
+    doc: ProjectionDoc,
+    model: monaco.editor.ITextModel
+  ): Promise<boolean> => {
+    if (model.getVersionId() === doc.committedSourceVersion) return true;
+    const key = canonicalFileUriKey(model.uri.toString());
+    // Attempt a sync even when `liveBroken` — the sidecar may have recovered, and
+    // this lets a provider call self-heal (syncLive clears `liveBroken` on success).
+    // If it still can't sync (returns false), degrade to the last on-save
+    // projection rather than blocking the provider entirely.
+    const fresh = await syncLive(key, model);
+    return fresh || liveBroken;
+  };
+
+  /**
+   * After a provider's async request resolves, confirm the snapshot it computed
+   * against is STILL valid. `reqVersion` is the model version at request start.
+   * ALWAYS require the same doc and an unchanged buffer (so an edit during the
+   * request never lets a now-stale result publish — even in degraded mode). In the
+   * healthy path additionally require the committed snapshot to still be `snap`
+   * (a newer live sync superseded the `.g.cs` the result was interpreted against);
+   * in degraded mode (`liveBroken`) we can't track committed gens, so the
+   * doc+buffer-unchanged check is the guarantee.
+   */
+  const snapshotStable = (
+    doc: ProjectionDoc,
+    model: monaco.editor.ITextModel,
+    snap: number,
+    reqVersion: number
+  ): boolean => {
+    if (docFor(model) !== doc || model.getVersionId() !== reqVersion) return false;
+    return liveBroken || doc.committedSourceVersion === snap;
   };
 
   const scheduleLiveEmit = (model: monaco.editor.ITextModel): void => {
@@ -763,7 +889,7 @@ export async function startRazorProjectionServer(
       key,
       window.setTimeout(() => {
         liveTimers.delete(key);
-        void runLiveEmit(key, model);
+        if (!disposed && !model.isDisposed()) void syncLive(key, model);
       }, LIVE_DEBOUNCE_MS)
     );
   };
@@ -839,6 +965,7 @@ export async function startRazorProjectionServer(
       liveTimers.clear();
       for (const key of [...docs.keys()]) forgetDoc(key);
       genChain.clear(); // drop the per-gcsUri mutation queues
+      syncChains.clear(); // drop the per-doc live-sync queues
       sentText.clear();
       forgetAllHtmlVirtual(); // drop any leftover virtual-HTML cache on stop
       // Belt-and-suspenders: drop EVERY store entry this server owns, in case a
