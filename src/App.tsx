@@ -338,7 +338,13 @@ export default function App() {
     const seen = new Set<string>();
     const merged: Problem[] = [];
     for (const p of [...problems, ...allStoredProblems()]) {
-      const key = `${p.path}|${p.line}|${p.column}|${p.severity}|${p.message}`;
+      // Canonicalize the path in the dedup key (decoKey: slashes + drive-letter
+      // case). The same diagnostic can arrive twice — as a Monaco marker (path
+      // from the model URI, e.g. `c:\…`) and from the workspace store (path the
+      // server keyed on, e.g. `C:/…`); without canonicalization the Problems
+      // panel would list each `.cshtml` diagnostic twice. (The Razor projection
+      // mirrors its `.cshtml` diagnostics into both.)
+      const key = `${decoKey(p.path)}|${p.line}|${p.column}|${p.severity}|${p.message}`;
       if (seen.has(key)) continue;
       seen.add(key);
       merged.push(p);

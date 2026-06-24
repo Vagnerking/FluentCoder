@@ -37,6 +37,8 @@ import {
 import { createLanguageClient, registerClientDisposables } from "../client";
 import { lspLog } from "../debug";
 import { canonicalFileUriKey, fromFileUri, toFileUri } from "../uri";
+import { setDiagnostics, clearServerDiagnostics } from "../diagnosticsStore";
+import type { Problem } from "../../types";
 import { wireRoslynStartup } from "./roslynShared";
 import { ROSLYN_INIT_OPTIONS } from "./csharp";
 import {
@@ -83,6 +85,29 @@ interface ProjectionDoc {
 interface LspRange {
   start: { line: number; character: number };
   end: { line: number; character: number };
+}
+
+/** Monaco `MarkerSeverity` (8=Error, 4=Warning, else info) → `Problem.severity`. */
+function severityFromMonaco(sev: number): Problem["severity"] {
+  if (sev >= 8) return "error";
+  if (sev >= 4) return "warning";
+  return "info";
+}
+
+/** Convert routed `.cshtml` markers to workspace-store `Problem`s for one file. */
+function markersToProblems(
+  cshtmlPath: string,
+  markers: readonly { severity: number; message: string; startLineNumber: number; startColumn: number }[]
+): Problem[] {
+  const name = cshtmlPath.split(/[\\/]/).pop() || cshtmlPath;
+  return markers.map((m) => ({
+    path: cshtmlPath,
+    name,
+    severity: severityFromMonaco(m.severity),
+    message: m.message,
+    line: m.startLineNumber,
+    column: m.startColumn,
+  }));
 }
 
 /** Minimal subset of the open `.cshtml` we need to (re)prepare a project. */
@@ -252,6 +277,12 @@ export async function startRazorProjectionServer(
     }
     const items = (result?.items ?? []) as Parameters<typeof routeDiagnostics>[0];
     const markers = await routeDiagnostics(items, remapToSourceFor(doc.cshtmlPath));
+    // Staleness guard: the awaits above (server pull + range remap) yield, so the
+    // doc may have been closed (forgetDoc) or replaced (reprepare/reopen) while we
+    // were waiting. If so, forgetDoc already cleared this file's markers + store;
+    // publishing now would resurrect stale diagnostics on a closed/superseded
+    // `.cshtml`. Only publish when this exact doc is still the current entry.
+    if (disposed || docs.get(canonicalFileUriKey(doc.cshtmlUri)) !== doc) return;
     const model = monaco.editor.getModel(monaco.Uri.parse(doc.cshtmlUri));
     if (model && !model.isDisposed()) {
       monaco.editor.setModelMarkers(
@@ -260,6 +291,14 @@ export async function startRazorProjectionServer(
         markers as unknown as monaco.editor.IMarkerData[]
       );
     }
+    // Also feed the workspace diagnostics store, keyed by the SOURCE `.cshtml`
+    // path. This is what drives the Problems panel for non-active files AND the
+    // explorer/tab error color (App merges it into `allProblems`). We can't rely
+    // on the Monaco-markers→`onProblemsChange` path alone for the file color: the
+    // marker carries the model URI, whose path can differ in shape from the git/
+    // tree path; the store uses `cshtmlPath`, the same absolute path everything
+    // else keys on, so the decoration lookup lines up.
+    setDiagnostics(RAZOR_PROJECTION_SERVER_ID, doc.cshtmlPath, markersToProblems(doc.cshtmlPath, markers));
   };
 
   /** Pull diagnostics for every open doc once. */
@@ -385,6 +424,9 @@ export async function startRazorProjectionServer(
     void razorForget(doc.cshtmlPath).catch(() => {});
     const model = monaco.editor.getModel(monaco.Uri.parse(doc.cshtmlUri));
     if (model && !model.isDisposed()) monaco.editor.setModelMarkers(model, DIAGNOSTICS_OWNER, []);
+    // Drop this file's store entry too, so a closed `.cshtml` stops coloring the
+    // explorer (empty list clears the key).
+    setDiagnostics(RAZOR_PROJECTION_SERVER_ID, doc.cshtmlPath, []);
   };
 
   const scheduleReprepare = (): void => {
@@ -466,6 +508,11 @@ export async function startRazorProjectionServer(
       for (const t of reprepareTimers.values()) window.clearTimeout(t);
       reprepareTimers.clear();
       for (const key of [...docs.keys()]) forgetDoc(key);
+      // Belt-and-suspenders: drop EVERY store entry this server owns, in case a
+      // doc lifecycle edge was missed or the docs map was incomplete at stop —
+      // server stop/reset must clear this owner's diagnostics (CSHTML lifecycle
+      // contract). forgetDoc already cleared the known docs above.
+      clearServerDiagnostics(RAZOR_PROJECTION_SERVER_ID);
     },
   });
 
