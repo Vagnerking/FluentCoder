@@ -62,6 +62,14 @@ interface StatusBarProps {
   onSelectTsVersion?: () => void;
   /** Opens the language-mode picker for the active file (VS Code's "Change Language Mode"). */
   onSelectLanguage?: () => void;
+  /** Detected encoding of the active file (e.g. "UTF-8"); null when none open. */
+  encoding?: string | null;
+  /** Active file's line-ending style label ("LF"/"CRLF"); null when none open. */
+  eol?: string | null;
+  /** Opens the "Reopen/Save with Encoding" picker. Omitted ⇒ not clickable. */
+  onSelectEncoding?: () => void;
+  /** Opens the line-ending picker (LF/CRLF). Omitted ⇒ not clickable. */
+  onSelectEol?: () => void;
 }
 
 /** Maps an LSP status to a codicon + label. */
@@ -110,6 +118,10 @@ export function StatusBar({
   onShowProblems,
   onSelectTsVersion,
   onSelectLanguage,
+  encoding,
+  eol,
+  onSelectEncoding,
+  onSelectEol,
 }: StatusBarProps) {
   // Friendly language name (VSCode-style), shared with the language-mode picker.
   const langDisplay = languageLabel(language);
@@ -324,7 +336,60 @@ export function StatusBar({
             {langDisplay}
           </span>
         )}
-        {fileName && <span className="status-item status-encoding">UTF-8</span>}
+        {fileName && encoding && (
+          <span
+            className={`status-item status-encoding${
+              onSelectEncoding ? " status-clickable" : ""
+            }`}
+            title={onSelectEncoding ? "Selecionar codificação" : undefined}
+            role={onSelectEncoding ? "button" : undefined}
+            tabIndex={onSelectEncoding ? 0 : undefined}
+            aria-label={
+              onSelectEncoding
+                ? `Codificação: ${encoding}; selecionar codificação`
+                : undefined
+            }
+            onClick={onSelectEncoding}
+            onKeyDown={
+              onSelectEncoding
+                ? (e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onSelectEncoding();
+                    }
+                  }
+                : undefined
+            }
+          >
+            {encoding}
+          </span>
+        )}
+        {fileName && eol && (
+          <span
+            className={`status-item status-eol${
+              onSelectEol ? " status-clickable" : ""
+            }`}
+            title={onSelectEol ? "Selecionar fim de linha" : undefined}
+            role={onSelectEol ? "button" : undefined}
+            tabIndex={onSelectEol ? 0 : undefined}
+            aria-label={
+              onSelectEol ? `Fim de linha: ${eol}; selecionar fim de linha` : undefined
+            }
+            onClick={onSelectEol}
+            onKeyDown={
+              onSelectEol
+                ? (e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onSelectEol();
+                    }
+                  }
+                : undefined
+            }
+          >
+            {eol}
+          </span>
+        )}
         {fileName && (
           <span className="status-item status-tabsize">Tab Size: {tabSize}</span>
         )}

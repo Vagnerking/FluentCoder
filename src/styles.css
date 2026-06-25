@@ -2957,6 +2957,7 @@ select:focus-visible,
    lower-value items drop out first as the bar narrows. */
 .status-right { flex-shrink: 0; }
 @container (max-width: 720px) { .status-tabsize { display: none; } }
+@container (max-width: 680px) { .status-eol { display: none; } }
 @container (max-width: 620px) { .status-encoding { display: none; } }
 @container (max-width: 520px) { .status-language { display: none; } }
 @container (max-width: 430px) { .status-cursor { display: none; } }
