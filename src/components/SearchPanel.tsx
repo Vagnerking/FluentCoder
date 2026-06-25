@@ -344,7 +344,7 @@ export function SearchPanel({
           disabled={!rootPath}
         />
         <div className="search-controls">
-          <Tooltip label="Diferenciar maiúsculas de minúsculas (Alt+C)">
+          <Tooltip label="Diferenciar maiúsculas de minúsculas">
             <button
               type="button"
               className={`search-toggle${caseSensitive ? " active" : ""}`}
@@ -356,7 +356,7 @@ export function SearchPanel({
               <Codicon name="caseSensitive" size={16} />
             </button>
           </Tooltip>
-          <Tooltip label="Palavra inteira (Alt+W)">
+          <Tooltip label="Palavra inteira">
             <button
               type="button"
               className={`search-toggle${wholeWord ? " active" : ""}`}
@@ -368,7 +368,7 @@ export function SearchPanel({
               <Codicon name="wholeWord" size={16} />
             </button>
           </Tooltip>
-          <Tooltip label="Usar expressão regular (Alt+R)">
+          <Tooltip label="Usar expressão regular">
             <button
               type="button"
               className={`search-toggle${regex ? " active" : ""}`}

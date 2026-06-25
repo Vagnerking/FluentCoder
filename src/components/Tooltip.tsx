@@ -9,6 +9,11 @@ import {
   type ReactElement,
 } from "react";
 
+/** A `disabled` element doesn't emit hover/focus, so the wrapper carries them. */
+function isDisabled(el: ReactElement): boolean {
+  return Boolean((el.props as { disabled?: boolean }).disabled);
+}
+
 interface TooltipProps {
   /**
    * Visible tooltip text. This is decorative for sighted users — the trigger
@@ -38,7 +43,10 @@ const HOVER_DELAY = 400;
  */
 export function Tooltip({ label, children, placement = "top" }: TooltipProps) {
   const id = useId();
-  const triggerRef = useRef<HTMLElement>(null);
+  // The wrapper is the anchor: it always emits hover/focus, even when the child
+  // (e.g. a `<button disabled>`) does not — fixing F2-AUD-005 for disabled
+  // controls like the Search/Git toggles. Measurement is taken from it too.
+  const anchorRef = useRef<HTMLSpanElement>(null);
   const timerRef = useRef<number | null>(null);
   const [open, setOpen] = useState(false);
   const [coords, setCoords] = useState<{ left: number; top: number } | null>(null);
@@ -51,8 +59,11 @@ export function Tooltip({ label, children, placement = "top" }: TooltipProps) {
   }, []);
 
   // Anchors the bubble to the trigger's current rect (in viewport coords).
+  // The wrapper uses `display: contents` (no box of its own), so we measure its
+  // element child — the actual control — which has geometry even when disabled.
   const position = useCallback(() => {
-    const el = triggerRef.current;
+    const wrapper = anchorRef.current;
+    const el = (wrapper?.firstElementChild as HTMLElement | null) ?? wrapper;
     if (!el) return;
     const rect = el.getBoundingClientRect();
     setCoords({
@@ -86,56 +97,51 @@ export function Tooltip({ label, children, placement = "top" }: TooltipProps) {
   // Clean up the pending hover timer if the trigger unmounts mid-delay.
   useEffect(() => clearTimer, [clearTimer]);
 
-  // Esc dismisses the tooltip without moving focus away from the trigger.
+  // Esc dismisses the tooltip without moving focus away from the trigger. The
+  // child keeps its own onKeyDown natively (it's a real DOM descendant), and
+  // this listens on the wrapper, so we never need to forward to it.
   const onKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (e.key === "Escape" && open) hide();
-      // Preserve any handler the child already had.
-      (children.props as { onKeyDown?: (e: KeyboardEvent) => void }).onKeyDown?.(e);
     },
-    [open, hide, children.props],
+    [open, hide],
   );
 
-  // Merge our handlers/refs onto the trigger without clobbering its own.
-  const childProps = children.props as {
-    onMouseEnter?: (e: unknown) => void;
-    onMouseLeave?: (e: unknown) => void;
-    onFocus?: (e: unknown) => void;
-    onBlur?: (e: unknown) => void;
-    "aria-describedby"?: string;
-  };
-
-  const trigger = cloneElement(children, {
-    ref: triggerRef,
-    "aria-describedby": [childProps["aria-describedby"], id]
-      .filter(Boolean)
-      .join(" "),
-    onMouseEnter: (e: unknown) => {
-      show(false);
-      childProps.onMouseEnter?.(e);
-    },
-    onMouseLeave: (e: unknown) => {
-      hide();
-      childProps.onMouseLeave?.(e);
-    },
-    // `:focus-visible` keeps the bubble out of the way on plain mouse clicks
-    // (which also focus the button) while still showing it for keyboard users.
-    onFocus: (e: unknown) => {
-      if ((triggerRef.current as HTMLElement | null)?.matches(":focus-visible")) {
-        show(true);
-      }
-      childProps.onFocus?.(e);
-    },
-    onBlur: (e: unknown) => {
-      hide();
-      childProps.onBlur?.(e);
-    },
-    onKeyDown,
-  } as Partial<typeof children.props>);
+  // Associate the bubble with the trigger for SR users — but only when the
+  // child is enabled (a disabled control is largely ignored by AT, and we must
+  // not clobber its own describedby otherwise).
+  const childProps = children.props as { "aria-describedby"?: string };
+  const child = isDisabled(children)
+    ? children
+    : cloneElement(children, {
+        "aria-describedby": [childProps["aria-describedby"], id]
+          .filter(Boolean)
+          .join(" "),
+      } as Partial<typeof children.props>);
 
   return (
     <>
-      {trigger}
+      {/* The wrapper is the event/measurement anchor so the tooltip works even
+          when the child is disabled. display: contents keeps layout unchanged. */}
+      <span
+        ref={anchorRef}
+        className="tooltip-anchor"
+        onMouseEnter={() => show(false)}
+        onMouseLeave={hide}
+        // Focus bubbles, so focusing the inner control fires this. Gate on
+        // :focus-visible so a plain mouse click (which also focuses) doesn't
+        // pop the bubble — only keyboard focus does.
+        onFocus={() => {
+          const active = document.activeElement;
+          if (active instanceof HTMLElement && active.matches(":focus-visible")) {
+            show(true);
+          }
+        }}
+        onBlur={hide}
+        onKeyDown={onKeyDown}
+      >
+        {child}
+      </span>
       {open && coords && (
         <span
           role="tooltip"

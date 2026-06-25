@@ -450,8 +450,11 @@ body {
 .explorer-title {
   font-weight: 600;
   color: var(--text-muted);
-  /* Section headers stay uppercase by VS Code convention; the heavy tracking is
-     softened to a subtle 0.3px so the label reads as a label, not spaced-out. */
+  /* Real sidebar section headers (Explorer, Git, Search…) stay uppercase by VS
+     Code convention; the heavy tracking is softened to a subtle 0.3px so the
+     label reads as a label, not spaced-out. The PlaceholderPanel reuses this
+     class but its title is panel *content* (e.g. "Contas"), so it opts out of
+     the uppercase below (F2-AUD-009). */
   text-transform: uppercase;
   letter-spacing: 0.3px;
   overflow: hidden;
@@ -3282,6 +3285,9 @@ select:focus-visible,
 
 /* ---- Placeholder panel ---- */
 .placeholder-panel { display: flex; flex-direction: column; height: 100%; }
+/* Placeholder titles are content, not chrome section headers — keep their
+   natural casing (sentence case) instead of the shared uppercase (F2-AUD-009). */
+.placeholder-panel .explorer-title { text-transform: none; letter-spacing: normal; }
 .placeholder-body { padding: 16px 12px; color: var(--text-muted); font-size: 12px; }
 
 /* ---- Problems panel ---- */
@@ -4393,6 +4399,12 @@ button .codicon { pointer-events: none; }
 }
 
 /* ---- Tooltip (F2-AUD-005) ---- */
+/* The Tooltip wrapper anchors hover/focus events even when the child control is
+   disabled. `display: contents` keeps it invisible to layout. */
+.tooltip-anchor {
+  display: contents;
+}
+
 /* Accessible tooltip bubble for icon-only command buttons. Rendered with
    `position: fixed` so it escapes the sidebar/activity-bar `overflow: hidden`;
    the trigger keeps its own aria-label, this is just the visual hint. */
@@ -4408,7 +4420,9 @@ button .codicon { pointer-events: none; }
   border: 1px solid var(--color-surface-overlay-border);
   border-radius: var(--radius-control);
   box-shadow: var(--shadow-flyout);
-  white-space: nowrap;
+  /* Wrap long/localized labels instead of overflowing the bubble/viewport. */
+  white-space: normal;
+  overflow-wrap: anywhere;
   pointer-events: none;
   /* Centre horizontally on the trigger; the vertical offset is per-placement. */
   transform: translateX(-50%);
@@ -4438,7 +4452,7 @@ button .codicon { pointer-events: none; }
 /* The canvas is mouse/visual only; this is its keyboard-navigable textual
    mirror. A floating listbox over the canvas where each option centres +
    spotlights the node (focus/click) and opens the file (Enter/Space/double
-   click). The graph region itself carries role="application" + an aria help
+   click). The graph region itself carries role="group" + an aria help
    string rendered via .graph-sr-only below. */
 
 /* Visually hidden but exposed to assistive tech (keyboard help, panel labels). */
@@ -4450,7 +4464,6 @@ button .codicon { pointer-events: none; }
   padding: 0;
   border: 0;
   overflow: hidden;
-  clip: rect(0 0 0 0);
   clip-path: inset(50%);
   white-space: nowrap;
 }

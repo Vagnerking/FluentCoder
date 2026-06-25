@@ -552,7 +552,11 @@ export function GraphView({ rootPath, activePath, onOpenFile }: GraphViewProps) 
       const n = ns.length;
       const now = performance.now();
       // Reduced motion: never run prolonged decorative physics — settle once.
-      if (S.reduced && S.alpha > 0.005 && n > 0) {
+      // But NOT during an active drag: a full synchronous O(n²) settle on every
+      // pointermove would freeze large graphs, hurting the very user who asked
+      // for less motion. During a drag we advance one step per frame (cheap) and
+      // let the settle finish on pointerup, when `mode` returns to "none".
+      if (S.reduced && S.alpha > 0.005 && n > 0 && mode !== "drag") {
         settleStatic();
         running = false;
         return;
@@ -931,10 +935,14 @@ export function GraphView({ rootPath, activePath, onOpenFile }: GraphViewProps) 
         </button>
       </div>
 
+      {/* role="group" (not "application"): the canvas is aria-hidden and the
+          accessible path is the node listbox, so we keep the screen reader's
+          virtual-cursor on the help text/legend/status rather than suppressing
+          it (which role="application" would do). */}
       <div
         className="graph-canvas-wrap"
         ref={wrapRef}
-        role="application"
+        role="group"
         aria-label="Grafo de dependências entre arquivos"
         aria-describedby="graph-a11y-help"
       >

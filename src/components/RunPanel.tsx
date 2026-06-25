@@ -99,10 +99,11 @@ export function RunPanel({ rootPath, onRun }: RunPanelProps) {
     <div className="run-panel">
       <div className="explorer-header run-header">
         <span className="explorer-title">EXECUTAR E DEPURAR</span>
-        <Tooltip label="Nova configuração">
+        <Tooltip label={draft ? "Fechar nova configuração" : "Nova configuração"}>
           <button
             className="git-icon-btn"
-            aria-label="Nova configuração"
+            aria-label={draft ? "Fechar nova configuração" : "Nova configuração"}
+            aria-expanded={Boolean(draft)}
             onClick={() => setDraft(draft ? null : { ...EMPTY_DRAFT })}
           >
             +
