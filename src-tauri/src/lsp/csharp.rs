@@ -229,9 +229,16 @@ pub fn detect_dotnet() -> Result<String, String> {
     };
 
     // `dotnet --version` succeeds iff the SDK/runtime is reachable.
-    let probe = std::process::Command::new(program)
-        .arg("--version")
-        .output();
+    let mut probe_cmd = std::process::Command::new(program);
+    probe_cmd.arg("--version");
+    // On Windows, suppress the console window the probe would flash.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        probe_cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let probe = probe_cmd.output();
 
     match probe {
         Ok(out) if out.status.success() => Ok(program.to_string()),

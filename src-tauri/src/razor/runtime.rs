@@ -118,12 +118,19 @@ fn is_newer_or_equal(a: &Path, b: &Path) -> bool {
 /// Run a command capturing stdout, killing it (and erroring) if it exceeds
 /// `timeout`. Prevents a hung `dotnet` from blocking the caller forever.
 fn run_capturing(program: &str, args: &[String], cwd: &Path, timeout: Duration) -> io::Result<Vec<u8>> {
-    let mut child = Command::new(program)
-        .args(args)
+    let mut cmd = Command::new(program);
+    cmd.args(args)
         .current_dir(cwd)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
+        .stderr(Stdio::null());
+    // On Windows, don't flash a console window for the spawned `dotnet`.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = cmd.spawn()?;
     // Drain stdout on a thread so a full pipe buffer can't deadlock the child. The
     // thread sends the captured bytes over a channel when stdout reaches EOF —
     // letting us wait for it with a DEADLINE rather than an unbounded `join()`.

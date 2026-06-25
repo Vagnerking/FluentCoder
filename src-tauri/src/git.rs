@@ -95,9 +95,18 @@ pub struct GitCommit {
 /// Runs `git <args>` in `cwd`, returning stdout on success or a combined
 /// stdout+stderr error string on failure (so the UI can show what went wrong).
 fn run_git(cwd: &str, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(cwd);
+    // On Windows, suppress the console window each `git` invocation would
+    // otherwise flash. The Git panel polls status, so without this the user
+    // sees terminals popping up repeatedly (and the UI stutters).
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = cmd
         .output()
         .map_err(|e| format!("Falha ao executar git: {e}"))?;
 
