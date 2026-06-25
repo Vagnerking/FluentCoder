@@ -3,6 +3,7 @@ import { Codicon } from "../icons/codicons/Codicon";
 import type { IconAction } from "../icons/codicons/codicon-map";
 import { FileIcon } from "../icon-theme/material/FileIcon";
 import { useModalDismiss } from "./useModalDismiss";
+import { useModalFocus } from "./useModalFocus";
 
 /** One row in a {@link QuickPick}. */
 export interface QuickPickItem {
@@ -52,13 +53,14 @@ export function QuickPick({
 }: QuickPickProps) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
+  const surfaceRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
 
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+  // Contrato de modal compartilhado: foco inicial no input de filtro, trap +
+  // restore, e Esc fecha (F2-AUD-007). O Esc sai do onKeyDown do input.
+  useModalFocus(surfaceRef, { initialFocus: inputRef, onEscape: onClose });
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -94,9 +96,6 @@ export function QuickPick({
       e.preventDefault();
       const it = filtered[selected];
       if (it) onPick(it);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      onClose();
     }
   }
 
@@ -108,6 +107,8 @@ export function QuickPick({
         aria-modal="true"
         aria-labelledby={title ? titleId : undefined}
         aria-label={title ? undefined : "Seleção rápida"}
+        tabIndex={-1}
+        ref={surfaceRef}
       >
         {title && (
           <div id={titleId} className="quick-pick-title">

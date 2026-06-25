@@ -84,9 +84,7 @@
   --shadow-flyout:
     inset 0 1px 0 rgba(255, 255, 255, 0.04),
     0 8px 24px rgba(0, 0, 0, 0.24);
-  --shadow-dialog:
-    inset 0 1px 0 rgba(255, 255, 255, 0.05),
-    0 16px 48px rgba(0, 0, 0, 0.36);
+  --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.5);
 
   /* ---- Motion (F2-AUD-004) ----
      Durations/easings consumed by transitions and animations. The global
@@ -1077,7 +1075,7 @@ body {
     var(--acrylic-tint-strong);
   border: 1px solid var(--acrylic-border-strong);
   border-radius: 8px;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-dialog);
   backdrop-filter: blur(28px) saturate(125%);
   -webkit-backdrop-filter: blur(28px) saturate(125%);
   color: var(--text);
@@ -1794,6 +1792,184 @@ select:focus-visible,
   box-shadow: var(--focus-ring);
 }
 
+/* ============================================================================
+   Base control systems — F2-AUD-014 (buttons) and F2-AUD-013 (inputs).
+
+   Opt-in classes so new screens (and gradual migration of existing ones) stop
+   re-deriving button/input styles per feature. They consume the token layer so
+   states stay consistent. Existing bespoke buttons keep working; migrate them
+   feature by feature rather than all at once.
+   ========================================================================= */
+
+/* ---- Buttons (F2-AUD-014) ---- */
+.ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 84px;
+  height: 30px;
+  padding: 0 14px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text);
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+.ui-button:hover:not(:disabled) {
+  background: var(--acrylic-control-hover);
+}
+.ui-button:active:not(:disabled) {
+  background: var(--acrylic-control-pressed);
+}
+.ui-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Primary / accent — the default/confirming action. */
+.ui-button-primary {
+  color: #06223a;
+  background: var(--accent);
+  border-color: transparent;
+  font-weight: 600;
+}
+.ui-button-primary:hover:not(:disabled) {
+  background: #7ad6ff;
+}
+.ui-button-primary:active:not(:disabled) {
+  background: #4cb8ec;
+}
+
+/* Secondary — explicit alias of the neutral base, for symmetry at call sites. */
+.ui-button-secondary {
+  background: var(--acrylic-control);
+}
+
+/* Danger — destructive actions (delete, discard). */
+.ui-button-danger {
+  color: #2a0d0f;
+  background: var(--color-status-error);
+  border-color: transparent;
+  font-weight: 600;
+}
+.ui-button-danger:hover:not(:disabled) {
+  background: #ff6b6b;
+}
+.ui-button-danger:active:not(:disabled) {
+  background: #d83b3b;
+}
+
+/* Loading: dim + show busy cursor; pair with aria-busy at the call site. */
+.ui-button[aria-busy="true"] {
+  opacity: 0.7;
+  cursor: progress;
+}
+
+/* Icon-only button — square, no min-width, codicon-sized. */
+.ui-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-width: 0;
+  padding: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+.ui-icon-button:hover:not(:disabled) {
+  background: var(--fill-subtle-hover);
+  color: var(--text);
+}
+.ui-icon-button:active:not(:disabled) {
+  background: var(--fill-subtle-active);
+}
+.ui-icon-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+/* Pressed/toggle state for icon buttons that use aria-pressed. */
+.ui-icon-button[aria-pressed="true"] {
+  background: var(--fill-selected);
+  color: var(--text);
+}
+
+/* ---- Inputs (F2-AUD-013) ---- */
+.ui-input,
+.ui-textarea,
+.ui-select {
+  width: 100%;
+  height: 30px;
+  padding: 0 9px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  border-bottom-color: var(--acrylic-border-strong);
+  border-radius: var(--radius-control);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  transition: border-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+.ui-textarea {
+  height: auto;
+  min-height: 48px;
+  padding: 7px 9px;
+  resize: vertical;
+}
+.ui-input::placeholder,
+.ui-textarea::placeholder {
+  color: var(--text-muted);
+}
+.ui-input:hover:not(:disabled),
+.ui-textarea:hover:not(:disabled),
+.ui-select:hover:not(:disabled) {
+  border-color: var(--acrylic-border-strong);
+}
+.ui-input:focus-visible,
+.ui-textarea:focus-visible,
+.ui-select:focus-visible {
+  outline: none;
+  border-color: var(--stroke-focus);
+  box-shadow: var(--focus-ring);
+}
+.ui-input:disabled,
+.ui-textarea:disabled,
+.ui-select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* Invalid: pair with aria-invalid="true" + an aria-describedby message. */
+.ui-input[aria-invalid="true"],
+.ui-textarea[aria-invalid="true"],
+.ui-select[aria-invalid="true"] {
+  border-color: var(--color-status-error);
+}
+.ui-input[aria-invalid="true"]:focus-visible,
+.ui-textarea[aria-invalid="true"]:focus-visible,
+.ui-select[aria-invalid="true"]:focus-visible {
+  box-shadow: 0 0 0 var(--focus-ring-width) var(--color-status-error);
+}
+/* The error text tied to an invalid field via aria-describedby. */
+.ui-field-error {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-status-error);
+}
+
 /* High contrast / forced colors (F2-AUD-002). In Windows high-contrast mode the
    system overrides backgrounds; keep focus, borders and selection visible by
    deferring to the system palette instead of our alpha tints. */
@@ -2088,13 +2264,19 @@ select:focus-visible,
   white-space: nowrap;
 }
 
+/* Empty/config states keep the discreet accent radial (functional branding on
+   an otherwise blank surface). The live chat surface stays flat so the decoration
+   never competes with conversation content (F2-AUD-011). */
 .agent-empty-state,
-.agent-config-page,
-.agent-chat {
+.agent-config-page {
   height: 100%;
   background:
     radial-gradient(circle at 50% 24%, rgba(96, 205, 255, 0.06), transparent 34%),
     var(--editor-bg);
+}
+.agent-chat {
+  height: 100%;
+  background: var(--editor-bg);
 }
 
 .agent-empty-state {
@@ -3219,7 +3401,7 @@ select:focus-visible,
    bar or window controls, and interacting with the titlebar can't dismiss them.
    Modals drop from just under the titlebar, centered (VS Code alignment). */
 .quick-open-backdrop { position: fixed; top: var(--titlebar-height); left: 0; right: 0; bottom: 0; z-index: 100; display: flex; justify-content: center; align-items: flex-start; }
-.quick-open { margin-top: 8px; width: 600px; max-width: calc(100vw - 32px); max-height: 60vh; display: flex; flex-direction: column; background: var(--acrylic-tint-strong); border: 1px solid var(--acrylic-border-strong); border-radius: var(--radius-card); box-shadow: 0 16px 48px rgba(0,0,0,0.5); backdrop-filter: blur(40px) saturate(140%); -webkit-backdrop-filter: blur(40px) saturate(140%); overflow: hidden; }
+.quick-open { margin-top: 8px; width: 600px; max-width: calc(100vw - 32px); max-height: 60vh; display: flex; flex-direction: column; background: var(--acrylic-tint-strong); border: 1px solid var(--acrylic-border-strong); border-radius: var(--radius-card); box-shadow: var(--shadow-dialog); backdrop-filter: blur(40px) saturate(140%); -webkit-backdrop-filter: blur(40px) saturate(140%); overflow: hidden; }
 .quick-open-input { margin: 8px; height: 32px; padding: 0 10px; font-size: 13px; color: var(--text); background: var(--acrylic-control); border: 1px solid var(--acrylic-border); border-bottom-color: var(--acrylic-border-strong); border-radius: var(--radius-control); outline: none; }
 .quick-open-input:focus { border-color: var(--accent); }
 .quick-open-list { overflow-y: auto; padding: 0 4px 4px; min-height: 0; }
@@ -3577,7 +3759,7 @@ select:focus-visible,
 
 /* ---- About / Keyboard Shortcuts dialog (Help menu) ---- */
 .about-backdrop { position: fixed; top: var(--titlebar-height); left: 0; right: 0; bottom: 0; z-index: 100; display: flex; justify-content: center; align-items: center; background: rgba(0,0,0,0.32); }
-.about-dialog { width: 420px; max-width: calc(100vw - 32px); max-height: 70vh; display: flex; flex-direction: column; background: var(--acrylic-tint-strong); border: 1px solid var(--acrylic-border-strong); border-radius: var(--radius-card); box-shadow: 0 16px 48px rgba(0,0,0,0.5); backdrop-filter: blur(40px) saturate(140%); -webkit-backdrop-filter: blur(40px) saturate(140%); overflow: hidden; outline: none; }
+.about-dialog { width: 420px; max-width: calc(100vw - 32px); max-height: 70vh; display: flex; flex-direction: column; background: var(--acrylic-tint-strong); border: 1px solid var(--acrylic-border-strong); border-radius: var(--radius-card); box-shadow: var(--shadow-dialog); backdrop-filter: blur(40px) saturate(140%); -webkit-backdrop-filter: blur(40px) saturate(140%); overflow: hidden; outline: none; }
 .about-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 8px 8px 14px; border-bottom: 1px solid var(--acrylic-border); }
 .about-title { font-size: 13px; font-weight: 600; color: var(--text); }
 .about-close { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-size: 18px; line-height: 1; color: var(--text-muted); background: transparent; border: none; border-radius: var(--radius-control); cursor: pointer; }
@@ -3595,7 +3777,7 @@ select:focus-visible,
 
 /* ---- Confirm dialog (reusable Fluent 2 modal: unsaved guard, delete, …) ---- */
 .confirm-overlay { position: fixed; inset: 0; z-index: 200; display: flex; justify-content: center; align-items: center; background: rgba(0,0,0,0.4); }
-.confirm-dialog { width: 440px; max-width: calc(100vw - 32px); display: flex; flex-direction: column; gap: 8px; padding: 20px; background: var(--acrylic-tint-strong); border: 1px solid var(--acrylic-border-strong); border-radius: var(--radius-card); box-shadow: 0 16px 48px rgba(0,0,0,0.5); backdrop-filter: blur(40px) saturate(140%); -webkit-backdrop-filter: blur(40px) saturate(140%); outline: none; }
+.confirm-dialog { width: 440px; max-width: calc(100vw - 32px); display: flex; flex-direction: column; gap: 8px; padding: 20px; background: var(--acrylic-tint-strong); border: 1px solid var(--acrylic-border-strong); border-radius: var(--radius-card); box-shadow: var(--shadow-dialog); backdrop-filter: blur(40px) saturate(140%); -webkit-backdrop-filter: blur(40px) saturate(140%); outline: none; }
 .confirm-title { margin: 0; font-size: 15px; font-weight: 600; color: var(--text); }
 .confirm-message { margin: 0 0 8px; font-size: 13px; line-height: 1.5; color: var(--text-secondary); }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }

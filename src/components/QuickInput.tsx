@@ -1,6 +1,7 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { Codicon } from "../icons/codicons/Codicon";
 import { useModalDismiss } from "./useModalDismiss";
+import { useModalFocus } from "./useModalFocus";
 
 interface QuickInputProps {
   /** Title bar text (e.g. "Senha de rafael@host"). */
@@ -33,12 +34,13 @@ export function QuickInput({
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const surfaceRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const titleId = useId();
 
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+  // Contrato de modal compartilhado: foco inicial no input, trap + restore, e
+  // Esc cancela (F2-AUD-007). O Esc deixa de ser tratado no onKeyDown do input.
+  useModalFocus(surfaceRef, { initialFocus: inputRef, onEscape: onClose });
 
   async function submit() {
     if (busy) return;
@@ -56,9 +58,6 @@ export function QuickInput({
     if (e.key === "Enter") {
       e.preventDefault();
       void submit();
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      onClose();
     }
   }
 
@@ -70,6 +69,8 @@ export function QuickInput({
         aria-modal="true"
         aria-labelledby={title ? titleId : undefined}
         aria-label={title ? undefined : "Entrada rápida"}
+        tabIndex={-1}
+        ref={surfaceRef}
       >
         {title && (
           <div id={titleId} className="quick-pick-title">

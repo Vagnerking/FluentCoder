@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { sshCanonicalize, sshListDir } from "../api";
 import { Codicon } from "../icons/codicons/Codicon";
 import { useModalDismiss } from "./useModalDismiss";
+import { useModalFocus } from "./useModalFocus";
 import type { FileNode } from "../types";
 
 interface RemoteFolderBrowserProps {
@@ -62,7 +63,14 @@ export function RemoteFolderBrowser({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState(0);
+  const surfaceRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+
+  // Contrato de modal compartilhado: trap + restore, e Esc cancela
+  // (F2-AUD-007). O foco inicial fica com a lógica local abaixo (depende de
+  // `loading` e re-foca a lista a cada navegação), então passamos
+  // `initialFocus: false` para não disputar com ela.
+  useModalFocus(surfaceRef, { initialFocus: false, onEscape: onCancel });
 
   const list = useCallback(
     async (dir: string) => {
@@ -127,11 +135,6 @@ export function RemoteFolderBrowser({
   }
 
   function onKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      onCancel();
-      return;
-    }
     if (!listRef.current?.contains(e.target as Node)) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -156,7 +159,10 @@ export function RemoteFolderBrowser({
       <div
         className="ssh-card ssh-browser"
         role="dialog"
+        aria-modal="true"
         aria-label="Escolher pasta remota"
+        tabIndex={-1}
+        ref={surfaceRef}
         onKeyDown={onKeyDown}
       >
         <header className="ssh-head">

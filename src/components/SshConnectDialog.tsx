@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Codicon } from "../icons/codicons/Codicon";
 import type { SshConnectInput } from "../api";
 import { useModalDismiss } from "./useModalDismiss";
+import { useModalFocus } from "./useModalFocus";
 
 interface SshConnectDialogProps {
   /** Prefill (e.g. from a saved host without a user, or a key host). */
@@ -45,11 +46,12 @@ export function SshConnectDialog({
   const [keyPassphrase, setKeyPassphrase] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const surfaceRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    hostRef.current?.focus();
-  }, []);
+  // Contrato de modal compartilhado: foco inicial no campo Host, trap + restore,
+  // e Esc cancela/volta via `dismiss` (F2-AUD-007). O Esc deixa o onKeyDown.
+  useModalFocus(surfaceRef, { initialFocus: hostRef, onEscape: dismiss });
 
   const authReady =
     authMode === "agent"
@@ -84,10 +86,7 @@ export function SshConnectDialog({
   }
 
   function onKeyDown(e: React.KeyboardEvent) {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      dismiss();
-    } else if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void submit();
     }
@@ -104,7 +103,10 @@ export function SshConnectDialog({
       <div
         className="ssh-card ssh-dialog"
         role="dialog"
+        aria-modal="true"
         aria-label="Conectar a um host SSH"
+        tabIndex={-1}
+        ref={surfaceRef}
         onKeyDown={onKeyDown}
       >
         <header className="ssh-head">
