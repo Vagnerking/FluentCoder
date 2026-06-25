@@ -38,6 +38,15 @@ interface ModalFocusOptions {
  * Usage: attach `surfaceRef` to the modal's surface (the `role="dialog"`
  * element) and call this hook once.
  */
+
+/**
+ * Stack of currently-open modal surfaces, in open order. Each hook instance
+ * registers a global keydown listener, so without this only the TOP modal must
+ * react — otherwise an Esc in a dialog opened over another would also fire the
+ * lower dialog's onEscape (and its Tab trap would fight for focus).
+ */
+const OPEN_MODALS: HTMLElement[] = [];
+
 export function useModalFocus(
   surfaceRef: RefObject<HTMLElement | null>,
   { onEscape, initialFocus }: ModalFocusOptions = {}
@@ -49,6 +58,7 @@ export function useModalFocus(
     previouslyFocused.current = document.activeElement as HTMLElement | null;
 
     const surface = surfaceRef.current;
+    if (surface) OPEN_MODALS.push(surface);
 
     // 1. Initial focus.
     if (initialFocus !== false) {
@@ -62,6 +72,9 @@ export function useModalFocus(
     }
 
     function onKeyDown(e: KeyboardEvent) {
+      // Only the top-most open modal handles keys — a stacked dialog must not
+      // dismiss or trap focus in the ones beneath it.
+      if (!surface || OPEN_MODALS[OPEN_MODALS.length - 1] !== surface) return;
       if (e.key === "Escape" && onEscape) {
         e.preventDefault();
         onEscape();
@@ -95,6 +108,10 @@ export function useModalFocus(
     window.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
+      if (surface) {
+        const index = OPEN_MODALS.lastIndexOf(surface);
+        if (index >= 0) OPEN_MODALS.splice(index, 1);
+      }
       // 3. Focus restore.
       previouslyFocused.current?.focus?.();
     };

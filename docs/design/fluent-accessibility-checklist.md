@@ -24,24 +24,31 @@
   foco, seleção, bordas de input/botão e estados de erro permanecem visíveis.
 - **Zoom**: aplique zoom da WebView até 200% (texto) e verifique que nada some,
   trunca sem reflow ou perde foco; teste também janela estreita.
+- **Leitor de tela**: percorra cada painel com o **Narrator** (Win+Ctrl+Enter)
+  e, se possível, com o **NVDA**. Confirme que cada controle é anunciado com
+  nome + papel + estado corretos (ex.: "Palavra inteira, botão de alternância,
+  ativado"), que widgets compostos (tablist, radiogroup, listbox) anunciam
+  posição/seleção, que os dialogs anunciam título/role ao abrir, e que o Graph
+  é navegável pela lista de nós. Foque os pontos abaixo, que foram alterados
+  nesta auditoria.
 
 ## Checklist por painel
 
 Marque por estado: `rest` / `hover` / `selected` / `disabled` / `focus`.
 
-| Painel | Contraste AA | Foco visível | Teclado completo | Reduced motion | Forced colors | Obs. |
-|---|---|---|---|---|---|---|
-| Explorer (árvore) | [ ] | [ ] | [ ] | [ ] | [ ] | |
-| Editor tabs | [ ] | [ ] | [ ] | [ ] | [ ] | tablist roving |
-| Search | [ ] | [ ] | [ ] | [ ] | [ ] | toggles aria-pressed |
-| Git | [ ] | [ ] | [ ] | [ ] | [ ] | badges cor+texto |
-| Problems | [ ] | [ ] | [ ] | [ ] | [ ] | ícone por severidade |
-| Terminal / painel inferior | [ ] | [ ] | [ ] | [ ] | [ ] | tablist |
-| Agents | [ ] | [ ] | [ ] | [ ] | [ ] | radiogroup de modo |
-| SSH (dialogs) | [ ] | [ ] | [ ] | [ ] | [ ] | trap/restore |
-| Graph | [ ] | [ ] | [ ] | [ ] | [ ] | listbox alternativa |
-| Status bar | [ ] | [ ] | [ ] | [ ] | [ ] | ações por teclado |
-| Dialogs (Confirm/About/Quick*) | [ ] | [ ] | [ ] | [ ] | [ ] | foco volta ao disparador |
+| Painel | Contraste AA | Foco visível | Teclado completo | Leitor de tela | Reduced motion | Forced colors | Obs. |
+|---|---|---|---|---|---|---|---|
+| Explorer (árvore) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | |
+| Editor tabs | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | tablist roving |
+| Search | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | toggles aria-pressed |
+| Git | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | badges cor+texto |
+| Problems | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | ícone por severidade |
+| Terminal / painel inferior | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | tablist |
+| Agents | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | radiogroup de modo |
+| SSH (dialogs) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | trap/restore |
+| Graph | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | listbox alternativa |
+| Status bar | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | ações por teclado |
+| Dialogs (Confirm/About/Quick*) | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | foco volta ao disparador |
 
 ## Status não dependente só de cor (F2-AUD-012)
 

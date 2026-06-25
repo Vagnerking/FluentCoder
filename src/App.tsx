@@ -4288,7 +4288,9 @@ export default function App() {
         encoding={activeFile?.encoding ?? null}
         eol={activeFile?.eol ? (activeFile.eol === "Lf" ? "LF" : "CRLF") : null}
         onSelectEncoding={
-          activeFile && !isUntitled(activeFile.path)
+          // Reopen-with-encoding re-reads from the local FS, so it's offered
+          // only for saved local files (not untitled, not remote SSH).
+          activeFile && !isUntitled(activeFile.path) && !remoteSession
             ? handleSelectEncoding
             : undefined
         }

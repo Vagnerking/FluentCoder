@@ -139,11 +139,20 @@ export async function readFile(path: string): Promise<DecodedFile> {
   return invoke<DecodedFile>("read_file", { path });
 }
 
-/** Re-reads a local file forcing a specific encoding ("Reopen with Encoding"). */
+/**
+ * Re-reads a local file forcing a specific encoding ("Reopen with Encoding").
+ * Not available on remote SSH workspaces — the encoding detector only runs on
+ * the local FS command, so we reject rather than read the remote path locally.
+ */
 export function readFileWithEncoding(
   path: string,
   encoding: string
 ): Promise<DecodedFile> {
+  if (getActiveRemote()) {
+    return Promise.reject(
+      new Error("Reabrir com codificação ainda não é suportado em workspaces remotos.")
+    );
+  }
   return invoke<DecodedFile>("read_file_with_encoding", { path, encoding });
 }
 

@@ -67,10 +67,11 @@ export function RemoteFolderBrowser({
   const listRef = useRef<HTMLDivElement>(null);
 
   // Contrato de modal compartilhado: trap + restore, e Esc cancela
-  // (F2-AUD-007). O foco inicial fica com a lógica local abaixo (depende de
-  // `loading` e re-foca a lista a cada navegação), então passamos
-  // `initialFocus: false` para não disputar com ela.
-  useModalFocus(surfaceRef, { initialFocus: false, onEscape: onCancel });
+  // (F2-AUD-007). O foco inicial vai para a própria superfície já na abertura —
+  // assim o usuário de teclado entra no modal mesmo durante o carregamento
+  // (hosts lentos) e não navega o fundo atrás do backdrop. Quando a lista chega,
+  // a lógica local abaixo move o foco para ela.
+  useModalFocus(surfaceRef, { initialFocus: surfaceRef, onEscape: onCancel });
 
   const list = useCallback(
     async (dir: string) => {

@@ -157,6 +157,31 @@ pub fn encode_for_save(content: &str, encoding: &str, eol: Eol, bom: bool) -> Re
         content.to_string()
     };
 
+    // encoding_rs has NO encoder for UTF-16LE/BE — `Encoding::encode` silently
+    // falls back to UTF-8 for them (output_encoding() == UTF-8). Encoding a
+    // UTF-16 file through it would write UTF-8 bytes under a UTF-16 BOM, i.e.
+    // corrupt the file. So we hand-encode UTF-16 here; all other encodings
+    // (UTF-8, Windows-125x, ISO-8859-x, Shift_JIS, GBK, …) go through the crate.
+    if enc == encoding_rs::UTF_16LE || enc == encoding_rs::UTF_16BE {
+        let big_endian = enc == encoding_rs::UTF_16BE;
+        let mut out = Vec::with_capacity(with_eol.len() * 2 + 2);
+        if bom {
+            out.extend_from_slice(if big_endian {
+                &[0xFE, 0xFF]
+            } else {
+                &[0xFF, 0xFE]
+            });
+        }
+        for unit in with_eol.encode_utf16() {
+            out.extend_from_slice(&if big_endian {
+                unit.to_be_bytes()
+            } else {
+                unit.to_le_bytes()
+            });
+        }
+        return Ok(out);
+    }
+
     let (encoded, _, had_unmappable) = enc.encode(&with_eol);
     if had_unmappable {
         // A char can't be represented in the target encoding — refuse rather
@@ -168,13 +193,9 @@ pub fn encode_for_save(content: &str, encoding: &str, eol: Eol, bom: bool) -> Re
     }
 
     let mut out = Vec::with_capacity(encoded.len() + 3);
-    if bom {
-        match enc.output_encoding() {
-            e if e == encoding_rs::UTF_8 => out.extend_from_slice(&[0xEF, 0xBB, 0xBF]),
-            e if e == encoding_rs::UTF_16LE => out.extend_from_slice(&[0xFF, 0xFE]),
-            e if e == encoding_rs::UTF_16BE => out.extend_from_slice(&[0xFE, 0xFF]),
-            _ => {} // Non-Unicode encodings have no BOM.
-        }
+    // Only UTF-8 carries a BOM among the crate-encodable encodings here.
+    if bom && enc == encoding_rs::UTF_8 {
+        out.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
     }
     out.extend_from_slice(&encoded);
     Ok(out)
@@ -223,6 +244,42 @@ mod tests {
         assert_eq!(d.content, "Hi");
         assert!(d.bom);
         assert_eq!(d.encoding, "UTF-16LE");
+    }
+
+    #[test]
+    fn utf16le_roundtrips_as_real_utf16_not_utf8() {
+        // Regression: encoding_rs has no UTF-16 encoder, so naive `enc.encode`
+        // would emit UTF-8 bytes under a UTF-16 BOM and corrupt the file. The
+        // bytes must come back byte-for-byte as UTF-16LE.
+        let raw = [0xFF, 0xFE, b'H', 0x00, b'i', 0x00];
+        let d = decode(&raw);
+        let bytes = encode_for_save(&d.content, &d.encoding, d.eol, d.bom).unwrap();
+        assert_eq!(bytes, raw);
+    }
+
+    #[test]
+    fn utf16be_roundtrips() {
+        // "Hi" in UTF-16BE with BOM.
+        let raw = [0xFE, 0xFF, 0x00, b'H', 0x00, b'i'];
+        let d = decode(&raw);
+        assert_eq!(d.content, "Hi");
+        assert_eq!(d.encoding, "UTF-16BE");
+        let bytes = encode_for_save(&d.content, &d.encoding, d.eol, d.bom).unwrap();
+        assert_eq!(bytes, raw);
+    }
+
+    #[test]
+    fn utf16_applies_crlf_in_code_units() {
+        // CRLF must be two UTF-16 code units, not raw bytes spliced in.
+        let d = DecodedFile {
+            content: "a\nb".to_string(),
+            encoding: "UTF-16LE".to_string(),
+            bom: false,
+            eol: Eol::Crlf,
+        };
+        let bytes = encode_for_save(&d.content, &d.encoding, d.eol, d.bom).unwrap();
+        // a \r \n b  →  61 00 0D 00 0A 00 62 00
+        assert_eq!(bytes, [0x61, 0x00, 0x0D, 0x00, 0x0A, 0x00, 0x62, 0x00]);
     }
 
     #[test]
