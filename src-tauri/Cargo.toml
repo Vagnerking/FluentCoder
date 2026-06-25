@@ -22,7 +22,11 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # `image-png` lets us decode the bundled PNG at runtime to set a crisp,
 # high-resolution window/taskbar icon (see the `setup` hook in lib.rs).
-tauri = { version = "2", features = ["image-png"] }
+# `macos-private-api` habilita janelas transparentes/com efeitos no macOS
+# (o método `.transparent()` do WebviewWindowBuilder só existe com ela no target
+# macOS — sem isso a build do macOS falha com E0599). No Windows/Linux é no-op.
+# Atenção: apps com esta feature não podem ser publicados na Mac App Store.
+tauri = { version = "2", features = ["image-png", "macos-private-api"] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
