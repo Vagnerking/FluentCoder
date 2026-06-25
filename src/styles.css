@@ -64,6 +64,10 @@
   --color-surface-overlay: #202734;
   --color-surface-overlay-border: #3a4150;
 
+  /* Graph node roles (F2-AUD-001 / F2-AUD-015) — consumed by GraphView. */
+  --color-graph-markdown: var(--accent);
+  --color-graph-code: #3ec9a7;
+
   /* ---- Focus (F2-AUD-003) ----
      One focus contract for every interactive element. Apply via the
      `:focus-visible` rule near the end of this file; never `outline: none`
@@ -448,8 +452,10 @@ body {
 .explorer-title {
   font-weight: 600;
   color: var(--text-muted);
+  /* Section headers stay uppercase by VS Code convention; the heavy tracking is
+     softened to a subtle 0.3px so the label reads as a label, not spaced-out. */
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -595,7 +601,9 @@ body {
   white-space: nowrap;
   overflow: hidden;
   color: var(--text-secondary);
-  font-family: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  /* Align to the primary typography stack (same as `body`) — no "Inter". */
+  font-family: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI",
+    system-ui, sans-serif;
   font-size: 14px;
   font-weight: 450;
   line-height: 20px;
@@ -4200,4 +4208,150 @@ button .codicon { pointer-events: none; }
 .backlinks-rel.rel-wikilink {
   color: var(--accent);
   border-color: rgba(96, 205, 255, 0.4);
+}
+
+/* ---- Tooltip (F2-AUD-005) ---- */
+/* Accessible tooltip bubble for icon-only command buttons. Rendered with
+   `position: fixed` so it escapes the sidebar/activity-bar `overflow: hidden`;
+   the trigger keeps its own aria-label, this is just the visual hint. */
+.tooltip {
+  position: fixed;
+  z-index: 10001;
+  max-width: 260px;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text);
+  background: var(--color-surface-overlay);
+  border: 1px solid var(--color-surface-overlay-border);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-flyout);
+  white-space: nowrap;
+  pointer-events: none;
+  /* Centre horizontally on the trigger; the vertical offset is per-placement. */
+  transform: translateX(-50%);
+  animation: tooltip-in var(--duration-fast) var(--ease-standard);
+}
+
+.tooltip-top {
+  /* Sit just above the trigger (top edge is the anchor). */
+  transform: translate(-50%, calc(-100% - 6px));
+}
+
+.tooltip-bottom {
+  /* Sit just below the trigger (bottom edge is the anchor). */
+  transform: translate(-50%, 6px);
+}
+
+@keyframes tooltip-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ---- Graph a11y (F2-AUD-015) ---- */
+/* The canvas is mouse/visual only; this is its keyboard-navigable textual
+   mirror. A floating listbox over the canvas where each option centres +
+   spotlights the node (focus/click) and opens the file (Enter/Space/double
+   click). The graph region itself carries role="application" + an aria help
+   string rendered via .graph-sr-only below. */
+
+/* Visually hidden but exposed to assistive tech (keyboard help, panel labels). */
+.graph-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.graph-node-list {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  width: 248px;
+  max-height: calc(100% - 24px);
+  border-radius: var(--radius-control);
+  border: 1px solid var(--acrylic-border);
+  background: rgba(20, 26, 34, 0.72);
+  backdrop-filter: blur(20px) saturate(120%);
+  -webkit-backdrop-filter: blur(20px) saturate(120%);
+  box-shadow: var(--shadow-flyout, 0 8px 24px rgba(0, 0, 0, 0.32));
+  overflow: hidden;
+}
+.graph-node-list-box {
+  overflow-y: auto;
+  padding: 4px;
+  outline: none;
+}
+.graph-node-list-empty {
+  margin: 0;
+  padding: 10px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.graph-node-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--radius-control);
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.graph-node-option:hover {
+  background: var(--fill-subtle-hover);
+  color: var(--text);
+}
+.graph-node-option.is-active {
+  background: var(--fill-selected, rgba(96, 205, 255, 0.16));
+  color: var(--text);
+}
+.graph-node-option.is-current .graph-node-option-name {
+  color: var(--accent);
+  font-weight: 600;
+}
+/* Roving-tabindex focus: the active option is the single tab stop and shows the
+   shared focus ring (the global :focus-visible rule covers role="option"). */
+.graph-node-option:focus-visible {
+  outline: var(--focus-ring-width) solid var(--stroke-focus);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+.graph-node-option-name {
+  flex: 0 0 auto;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.graph-node-option-rel {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  color: var(--text-disabled);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Reduced motion: drop the option hover/active colour transition too. */
+@media (prefers-reduced-motion: reduce) {
+  .graph-node-option {
+    transition: none;
+  }
 }

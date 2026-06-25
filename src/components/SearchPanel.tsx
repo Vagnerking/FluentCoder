@@ -11,6 +11,7 @@ import { cancelSearch, searchInDir } from "../api";
 import type { FileMatches, FileNode, LineMatch, SearchOptions } from "../types";
 import { Codicon } from "../icons/codicons/Codicon";
 import { FileIcon } from "../icon-theme/material/FileIcon";
+import { Tooltip } from "./Tooltip";
 
 interface SearchPanelProps {
   /** Root folder to search within, or null when no folder is open. */
@@ -343,51 +344,55 @@ export function SearchPanel({
           disabled={!rootPath}
         />
         <div className="search-controls">
-          <button
-            type="button"
-            className={`search-toggle${caseSensitive ? " active" : ""}`}
-            title="Diferenciar maiúsculas de minúsculas (Alt+C)"
-            aria-label="Diferenciar maiúsculas de minúsculas"
-            aria-pressed={caseSensitive}
-            disabled={!rootPath}
-            onClick={() => setCaseSensitive((v) => !v)}
-          >
-            <Codicon name="caseSensitive" size={16} />
-          </button>
-          <button
-            type="button"
-            className={`search-toggle${wholeWord ? " active" : ""}`}
-            title="Palavra inteira (Alt+W)"
-            aria-label="Palavra inteira"
-            aria-pressed={wholeWord}
-            disabled={!rootPath}
-            onClick={() => setWholeWord((v) => !v)}
-          >
-            <Codicon name="wholeWord" size={16} />
-          </button>
-          <button
-            type="button"
-            className={`search-toggle${regex ? " active" : ""}`}
-            title="Usar expressão regular (Alt+R)"
-            aria-label="Usar expressão regular"
-            aria-pressed={regex}
-            disabled={!rootPath}
-            onClick={() => setRegex((v) => !v)}
-          >
-            <Codicon name="regex" size={16} />
-          </button>
+          <Tooltip label="Diferenciar maiúsculas de minúsculas (Alt+C)">
+            <button
+              type="button"
+              className={`search-toggle${caseSensitive ? " active" : ""}`}
+              aria-label="Diferenciar maiúsculas de minúsculas"
+              aria-pressed={caseSensitive}
+              disabled={!rootPath}
+              onClick={() => setCaseSensitive((v) => !v)}
+            >
+              <Codicon name="caseSensitive" size={16} />
+            </button>
+          </Tooltip>
+          <Tooltip label="Palavra inteira (Alt+W)">
+            <button
+              type="button"
+              className={`search-toggle${wholeWord ? " active" : ""}`}
+              aria-label="Palavra inteira"
+              aria-pressed={wholeWord}
+              disabled={!rootPath}
+              onClick={() => setWholeWord((v) => !v)}
+            >
+              <Codicon name="wholeWord" size={16} />
+            </button>
+          </Tooltip>
+          <Tooltip label="Usar expressão regular (Alt+R)">
+            <button
+              type="button"
+              className={`search-toggle${regex ? " active" : ""}`}
+              aria-label="Usar expressão regular"
+              aria-pressed={regex}
+              disabled={!rootPath}
+              onClick={() => setRegex((v) => !v)}
+            >
+              <Codicon name="regex" size={16} />
+            </button>
+          </Tooltip>
           <span className="search-controls-sep" aria-hidden="true" />
-          <button
-            type="button"
-            className={`search-toggle${showFilters ? " active" : ""}`}
-            title="Alternar arquivos a incluir/excluir"
-            aria-label="Alternar arquivos a incluir/excluir"
-            aria-pressed={showFilters}
-            disabled={!rootPath}
-            onClick={() => setShowFilters((v) => !v)}
-          >
-            <Codicon name="filterFiles" size={14} />
-          </button>
+          <Tooltip label="Alternar arquivos a incluir/excluir">
+            <button
+              type="button"
+              className={`search-toggle${showFilters ? " active" : ""}`}
+              aria-label="Alternar arquivos a incluir/excluir"
+              aria-pressed={showFilters}
+              disabled={!rootPath}
+              onClick={() => setShowFilters((v) => !v)}
+            >
+              <Codicon name="filterFiles" size={14} />
+            </button>
+          </Tooltip>
         </div>
       </div>
 
@@ -419,14 +424,15 @@ export function SearchPanel({
           <span className="search-scope-chip" title={searchRoot}>
             <Codicon name="folder" size={12} />
             <span className="search-scope-name">{baseName(searchRoot)}</span>
-            <button
-              className="search-scope-clear"
-              title="Limpar escopo da pasta"
-              aria-label="Limpar escopo da pasta"
-              onClick={() => onClearScope?.()}
-            >
-              <Codicon name="close" size={12} />
-            </button>
+            <Tooltip label="Limpar escopo da pasta">
+              <button
+                className="search-scope-clear"
+                aria-label="Limpar escopo da pasta"
+                onClick={() => onClearScope?.()}
+              >
+                <Codicon name="close" size={12} />
+              </button>
+            </Tooltip>
           </span>
         </div>
       )}

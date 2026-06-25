@@ -12,6 +12,7 @@ import { languageForFile } from "../language";
 import { gitBlame } from "../api";
 import { toFileUri, fromFileUri } from "../lsp/uri";
 import { setupMonacoForLsp } from "../lsp/monacoSetup";
+import { palette } from "../theme/palette";
 
 // Console-only debug logging. (It used to mirror to a hardcoded path on another
 // machine and fire an IPC file write — with an ever-growing buffer — on EVERY
@@ -343,18 +344,24 @@ export function EditorPane({
         { token: "enum name", foreground: "B8D7A3" },
         { token: "type parameter name", foreground: "4EC9B0" },
       ],
+      // Chrome colors derive from the shared palette so the editor surfaces
+      // track the CSS token layer (F2-AUD-001). Monaco needs literals at
+      // registration time, so we read them from `palette` (hex without `#`
+      // where Monaco expects a bare token is not required — it accepts `#rgb`).
+      // Syntax-token foregrounds in `rules` above are a separate highlighting
+      // concern and intentionally stay inline.
       colors: {
-        "editor.background": "#1C222B",
-        "editorGutter.background": "#1C222B",
-        "editorLineNumber.foreground": "#7D8795",
-        "editorLineNumber.activeForeground": "#D6E2F0",
+        "editor.background": palette.editorBg,
+        "editorGutter.background": palette.editorBg,
+        "editorLineNumber.foreground": palette.textMuted,
+        "editorLineNumber.activeForeground": palette.textActive,
         "editor.lineHighlightBackground": "#FFFFFF0A",
         "editor.selectionBackground": "#60CDFF35",
         "editor.inactiveSelectionBackground": "#60CDFF20",
-        "editorCursor.foreground": "#60CDFF",
+        "editorCursor.foreground": palette.accent,
         "editorIndentGuide.background1": "#FFFFFF12",
         "editorIndentGuide.activeBackground1": "#8BB7D94D",
-        "minimap.background": "#1C222B",
+        "minimap.background": palette.editorBg,
         "scrollbarSlider.background": "#B8C7D526",
         "scrollbarSlider.hoverBackground": "#B8C7D540",
         "scrollbarSlider.activeBackground": "#B8C7D55A",
@@ -363,23 +370,23 @@ export function EditorPane({
         // against this theme's customized surfaces — the dropdown of
         // references becomes unreadable. Opaque surface (no acrylic alpha)
         // so the editor text never bleeds through the list.
-        "editorSuggestWidget.background": "#202734",
-        "editorSuggestWidget.border": "#3A4150",
-        "editorSuggestWidget.foreground": "#D6E2F0",
+        "editorSuggestWidget.background": palette.surfaceOverlay,
+        "editorSuggestWidget.border": palette.surfaceOverlayBorder,
+        "editorSuggestWidget.foreground": palette.textActive,
         "editorSuggestWidget.selectedBackground": "#2C5E80",
-        "editorSuggestWidget.selectedForeground": "#FFFFFF",
-        "editorSuggestWidget.highlightForeground": "#60CDFF",
+        "editorSuggestWidget.selectedForeground": palette.textBright,
+        "editorSuggestWidget.highlightForeground": palette.accent,
         "editorSuggestWidget.focusHighlightForeground": "#9DDCFF",
         // Hover, signature-help and parameter-hint popups share the same
         // surface so all editor flyouts stay legible and consistent.
-        "editorHoverWidget.background": "#202734",
-        "editorHoverWidget.border": "#3A4150",
-        "editorHoverWidget.foreground": "#D6E2F0",
-        "editorWidget.background": "#202734",
-        "editorWidget.border": "#3A4150",
-        "editorWidget.foreground": "#D6E2F0",
+        "editorHoverWidget.background": palette.surfaceOverlay,
+        "editorHoverWidget.border": palette.surfaceOverlayBorder,
+        "editorHoverWidget.foreground": palette.textActive,
+        "editorWidget.background": palette.surfaceOverlay,
+        "editorWidget.border": palette.surfaceOverlayBorder,
+        "editorWidget.foreground": palette.textActive,
         // Inline (ghost text) completion preview — the dimmed italic text.
-        "editorGhostText.foreground": "#7D8795",
+        "editorGhostText.foreground": palette.textMuted,
       },
     });
   };

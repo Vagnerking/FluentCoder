@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { listen } from "@tauri-apps/api/event";
 import { termCreate, termWrite, termResize, termClose } from "../api";
+import { terminalTheme } from "../theme/palette";
 import "@xterm/xterm/css/xterm.css";
 
 interface TerminalViewProps {
@@ -24,20 +25,10 @@ export function TerminalView({ id, cwd, command }: TerminalViewProps) {
     if (!containerRef.current) return;
 
     const term = new Terminal({
-      theme: {
-        background: "#1c222b",
-        foreground: "#d2dce7",
-        cursor: "#60cdff",
-        selectionBackground: "rgba(96,205,255,0.3)",
-        black: "#1c222b",
-        brightBlack: "#708090",
-        blue: "#75beff",
-        brightBlue: "#9cdcfe",
-        cyan: "#4ec9b0",
-        brightCyan: "#7fdbca",
-        white: "#d2dce7",
-        brightWhite: "#ffffff",
-      },
+      // Shared palette so the terminal stays in sync with the token layer
+      // (F2-AUD-001); also fills in the previously-missing ANSI red/green/
+      // yellow/magenta so colored CLI output renders correctly.
+      theme: { ...terminalTheme },
       fontFamily: '"Cascadia Code", "Consolas", monospace',
       fontSize: 13,
       lineHeight: 1.2,

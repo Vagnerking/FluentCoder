@@ -128,8 +128,14 @@ export function StatusBar({
           <span
             className="status-item status-remote"
             title={`Conectado via SSH a ${remoteHost}.\nClique para gerenciar a conexão.`}
+            // Kept as a span (not <button>): `.status-item` is a flex chip with no
+            // native-button reset, so a real button would break the bar's layout.
+            // We give it full keyboard parity instead (F2-AUD-016 / F2-AUD-008).
             role={onManageRemote ? "button" : undefined}
             tabIndex={onManageRemote ? 0 : undefined}
+            aria-label={
+              onManageRemote ? `Gerenciar conexão SSH com ${remoteHost}` : undefined
+            }
             onClick={onManageRemote}
             onKeyDown={(e) => {
               if (onManageRemote && (e.key === "Enter" || e.key === " ")) {
@@ -179,8 +185,20 @@ export function StatusBar({
             <span
               className="status-item"
               onClick={onClickBranch}
+              onKeyDown={
+                onClickBranch
+                  ? (e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onClickBranch();
+                      }
+                    }
+                  : undefined
+              }
               title={onClickBranch ? "Trocar de branch" : undefined}
               role={onClickBranch ? "button" : undefined}
+              tabIndex={onClickBranch ? 0 : undefined}
+              aria-label={onClickBranch ? `Branch ${branch}; trocar de branch` : undefined}
             >
               <Codicon name="gitBranch" /> {branch}
             </span>
@@ -193,6 +211,11 @@ export function StatusBar({
           title={onShowProblems ? "Mostrar Problemas" : undefined}
           role={onShowProblems ? "button" : undefined}
           tabIndex={onShowProblems ? 0 : undefined}
+          aria-label={
+            onShowProblems
+              ? `${errorCount} erros, ${warningCount} avisos; mostrar Problemas`
+              : undefined
+          }
           onClick={onShowProblems}
           onKeyDown={
             onShowProblems
@@ -221,6 +244,7 @@ export function StatusBar({
             title={`${s.id}: ${LSP_LABEL[s.status]} (clique para ações)`}
             role="button"
             tabIndex={0}
+            aria-label={`${s.id}: ${LSP_LABEL[s.status]}; abrir ações do servidor`}
             onClick={(e) => {
               const rect = e.currentTarget.getBoundingClientRect();
               setLspMenu({ server: s, x: rect.left, y: rect.top });
@@ -280,6 +304,11 @@ export function StatusBar({
             title={onSelectLanguage ? "Selecionar modo de linguagem" : undefined}
             role={onSelectLanguage ? "button" : undefined}
             tabIndex={onSelectLanguage ? 0 : undefined}
+            aria-label={
+              onSelectLanguage
+                ? `Linguagem: ${langDisplay}; selecionar modo de linguagem`
+                : undefined
+            }
             onClick={onSelectLanguage}
             onKeyDown={
               onSelectLanguage

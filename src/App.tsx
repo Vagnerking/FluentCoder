@@ -3819,9 +3819,9 @@ export default function App() {
           />
         );
       case "account":
-        return <PlaceholderPanel title="CONTAS" />;
+        return <PlaceholderPanel title="Contas" />;
       case "settings":
-        return <PlaceholderPanel title="GERENCIAR" />;
+        return <PlaceholderPanel title="Gerenciar" />;
       default:
         return (
           <FileExplorer
