@@ -38,6 +38,65 @@
   --radius-control: 6px;
   --radius-card: 8px;
 
+  /* ---- Semantic status tokens (F2-AUD-001 / F2-AUD-012) ----
+     Single source of truth for error/warning/success/info. Status must never
+     rely on color alone — pair these with an icon or text label at the call
+     site. Tuned for AA contrast over the dark Mica surfaces. */
+  --color-status-error: #f14c4c;
+  --color-status-error-muted: #c74e39;
+  --color-status-warning: #cca700;
+  --color-status-warning-strong: #e0a23b;
+  --color-status-success: #73c991;
+  --color-status-info: var(--accent);
+
+  /* Git decoration tokens — mirror VSCode's gitDecoration.* roles. */
+  --color-git-modified: #e2c08d;
+  --color-git-added: #73c991;
+  --color-git-untracked: #73c991;
+  --color-git-deleted: #f14c4c;
+  --color-git-deleted-strong: #c74e39;
+  --color-git-renamed: var(--accent);
+  --color-git-conflict: #e4676b;
+  --color-git-conflict-strong: #e0a23b;
+
+  /* Overlay surface for flyouts / menus / suggest widgets — opaque enough that
+     editor text never bleeds through. */
+  --color-surface-overlay: #202734;
+  --color-surface-overlay-border: #3a4150;
+
+  /* ---- Focus (F2-AUD-003) ----
+     One focus contract for every interactive element. Apply via the
+     `:focus-visible` rule near the end of this file; never `outline: none`
+     without substituting an equivalent ring. */
+  --stroke-focus: var(--accent);
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 1px;
+  --focus-ring: 0 0 0 var(--focus-ring-width) var(--stroke-focus);
+
+  /* ---- Elevation / shadow (F2-AUD-010) ----
+     Permanent surfaces stay flat (rest); strong shadows are reserved for
+     transient overlays (flyout/dialog). */
+  --shadow-rest: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-flyout:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 8px 24px rgba(0, 0, 0, 0.24);
+  --shadow-dialog:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 16px 48px rgba(0, 0, 0, 0.36);
+
+  /* ---- Motion (F2-AUD-004) ----
+     Durations/easings consumed by transitions and animations. The global
+     `prefers-reduced-motion` block collapses these to near-zero. */
+  --duration-fast: 100ms;
+  --duration-medium: 180ms;
+  --duration-slow: 280ms;
+  --ease-standard: cubic-bezier(0.33, 0, 0.1, 1);
+  --ease-decelerate: cubic-bezier(0.1, 0.9, 0.2, 1);
+
+  /* Only dark theme exists today; declare it so native form controls,
+     scrollbars and the canvas match (F2-AUD-002). */
+  color-scheme: dark;
+
   font-synthesis: none;
 }
 
@@ -239,9 +298,9 @@ body {
     var(--acrylic-tint);
   border: 1px solid var(--acrylic-border);
   border-radius: 8px;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04),
-    0 8px 24px rgba(0, 0, 0, 0.24);
+  /* Permanent surface: separated by border + tint, not a heavy drop shadow
+     (F2-AUD-010). Strong shadows are reserved for transient overlays. */
+  box-shadow: var(--shadow-rest);
   /* Native Mica already supplies the backdrop. A second CSS blur forces
      WebView2 to recompose this surface during every scroll frame. */
   display: flex;
@@ -260,9 +319,7 @@ body {
     var(--acrylic-tint-strong);
   border: 1px solid var(--acrylic-border);
   border-radius: 8px;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.035),
-    0 8px 24px rgba(0, 0, 0, 0.24);
+  box-shadow: var(--shadow-rest);
   backdrop-filter: blur(28px) saturate(120%);
   -webkit-backdrop-filter: blur(28px) saturate(120%);
   overflow: hidden;
@@ -1691,11 +1748,69 @@ body {
   user-select: none;
 }
 
-/* ---- Focus visibility (Fluent keyboard focus) ---- */
+/* ---- Focus visibility (Fluent keyboard focus) — F2-AUD-003 ----
+   Single focus contract for every interactive element. Any rule that sets
+   `outline: none` MUST provide an equivalent ring via the tokens below; the
+   `.focus-ring` utility is the canonical substitute. */
 button:focus-visible,
+[role="button"]:focus-visible,
+[role="tab"]:focus-visible,
+[role="radio"]:focus-visible,
+[role="menuitem"]:focus-visible,
+[role="option"]:focus-visible,
+a:focus-visible,
+summary:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible,
 .tree-row:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline: var(--focus-ring-width) solid var(--stroke-focus);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+
+/* Utility for controls that need an outset ring (e.g. inputs/handles where a
+   negative offset would clip). Replaces ad-hoc box-shadow focus styles. */
+.focus-ring:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Text fields across features clear the native outline; give them the shared
+   ring so keyboard focus is never invisible (F2-AUD-003 / F2-AUD-013). */
+.search-input:focus-visible,
+.git-message:focus-visible,
+.quick-open-input:focus-visible {
+  outline: none;
+  border-color: var(--stroke-focus);
+  box-shadow: var(--focus-ring);
+}
+
+/* High contrast / forced colors (F2-AUD-002). In Windows high-contrast mode the
+   system overrides backgrounds; keep focus, borders and selection visible by
+   deferring to the system palette instead of our alpha tints. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: var(--focus-ring-width) solid Highlight;
+    outline-offset: var(--focus-ring-offset);
+  }
+  button,
+  input,
+  textarea,
+  select,
+  [role="button"],
+  [role="tab"],
+  [role="menuitem"],
+  [role="option"] {
+    border: 1px solid ButtonBorder;
+  }
+  .tree-row.active,
+  [aria-selected="true"],
+  [aria-current="true"] {
+    background: Highlight;
+    color: HighlightText;
+    forced-color-adjust: none;
+  }
 }
 
 /* ---- Scrollbars ---- */
@@ -2602,7 +2717,19 @@ button:focus-visible,
   }
 }
 
+/* ---- Reduced motion (F2-AUD-004) ----
+   Global policy: collapse decorative transitions/animations to near-zero so no
+   element keeps moving for users who asked for less motion. Motion that
+   communicates state (e.g. a spinner) is left to opt back in deliberately. */
 @media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
   .activity-indicator {
     transition: none;
   }
@@ -3037,15 +3164,15 @@ button:focus-visible,
 .git-file-row:hover .git-file-action { opacity: 1; }
 .git-file-action:hover:not(:disabled) { background: var(--fill-subtle-hover); color: var(--text); }
 .git-file-badge { width: 16px; text-align: center; flex-shrink: 0; font-size: 12px; font-weight: 700; font-family: "Cascadia Code", "Consolas", monospace; }
-.git-badge-modified { color: #e2c08d; }
-.git-badge-added, .git-badge-untracked { color: #73c991; }
-.git-badge-deleted { color: #f14c4c; }
-.git-badge-renamed { color: var(--accent); }
+.git-badge-modified { color: var(--color-git-modified); }
+.git-badge-added, .git-badge-untracked { color: var(--color-git-added); }
+.git-badge-deleted { color: var(--color-git-deleted); }
+.git-badge-renamed { color: var(--color-git-renamed); }
 
 /* Merge-conflict group + its files stand out in amber. */
-.git-group-conflict { color: #e0a23b; }
+.git-group-conflict { color: var(--color-git-conflict-strong); }
 .git-group-conflict > span:first-child { display: inline-flex; align-items: center; gap: 5px; }
-.git-group-conflict .codicon { color: #e0a23b; }
+.git-group-conflict .codicon { color: var(--color-git-conflict-strong); }
 
 /* Stash entries. */
 .git-stash-row { display: flex; align-items: center; gap: 7px; padding: 3px 12px; font-size: 12px; color: var(--text-secondary); }
@@ -3502,20 +3629,20 @@ button .codicon { pointer-events: none; }
 
 /* Diagnostic / status codicon colors (shared by status bar + problems). */
 .status-left .codicon-error,
-.problem-error .problem-icon .codicon { color: #f14c4c; }
+.problem-error .problem-icon .codicon { color: var(--color-status-error); }
 .status-left .codicon-warning,
-.problem-warning .problem-icon .codicon { color: #cca700; }
-.problem-info .problem-icon .codicon { color: var(--accent); }
+.problem-warning .problem-icon .codicon { color: var(--color-status-warning); }
+.problem-info .problem-icon .codicon { color: var(--color-status-info); }
 
 /* ---- File-state decorations (label color + badge) ----
    Diagnostics outrank git; colors mirror VSCode's gitDecoration.*. */
-.deco-modified  { color: #e2c08d; }   /* modified (orange) */
+.deco-modified  { color: var(--color-git-modified); }        /* modified (orange) */
 .deco-added,
-.deco-untracked { color: #73c991; }   /* new / untracked (green) */
-.deco-deleted   { color: #c74e39; }   /* deleted (red) */
-.deco-conflict  { color: #e4676b; }   /* merge conflict */
-.deco-error     { color: #f14c4c; }   /* has error diagnostic */
-.deco-warning   { color: #cca700; }   /* has warning diagnostic */
+.deco-untracked { color: var(--color-git-added); }           /* new / untracked (green) */
+.deco-deleted   { color: var(--color-git-deleted-strong); }  /* deleted (red) */
+.deco-conflict  { color: var(--color-git-conflict); }        /* merge conflict */
+.deco-error     { color: var(--color-status-error); }        /* has error diagnostic */
+.deco-warning   { color: var(--color-status-warning); }      /* has warning diagnostic */
 
 /* The active row keeps its accent label for GIT states; the badge still shows
    state. Diagnostics are the exception: a selected/active file with an error or
