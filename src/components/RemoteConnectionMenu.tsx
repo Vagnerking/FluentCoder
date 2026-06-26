@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Codicon } from "../icons/codicons/Codicon";
 import type { IconAction } from "../icons/codicons/codicon-map";
 import { useModalDismiss } from "./useModalDismiss";
+import { useModalFocus } from "./useModalFocus";
 
 interface RemoteConnectionMenuProps {
   /** `user@host` of the active connection. */
@@ -74,11 +75,15 @@ export function RemoteConnectionMenu({
   ];
 
   const [selected, setSelected] = useState(0);
+  const surfaceRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    listRef.current?.focus();
-  }, []);
+  // Decisão modal: apesar do nome "menu", isto não é um flyout ancorado — abre
+  // sobre o `quick-open-backdrop` em tela cheia (z-index 100) que bloqueia o
+  // resto e fecha ao clicar fora. Logo é MODAL: aplicamos aria-modal + trap +
+  // restore, com foco inicial na lista navegável (F2-AUD-007). Esc fecha via
+  // hook, saindo do onKeyDown da lista.
+  useModalFocus(surfaceRef, { initialFocus: listRef, onEscape: onClose });
 
   function activate(index: number) {
     const action = actions[index];
@@ -95,9 +100,6 @@ export function RemoteConnectionMenu({
     } else if (e.key === "Enter") {
       e.preventDefault();
       activate(selected);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      onClose();
     }
   }
 
@@ -106,7 +108,10 @@ export function RemoteConnectionMenu({
       <div
         className="ssh-card ssh-menu"
         role="dialog"
+        aria-modal="true"
         aria-label="Gerenciar conexão remota"
+        tabIndex={-1}
+        ref={surfaceRef}
       >
         <header className="ssh-head">
           <span className="ssh-head-badge">

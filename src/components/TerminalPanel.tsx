@@ -3,6 +3,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent,
 } from "react";
 import { TerminalView } from "./TerminalView";
@@ -96,6 +97,9 @@ export function TerminalPanel({
   const [tabOrder, setTabOrder] = useState<PanelTab[]>(readTabOrder);
   const dragTabRef = useRef<PanelTab | null>(null);
   const [dropTab, setDropTab] = useState<{ tab: PanelTab; after: boolean } | null>(null);
+  // DOM nodes of the panel tabs, so arrow-key navigation can move focus (roving
+  // tabIndex), keyed by tab id and kept in sync as the order changes.
+  const tabRefs = useRef<Partial<Record<PanelTab, HTMLButtonElement | null>>>({});
 
   // Drag-reorderable terminal list. Terminals are live sessions (not persisted
   // across app restarts), so this order is session-scoped by nature.
@@ -187,6 +191,37 @@ export function TerminalPanel({
     return tab === "output" ? "Saída" : "Terminal";
   }
 
+  /**
+   * Arrow-key navigation for the panel tablist (WAI-ARIA tabs pattern): Left/Right
+   * move to the adjacent tab, Home/End jump to the ends, all with wrap. Selection
+   * follows focus (the tab under focus becomes active), matching the click behavior.
+   */
+  function onTabsKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+    const idx = tabOrder.indexOf(activeTab);
+    if (idx < 0) return;
+    let next = idx;
+    switch (e.key) {
+      case "ArrowLeft":
+        next = (idx - 1 + tabOrder.length) % tabOrder.length;
+        break;
+      case "ArrowRight":
+        next = (idx + 1) % tabOrder.length;
+        break;
+      case "Home":
+        next = 0;
+        break;
+      case "End":
+        next = tabOrder.length - 1;
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    const target = tabOrder[next];
+    setActiveTab(target);
+    tabRefs.current[target]?.focus();
+  }
+
   /** Drops the dragged tab before/after `target`, reordering the bar. */
   function reorderTabs(target: PanelTab, after: boolean) {
     const from = dragTabRef.current;
@@ -247,11 +282,26 @@ export function TerminalPanel({
           }
         }}
       >
-        <div className="terminal-tabs">
+        {/*
+          Panel tabs follow the WAI-ARIA tablist pattern (not aria-pressed buttons):
+          role="tablist" on the container, role="tab" + aria-selected per tab, with a
+          roving tabIndex (only the active tab is tabbable) and arrow/Home/End keys
+          driving focus + selection. Drag-and-drop reordering is preserved untouched.
+        */}
+        <div
+          className="terminal-tabs"
+          role="tablist"
+          aria-label="Painel inferior"
+          onKeyDown={onTabsKeyDown}
+        >
           {tabOrder.map((tab) => (
             <button
               key={tab}
+              ref={(el) => {
+                tabRefs.current[tab] = el;
+              }}
               type="button"
+              role="tab"
               draggable
               className={`terminal-tab${activeTab === tab ? " active" : ""}${
                 dropTab?.tab === tab
@@ -261,7 +311,8 @@ export function TerminalPanel({
                   : ""
               }`}
               onClick={() => setActiveTab(tab)}
-              aria-pressed={activeTab === tab}
+              aria-selected={activeTab === tab}
+              tabIndex={activeTab === tab ? 0 : -1}
               onDragStart={() => {
                 dragTabRef.current = tab;
               }}

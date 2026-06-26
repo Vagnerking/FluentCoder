@@ -1,3 +1,6 @@
+/** Line-ending style of an opened file, preserved on save. Mirrors Rust `Eol`. */
+export type Eol = "Lf" | "Crlf";
+
 /** A node in the file explorer tree. Mirrors the Rust `DirEntry`. */
 export interface FileNode {
   name: string;
@@ -101,6 +104,15 @@ export interface OpenFile {
    * `"image"`; "Open With…" can override either way.
    */
   mode?: OpenMode;
+  /**
+   * Detected text encoding (e.g. "UTF-8", "UTF-16LE", "windows-1252"). Shown in
+   * the status bar and re-applied on save so an edit keeps the original format.
+   */
+  encoding?: string;
+  /** Whether the file began with a byte-order mark (preserved on save). */
+  bom?: boolean;
+  /** Original line ending; the buffer itself is always LF in memory. */
+  eol?: Eol;
 }
 
 /**

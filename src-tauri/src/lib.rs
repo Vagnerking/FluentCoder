@@ -12,6 +12,7 @@ mod session;
 mod snap;
 mod ssh;
 mod terminal;
+mod text_io;
 mod walk;
 mod window;
 
@@ -67,6 +68,7 @@ pub fn run() {
             agents::acp_stop_workspace,
             fs_commands::read_dir,
             fs_commands::read_file,
+            fs_commands::read_file_with_encoding,
             fs_commands::read_file_base64,
             fs_commands::write_file,
             fs_commands::create_file,
