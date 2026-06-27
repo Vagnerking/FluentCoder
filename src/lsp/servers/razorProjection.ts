@@ -139,6 +139,43 @@ function openCshtmlModels(): monaco.editor.ITextModel[] {
     );
 }
 
+/** How long the projection start waits for the first `.cshtml` model to appear
+ * before giving up — covers the boot/session-restore race where the manager
+ * starts the server before Monaco has created the restored tab's model. */
+const CSHTML_MODEL_WAIT_MS = 15_000;
+
+/**
+ * Resolves with the open `.cshtml` models, waiting up to {@link CSHTML_MODEL_WAIT_MS}
+ * for the first one if none exist yet. On boot the LspManager may start this
+ * server (driven by `openedLanguages`) before the restored `.cshtml` tab's Monaco
+ * model is created; throwing "no .cshtml open" there would leave the server in an
+ * error state that never recovers without re-focusing the tab. Waiting closes
+ * that race so the projection comes up on the first boot, not the second visit.
+ */
+async function awaitCshtmlModels(): Promise<monaco.editor.ITextModel[]> {
+  const present = openCshtmlModels();
+  if (present.length > 0) return present;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      sub.dispose();
+      clearTimeout(timer);
+      resolve(openCshtmlModels());
+    };
+    const sub = monaco.editor.onDidCreateModel((m) => {
+      if (
+        m.getLanguageId() === CSHTML_PROJECTION_LANGUAGE_ID &&
+        m.uri.scheme === "file"
+      ) {
+        finish();
+      }
+    });
+    const timer = setTimeout(finish, CSHTML_MODEL_WAIT_MS);
+  });
+}
+
 /** Longest-prefix `.csproj` that contains `cshtmlPath`, or null (loose file). */
 async function resolveProject(
   rootPath: string,
@@ -161,7 +198,9 @@ export async function startRazorProjectionServer(
   context?: ServerStartContext
 ): Promise<MonacoLanguageClient> {
   // 1. Resolve the project from the first open `.cshtml` and prepare its peers.
-  const models = openCshtmlModels();
+  // Wait briefly for the model on boot: the manager can start us (from
+  // `openedLanguages`) before Monaco has created the restored tab's model.
+  const models = await awaitCshtmlModels();
   if (models.length === 0) {
     throw new Error("razor projection: no .cshtml open to serve");
   }

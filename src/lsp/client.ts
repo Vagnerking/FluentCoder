@@ -252,7 +252,7 @@ export function disposeLanguageClientContributions(
  * tokens, references, …) each contribute disposables without clobbering one
  * another, so {@link disposeLanguageClientContributions} tears them all down.
  */
-function addClientContributions(
+export function addClientContributions(
   client: MonacoLanguageClient,
   disposables: monaco.IDisposable[]
 ): void {
