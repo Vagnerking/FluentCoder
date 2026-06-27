@@ -98,14 +98,20 @@ export function ensureVscodeServices(): Promise<void> {
   // reuse the cached rejection and could never retry. Clear the cache in the
   // failure path so a subsequent `ensureVscodeServices()` attempts the boot
   // again, and re-throw so the current caller still sees the error.
-  const pending = initializeVscodeServices(serviceOverrides).then(() => {
-    lspLog("@codingame/monaco-vscode-api services initialized");
-  });
-  servicesInitialized = pending.catch((err) => {
-    lspLog("@codingame/monaco-vscode-api services FAILED to initialize", String(err));
-    if (servicesInitialized === pending) servicesInitialized = undefined;
-    throw err;
-  });
+  //
+  // `cached` (not the pre-`.catch` promise) is what we store in
+  // `servicesInitialized`, so the guard below compares against the SAME
+  // reference — only evicting if no later call has already replaced the cache.
+  const cached: Promise<void> = initializeVscodeServices(serviceOverrides)
+    .then(() => {
+      lspLog("@codingame/monaco-vscode-api services initialized");
+    })
+    .catch((err) => {
+      lspLog("@codingame/monaco-vscode-api services FAILED to initialize", String(err));
+      if (servicesInitialized === cached) servicesInitialized = undefined;
+      throw err;
+    });
+  servicesInitialized = cached;
 
   return servicesInitialized;
 }
