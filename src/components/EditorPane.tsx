@@ -97,11 +97,22 @@ export function EditorPane({
   // `@monaco-editor/react` at the shared Monaco instance. Gate the <Editor> on
   // it so the editor never mounts against a CDN/uninitialized Monaco.
   const [monacoReady, setMonacoReady] = useState(false);
+  // If `initialize()` rejects (see vscodeServices.ts) `whenMonacoReady` never
+  // resolves; without handling the rejection the pane would sit on the
+  // "Carregando editor…" placeholder forever and Node/the browser would log an
+  // unhandled promise rejection. Capture the failure so we can surface it
+  // instead of hanging silently.
+  const [monacoError, setMonacoError] = useState<unknown>(null);
   useEffect(() => {
     let alive = true;
-    void whenMonacoReady.then(() => {
-      if (alive) setMonacoReady(true);
-    });
+    whenMonacoReady.then(
+      () => {
+        if (alive) setMonacoReady(true);
+      },
+      (err) => {
+        if (alive) setMonacoError(err);
+      }
+    );
     return () => {
       alive = false;
     };
@@ -292,11 +303,13 @@ export function EditorPane({
     monaco.editor.defineTheme("fluent-acrylic-dark", {
       base: "vs-dark",
       inherit: true,
-      // Semantic-token color rules: the standalone theme matches a token's
-      // [type,...modifiers] against these `rules` keyed by the bare LSP semantic
-      // type names (class, enum, method…). Without them, semantic highlighting
-      // flows but types render in the default foreground (no visible coloring).
-      // Pairs with `'semanticHighlighting.enabled': true` on the editor options.
+      // Token color rules. With `'semanticHighlighting.enabled': false` (see the
+      // editor options below) these now drive the LEXICAL (Monarch) tokens — the
+      // standalone theme matches each token scope (`keyword`, `keyword.if`,
+      // `type`, `string`…) against these `rules`. They are also the rules that
+      // WOULD color LSP semantic tokens if semantic highlighting were re-enabled
+      // via the full VS Code theme path (the deferred follow-up noted below), so
+      // the bare LSP type names (class, enum, method…) are kept here too.
       rules: [
         // C# Monarch emits specific scopes such as `keyword.if` and
         // `keyword.return`. Keep declarations/modifiers blue and make
@@ -502,10 +515,24 @@ export function EditorPane({
   // this the first <Editor> could call monaco.editor.create() before
   // initialize() resolves (which the v10 stack forbids) or against the CDN
   // Monaco (breaking the single-instance contract → empty getModels(), no LSP).
+  if (monacoError) {
+    // Boot failed — show the reason instead of an endless spinner so the user
+    // (and a screen reader, via role="alert") knows the editor won't appear.
+    return (
+      <div className="editor-empty">
+        <div className="editor-empty-inner" role="alert">
+          <p>Falha ao carregar o editor.</p>
+          <p>{monacoError instanceof Error ? monacoError.message : String(monacoError)}</p>
+        </div>
+      </div>
+    );
+  }
   if (!monacoReady) {
     return (
       <div className="editor-empty">
-        <div className="editor-empty-inner">
+        {/* role="status" + aria-live so a screen reader announces the loading
+            state (and its resolution) instead of leaving AT users in silence. */}
+        <div className="editor-empty-inner" role="status" aria-live="polite">
           <p>Carregando editor…</p>
         </div>
       </div>

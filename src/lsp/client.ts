@@ -145,15 +145,19 @@ export async function createLanguageClient(
   // our hand-written bridges (which encode the C# token stabilization, owner
   // marker dedup and the references CodeLens override) and DISABLE the native
   // features so there is exactly one provider per feature/language. Must run
-  // before start(). Skipped for projection clients — they install no bridges,
-  // and their selector never matches a real Monaco model, so the native
-  // features have nothing to attach to (and `csharp` must stay owned by the
-  // real C# client). See nativeFeatures.ts and servers/razorProjection.ts.
-  if (!config.suppressGenericBridges) {
-    disableNativeClientFeature(client, config.serverId, "textDocument/semanticTokens");
-    disableNativeClientFeature(client, config.serverId, "textDocument/diagnostic");
-    disableNativeClientFeature(client, config.serverId, "textDocument/references");
-  }
+  // before start(). Projection clients (suppressGenericBridges) install no
+  // bridges of their own and want transport-only behavior, so their native
+  // features must be neutralized too: although their selector never matches a
+  // real Monaco model, Roslyn still advertises semanticTokens/diagnostic/
+  // references in `initialize`, and the native features attach per-client during
+  // start() regardless of selector — leaving them live would register stray
+  // providers that compete with the real C# client's bridges. `disableNative-
+  // ClientFeature` patches only THIS client's feature instances, so neutralizing
+  // here cannot disturb the real C# client. See nativeFeatures.ts and
+  // servers/razorProjection.ts.
+  disableNativeClientFeature(client, config.serverId, "textDocument/semanticTokens");
+  disableNativeClientFeature(client, config.serverId, "textDocument/diagnostic");
+  disableNativeClientFeature(client, config.serverId, "textDocument/references");
 
   lspLog("calling client.start() for", config.serverId);
   try {

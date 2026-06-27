@@ -80,7 +80,7 @@ Mapeado por **server id** (uma sessão por id) → linguagens Monaco que o dispa
 | `csharp` | base | `csharp` | `startCsharpServer` |
 | `typescript` | base | `typescript`, `javascript`, `typescriptreact`, `javascriptreact` | `startTypescriptServer` |
 | `razor` | base | `aspnetcorerazor` (`.razor`, cohost Roslyn) | `startRazorServer` |
-| `fluent-razor-projection` (id em `RAZOR_PROJECTION_SERVER_ID`) | base | `cshtml` (`.cshtml`, projeção ADR 0002) | `startRazorProjectionServer` |
+| `razor-projection` (`RAZOR_PROJECTION_SERVER_ID`) | base | `cshtml` (`.cshtml`, projeção ADR 0002) | `startRazorProjectionServer` |
 | `python` | npm | `python` | Pyright (`makeNpmServerStarter`) |
 | `yaml` | npm | `yaml` | YAML LS |
 | `json` | npm | `json` | JSON LS |
@@ -91,7 +91,7 @@ Mapeado por **server id** (uma sessão por id) → linguagens Monaco que o dispa
 | `dart` | system | `dart` | Dart LS (PATH) |
 | `go` | system | `go` | gopls (PATH) |
 
-> Observação: `csharp` e `fluent-razor-projection`/`razor` são Roslyn (escopo das
+> Observação: `csharp` e `razor-projection`/`razor` são Roslyn (escopo das
 > issues #77/#78), incluídos aqui só para completar a lista do registry. Os
 > servidores **não-Roslyn** alvo de #79 são: `typescript`, `python`, `yaml`,
 > `json`, `html`, `css`, `shell`, `dockerfile`, `dart`, `go`.

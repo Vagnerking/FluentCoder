@@ -41,10 +41,14 @@
  *     own `registerEditorOpener` (cross-file go-to-definition). Headless model
  *     services are all the LSP round-trip needs; the standalone editor brings
  *     its own theming (`defineTheme`) and Monarch tokenizer registration.
- *   - Semantic theming stays on the STANDALONE theme path (`defineTheme` +
- *     `'semanticHighlighting.enabled': true`), which works without the VS Code
- *     theme/textmate services. Pulling those in would replace the standalone
- *     theme engine and silently drop our `fluent-acrylic-dark` rules.
+ *   - Theming stays on the STANDALONE theme path (`defineTheme`), which works
+ *     without the VS Code theme/textmate services. Pulling those in would
+ *     replace the standalone theme engine and silently drop our
+ *     `fluent-acrylic-dark` rules. Note: `'semanticHighlighting.enabled'` is
+ *     currently `false` (see EditorPane editor options) because the standalone
+ *     theme path can't resolve LSP semantic-token colors; coloring is driven by
+ *     the Monarch lexical tokenizer instead. Re-enabling semantic highlighting
+ *     would require the full VS Code theme path (deferred follow-up).
  *
  * No `container` argument → headless services (no workbench DOM mounted), which
  * is exactly right when the editor is a standalone `@monaco-editor/react` view.
@@ -88,8 +92,19 @@ export function ensureVscodeServices(): Promise<void> {
     ...getConfigurationServiceOverride(),
   };
 
-  servicesInitialized = initializeVscodeServices(serviceOverrides).then(() => {
+  // On success the resolved promise is cached forever (idempotent boot). On
+  // FAILURE we must NOT keep the rejected promise around: `initialize()` never
+  // ran to completion, so the services are not up, yet every later caller would
+  // reuse the cached rejection and could never retry. Clear the cache in the
+  // failure path so a subsequent `ensureVscodeServices()` attempts the boot
+  // again, and re-throw so the current caller still sees the error.
+  const pending = initializeVscodeServices(serviceOverrides).then(() => {
     lspLog("@codingame/monaco-vscode-api services initialized");
+  });
+  servicesInitialized = pending.catch((err) => {
+    lspLog("@codingame/monaco-vscode-api services FAILED to initialize", String(err));
+    if (servicesInitialized === pending) servicesInitialized = undefined;
+    throw err;
   });
 
   return servicesInitialized;

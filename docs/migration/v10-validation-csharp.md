@@ -84,6 +84,16 @@
 > Verifica que existe **um único** provider (a bridge manual) e que a feature
 > nativa do v10 está desligada — caso contrário a corrida provisório→definitivo
 > volta e tipos regridem para `variable`.
+>
+> **⚠️ Pré-condição (estado atual da stack v10):** o semantic highlighting está
+> DESLIGADO por padrão (`'semanticHighlighting.enabled': false` em `EditorPane`),
+> porque o caminho de tema standalone não resolve as cores de semantic token (ver
+> ADR 0003 e o comentário em `EditorPane`/`vscodeServices.ts`). Assim, os passos
+> 8–9 abaixo (classificação fina struct/enum/class) só se aplicam DEPOIS do
+> follow-up que reativa o semantic highlighting pelo caminho de tema completo do
+> VS Code. Enquanto isso, a coloração de C# vem do Monarch (passo 10) e o passo 7
+> (provider único / feature nativa desligada) continua valendo, pois a bridge
+> permanece registrada para quando o highlighting voltar.
 
 7. **Apenas um provider responde por `csharp`.**
    - Observar no log: `[lsp] native feature disabled (bridge owns it) csharp textDocument/semanticTokens`
@@ -114,26 +124,29 @@
      mantêm `struct`/`enum`/`class`. Se viram `variable`, há provider duplicado
      ou resposta antiga sobrescrevendo (quebra de contrato `editor.md`).
 
-10. **[CONCERN — fallback léxico do C#] Coloração de keyword ANTES dos tokens
-    semânticos.**
-    > **Alerta sinalizado e CONFIRMADO na verificação estática:** o build
+10. **[fallback léxico do C#] Coloração de keyword ANTES (e independente) dos
+    tokens semânticos.**
+    > **Contexto da migração (RESOLVIDO na implementação):** o build
     > `@codingame/monaco-vscode-editor-api` mapeia `./esm/vs/basic-languages/*`
-    > para `./empty.js` (`export {}`). Logo, o import em `monacoSetup.ts:20`
-    > (`monaco-editor/esm/vs/basic-languages/csharp/csharp.contribution.js`) é um
-    > **no-op** na v10, e **não há** `setMonarchTokensProvider("csharp", ...)` em
-    > nenhum outro lugar. Resultado provável: a camada léxica (Monarch) do C#
-    > **não existe** mais.
+    > para `./empty.js` (`export {}`), então a contribution C# embutida do Monaco
+    > virou no-op na v10. Por isso `monacoSetup.ts` registra um Monarch C#
+    > explícito — `setMonarchTokensProvider("csharp", csharpMonarch())`
+    > (`ensureCsharpMonarchFallback`) — para repor a camada léxica. **Além disso,
+    > na stack v10 o semantic highlighting do Roslyn está DESLIGADO**
+    > (`'semanticHighlighting.enabled': false`, ver `EditorPane`), então a
+    > coloração de C# vem inteiramente do Monarch — este passo valida exatamente
+    > essa camada.
     - Ação: abrir um `.cs` e observar **no primeiro instante**, antes de
-      `projectInitializationComplete` (ou desconectando o servidor Roslyn): as
+      `projectInitializationComplete` (ou com o servidor Roslyn desconectado): as
       palavras-chave `if`, `return`, `public`, `class` etc.
-    - Esperado (se o fallback funcionasse): keywords já coloridas pelo Monarch.
-    - **Provável observação real:** texto plano (cor de foreground) até os tokens
-      semânticos do Roslyn chegarem; depois o `controlKeyword`/`keyword` pinta.
-    - **Anotar o resultado.** Se as keywords ficam sem cor até o Roslyn responder,
-      o fallback léxico C# está quebrado pela migração (degradação visual, não
-      quebra de contrato semântico — mas regride a experiência do `editor.md`
-      §"tokens léxicos e semânticos"). Cor semântica final (passo 8) ainda deve
-      funcionar.
+    - **Esperado:** keywords já coloridas IMEDIATAMENTE pelo Monarch (não
+      dependem do Roslyn). Strings, char literals, números e comentários também.
+    - **Anotar o resultado.** Se as keywords ficarem sem cor (texto plano), o
+      Monarch C# de `monacoSetup.ts` não registrou — regressão da camada léxica
+      esperada pelo `editor.md` §"tokens léxicos e semânticos". Como o semantic
+      highlighting está off (ver nota da seção anterior), a cor de keywords/
+      tipos/strings deve PERMANECER a do Monarch o tempo todo — não há mais um
+      passo semântico que a substitua.
 
 ---
 
