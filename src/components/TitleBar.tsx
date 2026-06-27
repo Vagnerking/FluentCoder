@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { MenuBar } from "./MenuBar";
+import { Tooltip } from "./Tooltip";
 import { useSnapLayout } from "../snap/useSnapLayout";
 import type { MenuDef } from "../types";
 import logoUrl from "../assets/fluent-coder.png";
@@ -77,37 +78,46 @@ export function TitleBar({
       <div className="titlebar-right" data-tauri-drag-region>
       {/* VS Code-style layout controls, just left of the window buttons. */}
       <div className="titlebar-layout" data-tauri-drag-region>
-        <button
-          className={`titlebar-layout-btn${sidebarOpen ? " active" : ""}`}
-          onClick={onToggleSidebar}
-          title={sidebarOpen ? "Ocultar barra lateral" : "Mostrar barra lateral"}
-          aria-label="Alternar barra lateral"
-          aria-pressed={sidebarOpen}
+        <Tooltip
+          label={sidebarOpen ? "Ocultar barra lateral" : "Mostrar barra lateral"}
+          placement="bottom"
         >
-          <SidebarIcon open={sidebarOpen} />
-        </button>
-        <button
-          className={`titlebar-layout-btn${panelOpen ? " active" : ""}`}
-          onClick={onTogglePanel}
-          title={panelOpen ? "Ocultar painel inferior" : "Mostrar painel inferior"}
-          aria-label="Alternar painel inferior"
-          aria-pressed={panelOpen}
+          <button
+            className={`titlebar-layout-btn${sidebarOpen ? " active" : ""}`}
+            onClick={onToggleSidebar}
+            aria-label="Alternar barra lateral"
+            aria-pressed={sidebarOpen}
+          >
+            <SidebarIcon open={sidebarOpen} />
+          </button>
+        </Tooltip>
+        <Tooltip
+          label={panelOpen ? "Ocultar painel inferior" : "Mostrar painel inferior"}
+          placement="bottom"
         >
-          <PanelIcon open={panelOpen} />
-        </button>
+          <button
+            className={`titlebar-layout-btn${panelOpen ? " active" : ""}`}
+            onClick={onTogglePanel}
+            aria-label="Alternar painel inferior"
+            aria-pressed={panelOpen}
+          >
+            <PanelIcon open={panelOpen} />
+          </button>
+        </Tooltip>
       </div>
 
       <div className="window-controls" data-tauri-drag-region>
-        <button
-          className="caption-btn"
-          onClick={() => appWindow.minimize()}
-          title="Minimizar"
-          aria-label="Minimizar"
-        >
-          <svg width="10" height="10" viewBox="0 0 10 10">
-            <rect x="0" y="4.5" width="10" height="1" fill="currentColor" />
-          </svg>
-        </button>
+        <Tooltip label="Minimizar" placement="bottom">
+          <button
+            className="caption-btn"
+            onClick={() => appWindow.minimize()}
+            aria-label="Minimizar"
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10">
+              <rect x="0" y="4.5" width="10" height="1" fill="currentColor" />
+            </svg>
+          </button>
+        </Tooltip>
 
         <button
           ref={maxBtnRef}
@@ -128,16 +138,17 @@ export function TitleBar({
           )}
         </button>
 
-        <button
-          className="caption-btn caption-close"
-          onClick={() => appWindow.close()}
-          title="Fechar"
-          aria-label="Fechar"
-        >
-          <svg width="10" height="10" viewBox="0 0 10 10">
-            <path d="M0 0 L10 10 M10 0 L0 10" stroke="currentColor" strokeWidth="1" />
-          </svg>
-        </button>
+        <Tooltip label="Fechar" placement="bottom">
+          <button
+            className="caption-btn caption-close"
+            onClick={() => appWindow.close()}
+            aria-label="Fechar"
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10">
+              <path d="M0 0 L10 10 M10 0 L0 10" stroke="currentColor" strokeWidth="1" />
+            </svg>
+          </button>
+        </Tooltip>
       </div>
       </div>
     </div>

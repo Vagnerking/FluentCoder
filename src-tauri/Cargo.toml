@@ -22,7 +22,11 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # `image-png` lets us decode the bundled PNG at runtime to set a crisp,
 # high-resolution window/taskbar icon (see the `setup` hook in lib.rs).
-tauri = { version = "2", features = ["image-png"] }
+# `macos-private-api` habilita janelas transparentes/com efeitos no macOS
+# (o método `.transparent()` do WebviewWindowBuilder só existe com ela no target
+# macOS — sem isso a build do macOS falha com E0599). No Windows/Linux é no-op.
+# Atenção: apps com esta feature não podem ser publicados na Mac App Store.
+tauri = { version = "2", features = ["image-png", "macos-private-api"] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -42,6 +46,13 @@ grep-searcher = "0.1"
 # `Matcher` trait — used to locate match column ranges within a line for highlight.
 grep-matcher = "0.1"
 regex = "1"
+# Text encoding detection + transcoding so we open/save files like VS Code:
+# `encoding_rs` is the WHATWG-standard codec set (UTF-8/16, Windows-1252,
+# Latin-1, …); `chardetng` is Firefox's charset detector for legacy 8-bit files
+# with no BOM. Together they handle BOM stripping, UTF-16, and the
+# Latin-1/Windows-1252 heuristic the decompiled-metadata files trip on.
+encoding_rs = "0.8"
+chardetng = "0.1"
 
 # --- LSP module (src/lsp) ---
 # Async runtime + WS bridge between the frontend monaco-languageclient and the

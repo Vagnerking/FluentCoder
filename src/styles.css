@@ -38,6 +38,67 @@
   --radius-control: 6px;
   --radius-card: 8px;
 
+  /* ---- Semantic status tokens (F2-AUD-001 / F2-AUD-012) ----
+     Single source of truth for error/warning/success/info. Status must never
+     rely on color alone — pair these with an icon or text label at the call
+     site. Tuned for AA contrast over the dark Mica surfaces. */
+  --color-status-error: #f14c4c;
+  --color-status-error-muted: #c74e39;
+  --color-status-warning: #cca700;
+  --color-status-warning-strong: #e0a23b;
+  --color-status-success: #73c991;
+  --color-status-info: var(--accent);
+
+  /* Git decoration tokens — mirror VSCode's gitDecoration.* roles. */
+  --color-git-modified: #e2c08d;
+  --color-git-added: #73c991;
+  --color-git-untracked: #73c991;
+  --color-git-deleted: #f14c4c;
+  --color-git-deleted-strong: #c74e39;
+  --color-git-renamed: var(--accent);
+  --color-git-conflict: #e4676b;
+  --color-git-conflict-strong: #e0a23b;
+
+  /* Overlay surface for flyouts / menus / suggest widgets — opaque enough that
+     editor text never bleeds through. */
+  --color-surface-overlay: #202734;
+  --color-surface-overlay-border: #3a4150;
+
+  /* Graph node roles (F2-AUD-001 / F2-AUD-015) — consumed by GraphView. */
+  --color-graph-markdown: var(--accent);
+  --color-graph-code: #3ec9a7;
+
+  /* ---- Focus (F2-AUD-003) ----
+     One focus contract for every interactive element. Apply via the
+     `:focus-visible` rule near the end of this file; never `outline: none`
+     without substituting an equivalent ring. */
+  --stroke-focus: var(--accent);
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 1px;
+  --focus-ring: 0 0 0 var(--focus-ring-width) var(--stroke-focus);
+
+  /* ---- Elevation / shadow (F2-AUD-010) ----
+     Permanent surfaces stay flat (rest); strong shadows are reserved for
+     transient overlays (flyout/dialog). */
+  --shadow-rest: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-flyout:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 8px 24px rgba(0, 0, 0, 0.24);
+  --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.5);
+
+  /* ---- Motion (F2-AUD-004) ----
+     Durations/easings consumed by transitions and animations. The global
+     `prefers-reduced-motion` block collapses these to near-zero. */
+  --duration-fast: 100ms;
+  --duration-medium: 180ms;
+  --duration-slow: 280ms;
+  --ease-standard: cubic-bezier(0.33, 0, 0.1, 1);
+  --ease-decelerate: cubic-bezier(0.1, 0.9, 0.2, 1);
+
+  /* Only dark theme exists today; declare it so native form controls,
+     scrollbars and the canvas match (F2-AUD-002). */
+  color-scheme: dark;
+
   font-synthesis: none;
 }
 
@@ -239,9 +300,9 @@ body {
     var(--acrylic-tint);
   border: 1px solid var(--acrylic-border);
   border-radius: 8px;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04),
-    0 8px 24px rgba(0, 0, 0, 0.24);
+  /* Permanent surface: separated by border + tint, not a heavy drop shadow
+     (F2-AUD-010). Strong shadows are reserved for transient overlays. */
+  box-shadow: var(--shadow-rest);
   /* Native Mica already supplies the backdrop. A second CSS blur forces
      WebView2 to recompose this surface during every scroll frame. */
   display: flex;
@@ -260,9 +321,7 @@ body {
     var(--acrylic-tint-strong);
   border: 1px solid var(--acrylic-border);
   border-radius: 8px;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.035),
-    0 8px 24px rgba(0, 0, 0, 0.24);
+  box-shadow: var(--shadow-rest);
   backdrop-filter: blur(28px) saturate(120%);
   -webkit-backdrop-filter: blur(28px) saturate(120%);
   overflow: hidden;
@@ -391,8 +450,13 @@ body {
 .explorer-title {
   font-weight: 600;
   color: var(--text-muted);
+  /* Real sidebar section headers (Explorer, Git, Search…) stay uppercase by VS
+     Code convention; the heavy tracking is softened to a subtle 0.3px so the
+     label reads as a label, not spaced-out. The PlaceholderPanel reuses this
+     class but its title is panel *content* (e.g. "Contas"), so it opts out of
+     the uppercase below (F2-AUD-009). */
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -538,7 +602,9 @@ body {
   white-space: nowrap;
   overflow: hidden;
   color: var(--text-secondary);
-  font-family: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  /* Align to the primary typography stack (same as `body`) — no "Inter". */
+  font-family: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI",
+    system-ui, sans-serif;
   font-size: 14px;
   font-weight: 450;
   line-height: 20px;
@@ -1012,7 +1078,7 @@ body {
     var(--acrylic-tint-strong);
   border: 1px solid var(--acrylic-border-strong);
   border-radius: 8px;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-dialog);
   backdrop-filter: blur(28px) saturate(125%);
   -webkit-backdrop-filter: blur(28px) saturate(125%);
   color: var(--text);
@@ -1691,11 +1757,247 @@ body {
   user-select: none;
 }
 
-/* ---- Focus visibility (Fluent keyboard focus) ---- */
+/* ---- Focus visibility (Fluent keyboard focus) — F2-AUD-003 ----
+   Single focus contract for every interactive element. Any rule that sets
+   `outline: none` MUST provide an equivalent ring via the tokens below; the
+   `.focus-ring` utility is the canonical substitute. */
 button:focus-visible,
+[role="button"]:focus-visible,
+[role="tab"]:focus-visible,
+[role="radio"]:focus-visible,
+[role="menuitem"]:focus-visible,
+[role="option"]:focus-visible,
+a:focus-visible,
+summary:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible,
 .tree-row:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline: var(--focus-ring-width) solid var(--stroke-focus);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+
+/* Utility for controls that need an outset ring (e.g. inputs/handles where a
+   negative offset would clip). Replaces ad-hoc box-shadow focus styles. */
+.focus-ring:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Text fields across features clear the native outline; give them the shared
+   ring so keyboard focus is never invisible (F2-AUD-003 / F2-AUD-013). */
+.search-input:focus-visible,
+.git-message:focus-visible,
+.quick-open-input:focus-visible {
+  outline: none;
+  border-color: var(--stroke-focus);
+  box-shadow: var(--focus-ring);
+}
+
+/* ============================================================================
+   Base control systems — F2-AUD-014 (buttons) and F2-AUD-013 (inputs).
+
+   Opt-in classes so new screens (and gradual migration of existing ones) stop
+   re-deriving button/input styles per feature. They consume the token layer so
+   states stay consistent. Existing bespoke buttons keep working; migrate them
+   feature by feature rather than all at once.
+   ========================================================================= */
+
+/* ---- Buttons (F2-AUD-014) ---- */
+.ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 84px;
+  height: 30px;
+  padding: 0 14px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text);
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+.ui-button:hover:not(:disabled) {
+  background: var(--acrylic-control-hover);
+}
+.ui-button:active:not(:disabled) {
+  background: var(--acrylic-control-pressed);
+}
+.ui-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Primary / accent — the default/confirming action. */
+.ui-button-primary {
+  color: #06223a;
+  background: var(--accent);
+  border-color: transparent;
+  font-weight: 600;
+}
+.ui-button-primary:hover:not(:disabled) {
+  background: #7ad6ff;
+}
+.ui-button-primary:active:not(:disabled) {
+  background: #4cb8ec;
+}
+
+/* Secondary — explicit alias of the neutral base, for symmetry at call sites. */
+.ui-button-secondary {
+  background: var(--acrylic-control);
+}
+
+/* Danger — destructive actions (delete, discard). */
+.ui-button-danger {
+  color: #2a0d0f;
+  background: var(--color-status-error);
+  border-color: transparent;
+  font-weight: 600;
+}
+.ui-button-danger:hover:not(:disabled) {
+  background: #ff6b6b;
+}
+.ui-button-danger:active:not(:disabled) {
+  background: #d83b3b;
+}
+
+/* Loading: dim + show busy cursor; pair with aria-busy at the call site. */
+.ui-button[aria-busy="true"] {
+  opacity: 0.7;
+  cursor: progress;
+}
+
+/* Icon-only button — square, no min-width, codicon-sized. */
+.ui-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-width: 0;
+  padding: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+.ui-icon-button:hover:not(:disabled) {
+  background: var(--fill-subtle-hover);
+  color: var(--text);
+}
+.ui-icon-button:active:not(:disabled) {
+  background: var(--fill-subtle-active);
+}
+.ui-icon-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+/* Pressed/toggle state for icon buttons that use aria-pressed. */
+.ui-icon-button[aria-pressed="true"] {
+  background: var(--fill-selected);
+  color: var(--text);
+}
+
+/* ---- Inputs (F2-AUD-013) ---- */
+.ui-input,
+.ui-textarea,
+.ui-select {
+  width: 100%;
+  height: 30px;
+  padding: 0 9px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  border-bottom-color: var(--acrylic-border-strong);
+  border-radius: var(--radius-control);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  transition: border-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+.ui-textarea {
+  height: auto;
+  min-height: 48px;
+  padding: 7px 9px;
+  resize: vertical;
+}
+.ui-input::placeholder,
+.ui-textarea::placeholder {
+  color: var(--text-muted);
+}
+.ui-input:hover:not(:disabled),
+.ui-textarea:hover:not(:disabled),
+.ui-select:hover:not(:disabled) {
+  border-color: var(--acrylic-border-strong);
+}
+.ui-input:focus-visible,
+.ui-textarea:focus-visible,
+.ui-select:focus-visible {
+  outline: none;
+  border-color: var(--stroke-focus);
+  box-shadow: var(--focus-ring);
+}
+.ui-input:disabled,
+.ui-textarea:disabled,
+.ui-select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* Invalid: pair with aria-invalid="true" + an aria-describedby message. */
+.ui-input[aria-invalid="true"],
+.ui-textarea[aria-invalid="true"],
+.ui-select[aria-invalid="true"] {
+  border-color: var(--color-status-error);
+}
+.ui-input[aria-invalid="true"]:focus-visible,
+.ui-textarea[aria-invalid="true"]:focus-visible,
+.ui-select[aria-invalid="true"]:focus-visible {
+  box-shadow: 0 0 0 var(--focus-ring-width) var(--color-status-error);
+}
+/* The error text tied to an invalid field via aria-describedby. */
+.ui-field-error {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-status-error);
+}
+
+/* High contrast / forced colors (F2-AUD-002). In Windows high-contrast mode the
+   system overrides backgrounds; keep focus, borders and selection visible by
+   deferring to the system palette instead of our alpha tints. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: var(--focus-ring-width) solid Highlight;
+    outline-offset: var(--focus-ring-offset);
+  }
+  button,
+  input,
+  textarea,
+  select,
+  [role="button"],
+  [role="tab"],
+  [role="menuitem"],
+  [role="option"] {
+    border: 1px solid ButtonBorder;
+  }
+  .tree-row.active,
+  [aria-selected="true"],
+  [aria-current="true"] {
+    background: Highlight;
+    color: HighlightText;
+    forced-color-adjust: none;
+  }
 }
 
 /* ---- Scrollbars ---- */
@@ -1965,13 +2267,19 @@ button:focus-visible,
   white-space: nowrap;
 }
 
+/* Empty/config states keep the discreet accent radial (functional branding on
+   an otherwise blank surface). The live chat surface stays flat so the decoration
+   never competes with conversation content (F2-AUD-011). */
 .agent-empty-state,
-.agent-config-page,
-.agent-chat {
+.agent-config-page {
   height: 100%;
   background:
     radial-gradient(circle at 50% 24%, rgba(96, 205, 255, 0.06), transparent 34%),
     var(--editor-bg);
+}
+.agent-chat {
+  height: 100%;
+  background: var(--editor-bg);
 }
 
 .agent-empty-state {
@@ -2602,7 +2910,19 @@ button:focus-visible,
   }
 }
 
+/* ---- Reduced motion (F2-AUD-004) ----
+   Global policy: collapse decorative transitions/animations to near-zero so no
+   element keeps moving for users who asked for less motion. Motion that
+   communicates state (e.g. a spinner) is left to opt back in deliberately. */
 @media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
   .activity-indicator {
     transition: none;
   }
@@ -2637,6 +2957,7 @@ button:focus-visible,
    lower-value items drop out first as the bar narrows. */
 .status-right { flex-shrink: 0; }
 @container (max-width: 720px) { .status-tabsize { display: none; } }
+@container (max-width: 680px) { .status-eol { display: none; } }
 @container (max-width: 620px) { .status-encoding { display: none; } }
 @container (max-width: 520px) { .status-language { display: none; } }
 @container (max-width: 430px) { .status-cursor { display: none; } }
@@ -2965,6 +3286,9 @@ button:focus-visible,
 
 /* ---- Placeholder panel ---- */
 .placeholder-panel { display: flex; flex-direction: column; height: 100%; }
+/* Placeholder titles are content, not chrome section headers — keep their
+   natural casing (sentence case) instead of the shared uppercase (F2-AUD-009). */
+.placeholder-panel .explorer-title { text-transform: none; letter-spacing: normal; }
 .placeholder-body { padding: 16px 12px; color: var(--text-muted); font-size: 12px; }
 
 /* ---- Problems panel ---- */
@@ -3037,15 +3361,15 @@ button:focus-visible,
 .git-file-row:hover .git-file-action { opacity: 1; }
 .git-file-action:hover:not(:disabled) { background: var(--fill-subtle-hover); color: var(--text); }
 .git-file-badge { width: 16px; text-align: center; flex-shrink: 0; font-size: 12px; font-weight: 700; font-family: "Cascadia Code", "Consolas", monospace; }
-.git-badge-modified { color: #e2c08d; }
-.git-badge-added, .git-badge-untracked { color: #73c991; }
-.git-badge-deleted { color: #f14c4c; }
-.git-badge-renamed { color: var(--accent); }
+.git-badge-modified { color: var(--color-git-modified); }
+.git-badge-added, .git-badge-untracked { color: var(--color-git-added); }
+.git-badge-deleted { color: var(--color-git-deleted); }
+.git-badge-renamed { color: var(--color-git-renamed); }
 
 /* Merge-conflict group + its files stand out in amber. */
-.git-group-conflict { color: #e0a23b; }
+.git-group-conflict { color: var(--color-git-conflict-strong); }
 .git-group-conflict > span:first-child { display: inline-flex; align-items: center; gap: 5px; }
-.git-group-conflict .codicon { color: #e0a23b; }
+.git-group-conflict .codicon { color: var(--color-git-conflict-strong); }
 
 /* Stash entries. */
 .git-stash-row { display: flex; align-items: center; gap: 7px; padding: 3px 12px; font-size: 12px; color: var(--text-secondary); }
@@ -3084,7 +3408,7 @@ button:focus-visible,
    bar or window controls, and interacting with the titlebar can't dismiss them.
    Modals drop from just under the titlebar, centered (VS Code alignment). */
 .quick-open-backdrop { position: fixed; top: var(--titlebar-height); left: 0; right: 0; bottom: 0; z-index: 100; display: flex; justify-content: center; align-items: flex-start; }
-.quick-open { margin-top: 8px; width: 600px; max-width: calc(100vw - 32px); max-height: 60vh; display: flex; flex-direction: column; background: var(--acrylic-tint-strong); border: 1px solid var(--acrylic-border-strong); border-radius: var(--radius-card); box-shadow: 0 16px 48px rgba(0,0,0,0.5); backdrop-filter: blur(40px) saturate(140%); -webkit-backdrop-filter: blur(40px) saturate(140%); overflow: hidden; }
+.quick-open { margin-top: 8px; width: 600px; max-width: calc(100vw - 32px); max-height: 60vh; display: flex; flex-direction: column; background: var(--acrylic-tint-strong); border: 1px solid var(--acrylic-border-strong); border-radius: var(--radius-card); box-shadow: var(--shadow-dialog); backdrop-filter: blur(40px) saturate(140%); -webkit-backdrop-filter: blur(40px) saturate(140%); overflow: hidden; }
 .quick-open-input { margin: 8px; height: 32px; padding: 0 10px; font-size: 13px; color: var(--text); background: var(--acrylic-control); border: 1px solid var(--acrylic-border); border-bottom-color: var(--acrylic-border-strong); border-radius: var(--radius-control); outline: none; }
 .quick-open-input:focus { border-color: var(--accent); }
 .quick-open-list { overflow-y: auto; padding: 0 4px 4px; min-height: 0; }
@@ -3442,7 +3766,7 @@ button:focus-visible,
 
 /* ---- About / Keyboard Shortcuts dialog (Help menu) ---- */
 .about-backdrop { position: fixed; top: var(--titlebar-height); left: 0; right: 0; bottom: 0; z-index: 100; display: flex; justify-content: center; align-items: center; background: rgba(0,0,0,0.32); }
-.about-dialog { width: 420px; max-width: calc(100vw - 32px); max-height: 70vh; display: flex; flex-direction: column; background: var(--acrylic-tint-strong); border: 1px solid var(--acrylic-border-strong); border-radius: var(--radius-card); box-shadow: 0 16px 48px rgba(0,0,0,0.5); backdrop-filter: blur(40px) saturate(140%); -webkit-backdrop-filter: blur(40px) saturate(140%); overflow: hidden; outline: none; }
+.about-dialog { width: 420px; max-width: calc(100vw - 32px); max-height: 70vh; display: flex; flex-direction: column; background: var(--acrylic-tint-strong); border: 1px solid var(--acrylic-border-strong); border-radius: var(--radius-card); box-shadow: var(--shadow-dialog); backdrop-filter: blur(40px) saturate(140%); -webkit-backdrop-filter: blur(40px) saturate(140%); overflow: hidden; outline: none; }
 .about-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 8px 8px 14px; border-bottom: 1px solid var(--acrylic-border); }
 .about-title { font-size: 13px; font-weight: 600; color: var(--text); }
 .about-close { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-size: 18px; line-height: 1; color: var(--text-muted); background: transparent; border: none; border-radius: var(--radius-control); cursor: pointer; }
@@ -3460,7 +3784,7 @@ button:focus-visible,
 
 /* ---- Confirm dialog (reusable Fluent 2 modal: unsaved guard, delete, …) ---- */
 .confirm-overlay { position: fixed; inset: 0; z-index: 200; display: flex; justify-content: center; align-items: center; background: rgba(0,0,0,0.4); }
-.confirm-dialog { width: 440px; max-width: calc(100vw - 32px); display: flex; flex-direction: column; gap: 8px; padding: 20px; background: var(--acrylic-tint-strong); border: 1px solid var(--acrylic-border-strong); border-radius: var(--radius-card); box-shadow: 0 16px 48px rgba(0,0,0,0.5); backdrop-filter: blur(40px) saturate(140%); -webkit-backdrop-filter: blur(40px) saturate(140%); outline: none; }
+.confirm-dialog { width: 440px; max-width: calc(100vw - 32px); display: flex; flex-direction: column; gap: 8px; padding: 20px; background: var(--acrylic-tint-strong); border: 1px solid var(--acrylic-border-strong); border-radius: var(--radius-card); box-shadow: var(--shadow-dialog); backdrop-filter: blur(40px) saturate(140%); -webkit-backdrop-filter: blur(40px) saturate(140%); outline: none; }
 .confirm-title { margin: 0; font-size: 15px; font-weight: 600; color: var(--text); }
 .confirm-message { margin: 0 0 8px; font-size: 13px; line-height: 1.5; color: var(--text-secondary); }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
@@ -3502,20 +3826,20 @@ button .codicon { pointer-events: none; }
 
 /* Diagnostic / status codicon colors (shared by status bar + problems). */
 .status-left .codicon-error,
-.problem-error .problem-icon .codicon { color: #f14c4c; }
+.problem-error .problem-icon .codicon { color: var(--color-status-error); }
 .status-left .codicon-warning,
-.problem-warning .problem-icon .codicon { color: #cca700; }
-.problem-info .problem-icon .codicon { color: var(--accent); }
+.problem-warning .problem-icon .codicon { color: var(--color-status-warning); }
+.problem-info .problem-icon .codicon { color: var(--color-status-info); }
 
 /* ---- File-state decorations (label color + badge) ----
    Diagnostics outrank git; colors mirror VSCode's gitDecoration.*. */
-.deco-modified  { color: #e2c08d; }   /* modified (orange) */
+.deco-modified  { color: var(--color-git-modified); }        /* modified (orange) */
 .deco-added,
-.deco-untracked { color: #73c991; }   /* new / untracked (green) */
-.deco-deleted   { color: #c74e39; }   /* deleted (red) */
-.deco-conflict  { color: #e4676b; }   /* merge conflict */
-.deco-error     { color: #f14c4c; }   /* has error diagnostic */
-.deco-warning   { color: #cca700; }   /* has warning diagnostic */
+.deco-untracked { color: var(--color-git-added); }           /* new / untracked (green) */
+.deco-deleted   { color: var(--color-git-deleted-strong); }  /* deleted (red) */
+.deco-conflict  { color: var(--color-git-conflict); }        /* merge conflict */
+.deco-error     { color: var(--color-status-error); }        /* has error diagnostic */
+.deco-warning   { color: var(--color-status-warning); }      /* has warning diagnostic */
 
 /* The active row keeps its accent label for GIT states; the badge still shows
    state. Diagnostics are the exception: a selected/active file with an error or
@@ -4073,4 +4397,157 @@ button .codicon { pointer-events: none; }
 .backlinks-rel.rel-wikilink {
   color: var(--accent);
   border-color: rgba(96, 205, 255, 0.4);
+}
+
+/* ---- Tooltip (F2-AUD-005) ---- */
+/* The Tooltip wrapper anchors hover/focus events even when the child control is
+   disabled. `display: contents` keeps it invisible to layout. */
+.tooltip-anchor {
+  display: contents;
+}
+
+/* Accessible tooltip bubble for icon-only command buttons. Rendered with
+   `position: fixed` so it escapes the sidebar/activity-bar `overflow: hidden`;
+   the trigger keeps its own aria-label, this is just the visual hint. */
+.tooltip {
+  position: fixed;
+  z-index: 10001;
+  max-width: 260px;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text);
+  background: var(--color-surface-overlay);
+  border: 1px solid var(--color-surface-overlay-border);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-flyout);
+  /* Wrap long/localized labels instead of overflowing the bubble/viewport. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  /* Centre horizontally on the trigger; the vertical offset is per-placement. */
+  transform: translateX(-50%);
+  animation: tooltip-in var(--duration-fast) var(--ease-standard);
+}
+
+.tooltip-top {
+  /* Sit just above the trigger (top edge is the anchor). */
+  transform: translate(-50%, calc(-100% - 6px));
+}
+
+.tooltip-bottom {
+  /* Sit just below the trigger (bottom edge is the anchor). */
+  transform: translate(-50%, 6px);
+}
+
+@keyframes tooltip-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ---- Graph a11y (F2-AUD-015) ---- */
+/* The canvas is mouse/visual only; this is its keyboard-navigable textual
+   mirror. A floating listbox over the canvas where each option centres +
+   spotlights the node (focus/click) and opens the file (Enter/Space/double
+   click). The graph region itself carries role="group" + an aria help
+   string rendered via .graph-sr-only below. */
+
+/* Visually hidden but exposed to assistive tech (keyboard help, panel labels). */
+.graph-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.graph-node-list {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  width: 248px;
+  max-height: calc(100% - 24px);
+  border-radius: var(--radius-control);
+  border: 1px solid var(--acrylic-border);
+  background: rgba(20, 26, 34, 0.72);
+  backdrop-filter: blur(20px) saturate(120%);
+  -webkit-backdrop-filter: blur(20px) saturate(120%);
+  box-shadow: var(--shadow-flyout, 0 8px 24px rgba(0, 0, 0, 0.32));
+  overflow: hidden;
+}
+.graph-node-list-box {
+  overflow-y: auto;
+  padding: 4px;
+  outline: none;
+}
+.graph-node-list-empty {
+  margin: 0;
+  padding: 10px 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.graph-node-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--radius-control);
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.graph-node-option:hover {
+  background: var(--fill-subtle-hover);
+  color: var(--text);
+}
+.graph-node-option.is-active {
+  background: var(--fill-selected, rgba(96, 205, 255, 0.16));
+  color: var(--text);
+}
+.graph-node-option.is-current .graph-node-option-name {
+  color: var(--accent);
+  font-weight: 600;
+}
+/* Roving-tabindex focus: the active option is the single tab stop and shows the
+   shared focus ring (the global :focus-visible rule covers role="option"). */
+.graph-node-option:focus-visible {
+  outline: var(--focus-ring-width) solid var(--stroke-focus);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+.graph-node-option-name {
+  flex: 0 0 auto;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.graph-node-option-rel {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  color: var(--text-disabled);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Reduced motion: drop the option hover/active colour transition too. */
+@media (prefers-reduced-motion: reduce) {
+  .graph-node-option {
+    transition: none;
+  }
 }

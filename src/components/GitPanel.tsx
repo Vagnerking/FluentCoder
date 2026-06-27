@@ -29,6 +29,7 @@ import { Codicon } from "../icons/codicons/Codicon";
 import type { IconAction } from "../icons/codicons/codicon-map";
 import { FileIcon } from "../icon-theme/material/FileIcon";
 import { TreeContextMenu } from "./TreeContextMenu";
+import { Tooltip } from "./Tooltip";
 
 interface GitPanelProps {
   /** Open folder; the repo is resolved from here. Null when nothing is open. */
@@ -278,44 +279,52 @@ export function GitPanel({
       <div className="explorer-header git-header">
         <span className="explorer-title">CONTROLE DE CÓDIGO-FONTE</span>
         <div className="git-actions">
-          <button
-            className="git-icon-btn"
-            title="Buscar (fetch)"
-            disabled={busy}
-            onClick={() => act(() => gitFetch(rootPath))}
-          >
-            <Codicon name="refresh" />
-          </button>
-          <button
-            className="git-icon-btn"
-            title="Pull"
-            disabled={busy || !status?.hasUpstream}
-            onClick={() => act(() => gitPull(rootPath))}
-          >
-            <Codicon name="gitPull" />
-            {status && status.behind > 0 ? status.behind : ""}
-          </button>
-          <button
-            className="git-icon-btn"
-            title="Push"
-            disabled={busy || !status?.hasUpstream}
-            onClick={() => act(() => gitPush(rootPath))}
-          >
-            <Codicon name="gitPush" />
-            {status && status.ahead > 0 ? status.ahead : ""}
-          </button>
-          <button
-            className="git-icon-btn"
-            title="Guardar alterações (stash)"
-            disabled={busy || (status?.files.length ?? 0) === 0}
-            onClick={() => {
-              const raw = window.prompt("Mensagem do stash (opcional):");
-              if (raw === null) return;
-              void act(() => gitStashPush(rootPath, raw || undefined));
-            }}
-          >
-            <Codicon name="bookmark" />
-          </button>
+          <Tooltip label="Buscar (fetch)">
+            <button
+              className="git-icon-btn"
+              aria-label="Buscar (fetch)"
+              disabled={busy}
+              onClick={() => act(() => gitFetch(rootPath))}
+            >
+              <Codicon name="refresh" />
+            </button>
+          </Tooltip>
+          <Tooltip label="Pull">
+            <button
+              className="git-icon-btn"
+              aria-label="Pull"
+              disabled={busy || !status?.hasUpstream}
+              onClick={() => act(() => gitPull(rootPath))}
+            >
+              <Codicon name="gitPull" />
+              {status && status.behind > 0 ? status.behind : ""}
+            </button>
+          </Tooltip>
+          <Tooltip label="Push">
+            <button
+              className="git-icon-btn"
+              aria-label="Push"
+              disabled={busy || !status?.hasUpstream}
+              onClick={() => act(() => gitPush(rootPath))}
+            >
+              <Codicon name="gitPush" />
+              {status && status.ahead > 0 ? status.ahead : ""}
+            </button>
+          </Tooltip>
+          <Tooltip label="Guardar alterações (stash)">
+            <button
+              className="git-icon-btn"
+              aria-label="Guardar alterações (stash)"
+              disabled={busy || (status?.files.length ?? 0) === 0}
+              onClick={() => {
+                const raw = window.prompt("Mensagem do stash (opcional):");
+                if (raw === null) return;
+                void act(() => gitStashPush(rootPath, raw || undefined));
+              }}
+            >
+              <Codicon name="bookmark" />
+            </button>
+          </Tooltip>
         </div>
       </div>
 
@@ -404,32 +413,36 @@ export function GitPanel({
             <div className="git-group-header-actions">
               {changes.length > 0 && (
                 <>
-                  <button
-                    className="git-link-btn"
-                    disabled={busy}
-                    title="Descartar todas as alterações"
-                    onClick={() =>
-                      act(async () => {
-                        if (
-                          !window.confirm(
-                            "Descartar TODAS as alterações do diretório de trabalho? Esta ação não pode ser desfeita."
+                  <Tooltip label="Descartar todas as alterações">
+                    <button
+                      className="git-link-btn"
+                      disabled={busy}
+                      aria-label="Descartar todas as alterações"
+                      onClick={() =>
+                        act(async () => {
+                          if (
+                            !window.confirm(
+                              "Descartar TODAS as alterações do diretório de trabalho? Esta ação não pode ser desfeita."
+                            )
                           )
-                        )
-                          return;
-                        await gitDiscardAll(rootPath);
-                      })
-                    }
-                  >
-                    <Codicon name="discard" />
-                  </button>
-                  <button
-                    className="git-link-btn"
-                    disabled={busy}
-                    title="Preparar tudo"
-                    onClick={() => act(() => gitStageAll(rootPath))}
-                  >
-                    <Codicon name="add" />
-                  </button>
+                            return;
+                          await gitDiscardAll(rootPath);
+                        })
+                      }
+                    >
+                      <Codicon name="discard" />
+                    </button>
+                  </Tooltip>
+                  <Tooltip label="Preparar tudo">
+                    <button
+                      className="git-link-btn"
+                      disabled={busy}
+                      aria-label="Preparar tudo"
+                      onClick={() => act(() => gitStageAll(rootPath))}
+                    >
+                      <Codicon name="add" />
+                    </button>
+                  </Tooltip>
                 </>
               )}
               <span className="git-count">{changes.length}</span>
@@ -472,35 +485,41 @@ export function GitPanel({
                   <Codicon name="bookmark" size={13} />
                   <span className="git-stash-msg">{st.message}</span>
                   <span className="git-file-spacer" />
-                  <button
-                    className="git-file-action"
-                    title="Aplicar (mantém o stash)"
-                    disabled={busy}
-                    onClick={() => act(() => gitStashApply(rootPath, st.index))}
-                  >
-                    <Codicon name="add" size={14} />
-                  </button>
-                  <button
-                    className="git-file-action"
-                    title="Pop (aplica e remove)"
-                    disabled={busy}
-                    onClick={() => act(() => gitStashPop(rootPath, st.index))}
-                  >
-                    <Codicon name="gitPull" size={14} />
-                  </button>
-                  <button
-                    className="git-file-action"
-                    title="Descartar stash"
-                    disabled={busy}
-                    onClick={() =>
-                      act(async () => {
-                        if (!window.confirm("Descartar este stash?")) return;
-                        await gitStashDrop(rootPath, st.index);
-                      })
-                    }
-                  >
-                    <Codicon name="trash" size={14} />
-                  </button>
+                  <Tooltip label="Aplicar (mantém o stash)">
+                    <button
+                      className="git-file-action"
+                      aria-label="Aplicar (mantém o stash)"
+                      disabled={busy}
+                      onClick={() => act(() => gitStashApply(rootPath, st.index))}
+                    >
+                      <Codicon name="add" size={14} />
+                    </button>
+                  </Tooltip>
+                  <Tooltip label="Pop (aplica e remove)">
+                    <button
+                      className="git-file-action"
+                      aria-label="Pop (aplica e remove)"
+                      disabled={busy}
+                      onClick={() => act(() => gitStashPop(rootPath, st.index))}
+                    >
+                      <Codicon name="gitPull" size={14} />
+                    </button>
+                  </Tooltip>
+                  <Tooltip label="Descartar stash">
+                    <button
+                      className="git-file-action"
+                      aria-label="Descartar stash"
+                      disabled={busy}
+                      onClick={() =>
+                        act(async () => {
+                          if (!window.confirm("Descartar este stash?")) return;
+                          await gitStashDrop(rootPath, st.index);
+                        })
+                      }
+                    >
+                      <Codicon name="trash" size={14} />
+                    </button>
+                  </Tooltip>
                 </div>
               ))}
           </div>
@@ -590,23 +609,27 @@ function GitFileRow({
       </span>
       <span className="git-file-spacer" />
       {onDiscard && (
+        <Tooltip label="Descartar alterações">
+          <button
+            className="git-file-action"
+            aria-label="Descartar alterações"
+            disabled={disabled}
+            onClick={onDiscard}
+          >
+            <Codicon name="discard" />
+          </button>
+        </Tooltip>
+      )}
+      <Tooltip label={actionTitle}>
         <button
           className="git-file-action"
-          title="Descartar alterações"
+          aria-label={actionTitle}
           disabled={disabled}
-          onClick={onDiscard}
+          onClick={onAction}
         >
-          <Codicon name="discard" />
+          <Codicon name={actionIcon} />
         </button>
-      )}
-      <button
-        className="git-file-action"
-        title={actionTitle}
-        disabled={disabled}
-        onClick={onAction}
-      >
-        <Codicon name={actionIcon} />
-      </button>
+      </Tooltip>
       <span className={`git-file-badge git-badge-${b.kind}`}>{b.letter}</span>
     </div>
   );

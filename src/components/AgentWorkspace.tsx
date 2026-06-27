@@ -1,4 +1,11 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FormEvent,
+  KeyboardEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { acpProvider, acpProviders } from "../acp/providers";
@@ -314,6 +321,9 @@ function AgentChat({
 }) {
   const [draft, setDraft] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
+  // DOM nodes of the mode radios, so arrow-key navigation can move focus along
+  // with selection (roving tabIndex), keyed by mode id.
+  const modeRefs = useRef<Partial<Record<AgentMode, HTMLButtonElement | null>>>({});
   const provider = useMemo(() => acpProvider(agent.provider), [agent.provider]);
 
   useEffect(() => {
@@ -326,6 +336,34 @@ function AgentChat({
     if (!message || busy) return;
     setDraft("");
     await onSend(message, mode);
+  }
+
+  /**
+   * Arrow-key navigation for the mode radiogroup (WAI-ARIA radio pattern):
+   * Up/Left select the previous mode, Down/Right the next, both with wrap.
+   * Selecting via arrow also moves focus to the newly checked radio.
+   */
+  function onModeKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (busy) return;
+    const idx = AGENT_MODES.indexOf(mode);
+    if (idx < 0) return;
+    let next = idx;
+    switch (event.key) {
+      case "ArrowUp":
+      case "ArrowLeft":
+        next = (idx - 1 + AGENT_MODES.length) % AGENT_MODES.length;
+        break;
+      case "ArrowDown":
+      case "ArrowRight":
+        next = (idx + 1) % AGENT_MODES.length;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    const target = AGENT_MODES[next];
+    onModeChange(target);
+    modeRefs.current[target]?.focus();
   }
 
   return (
@@ -404,13 +442,24 @@ function AgentChat({
       </div>
 
       <form className="agent-composer" onSubmit={submit}>
-        <div className="agent-mode-bar" role="radiogroup" aria-label="Modo do agente">
+        <div
+          className="agent-mode-bar"
+          role="radiogroup"
+          aria-label="Modo do agente"
+          onKeyDown={onModeKeyDown}
+        >
           {AGENT_MODES.map((id) => (
             <button
               key={id}
+              ref={(el) => {
+                modeRefs.current[id] = el;
+              }}
               type="button"
               role="radio"
               aria-checked={mode === id}
+              // Roving tabIndex: only the checked radio is tabbable; arrows move
+              // focus within the group (WAI-ARIA radiogroup pattern).
+              tabIndex={mode === id ? 0 : -1}
               className={`agent-mode-option ${mode === id ? "active" : ""}`}
               onClick={() => onModeChange(id)}
               disabled={busy}

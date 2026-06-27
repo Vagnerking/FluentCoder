@@ -992,7 +992,7 @@ export async function startRazorProjectionServer(
 
 /** Read the projected `.g.cs` from disk via the app's FS command. */
 async function readGenerated(path: string): Promise<string> {
-  return readFile(path);
+  return (await readFile(path)).content;
 }
 
 /** LSP hover contents → Monaco markdown. */
