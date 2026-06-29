@@ -352,7 +352,21 @@ pub fn prepare_with_timeout(
         });
     }
 
-    crate::rdiag!("[razor:timing] prepare TOTAL {:?}", started.elapsed());
+    // The full prepare (derive + emit + materialize + restore + source maps) is
+    // the cold-path cost of opening a `.cshtml`. Flag a slow one so a heavy
+    // project (e.g. many ProjectReferences, cold NuGet/restore) is visible as a
+    // concrete number in razor-diag.log rather than just "opening .cshtml is slow".
+    let total = started.elapsed();
+    if total.as_secs() >= 3 {
+        crate::rdiag!(
+            "[razor:timing] prepare TOTAL {:?} (SLOW — {} projection(s), {} missing)",
+            total,
+            projections.len(),
+            missing.len()
+        );
+    } else {
+        crate::rdiag!("[razor:timing] prepare TOTAL {:?}", total);
+    }
     Ok(PreparedShadow {
         plan,
         projections,
