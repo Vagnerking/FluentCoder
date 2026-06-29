@@ -49,6 +49,11 @@ pub fn run() {
                 }
             }
             window::restore_main_window(app.handle());
+            // Point the Razor/C# pipeline diagnostic log at the app data dir so a
+            // failing projection run leaves an inspectable trace (razor-diag.log).
+            if let Ok(dir) = app.path().app_data_dir() {
+                razor::diag::init(dir);
+            }
             Ok(())
         })
         .manage(terminal::TerminalState::new())
@@ -154,6 +159,7 @@ pub fn run() {
             razor::commands::razor_remap_to_generated,
             razor::commands::razor_remap_to_source,
             razor::commands::razor_forget,
+            razor::commands::razor_diag_log,
             ssh::ssh_connect,
             ssh::ssh_list_dir,
             ssh::ssh_read_file,

@@ -346,4 +346,36 @@ Antes de integrar mudanças CSHTML:
 - confirmar que TypeScript/JavaScript continuam com um único provider;
 - confirmar que `.razor` não foi capturado pelo serviço `.cshtml`;
 - confirmar reset e troca de workspace;
-- confirmar que a instância Monaco continua única.
+- confirmar que a instância Monaco continua única;
+- **rodar o E2E `tests/e2e/specs/razor-projection.e2e.ts` ANTES de commitar
+  qualquer mudança no caminho de diagnóstico/remap.** Os testes unitários usam
+  mocks e não cobrem o contrato real dos comandos Tauri (serialização camelCase)
+  nem divergências de remap — só o E2E pega. Quando este E2E falhar após uma
+  mudança nesse caminho, suspeite de regressão determinística ANTES de culpar o
+  ambiente; bisseccione com `git checkout <commit-bom> -- <arquivos>` + rebuild.
+
+## Observabilidade / troubleshooting
+
+O pipeline `.cshtml` → `.g.cs` (projeção) → Roslyn → remap grava uma trilha
+ordenada (backend + frontend) em **`<app_data_dir>/razor-diag.log`**
+(Windows: `%APPDATA%\com.fluentcoder.app\razor-diag.log`). Infra:
+`src-tauri/src/razor/diag.rs` (`rdiag!`), comando `razor_diag_log`, e o espelho
+de `lspLog` em `src/lsp/debug.ts` (linhas do pipeline são sempre espelhadas; o
+resto só com `localStorage["lsp.diagToFile"]="1"`). É **metadado apenas** —
+nunca conteúdo do código do usuário.
+
+Leitura rápida quando "a projeção não valida" / "está lento":
+
+- `razor projection: diagnostics {pulled, mapped, ms}`
+  - `pulled>0, mapped=0` → remap descartou tudo. Causa clássica: tipo Razor
+    DUPLICADO entre o projeto Web (que gera as `Views_*`) e o shadow. O shadow
+    csproj suprime isso via `Properties` no `ProjectReference`
+    (`EnableDefaultRazorGenerateItems=false` etc. — `shadow.rs`); se voltar a
+    falhar, confira essa supressão.
+  - `pulled=0` → Roslyn não classificou nada (projeto não carregou / shadow não
+    restaurado / `.g.cs` errado). Veja `[razor:error]` e `[razor:timing]`.
+  - `ms` alto → pull lento do Roslyn.
+- `[razor:timing] prepare TOTAL ... (SLOW ...)` → prepare caro (projeto pesado,
+  restore frio). `[razor:live] emit ... (SLOW ...)` → sidecar por-tecla lento.
+- `[razor:error] shadow restore FAILED / no projected .g.cs` → falhas antes
+  silenciosas do broker.

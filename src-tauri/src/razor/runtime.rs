@@ -174,6 +174,48 @@ fn run_capturing(program: &str, args: &[String], cwd: &Path, timeout: Duration) 
     }
 }
 
+/// Run a process to completion and return its exit status (stdout/stderr
+/// discarded), with the same timeout + no-console-window behavior as
+/// {@link run_capturing}. Unlike `run_capturing` — which returns `Ok` on ANY
+/// exit so callers like the emit can tolerate the deliberate compile failure —
+/// this surfaces the exit CODE, so the restore path can tell a real
+/// `dotnet restore` failure from success (a non-zero restore leaves the shadow
+/// unloadable → no C# diagnostics).
+fn run_to_status(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    timeout: Duration,
+) -> io::Result<std::process::ExitStatus> {
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .current_dir(cwd)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = cmd.spawn()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("`{program}` timed out after {}s", timeout.as_secs()),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// A materialized projection ready to serve.
 pub struct PreparedProjection {
     pub cshtml_rel: PathBuf,
@@ -234,7 +276,7 @@ pub fn prepare_with_timeout(
     // 1. derive TFM + framework references (cached per project; ~0.6s on a miss).
     let t = Instant::now();
     let derived = derive_cached(user_csproj_path, user_project_dir, timeout)?;
-    eprintln!("[razor:timing] derive {:?}", t.elapsed());
+    crate::rdiag!("[razor:timing] derive {:?}", t.elapsed());
 
     // 2. plan.
     let plan = broker::plan(&BrokerInputs {
@@ -279,18 +321,18 @@ pub fn prepare_with_timeout(
         }
     });
     if emit_current {
-        eprintln!("[razor:timing] emit SKIPPED (projections up-to-date)");
+        crate::rdiag!("[razor:timing] emit SKIPPED (projections up-to-date)");
     } else {
         let t = Instant::now();
         let (eprog, eargs) = &plan.emit_command;
         let _ = run_capturing(eprog, eargs, &plan.emit_cwd, timeout)?;
-        eprintln!("[razor:timing] emit {:?}", t.elapsed());
+        crate::rdiag!("[razor:timing] emit {:?}", t.elapsed());
     }
 
     // 4. materialize the shadow (write csproj, copy/remove-stale projections, .sln).
     let t = Instant::now();
     exec::materialize(&plan)?;
-    eprintln!("[razor:timing] materialize {:?}", t.elapsed());
+    crate::rdiag!("[razor:timing] materialize {:?}", t.elapsed());
 
     // 4.5 restore the shadow so Roslyn can load it (it won't restore itself; it
     //     only asks via `workspace/_roslyn_projectNeedsRestore`). The shadow's
@@ -299,15 +341,41 @@ pub fn prepare_with_timeout(
     //     persists in the temp shadow across app restarts.
     let assets = plan.shadow_dir.join("obj").join("project.assets.json");
     if assets.exists() {
-        eprintln!("[razor:timing] restore SKIPPED (shadow already restored)");
+        crate::rdiag!("[razor:timing] restore SKIPPED (shadow already restored)");
     } else {
         let t = Instant::now();
         let restore_args = vec![
             "restore".to_string(),
             plan.shadow_csproj_path.to_string_lossy().to_string(),
         ];
-        let _ = run_capturing("dotnet", &restore_args, &plan.shadow_dir, timeout);
-        eprintln!("[razor:timing] restore {:?}", t.elapsed());
+        // A failed restore leaves Roslyn unable to load the shadow → NO
+        // diagnostics surface, which looks like the projection silently doing
+        // nothing. Check the EXIT CODE (not just spawn success): a `dotnet
+        // restore` that runs but returns non-zero is a real failure that the
+        // old `run_capturing` would have reported as `Ok`. Logged so this root
+        // cause is visible instead of swallowed.
+        match run_to_status("dotnet", &restore_args, &plan.shadow_dir, timeout) {
+            Ok(status) if status.success() => {
+                crate::rdiag!("[razor:timing] restore {:?}", t.elapsed())
+            }
+            Ok(status) => crate::rdiag!(
+                "[razor:error] shadow restore exited {} after {:?} (shadow={}) — Roslyn won't load the project; no C# diagnostics will appear",
+                status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".to_string()),
+                t.elapsed(),
+                plan.shadow_dir.display()
+            ),
+            Err(e) => crate::rdiag!(
+                "[razor:error] shadow restore FAILED after {:?}: {e} (shadow={}) — Roslyn won't load the project; no C# diagnostics will appear",
+                t.elapsed(),
+                plan.shadow_dir.display()
+            ),
+        }
+        if !assets.exists() {
+            crate::rdiag!(
+                "[razor:error] shadow restore did NOT produce obj/project.assets.json at {} — the shadow solution is unrestored",
+                plan.shadow_dir.display()
+            );
+        }
     }
 
     // 5. build a source map per materialized projection; record any that are missing.
@@ -315,7 +383,15 @@ pub fn prepare_with_timeout(
     let mut missing = Vec::new();
     for pf in &plan.projections {
         if !pf.shadow_gcs.exists() {
-            missing.push(pf.cshtml_rel.clone()); // emit produced no projection (degraded)
+            // Emit produced no projection for this `.cshtml` (degraded). Without a
+            // `.g.cs` there is nothing for Roslyn to analyze → no diagnostics for
+            // this file; surface it so a partial/failed emit is diagnosable.
+            crate::rdiag!(
+                "[razor:error] no projected .g.cs for {} (expected {}) — emit degraded; this file gets no C# diagnostics",
+                pf.cshtml_rel.display(),
+                pf.shadow_gcs.display()
+            );
+            missing.push(pf.cshtml_rel.clone());
             continue;
         }
         let generated = std::fs::read_to_string(&pf.shadow_gcs)?;
@@ -328,7 +404,21 @@ pub fn prepare_with_timeout(
         });
     }
 
-    eprintln!("[razor:timing] prepare TOTAL {:?}", started.elapsed());
+    // The full prepare (derive + emit + materialize + restore + source maps) is
+    // the cold-path cost of opening a `.cshtml`. Flag a slow one so a heavy
+    // project (e.g. many ProjectReferences, cold NuGet/restore) is visible as a
+    // concrete number in razor-diag.log rather than just "opening .cshtml is slow".
+    let total = started.elapsed();
+    if total.as_secs() >= 3 {
+        crate::rdiag!(
+            "[razor:timing] prepare TOTAL {:?} (SLOW — {} projection(s), {} missing)",
+            total,
+            projections.len(),
+            missing.len()
+        );
+    } else {
+        crate::rdiag!("[razor:timing] prepare TOTAL {:?}", total);
+    }
     Ok(PreparedShadow {
         plan,
         projections,

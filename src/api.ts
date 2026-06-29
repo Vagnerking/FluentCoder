@@ -1184,6 +1184,13 @@ export function razorForget(cshtmlPath: string): Promise<void> {
   return invoke<void>("razor_forget", { cshtmlPath });
 }
 
+/** Append a line to the shared Razor/C# pipeline diagnostic log
+ * (`<app_data_dir>/razor-diag.log`), so the frontend LSP chain lands in the
+ * same ordered trace as the backend broker steps. Best-effort fire-and-forget. */
+export function razorDiagLog(line: string): Promise<void> {
+  return invoke<void>("razor_diag_log", { line });
+}
+
 /** Result of a live emit (per-keystroke projection via the sidecar). */
 export interface RazorEmitLiveResult {
   /** The fresh projected C# — feed straight into Roslyn (didOpen). */
