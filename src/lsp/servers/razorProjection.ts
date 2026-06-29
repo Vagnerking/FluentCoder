@@ -812,6 +812,11 @@ export async function startRazorProjectionServer(
   for (const ed of monaco.editor.getEditors()) attachAutoClose(ed);
   disposables.push(monaco.editor.onDidCreateEditor(attachAutoClose));
 
+  // Owner for the "projection unavailable" notice so it never collides with the
+  // real remapped diagnostics (which use DIAGNOSTICS_OWNER) and can be cleared
+  // independently once a file's projection is restored.
+  const MISSING_OWNER = `${DIAGNOSTICS_OWNER}:missing`;
+
   // 5. Lifecycle: watch model open/close/change to (re)prepare and clean up.
   const forgetDoc = (key: string): void => {
     const doc = docs.get(key);
@@ -830,7 +835,10 @@ export async function startRazorProjectionServer(
     });
     void razorForget(doc.cshtmlPath).catch(() => {});
     const model = monaco.editor.getModel(monaco.Uri.parse(doc.cshtmlUri));
-    if (model && !model.isDisposed()) monaco.editor.setModelMarkers(model, DIAGNOSTICS_OWNER, []);
+    if (model && !model.isDisposed()) {
+      monaco.editor.setModelMarkers(model, DIAGNOSTICS_OWNER, []);
+      monaco.editor.setModelMarkers(model, MISSING_OWNER, []); // clear the degraded notice too
+    }
     // Drop this file's store entry too, so a closed `.cshtml` stops coloring the
     // explorer (empty list clears the key).
     setDiagnostics(RAZOR_PROJECTION_SERVER_ID, doc.cshtmlPath, []);
@@ -841,6 +849,44 @@ export async function startRazorProjectionServer(
     liveTimers.delete(key);
     syncChains.delete(key);
     liveBroken.delete(key);
+  };
+
+  /**
+   * Surface a degraded-state marker on every `.cshtml` whose projection failed to
+   * emit (`razorPrepare.missing`) instead of leaving it SILENTLY undiagnosed —
+   * the user would otherwise see no C# squiggles and assume the file is clean.
+   * Publishes a Warning on line 1; clears the notice for any file that is no
+   * longer missing (projection restored). Best-effort and idempotent.
+   */
+  const publishMissingMarkers = (missingRels: readonly string[]): void => {
+    const missingSet = new Set(missingRels.map((r) => r.replace(/\\/g, "/").toLowerCase()));
+    for (const m of openCshtmlModels()) {
+      if (!inThisProject(fromFileUri(m.uri.toString()))) continue;
+      const rel = relativize(projectDir, fromFileUri(m.uri.toString()))
+        .replace(/\\/g, "/")
+        .toLowerCase();
+      const isMissing = missingSet.has(rel);
+      monaco.editor.setModelMarkers(
+        m,
+        MISSING_OWNER,
+        isMissing
+          ? [
+              {
+                severity: monaco.MarkerSeverity.Warning,
+                message:
+                  "Análise C# indisponível para este .cshtml: a projeção Razor não " +
+                  "pôde ser gerada (verifique o build do projeto / razor-diag.log). " +
+                  "Erros de C# não serão mostrados até a projeção ser restaurada.",
+                startLineNumber: 1,
+                startColumn: 1,
+                endLineNumber: 1,
+                endColumn: 1,
+                source: "razor",
+              },
+            ]
+          : []
+      );
+    }
   };
 
   const scheduleReprepare = (): void => {
@@ -872,6 +918,7 @@ export async function startRazorProjectionServer(
       });
       for (const info of re.available) await openProjection(info);
       pullAllDiagnostics();
+      publishMissingMarkers(re.missing);
     } catch (err) {
       lspLog("razor projection: reprepare failed", String(err));
     }
@@ -1048,6 +1095,7 @@ export async function startRazorProjectionServer(
       void (async () => {
         for (const info of prepared.available) await openProjection(info);
         pullAllDiagnostics();
+        publishMissingMarkers(prepared.missing);
       })();
       // Build + warm the live-emit sidecar in the background so the first
       // keystroke hits the fast (~ms) path. Best-effort: if the build/warm fails,
