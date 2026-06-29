@@ -72,52 +72,6 @@ test("routeDiagnostics keeps only the mappable ones in a mixed batch", async () 
   assert.equal(markers[0].code, "CS1061");
 });
 
-// --- batch range remap path (production: one Tauri round-trip for all ranges) ---
-
-test("routeDiagnostics uses the batchRemap (index-aligned) when provided", async () => {
-  const synthetic: LspDiagnostic = {
-    range: { start: { line: 42, character: 0 }, end: { line: 42, character: 5 } },
-    message: "noise",
-  };
-  // Whole-range batch remapper mirroring the Rust contract: index-aligned with
-  // input, null for synthetic. CS1061 → Monaco 1-based (16,15)-(16,34).
-  const calls: number[] = [];
-  const batchRemap = async (ranges: readonly { start: { line: number }; }[]) => {
-    calls.push(ranges.length);
-    return ranges.map((r) =>
-      r.start.line === 160
-        ? { startLineNumber: 16, startColumn: 15, endLineNumber: 16, endColumn: 34 }
-        : null
-    );
-  };
-  // If batchRemap is used, the per-point remap must NOT be called.
-  const failRemap: RemapFn = async () => {
-    throw new Error("per-point remap should not run when batchRemap is provided");
-  };
-  const markers = await routeDiagnostics([synthetic, CS1061], failRemap, batchRemap);
-  assert.deepEqual(calls, [2]); // ONE call, both (non-phantom) ranges together
-  assert.equal(markers.length, 1);
-  assert.equal(markers[0].code, "CS1061");
-  assert.equal(markers[0].startLineNumber, 16);
-  assert.equal(markers[0].endColumn, 34);
-});
-
-test("routeDiagnostics batchRemap excludes phantom CS0229 before remapping", async () => {
-  const phantom: LspDiagnostic = {
-    range: { start: { line: 5, character: 0 }, end: { line: 5, character: 3 } },
-    code: "CS0229",
-    message: "Ambiguity between 'X.Y' and 'X.Y'",
-  };
-  let received = -1;
-  const batchRemap = async (ranges: readonly unknown[]) => {
-    received = ranges.length;
-    return ranges.map(() => null);
-  };
-  const out = await routeDiagnostics([phantom, CS1061], remapToSource, batchRemap);
-  assert.equal(received, 1); // phantom filtered out BEFORE the batch call
-  assert.equal(out.length, 0); // and CS1061 here maps to null → dropped
-});
-
 // --- phantom self-ambiguity (CS0229) from the duplicated Razor page class ---
 
 const PHANTOM_CS0229: LspDiagnostic = {

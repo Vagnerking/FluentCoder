@@ -33,7 +33,6 @@ import {
   razorPrepare,
   razorRemapToGenerated,
   razorRemapToSource,
-  razorRemapRangesToSource,
   razorWarm,
   readFile,
   startLspServer,
@@ -61,7 +60,6 @@ import {
   routeDefinition,
   routeDiagnostics,
   type RemapFn,
-  type BatchRangeRemapFn,
 } from "./razorProjectionRouting";
 import type { ServerStartContext } from ".";
 
@@ -316,43 +314,6 @@ export async function startRazorProjectionServer(
     (line, character) =>
       razorRemapToSource(cshtmlPath, line, character);
 
-  // Batch remapper for diagnostics: one Tauri round-trip for ALL ranges instead
-  // of two per diagnostic. Converts the Rust 0-based result into Monaco's 1-based
-  // RoutedRange (null stays null = unmappable/synthetic).
-  const batchRemapFor =
-    (cshtmlPath: string): BatchRangeRemapFn =>
-    async (ranges) => {
-      let mapped;
-      try {
-        mapped = await razorRemapRangesToSource(
-          cshtmlPath,
-          ranges.map((r) => ({
-            startLine: r.start.line,
-            startCharacter: r.start.character,
-            endLine: r.end.line,
-            endCharacter: r.end.character,
-          }))
-        );
-      } catch (err) {
-        // The batch command failed (e.g. payload/command mismatch). Don't let it
-        // sink the whole pull (which would drop EVERY diagnostic silently) — fall
-        // back to the per-point remap so diagnostics still surface.
-        lspLog("razor projection: batch remap failed; falling back per-range", String(err));
-        const single = remapToSourceFor(cshtmlPath);
-        return Promise.all(ranges.map((r) => remapRangeToMonaco(r, single)));
-      }
-      return mapped.map((m) =>
-        m
-          ? {
-              startLineNumber: m.startLine + 1,
-              startColumn: m.startCharacter + 1,
-              endLineNumber: m.endLine + 1,
-              endColumn: m.endCharacter + 1,
-            }
-          : null
-      );
-    };
-
   const inProjectModelFor = (cshtmlPath: string): monaco.editor.ITextModel | null => {
     const wantKey = canonicalFileUriKey(toFileUri(cshtmlPath));
     return (
@@ -452,8 +413,7 @@ export async function startRazorProjectionServer(
     const items = (result?.items ?? []) as Parameters<typeof routeDiagnostics>[0];
     const markers = await routeDiagnostics(
       items,
-      remapToSourceFor(doc.cshtmlPath),
-      batchRemapFor(doc.cshtmlPath)
+      remapToSourceFor(doc.cshtmlPath)
     );
     // Visibility into the exact point where diagnostics tend to vanish: how many
     // Roslyn returned for the `.g.cs` vs how many survived the `#line` remap onto

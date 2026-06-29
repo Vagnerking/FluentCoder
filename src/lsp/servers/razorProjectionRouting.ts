@@ -78,17 +78,6 @@ export interface RoutedLocation {
 export type RemapFn = (line: number, character: number) => Promise<RemapPos | null>;
 
 /**
- * Batch remapper: takes generated-`.g.cs` ranges (0-based LSP) and returns the
- * `.cshtml` ranges as 1-based Monaco `RoutedRange`s, index-aligned, with `null`
- * for unmappable (synthetic) ones. Backed by the single-round-trip
- * `razor_remap_ranges_to_source` command — the production path for
- * {@link routeDiagnostics}.
- */
-export type BatchRangeRemapFn = (
-  ranges: readonly LspRange[]
-) => Promise<(RoutedRange | null)[]>;
-
-/**
  * Monaco `MarkerSeverity` numeric values (the enum is not imported to keep this
  * module monaco-free): Hint=1, Info=2, Warning=4, Error=8.
  */
@@ -178,26 +167,12 @@ export function isPhantomSelfAmbiguity(d: LspDiagnostic): boolean {
  */
 export async function routeDiagnostics(
   items: readonly LspDiagnostic[],
-  remapToSource: RemapFn,
-  batchRemap?: BatchRangeRemapFn
+  remapToSource: RemapFn
 ): Promise<RoutedMarker[]> {
-  // Drop architecture-artifact diagnostics up front, then remap the survivors'
-  // ranges in ONE batch call when a `batchRemap` is provided (production path:
-  // collapses `2 × N` Tauri hops into 1). Without it, fall back to the per-point
-  // `remapToSource` (keeps the pure unit tests trivially driveable).
-  const kept = items.filter((d) => !isPhantomSelfAmbiguity(d));
-  const ranges: RoutedRange[] = [];
-  if (batchRemap) {
-    const mapped = await batchRemap(kept.map((d) => d.range));
-    for (const r of mapped) ranges.push(r as RoutedRange); // index-aligned; null entries handled below
-  } else {
-    for (const d of kept) ranges.push((await remapRangeToMonaco(d.range, remapToSource)) as RoutedRange);
-  }
-
   const markers: RoutedMarker[] = [];
-  for (let i = 0; i < kept.length; i++) {
-    const d = kept[i];
-    const range = ranges[i];
+  for (const d of items) {
+    if (isPhantomSelfAmbiguity(d)) continue; // architecture artifact, not user code
+    const range = await remapRangeToMonaco(d.range, remapToSource);
     if (!range) continue; // unmappable → synthetic scaffolding, not user code
     const tags = standardTags(d.tags);
     markers.push({
