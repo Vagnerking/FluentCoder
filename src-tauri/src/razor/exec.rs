@@ -55,13 +55,22 @@ pub fn materialize(plan: &BrokerPlan) -> io::Result<()> {
         .parent()
         .unwrap_or(&plan.shadow_dir)
         .to_path_buf();
-    let sln = render_solution(
-        &sln_dir,
-        &[
-            ("UserProject", &plan.user_csproj_path),
-            ("ShadowRazor", &plan.shadow_csproj_path),
-        ],
-    );
+    // The solution contains ONLY the shadow project — NOT the user project.
+    //
+    // Including the user project as a second solution member made Roslyn load it
+    // as its own compilation, where a `Microsoft.NET.Sdk.Web` project regenerates
+    // its `Views_*` page classes (and picks up any persisted `obj/.../generated/
+    // *.g.cs` left by a `dotnet build` / the VS Code C# extension). The shadow
+    // ALSO compiles the same page class from the projected `.g.cs`, so the type
+    // ended up defined TWICE across the two solution projects → a flood of
+    // CS0101/CS0111/CS0229 that suppressed the real user diagnostic (the CS1061
+    // vanished). The `Properties=` Razor-suppression metadata on the
+    // ProjectReference fixes the BUILD graph but NOT how Roslyn loads a project
+    // that is its own solution node, so the only reliable fix is to keep the user
+    // project OUT of the solution. The shadow still `ProjectReference`s it, so
+    // Roslyn resolves the user's types (WeatherModel, etc.) transitively WITH the
+    // suppression applied — definitions still navigate into the real source.
+    let sln = render_solution(&sln_dir, &[("ShadowRazor", &plan.shadow_csproj_path)]);
     fs::write(&plan.solution_path, sln)?;
     Ok(())
 }
@@ -230,8 +239,11 @@ mod tests {
             "// generated"
         );
         let sln = fs::read_to_string(&plan.solution_path).unwrap();
+        // Solution contains ONLY the shadow project; the user project is pulled
+        // in transitively via the shadow's ProjectReference (not as its own
+        // solution node), so Roslyn never double-compiles the Razor page class.
         assert!(sln.contains("ShadowRazor.csproj"));
-        assert!(sln.contains("App.csproj"));
+        assert!(!sln.contains("App.csproj"), "user project must NOT be a solution member:\n{sln}");
 
         let _ = fs::remove_dir_all(&root);
     }
