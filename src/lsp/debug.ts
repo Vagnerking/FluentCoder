@@ -18,22 +18,28 @@ export function lspLog(...args: unknown[]): void {
   mirrorToDiagFile(line);
 }
 
-// When `localStorage["lsp.diagToFile"] === "1"`, also append each LSP line to
-// the backend's shared `razor-diag.log`, interleaved with the broker's pipeline
-// steps. This makes a failing C#/Razor run inspectable as one ordered timeline
-// even in a packaged build / under the E2E driver (where the webview console is
-// not captured). Off by default — zero cost in normal use. Dynamic import keeps
-// `api` out of this module's load path (and avoids any import cycle).
-let diagToFile: boolean | undefined;
+// Mirror LSP lines to the backend's shared `razor-diag.log`, interleaved with
+// the broker's pipeline steps, so a failing C#/Razor run is inspectable as one
+// ordered timeline even in a packaged build / under the E2E driver (where the
+// webview console isn't captured). Dynamic import keeps `api` out of this
+// module's load path (and avoids an import cycle).
+//
+// Two tiers: lines about the Razor/C# (Roslyn) pipeline are ALWAYS mirrored
+// (that's the whole point — the projection chain is the hard thing to debug);
+// everything else only mirrors when `localStorage["lsp.diagToFile"] === "1"`, to
+// keep the file focused in normal use.
+const PIPELINE_RE =
+  /razor|projection|roslyn|csharp|cshtml|\.g\.cs|semantic|diagnostic|solution\/open|projectInitial/i;
+let diagToFileAll: boolean | undefined;
 function mirrorToDiagFile(line: string): void {
-  if (diagToFile === undefined) {
+  if (diagToFileAll === undefined) {
     try {
-      diagToFile = localStorage.getItem("lsp.diagToFile") === "1";
+      diagToFileAll = localStorage.getItem("lsp.diagToFile") === "1";
     } catch {
-      diagToFile = false;
+      diagToFileAll = false;
     }
   }
-  if (!diagToFile) return;
+  if (!diagToFileAll && !PIPELINE_RE.test(line)) return;
   void import("../api")
     .then(({ razorDiagLog }) => razorDiagLog(line))
     .catch(() => {

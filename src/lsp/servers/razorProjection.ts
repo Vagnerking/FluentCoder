@@ -403,6 +403,16 @@ export async function startRazorProjectionServer(
     }
     const items = (result?.items ?? []) as Parameters<typeof routeDiagnostics>[0];
     const markers = await routeDiagnostics(items, remapToSourceFor(doc.cshtmlPath));
+    // Visibility into the exact point where diagnostics tend to vanish: how many
+    // Roslyn returned for the `.g.cs` vs how many survived the `#line` remap onto
+    // the `.cshtml`. `pulled>0, mapped=0` ⇒ remap dropped them (source-map/range
+    // bug); `pulled=0` ⇒ Roslyn classified nothing (project not loaded / wrong
+    // .g.cs / shadow unrestored). Both previously looked identical (silent).
+    lspLog("razor projection: diagnostics", {
+      cshtml: doc.cshtmlPath,
+      pulled: items.length,
+      mapped: markers.length,
+    });
     // Staleness guard: the awaits above (server pull + range remap) yield, so the
     // doc may have been closed (forgetDoc) or replaced (reprepare/reopen) while we
     // were waiting. If so, forgetDoc already cleared this file's markers + store;
