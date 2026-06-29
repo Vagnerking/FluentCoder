@@ -953,11 +953,17 @@ export async function startRazorProjectionServer(
     );
   };
 
-  const attachModel = (model: monaco.editor.ITextModel): void => {
+  const attachModel = (model: monaco.editor.ITextModel, initial = false): void => {
     if (model.getLanguageId() !== CSHTML_PROJECTION_LANGUAGE_ID || model.uri.scheme !== "file") return;
     if (!inThisProject(fromFileUri(model.uri.toString()))) return; // other project (V1)
-    // A newly-opened `.cshtml` matches disk → safe to reprepare immediately.
-    scheduleReprepare();
+    // Reprepare ONLY for models that appear AFTER startup. The models already
+    // open at start are covered by the initial `prepared`/`openProjection` in
+    // `onProjectInitialized`; firing a reprepare for them here would run a second
+    // `razorPrepare` (emit + materialize) that races the `.g.cs` Roslyn just
+    // opened — observed as `reprepare failed: os error 32` (file lock) and a
+    // desynced map, so every diagnostic dropped (`pulled>0, mapped=0`). A
+    // genuinely new tab, by contrast, has no projection yet and must reprepare.
+    if (!initial) scheduleReprepare();
     // Live re-emit on every (debounced) edit, so detection follows the buffer.
     const sub = model.onDidChangeContent(() => {
       if (disposed) return;
@@ -966,9 +972,10 @@ export async function startRazorProjectionServer(
     disposables.push(sub);
   };
 
-  disposables.push(monaco.editor.onDidCreateModel(attachModel));
-  // Attach to any `.cshtml` already open when the server starts.
-  for (const m of openCshtmlModels()) attachModel(m);
+  disposables.push(monaco.editor.onDidCreateModel((m) => attachModel(m)));
+  // Attach to any `.cshtml` already open when the server starts — `initial` so we
+  // don't double-prepare what the startup `prepared` already projected.
+  for (const m of openCshtmlModels()) attachModel(m, true);
   disposables.push(
     monaco.editor.onWillDisposeModel((model) => forgetDoc(canonicalFileUriKey(model.uri.toString())))
   );
