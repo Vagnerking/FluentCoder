@@ -62,12 +62,20 @@ pub fn render_shadow_csproj(spec: &ShadowSpec) -> String {
     // turning its Razor source generation off so only the shadow's projected
     // `.g.cs` defines the page class. (A newer .NET SDK reintroduced the
     // duplication that made `.cshtml` diagnostics vanish.)
+    //
+    // `EmitCompilerGeneratedFiles=false` is the key one when ANOTHER tool (VS
+    // Code's C#/Razor extension, or a plain `dotnet build`) has already
+    // materialized the page classes under `obj/.../generated/`: with emit ON
+    // those persisted `.g.cs` are picked back up and the duplicate type returns
+    // even though the generator itself is disabled. Forcing it OFF on the
+    // reference keeps those out of the shadow's view of the project.
     let suppress_razor = [
         "EnableDefaultRazorGenerateItems=false",
         "GenerateRazorAssemblyInfo=false",
         "RazorCompileOnBuild=false",
         "IncludeRazorContentInPack=false",
         "EnableDefaultRazorComponentItems=false",
+        "EmitCompilerGeneratedFiles=false",
     ]
     .join("%3B"); // MSBuild-escaped ';' inside the Properties attribute value
     s.push_str(&format!(
@@ -133,6 +141,13 @@ mod tests {
             "ProjectReference must disable the user project's Razor generation"
         );
         assert!(xml.contains("RazorCompileOnBuild=false"));
+        // The key one when another tool already wrote the generated page classes
+        // under obj/.../generated/ (VS Code C# ext, or a `dotnet build`): emit OFF
+        // keeps those persisted `.g.cs` out of the shadow's compilation.
+        assert!(
+            xml.contains("EmitCompilerGeneratedFiles=false"),
+            "ProjectReference must keep persisted generated files out of the shadow"
+        );
         // `;` separators must be MSBuild-escaped inside the attribute value.
         assert!(xml.contains("%3B"));
     }
