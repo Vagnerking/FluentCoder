@@ -396,6 +396,7 @@ export async function startRazorProjectionServer(
   const pullDiagnostics = async (doc: ProjectionDoc): Promise<void> => {
     if (disposed) return;
     let result: { items?: unknown[] } | null = null;
+    const startedAt = typeof performance !== "undefined" ? performance.now() : 0;
     try {
       // Serialize against the provisional-completion swap so diagnostics aren't
       // pulled from a temporarily-injected `.g.cs`.
@@ -416,10 +417,14 @@ export async function startRazorProjectionServer(
     // the `.cshtml`. `pulled>0, mapped=0` ⇒ remap dropped them (source-map/range
     // bug); `pulled=0` ⇒ Roslyn classified nothing (project not loaded / wrong
     // .g.cs / shadow unrestored). Both previously looked identical (silent).
+    // `ms` is the Roslyn pull round-trip — surfaces a slow/degraded server.
+    const pullMs =
+      startedAt > 0 ? Math.round(performance.now() - startedAt) : undefined;
     lspLog("razor projection: diagnostics", {
       cshtml: doc.cshtmlPath,
       pulled: items.length,
       mapped: markers.length,
+      ...(pullMs !== undefined ? { ms: pullMs } : {}),
     });
     // Staleness guard: the awaits above (server pull + range remap) yield, so the
     // doc may have been closed (forgetDoc) or replaced (reprepare/reopen) while we
