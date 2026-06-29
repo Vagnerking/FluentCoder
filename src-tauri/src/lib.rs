@@ -158,6 +158,7 @@ pub fn run() {
             razor::commands::razor_ensure_sidecar,
             razor::commands::razor_remap_to_generated,
             razor::commands::razor_remap_to_source,
+            razor::commands::razor_remap_ranges_to_source,
             razor::commands::razor_forget,
             razor::commands::razor_diag_log,
             ssh::ssh_connect,

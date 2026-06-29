@@ -1179,6 +1179,29 @@ export function razorRemapToSource(
   return invoke<RazorRemapPos | null>("razor_remap_to_source", { cshtmlPath, line, character });
 }
 
+/** A generated-`.g.cs` range (0-based LSP) to remap back to the `.cshtml`. */
+export interface RazorGenRange {
+  startLine: number;
+  startCharacter: number;
+  endLine: number;
+  endCharacter: number;
+}
+
+/** A remapped `.cshtml` range (0-based LSP), or `null` if unmappable. */
+export type RazorRemapRange = RazorGenRange | null;
+
+/**
+ * Batch-remap many projected-C# RANGES back to the `.cshtml` in ONE call. The
+ * result is index-aligned with `ranges`; `null` entries are synthetic/unmappable.
+ * Avoids the per-diagnostic `2 × N` round-trips of `razorRemapToSource`.
+ */
+export function razorRemapRangesToSource(
+  cshtmlPath: string,
+  ranges: RazorGenRange[]
+): Promise<RazorRemapRange[]> {
+  return invoke<RazorRemapRange[]>("razor_remap_ranges_to_source", { cshtmlPath, ranges });
+}
+
 /** Drop a `.cshtml`'s cached source map (on close). */
 export function razorForget(cshtmlPath: string): Promise<void> {
   return invoke<void>("razor_forget", { cshtmlPath });

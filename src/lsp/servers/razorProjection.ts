@@ -33,6 +33,7 @@ import {
   razorPrepare,
   razorRemapToGenerated,
   razorRemapToSource,
+  razorRemapRangesToSource,
   razorWarm,
   readFile,
   startLspServer,
@@ -60,6 +61,7 @@ import {
   routeDefinition,
   routeDiagnostics,
   type RemapFn,
+  type BatchRangeRemapFn,
 } from "./razorProjectionRouting";
 import type { ServerStartContext } from ".";
 
@@ -314,6 +316,33 @@ export async function startRazorProjectionServer(
     (line, character) =>
       razorRemapToSource(cshtmlPath, line, character);
 
+  // Batch remapper for diagnostics: one Tauri round-trip for ALL ranges instead
+  // of two per diagnostic. Converts the Rust 0-based result into Monaco's 1-based
+  // RoutedRange (null stays null = unmappable/synthetic).
+  const batchRemapFor =
+    (cshtmlPath: string): BatchRangeRemapFn =>
+    async (ranges) => {
+      const mapped = await razorRemapRangesToSource(
+        cshtmlPath,
+        ranges.map((r) => ({
+          startLine: r.start.line,
+          startCharacter: r.start.character,
+          endLine: r.end.line,
+          endCharacter: r.end.character,
+        }))
+      );
+      return mapped.map((m) =>
+        m
+          ? {
+              startLineNumber: m.startLine + 1,
+              startColumn: m.startCharacter + 1,
+              endLineNumber: m.endLine + 1,
+              endColumn: m.endCharacter + 1,
+            }
+          : null
+      );
+    };
+
   const inProjectModelFor = (cshtmlPath: string): monaco.editor.ITextModel | null => {
     const wantKey = canonicalFileUriKey(toFileUri(cshtmlPath));
     return (
@@ -411,7 +440,11 @@ export async function startRazorProjectionServer(
       return;
     }
     const items = (result?.items ?? []) as Parameters<typeof routeDiagnostics>[0];
-    const markers = await routeDiagnostics(items, remapToSourceFor(doc.cshtmlPath));
+    const markers = await routeDiagnostics(
+      items,
+      remapToSourceFor(doc.cshtmlPath),
+      batchRemapFor(doc.cshtmlPath)
+    );
     // Visibility into the exact point where diagnostics tend to vanish: how many
     // Roslyn returned for the `.g.cs` vs how many survived the `#line` remap onto
     // the `.cshtml`. `pulled>0, mapped=0` ⇒ remap dropped them (source-map/range

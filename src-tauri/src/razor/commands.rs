@@ -591,6 +591,63 @@ pub fn razor_remap_to_source(
     mapped.map(|p| RemapPos { line: p.line, character: p.character })
 }
 
+/// One generated-side range to remap (0-based LSP `[start, end)`).
+#[derive(serde::Deserialize)]
+pub struct GenRange {
+    pub start_line: u32,
+    pub start_character: u32,
+    pub end_line: u32,
+    pub end_character: u32,
+}
+
+/// A remapped `.cshtml` range, or `null` for an unmappable (synthetic) one.
+#[derive(Serialize)]
+pub struct RemapRange {
+    pub start_line: u32,
+    pub start_character: u32,
+    pub end_line: u32,
+    pub end_character: u32,
+}
+
+/// Batch version of {@link razor_remap_to_source} for whole RANGES: remap many
+/// generated-`.g.cs` ranges back to the `.cshtml` in ONE Tauri round-trip.
+///
+/// `routeDiagnostics` previously called `razor_remap_to_source` twice per
+/// diagnostic (start + end) — `2 * N` TS→Rust hops per pull, repeated on every
+/// diagnostic retry. A file with many errors (and the retry backoff) turned that
+/// into hundreds of crossings. This locks the map once and remaps every range
+/// with `generated_range_to_source` (which also enforces the same-region rule,
+/// so a span never bridges synthetic C#). The result vector is index-aligned
+/// with `ranges`; `None` entries are unmappable and the caller drops them.
+#[tauri::command]
+pub fn razor_remap_ranges_to_source(
+    state: State<'_, RazorState>,
+    cshtml_path: String,
+    ranges: Vec<GenRange>,
+) -> Vec<Option<RemapRange>> {
+    let Ok(maps) = state.maps.lock() else {
+        return ranges.iter().map(|_| None).collect();
+    };
+    let Some(map) = maps.get(&canonical_key(Path::new(&cshtml_path))) else {
+        return ranges.iter().map(|_| None).collect();
+    };
+    ranges
+        .into_iter()
+        .map(|r| {
+            let lsp = remap::LspRange {
+                start: LspPos::new(r.start_line, r.start_character),
+                end: LspPos::new(r.end_line, r.end_character),
+            };
+            remap::generated_range_to_source(map, lsp).map(|out| RemapRange {
+                start_line: out.start.line,
+                start_character: out.start.character,
+                end_line: out.end.line,
+                end_character: out.end.character,
+            })
+        })
+        .collect()
+}
+
 /// Append a line from the frontend LSP/projection chain to the shared
 /// `razor-diag.log`. Lets the `.cshtml` projection client (TS side) land its
 /// trace in the SAME ordered file as the backend pipeline steps, so a failing
