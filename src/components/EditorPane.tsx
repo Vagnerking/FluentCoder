@@ -561,6 +561,16 @@ export function EditorPane({
       // documentSelector is `{ scheme: "file" }` attach to it. Passing the raw
       // Windows path would make Monaco treat the drive letter as the URI scheme.
       path={modelPath}
+      // KEEP the model alive across tab switches. By default @monaco-editor/react
+      // DISPOSES the previous model when `path` changes (switching tabs), which
+      // fires Monaco's `onWillDisposeModel` → the Razor broker's `forgetDoc`
+      // (clears the `.cshtml` diagnostics + drops the source map) and forces a
+      // slow, race-prone re-prepare on return. That made the C# projection error
+      // (and Roslyn diagnostics in general) vanish after visiting another file and
+      // coming back. With the model kept, switching tabs no longer tears the LSP
+      // document down; the real dispose happens only when the tab is truly closed
+      // (App's open-paths reconciliation effect, guarded against split groups).
+      keepCurrentModel
       language={languageForFile(file.name, file.path)}
       value={file.content}
       onChange={(value) => onChange(value ?? "")}

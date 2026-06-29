@@ -2316,10 +2316,40 @@ export default function App() {
 
   /** Remove a tab from `openFiles`, moving focus off it if it was active. */
   /** Removes a tab from a group, moving focus off it and collapsing an emptied
-   *  group (except the last one). */
+   *  group (except the last one). Orphaned models are disposed by the
+   *  reconciliation effect below (see `keepCurrentModel`). */
   const removeTabFromGroup = useCallback((groupId: string, path: string) => {
     setLayout((l) => closeFile(l, groupId, path));
   }, []);
+
+  // Dispose Monaco models for files that were open and are now closed in EVERY
+  // group. `EditorPane` sets `keepCurrentModel`, so Monaco no longer disposes a
+  // model on tab switch (which previously tore down the Razor projection / LSP
+  // document and made C# diagnostics vanish after revisiting a tab). The flip
+  // side: we must dispose models on REAL close ourselves, or they'd leak and keep
+  // stale LSP documents (or, for untitled buffers, their unsaved contents) alive.
+  // Reconciling against the set of open paths covers every close path (close,
+  // close-all/others/left/right, detach) at once, and the split-group guard is
+  // automatic — a path still open in another group stays in `openNow`. Disposing
+  // fires onWillDisposeModel → the broker's forgetDoc and the client's didClose:
+  // the correct teardown for a closed document. Untitled buffers are tracked too
+  // (their model URI is the synthetic `untitled:` path, matching EditorPane).
+  const openFilePathsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const openNow = new Set<string>();
+    for (const group of Object.values(layout.groups)) {
+      for (const f of group.files) openNow.add(f.path);
+    }
+    for (const path of openFilePathsRef.current) {
+      if (openNow.has(path)) continue;
+      // Mirror EditorPane's `modelPath`: untitled buffers keep their synthetic
+      // `untitled:` URI; on-disk files go through the `file://` scheme.
+      const uri = isUntitled(path) ? path : toFileUri(path);
+      const model = monaco.editor.getModel(monaco.Uri.parse(uri));
+      if (model && !model.isDisposed()) model.dispose();
+    }
+    openFilePathsRef.current = openNow;
+  }, [layout]);
 
   /** Reorders tabs within a group: drops `fromPath` just before/after `toPath`. */
   const reorderTabsInGroup = useCallback(
