@@ -989,9 +989,18 @@ export async function startRazorProjectionServer(
   };
 
   disposables.push(monaco.editor.onDidCreateModel((m) => attachModel(m)));
-  // Attach to any `.cshtml` already open when the server starts — `initial` so we
-  // don't double-prepare what the startup `prepared` already projected.
-  for (const m of openCshtmlModels()) attachModel(m, true);
+  // Attach to any `.cshtml` already open when the server starts. Mark a model
+  // `initial` (suppress its reprepare) ONLY if the startup `prepared` actually
+  // projected it — otherwise a `.cshtml` that opened AFTER `awaitCshtmlModels()`
+  // snapshotted (but before this loop) isn't in `prepared` and would be left
+  // without a projection; those must reprepare like a genuinely new tab.
+  const projectedKeys = new Set(
+    prepared.available.map((info) => canonicalFileUriKey(toFileUri(info.cshtmlPath)))
+  );
+  for (const m of openCshtmlModels()) {
+    const isProjected = projectedKeys.has(canonicalFileUriKey(m.uri.toString()));
+    attachModel(m, isProjected);
+  }
   disposables.push(
     monaco.editor.onWillDisposeModel((model) => forgetDoc(canonicalFileUriKey(model.uri.toString())))
   );

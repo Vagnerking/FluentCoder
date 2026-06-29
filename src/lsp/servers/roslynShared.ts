@@ -83,6 +83,26 @@ export function wireRoslynStartup(
   // triggers the v10 client's own didOpen). Gate the late-bind on this flag so we
   // never push documents before the solution is ready.
   let workspaceInitialized = false;
+  // Models created BEFORE init completes are parked here and rebound in the init
+  // handler. This closes the race the simple `workspaceInitialized` guard left
+  // open: a model created AFTER `reopenRoslynDocuments()` snapshotted `getModels()`
+  // but BEFORE init finished would otherwise be covered by neither the batch nor
+  // the late listener, and never get rebound (no diagnostics until refocus).
+  const pendingPreInit = new Set<monaco.editor.ITextModel>();
+
+  const rebindOne = (model: monaco.editor.ITextModel): void => {
+    if (model.isDisposed()) return;
+    void rebindRoslynDocument(client, model)
+      .then(() => {
+        enableLanguageClientSemanticTokens(client);
+        stabilizeLanguageClientSemanticTokens(client);
+        repullDiagnostics(client);
+      })
+      .catch((err) =>
+        lspLog("late model rebind failed; re-pulling diagnostics", serverId, String(err))
+      );
+  };
+
   client.onNotification("workspace/projectInitializationComplete", () => {
     lspLog("Roslyn project initialization COMPLETE", serverId, rootPath);
     const workspace = roslynWorkspaces.get(client);
@@ -105,29 +125,32 @@ export function wireRoslynStartup(
         repullDiagnostics(client);
       })
       .finally(() => {
+        // Flip the flag FIRST so any model created from now on takes the direct
+        // path, then drain those parked during startup. A model in both the
+        // reopen snapshot and `pendingPreInit` just gets a harmless extra
+        // didClose+didOpen (idempotent).
         workspaceInitialized = true;
+        const parked = [...pendingPreInit];
+        pendingPreInit.clear();
+        for (const model of parked) rebindOne(model);
         onProjectInitialized?.();
       });
   });
 
-  // Late-arriving models: bind any matching model created AFTER init. Only the
-  // shared C# path uses this (`reopenLanguages` non-empty); the projection
-  // starter manages its own `.g.cs` lifecycle (`reopenLanguages: []`), so the
-  // listener is a no-op there.
+  // Bind any matching model regardless of WHEN it appears. Only the shared C#
+  // path uses this (`reopenLanguages` non-empty); the projection starter manages
+  // its own `.g.cs` lifecycle (`reopenLanguages: []`), so it's a no-op there.
+  // Pre-init creations are parked (drained by the init handler); post-init ones
+  // rebind immediately.
   if (reopenLanguages.length > 0) {
     const onCreate = monaco.editor.onDidCreateModel((model) => {
-      if (!workspaceInitialized) return; // init's own reopen will cover it
       if (!reopenLanguages.includes(model.getLanguageId())) return;
       if (model.uri.scheme !== "file") return;
-      void rebindRoslynDocument(client, model)
-        .then(() => {
-          enableLanguageClientSemanticTokens(client);
-          stabilizeLanguageClientSemanticTokens(client);
-          repullDiagnostics(client);
-        })
-        .catch((err) =>
-          lspLog("late model rebind failed; re-pulling diagnostics", serverId, String(err))
-        );
+      if (!workspaceInitialized) {
+        pendingPreInit.add(model);
+        return;
+      }
+      rebindOne(model);
     });
     addClientContributions(client, [onCreate]);
   }
