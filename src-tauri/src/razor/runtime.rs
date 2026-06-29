@@ -234,7 +234,7 @@ pub fn prepare_with_timeout(
     // 1. derive TFM + framework references (cached per project; ~0.6s on a miss).
     let t = Instant::now();
     let derived = derive_cached(user_csproj_path, user_project_dir, timeout)?;
-    eprintln!("[razor:timing] derive {:?}", t.elapsed());
+    crate::rdiag!("[razor:timing] derive {:?}", t.elapsed());
 
     // 2. plan.
     let plan = broker::plan(&BrokerInputs {
@@ -279,18 +279,18 @@ pub fn prepare_with_timeout(
         }
     });
     if emit_current {
-        eprintln!("[razor:timing] emit SKIPPED (projections up-to-date)");
+        crate::rdiag!("[razor:timing] emit SKIPPED (projections up-to-date)");
     } else {
         let t = Instant::now();
         let (eprog, eargs) = &plan.emit_command;
         let _ = run_capturing(eprog, eargs, &plan.emit_cwd, timeout)?;
-        eprintln!("[razor:timing] emit {:?}", t.elapsed());
+        crate::rdiag!("[razor:timing] emit {:?}", t.elapsed());
     }
 
     // 4. materialize the shadow (write csproj, copy/remove-stale projections, .sln).
     let t = Instant::now();
     exec::materialize(&plan)?;
-    eprintln!("[razor:timing] materialize {:?}", t.elapsed());
+    crate::rdiag!("[razor:timing] materialize {:?}", t.elapsed());
 
     // 4.5 restore the shadow so Roslyn can load it (it won't restore itself; it
     //     only asks via `workspace/_roslyn_projectNeedsRestore`). The shadow's
@@ -299,15 +299,31 @@ pub fn prepare_with_timeout(
     //     persists in the temp shadow across app restarts.
     let assets = plan.shadow_dir.join("obj").join("project.assets.json");
     if assets.exists() {
-        eprintln!("[razor:timing] restore SKIPPED (shadow already restored)");
+        crate::rdiag!("[razor:timing] restore SKIPPED (shadow already restored)");
     } else {
         let t = Instant::now();
         let restore_args = vec![
             "restore".to_string(),
             plan.shadow_csproj_path.to_string_lossy().to_string(),
         ];
-        let _ = run_capturing("dotnet", &restore_args, &plan.shadow_dir, timeout);
-        eprintln!("[razor:timing] restore {:?}", t.elapsed());
+        // A failed restore leaves Roslyn unable to load the shadow → NO
+        // diagnostics surface, which looks like the projection silently doing
+        // nothing. Log the failure (and whether assets actually landed) so this
+        // root cause is visible instead of swallowed by `let _ =`.
+        match run_capturing("dotnet", &restore_args, &plan.shadow_dir, timeout) {
+            Ok(_) => crate::rdiag!("[razor:timing] restore {:?}", t.elapsed()),
+            Err(e) => crate::rdiag!(
+                "[razor:error] shadow restore FAILED after {:?}: {e} (shadow={}) — Roslyn won't load the project; no C# diagnostics will appear",
+                t.elapsed(),
+                plan.shadow_dir.display()
+            ),
+        }
+        if !assets.exists() {
+            crate::rdiag!(
+                "[razor:error] shadow restore did NOT produce obj/project.assets.json at {} — the shadow solution is unrestored",
+                plan.shadow_dir.display()
+            );
+        }
     }
 
     // 5. build a source map per materialized projection; record any that are missing.
@@ -315,7 +331,15 @@ pub fn prepare_with_timeout(
     let mut missing = Vec::new();
     for pf in &plan.projections {
         if !pf.shadow_gcs.exists() {
-            missing.push(pf.cshtml_rel.clone()); // emit produced no projection (degraded)
+            // Emit produced no projection for this `.cshtml` (degraded). Without a
+            // `.g.cs` there is nothing for Roslyn to analyze → no diagnostics for
+            // this file; surface it so a partial/failed emit is diagnosable.
+            crate::rdiag!(
+                "[razor:error] no projected .g.cs for {} (expected {}) — emit degraded; this file gets no C# diagnostics",
+                pf.cshtml_rel.display(),
+                pf.shadow_gcs.display()
+            );
+            missing.push(pf.cshtml_rel.clone());
             continue;
         }
         let generated = std::fs::read_to_string(&pf.shadow_gcs)?;
@@ -328,7 +352,7 @@ pub fn prepare_with_timeout(
         });
     }
 
-    eprintln!("[razor:timing] prepare TOTAL {:?}", started.elapsed());
+    crate::rdiag!("[razor:timing] prepare TOTAL {:?}", started.elapsed());
     Ok(PreparedShadow {
         plan,
         projections,

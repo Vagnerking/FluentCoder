@@ -573,6 +573,16 @@ pub fn razor_remap_to_source(
         .map(|p| RemapPos { line: p.line, character: p.character })
 }
 
+/// Append a line from the frontend LSP/projection chain to the shared
+/// `razor-diag.log`. Lets the `.cshtml` projection client (TS side) land its
+/// trace in the SAME ordered file as the backend pipeline steps, so a failing
+/// C#/Razor run reads as one timeline (didOpen → pull → remap alongside
+/// derive/emit/restore). Best-effort; never errors back to the UI.
+#[tauri::command]
+pub fn razor_diag_log(line: String) {
+    crate::razor::diag::log(&line);
+}
+
 /// Drop a document's cached source map + live-emit context (on `.cshtml` close).
 #[tauri::command]
 pub fn razor_forget(state: State<'_, RazorState>, cshtml_path: String) {
