@@ -380,15 +380,25 @@ pub async fn razor_emit_live(
     // runtime's worker threads (same pattern as `razor_prepare`/`razor_ensure_sidecar`).
     let cshtml_abs = ctx.cshtml_abs.clone();
     let sidecar = state.clone_sidecar_ref();
+    let emit_started = std::time::Instant::now();
     let emitted = tauri::async_runtime::spawn_blocking(move || {
         sidecar.emit(&ctx.inputs, &ctx.cshtml_abs, &text)
     })
     .await
     .map_err(|e| format!("razor emit join error: {e}"))?;
+    let emit_ms = emit_started.elapsed();
+    // The live sidecar is the per-keystroke path; it must stay in the low-ms range
+    // or typing feels laggy. Trace every emit (and flag slow ones) so a degraded
+    // sidecar is visible in razor-diag.log instead of just "the editor feels slow".
+    if emit_ms.as_millis() >= 250 {
+        crate::rdiag!("[razor:live] SLOW emit {:?} for {}", emit_ms, cshtml_abs);
+    } else {
+        crate::rdiag!("[razor:live] emit {:?}", emit_ms);
+    }
     let generated = match emitted {
         Ok(g) => g,
         Err(e) => {
-            eprintln!("[razor:live] emit FAILED: {e}");
+            crate::rdiag!("[razor:live] emit FAILED for {cshtml_abs}: {e}");
             return Ok(EmitLiveResult {
                 generated_text: String::new(),
                 generation: 0,
@@ -402,7 +412,7 @@ pub async fn razor_emit_live(
         // transient invalid buffer). Don't blank Roslyn's view with empty text —
         // return ok:false so the caller KEEPS the last good projection. The next
         // valid edit re-emits a real `.g.cs`.
-        eprintln!("[razor:live] emit produced EMPTY .g.cs for {cshtml_abs}");
+        crate::rdiag!("[razor:live] emit produced EMPTY .g.cs for {cshtml_abs}");
         return Ok(EmitLiveResult {
             generated_text: String::new(),
             generation: 0,
