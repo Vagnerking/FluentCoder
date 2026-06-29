@@ -322,15 +322,25 @@ export async function startRazorProjectionServer(
   const batchRemapFor =
     (cshtmlPath: string): BatchRangeRemapFn =>
     async (ranges) => {
-      const mapped = await razorRemapRangesToSource(
-        cshtmlPath,
-        ranges.map((r) => ({
-          startLine: r.start.line,
-          startCharacter: r.start.character,
-          endLine: r.end.line,
-          endCharacter: r.end.character,
-        }))
-      );
+      let mapped;
+      try {
+        mapped = await razorRemapRangesToSource(
+          cshtmlPath,
+          ranges.map((r) => ({
+            startLine: r.start.line,
+            startCharacter: r.start.character,
+            endLine: r.end.line,
+            endCharacter: r.end.character,
+          }))
+        );
+      } catch (err) {
+        // The batch command failed (e.g. payload/command mismatch). Don't let it
+        // sink the whole pull (which would drop EVERY diagnostic silently) — fall
+        // back to the per-point remap so diagnostics still surface.
+        lspLog("razor projection: batch remap failed; falling back per-range", String(err));
+        const single = remapToSourceFor(cshtmlPath);
+        return Promise.all(ranges.map((r) => remapRangeToMonaco(r, single)));
+      }
       return mapped.map((m) =>
         m
           ? {

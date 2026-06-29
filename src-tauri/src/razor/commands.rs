@@ -602,7 +602,11 @@ pub fn razor_remap_to_source(
 }
 
 /// One generated-side range to remap (0-based LSP `[start, end)`).
+/// camelCase to match the JS payload (`startLine`, `startCharacter`, …); without
+/// it serde fails to deserialize and the whole command rejects, which silently
+/// stalls the diagnostics pull (no markers — caught only by the E2E).
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GenRange {
     pub start_line: u32,
     pub start_character: u32,
