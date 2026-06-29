@@ -51,9 +51,29 @@ pub fn render_shadow_csproj(spec: &ShadowSpec) -> String {
     }
     s.push_str("  </PropertyGroup>\n\n");
     s.push_str("  <ItemGroup>\n");
+    // Reference the user project for its TYPES, but suppress its Razor page
+    // generation across the reference. A `Microsoft.NET.Sdk.Web` user project
+    // emits its own `Views_*` page classes (`AspNetCoreGeneratedDocument.*`);
+    // the shadow ALSO compiles the same class from the projected `.g.cs`, so
+    // without this the Roslyn workspace sees the type defined twice and floods
+    // with CS0101/CS0111/CS0229/CS0579 — which suppress the real user
+    // diagnostic (e.g. the CS1061 never surfaces). The `Properties` metadata
+    // sets MSBuild global properties for the referenced project's evaluation,
+    // turning its Razor source generation off so only the shadow's projected
+    // `.g.cs` defines the page class. (A newer .NET SDK reintroduced the
+    // duplication that made `.cshtml` diagnostics vanish.)
+    let suppress_razor = [
+        "EnableDefaultRazorGenerateItems=false",
+        "GenerateRazorAssemblyInfo=false",
+        "RazorCompileOnBuild=false",
+        "IncludeRazorContentInPack=false",
+        "EnableDefaultRazorComponentItems=false",
+    ]
+    .join("%3B"); // MSBuild-escaped ';' inside the Properties attribute value
     s.push_str(&format!(
-        "    <ProjectReference Include=\"{}\" />\n",
-        esc(spec.user_csproj_rel)
+        "    <ProjectReference Include=\"{}\" Properties=\"{}\" />\n",
+        esc(spec.user_csproj_rel),
+        suppress_razor
     ));
     for fr in spec.framework_references {
         s.push_str(&format!("    <FrameworkReference Include=\"{}\" />\n", esc(fr)));
@@ -95,8 +115,26 @@ mod tests {
     #[test]
     fn references_user_project_and_framework() {
         let xml = render_shadow_csproj(&spec());
-        assert!(xml.contains("<ProjectReference Include=\"..\\SampleMvc\\SampleMvc.csproj\" />"));
+        // The reference now carries Razor-suppression Properties (see below), so
+        // assert on the Include plus the opening tag rather than a bare self-close.
+        assert!(xml.contains("<ProjectReference Include=\"..\\SampleMvc\\SampleMvc.csproj\""));
         assert!(xml.contains("<FrameworkReference Include=\"Microsoft.AspNetCore.App\" />"));
+    }
+
+    #[test]
+    fn suppresses_razor_generation_on_user_reference() {
+        // Without this, a Web-SDK user project emits its own Views_* page classes
+        // AND the shadow compiles the same class from the projected .g.cs → the
+        // type is defined twice (CS0101/CS0111/CS0229), which suppresses the real
+        // user diagnostic. The reference must turn the user's Razor generation off.
+        let xml = render_shadow_csproj(&spec());
+        assert!(
+            xml.contains("EnableDefaultRazorGenerateItems=false"),
+            "ProjectReference must disable the user project's Razor generation"
+        );
+        assert!(xml.contains("RazorCompileOnBuild=false"));
+        // `;` separators must be MSBuild-escaped inside the attribute value.
+        assert!(xml.contains("%3B"));
     }
 
     #[test]

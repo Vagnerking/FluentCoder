@@ -348,6 +348,14 @@ export async function startRazorProjectionServer(
       lspLog("razor projection: read .g.cs failed", info.generatedPath, String(err));
       return;
     }
+    // Which `.g.cs` (and how big) is being opened in Roslyn — the source map is
+    // built from THIS file, so its line count must match the positions Roslyn
+    // later reports. A mismatch (e.g. build vs sidecar layout) shows up as the
+    // diagnostics landing outside every region (mapped=0).
+    lspLog("razor projection: openProjection .g.cs", {
+      path: info.generatedPath,
+      lines: text.split("\n").length,
+    });
 
     // Run through the per-doc snapshot queue so this authoritative reopen can't
     // interleave with a live sync / provider ensureFresh for the same doc.

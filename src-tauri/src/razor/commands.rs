@@ -568,9 +568,27 @@ pub fn razor_remap_to_source(
     character: u32,
 ) -> Option<RemapPos> {
     let maps = state.maps.lock().ok()?;
-    let map = maps.get(&canonical_key(Path::new(&cshtml_path)))?;
-    remap::generated_pos_to_source(map, LspPos::new(line, character))
-        .map(|p| RemapPos { line: p.line, character: p.character })
+    let key = canonical_key(Path::new(&cshtml_path));
+    let Some(map) = maps.get(&key) else {
+        // No cached map for this `.cshtml` → every remap fails (mapped=0). Sample
+        // the failure so a key mismatch / missing map is visible in razor-diag.log.
+        crate::razor::diag::sample_remap_miss(&format!(
+            "[razor:remap] NO MAP for key={key} (cached keys: {})",
+            maps.keys().take(4).cloned().collect::<Vec<_>>().join(" | ")
+        ));
+        return None;
+    };
+    let mapped = remap::generated_pos_to_source(map, LspPos::new(line, character));
+    if mapped.is_none() {
+        // Map present but this generated position fell outside every region.
+        // Sample it (with the map's region count) to tell "map empty" from
+        // "position genuinely synthetic".
+        crate::razor::diag::sample_remap_miss(&format!(
+            "[razor:remap] gen ({line},{character}) UNMAPPED — regions={}",
+            map.region_count()
+        ));
+    }
+    mapped.map(|p| RemapPos { line: p.line, character: p.character })
 }
 
 /// Append a line from the frontend LSP/projection chain to the shared

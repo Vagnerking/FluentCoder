@@ -21,6 +21,7 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -65,6 +66,22 @@ pub fn log(line: &str) {
 
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(f, "{} {}", now_ms(), line);
+    }
+}
+
+/// Cap on sampled remap-miss lines per session, so a failing run (30 diagnostics
+/// × several pull retries) logs a handful of representative misses instead of
+/// thousands. Resets only on app restart.
+static REMAP_MISS_SAMPLES: AtomicU32 = AtomicU32::new(0);
+const MAX_REMAP_MISS_SAMPLES: u32 = 12;
+
+/// Log a remap miss, bounded to the first [`MAX_REMAP_MISS_SAMPLES`] of the
+/// session. Used to diagnose `mapped=0` (every projected diagnostic dropped):
+/// distinguishes a missing/wrong-key map from a genuinely synthetic position
+/// without flooding the log.
+pub fn sample_remap_miss(line: &str) {
+    if REMAP_MISS_SAMPLES.fetch_add(1, Ordering::Relaxed) < MAX_REMAP_MISS_SAMPLES {
+        log(line);
     }
 }
 
