@@ -174,6 +174,48 @@ fn run_capturing(program: &str, args: &[String], cwd: &Path, timeout: Duration) 
     }
 }
 
+/// Run a process to completion and return its exit status (stdout/stderr
+/// discarded), with the same timeout + no-console-window behavior as
+/// {@link run_capturing}. Unlike `run_capturing` — which returns `Ok` on ANY
+/// exit so callers like the emit can tolerate the deliberate compile failure —
+/// this surfaces the exit CODE, so the restore path can tell a real
+/// `dotnet restore` failure from success (a non-zero restore leaves the shadow
+/// unloadable → no C# diagnostics).
+fn run_to_status(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    timeout: Duration,
+) -> io::Result<std::process::ExitStatus> {
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .current_dir(cwd)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = cmd.spawn()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("`{program}` timed out after {}s", timeout.as_secs()),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// A materialized projection ready to serve.
 pub struct PreparedProjection {
     pub cshtml_rel: PathBuf,
@@ -308,10 +350,20 @@ pub fn prepare_with_timeout(
         ];
         // A failed restore leaves Roslyn unable to load the shadow → NO
         // diagnostics surface, which looks like the projection silently doing
-        // nothing. Log the failure (and whether assets actually landed) so this
-        // root cause is visible instead of swallowed by `let _ =`.
-        match run_capturing("dotnet", &restore_args, &plan.shadow_dir, timeout) {
-            Ok(_) => crate::rdiag!("[razor:timing] restore {:?}", t.elapsed()),
+        // nothing. Check the EXIT CODE (not just spawn success): a `dotnet
+        // restore` that runs but returns non-zero is a real failure that the
+        // old `run_capturing` would have reported as `Ok`. Logged so this root
+        // cause is visible instead of swallowed.
+        match run_to_status("dotnet", &restore_args, &plan.shadow_dir, timeout) {
+            Ok(status) if status.success() => {
+                crate::rdiag!("[razor:timing] restore {:?}", t.elapsed())
+            }
+            Ok(status) => crate::rdiag!(
+                "[razor:error] shadow restore exited {} after {:?} (shadow={}) — Roslyn won't load the project; no C# diagnostics will appear",
+                status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".to_string()),
+                t.elapsed(),
+                plan.shadow_dir.display()
+            ),
             Err(e) => crate::rdiag!(
                 "[razor:error] shadow restore FAILED after {:?}: {e} (shadow={}) — Roslyn won't load the project; no C# diagnostics will appear",
                 t.elapsed(),

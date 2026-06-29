@@ -22,11 +22,16 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Resolved path of `razor-diag.log`. `None` until [`init`] runs.
 static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+/// Serializes the size-check + write so concurrent callers (`rdiag!` from the
+/// runtime and `razor_diag_log` from the frontend) can't interleave a truncate
+/// with an append near `MAX_BYTES` and lose/reorder lines.
+static LOG_LOCK: Mutex<()> = Mutex::new(());
 
 /// Truncate the log once it passes this size (bytes). Keeps the most recent
 /// run's trace bounded without external rotation. 4 MiB holds a very long
@@ -55,6 +60,11 @@ fn now_ms() -> u128 {
 pub fn log(line: &str) {
     eprintln!("{line}");
     let Some(path) = LOG_PATH.get() else { return };
+
+    // Hold the lock across the size-check + truncate + append so two threads
+    // can't interleave (one truncating while another appends near MAX_BYTES).
+    // Recover from a poisoned lock — a logging mutex must never take the app down.
+    let _guard = LOG_LOCK.lock().unwrap_or_else(|p| p.into_inner());
 
     // Bound the file: if it's already at/over the cap, start fresh. Checked
     // before each append — cheap (a stat) next to the dotnet spawns this traces.
