@@ -122,9 +122,30 @@
 ## Log de execução
 
 - [x] 03/07 — Base Razor performática (7 commits) + fix corrida de boot
-      (`waitForCshtmlModels`) — E2E revalidação em andamento.
-- [ ] A1 format on save
-- [ ] A2 code actions `.cshtml`
-- [ ] B debugger DAP
-- [ ] C test runner
-- [ ] D solution explorer
+      (`waitForCshtmlModels`, commit 676aae6) — **E2E verde em 10.8s**.
+- [x] 03/07 — A1 format on save (commit 8e52a5f): flag `editor.formatOnSave`,
+      via `editor.action.formatDocument`, best-effort com timeout de 2s,
+      toggle na paleta. Escopo: csharp + editor anexado.
+- [x] 03/07 — A2 code actions `.cshtml` (commit dec047e): provider manual +
+      `codeAction/resolve`; `razor_remap_ranges_to_source_strict` +
+      `routeWorkspaceEdit` (drop-whole-action em região sintética/resource-op).
+      PENDENTE de validação manual no app (quick fix real num .cshtml).
+- [x] 03/07 — B debugger DAP (commits 3b61e07 + fa3aed8): backend
+      `src-tauri/src/dap/` (netcoredbg 3.2.0-1092 com SHA pinado 4 plataformas,
+      bridge WS quiet, DapState, attach via lista de processos,
+      `dap_resolve_dotnet_target` = build+TargetPath em 1 chamada MSBuild);
+      frontend `src/dap/` (client DAP raw-WS + debugSession com a dança
+      completa), breakpoints na gutter do EditorPane, seção "Depurar (.NET)"
+      no RunPanel (toolbar/pilha/variáveis/output). Handshake DAP validado
+      contra o binário real (initialize success:true). PENDENTE: sessão
+      end-to-end manual (breakpoint → hit → step) e debug de teste.
+- [x] 03/07 — C test runner (commit 652b7e5): `testrunner.rs` (descoberta
+      --list-tests locale-forçada; execução via TRX — parser próprio sem deps;
+      outcome/duração/mensagem por teste), seção "Testes (.NET)" no RunPanel
+      (descobrir, executar todos/um, ✓/✗+duração inline). PENDENTE: validação
+      com projeto xUnit real (o repo não tem fixture de teste .NET) e
+      debug-de-teste (VSTEST_HOST_DEBUG, depende de B manual-ok).
+- [x] 03/07 — D solution explorer V1 (commit 8bb249d): `sln.rs` (parser .sln
+      clássico, roundtrip com o gerador do broker), SolutionPanel (view nova
+      na ActivityBar, ícone layers), projetos + arquivos + build/debug por
+      projeto. Fora do V1: gestão de solution/referências, startup project.
