@@ -13,6 +13,7 @@
 import type { Monaco } from "@monaco-editor/react";
 import type * as MonacoNS from "monaco-editor";
 import { installRazorHtmlLint } from "../lint/razorHtmlLint";
+import { installFileTextModelResolver } from "./textModelResolver";
 // `monaco-editor`'s ESM API does not automatically bundle every basic-language
 // contribution. Register C#'s lazy Monarch loader explicitly; otherwise Roslyn
 // semantic tokens color symbols, but lexical-only tokens such as `if` and
@@ -25,6 +26,11 @@ let didSetup = false;
 export function setupMonacoForLsp(monaco: Monaco): void {
   if (didSetup) return;
   didSetup = true;
+
+  // Must run BEFORE the first editor instantiates the standalone services:
+  // resolves file:// models on demand so Ctrl+hover underlines definitions in
+  // files that were never opened (see textModelResolver.ts).
+  installFileTextModelResolver();
 
   disableBuiltinTsWorker(monaco);
   registerReactLanguages(monaco);
