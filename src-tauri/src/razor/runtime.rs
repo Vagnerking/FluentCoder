@@ -158,7 +158,7 @@ pub const DEFAULT_DOTNET_TIMEOUT: Duration = Duration::from_secs(180);
 /// Razor compiler merges the chain from the view's own folder up to the project
 /// root, so an edit to ANY of them (including `Areas/**` and nested `Views/`
 /// subfolders) must invalidate the emitted projection.
-fn view_import_chain(user_project_dir: &Path, cshtml_rel: &Path) -> Vec<PathBuf> {
+pub(crate) fn view_import_chain(user_project_dir: &Path, cshtml_rel: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut dir = cshtml_rel.parent();
     loop {
@@ -190,7 +190,7 @@ fn content_fingerprint(text: &str) -> String {
 /// True if `a` is at least as new as `b` (by modified time). Conservative: any
 /// missing/unreadable mtime returns false, so callers re-do the work rather than
 /// trust a stale artifact.
-fn is_newer_or_equal(a: &Path, b: &Path) -> bool {
+pub(crate) fn is_newer_or_equal(a: &Path, b: &Path) -> bool {
     match (
         std::fs::metadata(a).and_then(|m| m.modified()),
         std::fs::metadata(b).and_then(|m| m.modified()),
@@ -355,32 +355,40 @@ pub fn prepare(
     )
 }
 
-/// [`prepare`] with an explicit per-`dotnet` timeout.
-pub fn prepare_with_timeout(
+/// Result of [`prepare_shell`]: the plan + derived refs, with the shadow shell
+/// (csproj/sln) materialized and restored — but NO projections emitted yet. The
+/// caller produces each `.g.cs` via the live sidecar (fast path) and only falls
+/// back to [`emit_fallback`] (a `dotnet build`) when the sidecar can't.
+pub struct ShellPrepared {
+    pub plan: BrokerPlan,
+    pub derived: DerivedRefs,
+}
+
+/// Derive → plan → materialize shell → restore. Never emits — the whole point of
+/// the redesign is that NOTHING on the open/save path builds the user's project.
+pub fn prepare_shell(
     workspace_dir: &Path,
     user_project_dir: &Path,
     user_csproj_path: &Path,
     config: &str,
     cshtml_rels: &[PathBuf],
     timeout: Duration,
-) -> io::Result<PreparedShadow> {
-    // Each `dotnet` spawn costs ~1-1.5s (CLI + MSBuild). We time every step and
-    // skip the ones whose output is already current, so re-opening a `.cshtml`
-    // doesn't pay the full pipeline again. Timings go to stderr ([razor:timing]).
+) -> io::Result<ShellPrepared> {
     let started = Instant::now();
 
-    // 0. serialize per project: a concurrent prepare for the same project would
-    //    race dotnet over the same obj/ and shadow. The loser of the race finds
-    //    warm caches when it acquires the lock.
+    // Serialize per project: a concurrent prepare for the same project would
+    // race dotnet over the same obj/ and shadow. The loser of the race finds
+    // warm caches when it acquires the lock.
     let lock = prepare_lock_for(user_csproj_path);
     let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
 
-    // 1. derive TFM + framework references (cached per project; ~0.6s on a miss).
+    // 1. derive TFM + framework references (cached per project; ~0.6s on a miss;
+    //    design-time — no restore, no builds).
     let t = Instant::now();
     let derived = derive_cached(user_csproj_path, user_project_dir, timeout)?;
     eprintln!("[razor:timing] derive {:?}", t.elapsed());
 
-    // 2. plan.
+    // 2. plan (pure).
     let plan = broker::plan(&BrokerInputs {
         workspace_dir,
         user_project_dir,
@@ -391,21 +399,96 @@ pub fn prepare_with_timeout(
         cshtml_rels,
     });
 
-    // 3. emit the projected .g.cs. Skip the `dotnet build` when every projection
-    //    is already newer than ALL of its inputs (re-open with no edit) — the
-    //    emitted files are still current. Inputs that change generated text: the
-    //    `.cshtml` itself, the `.csproj` (refs/SDK), and the `_ViewImports`/
-    //    `_ViewStart` chain from the view's folder up to the project root
-    //    (usings/inherits/inject/TagHelpers — including Areas/nested ones).
-    let global_inputs: Vec<PathBuf> = vec![user_csproj_path.to_path_buf()];
+    // 3. materialize the shell (csproj + sln, content-aware: no mtime churn).
+    let t = Instant::now();
+    exec::materialize_shell(&plan)?;
+    eprintln!("[razor:timing] materialize-shell {:?}", t.elapsed());
+
+    // 4. restore the shadow so Roslyn can load it.
+    restore_shadow(&plan, timeout);
+
+    eprintln!("[razor:timing] prepare-shell TOTAL {:?}", started.elapsed());
+    Ok(ShellPrepared { plan, derived })
+}
+
+/// Restore the shadow project (it won't restore itself; Roslyn only asks via
+/// `workspace/_roslyn_projectNeedsRestore`). `-p:RestoreRecursive=false` restores
+/// ONLY the shadow — without it, NuGet walks the ProjectReference into the user
+/// project and its whole graph (23+ projects in a monorepo), which the user's own
+/// restore already covers. Skips when the assets exist AND the shadow csproj
+/// content hasn't changed since the restore that produced them (a bare "assets
+/// exist" skip served stale assets after TFM/FrameworkReference changes forever).
+fn restore_shadow(plan: &BrokerPlan, timeout: Duration) {
+    let assets = plan.shadow_dir.join("obj").join("project.assets.json");
+    let fp_path = plan.shadow_dir.join("obj").join(".fluent-restore-fp");
+    let fp_current = content_fingerprint(&plan.shadow_csproj_content);
+    let fp_on_disk = std::fs::read_to_string(&fp_path).unwrap_or_default();
+    if assets.exists() && fp_on_disk == fp_current {
+        eprintln!("[razor:timing] restore SKIPPED (shadow already restored)");
+        return;
+    }
+    let t = Instant::now();
+    let restore_args = vec![
+        "restore".to_string(),
+        plan.shadow_csproj_path.to_string_lossy().to_string(),
+        "-p:RestoreRecursive=false".to_string(),
+    ];
+    match run_capturing("dotnet", &restore_args, &plan.shadow_dir, timeout) {
+        Ok(out) if out.success => {
+            // Record what we restored; failure to write only means an extra
+            // restore next time.
+            let _ = std::fs::write(&fp_path, &fp_current);
+        }
+        Ok(out) => eprintln!(
+            "[razor:error] shadow restore exited {} — {}",
+            out.exit_code_display(),
+            out.stderr_tail()
+        ),
+        Err(e) => eprintln!("[razor:error] shadow restore failed to run: {e}"),
+    }
+    eprintln!("[razor:timing] restore {:?}", t.elapsed());
+}
+
+/// True when `pf`'s on-disk shadow projection is newer than every input that can
+/// change its generated text: the `.cshtml` itself, the `.csproj` (refs/SDK), and
+/// the `_ViewImports`/`_ViewStart` chain from the view's folder up to the project
+/// root (including Areas/nested ones).
+pub fn projection_current(
+    user_project_dir: &Path,
+    user_csproj_path: &Path,
+    pf: &broker::ProjectionFile,
+) -> bool {
+    if !pf.shadow_gcs.exists() {
+        return false;
+    }
+    let cshtml = user_project_dir.join(&pf.cshtml_rel);
+    is_newer_or_equal(&pf.shadow_gcs, &cshtml)
+        && is_newer_or_equal(&pf.shadow_gcs, user_csproj_path)
+        && view_import_chain(user_project_dir, &pf.cshtml_rel)
+            .iter()
+            .all(|g| is_newer_or_equal(&pf.shadow_gcs, g))
+}
+
+/// FALLBACK emit: one `dotnet build` of the user project (scoped: single project,
+/// single TFM, no dependency builds) + copy the emitted `.g.cs` into the shadow.
+/// Only for when the sidecar can't produce a projection (not built / crashed).
+/// Serialized by the same per-project lock as [`prepare_shell`].
+pub fn emit_fallback(
+    plan: &BrokerPlan,
+    user_project_dir: &Path,
+    timeout: Duration,
+) -> io::Result<()> {
+    let lock = prepare_lock_for(&plan.user_csproj_path);
+    let _guard = lock.lock().unwrap_or_else(|p| p.into_inner());
+
+    // Skip the build when every emitted file is already newer than its inputs
+    // (re-open with no edit).
     let emit_current = plan.projections.iter().all(|pf| {
-        // Use whichever emit location actually holds the file (pinned or the obj
-        // fallback the SDK may have used instead).
         match exec::resolve_emitted(pf) {
             Some(emitted) => {
                 let cshtml = user_project_dir.join(&pf.cshtml_rel);
                 is_newer_or_equal(emitted, &cshtml)
-                    && global_inputs.iter().all(|g| is_newer_or_equal(emitted, g))
+                    && is_newer_or_equal(emitted, &plan.user_csproj_path)
                     && view_import_chain(user_project_dir, &pf.cshtml_rel)
                         .iter()
                         .all(|g| is_newer_or_equal(emitted, g))
@@ -414,7 +497,7 @@ pub fn prepare_with_timeout(
         }
     });
     if emit_current {
-        eprintln!("[razor:timing] emit SKIPPED (projections up-to-date)");
+        eprintln!("[razor:timing] emit-fallback SKIPPED (projections up-to-date)");
     } else {
         let t = Instant::now();
         let (eprog, eargs) = &plan.emit_command;
@@ -424,61 +507,42 @@ pub fn prepare_with_timeout(
             // user's C# has errors) but no longer silent: if the .g.cs ends up
             // missing, this line says why.
             eprintln!(
-                "[razor:error] emit exited {} — {}",
+                "[razor:error] emit-fallback exited {} — {}",
                 out.exit_code_display(),
                 out.stderr_tail()
             );
         }
-        eprintln!("[razor:timing] emit {:?}", t.elapsed());
+        eprintln!("[razor:timing] emit-fallback {:?}", t.elapsed());
     }
+    exec::materialize_projections(plan)
+}
 
-    // 4. materialize the shadow (write csproj, copy/remove-stale projections, .sln).
-    let t = Instant::now();
-    exec::materialize(&plan)?;
-    eprintln!("[razor:timing] materialize {:?}", t.elapsed());
+/// [`prepare`] with an explicit per-`dotnet` timeout. Legacy full pipeline
+/// (shell + dotnet-build emit + map parse) — the command layer now drives the
+/// sidecar-first flow itself and only uses [`emit_fallback`]; this remains for
+/// the e2e test and as the complete non-sidecar reference path.
+pub fn prepare_with_timeout(
+    workspace_dir: &Path,
+    user_project_dir: &Path,
+    user_csproj_path: &Path,
+    config: &str,
+    cshtml_rels: &[PathBuf],
+    timeout: Duration,
+) -> io::Result<PreparedShadow> {
+    let shell = prepare_shell(
+        workspace_dir,
+        user_project_dir,
+        user_csproj_path,
+        config,
+        cshtml_rels,
+        timeout,
+    )?;
+    emit_fallback(&shell.plan, user_project_dir, timeout)?;
 
-    // 4.5 restore the shadow so Roslyn can load it (it won't restore itself; it
-    //     only asks via `workspace/_roslyn_projectNeedsRestore`).
-    //     `-p:RestoreRecursive=false` restores ONLY the shadow project — without
-    //     it, NuGet walks the ProjectReference into the user project and its
-    //     whole graph (23+ projects in a monorepo), which the user's own restore
-    //     already covers. Skip when the assets exist AND the shadow csproj
-    //     content hasn't changed since the restore that produced them (a bare
-    //     "assets exist" skip served stale assets after TFM/FrameworkReference
-    //     changes forever).
-    let assets = plan.shadow_dir.join("obj").join("project.assets.json");
-    let fp_path = plan.shadow_dir.join("obj").join(".fluent-restore-fp");
-    let fp_current = content_fingerprint(&plan.shadow_csproj_content);
-    let fp_on_disk = std::fs::read_to_string(&fp_path).unwrap_or_default();
-    if assets.exists() && fp_on_disk == fp_current {
-        eprintln!("[razor:timing] restore SKIPPED (shadow already restored)");
-    } else {
-        let t = Instant::now();
-        let restore_args = vec![
-            "restore".to_string(),
-            plan.shadow_csproj_path.to_string_lossy().to_string(),
-            "-p:RestoreRecursive=false".to_string(),
-        ];
-        match run_capturing("dotnet", &restore_args, &plan.shadow_dir, timeout) {
-            Ok(out) if out.success => {
-                // Record what we restored; failure to write only means an extra
-                // restore next time.
-                let _ = std::fs::write(&fp_path, &fp_current);
-            }
-            Ok(out) => eprintln!(
-                "[razor:error] shadow restore exited {} — {}",
-                out.exit_code_display(),
-                out.stderr_tail()
-            ),
-            Err(e) => eprintln!("[razor:error] shadow restore failed to run: {e}"),
-        }
-        eprintln!("[razor:timing] restore {:?}", t.elapsed());
-    }
-
-    // 5. build a source map per materialized projection; record any that are missing.
+    // Build a source map per materialized projection; record any that are missing.
     let mut projections = Vec::new();
     let mut missing = Vec::new();
-    for pf in &plan.projections {
+    for pf in &shell.plan.projections {
         if !pf.shadow_gcs.exists() {
             missing.push(pf.cshtml_rel.clone()); // emit produced no projection (degraded)
             continue;
@@ -493,12 +557,11 @@ pub fn prepare_with_timeout(
         });
     }
 
-    eprintln!("[razor:timing] prepare TOTAL {:?}", started.elapsed());
     Ok(PreparedShadow {
-        plan,
+        plan: shell.plan,
         projections,
         missing,
-        derived,
+        derived: shell.derived,
     })
 }
 

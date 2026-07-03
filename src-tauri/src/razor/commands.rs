@@ -18,6 +18,7 @@ use base64::Engine;
 use serde::Serialize;
 use tauri::State;
 
+use super::exec;
 use super::remap::{self, LspPos};
 use super::runtime;
 use super::sidecar::{FileSpec, ProjectInputs, Sidecar};
@@ -138,6 +139,11 @@ pub struct RazorPrepareResult {
     pub available: Vec<RazorProjectionInfo>,
     /// `.cshtml` (relative) requested but with no projection (degraded).
     pub missing: Vec<String>,
+    /// Derived reference DLLs that do NOT exist on disk (ProjectReferences the
+    /// user never built). Semantics degrade for types from these assemblies —
+    /// the frontend surfaces this honestly instead of letting Roslyn report
+    /// false "type does not exist" errors with no explanation.
+    pub missing_references: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -146,10 +152,35 @@ pub struct RemapPos {
     pub character: u32,
 }
 
+/// One fully-prepared view, produced off the UI thread and installed into
+/// [`RazorState`] afterwards (locks are held only for the in-memory inserts —
+/// never across filesystem/process I/O).
+struct PreparedView {
+    rel_str: String,
+    abs: PathBuf,
+    map: RazorSourceMap,
+    generated_path: String,
+    context: ProjectionContext,
+}
+
+struct PrepareOutcome {
+    shadow_dir: String,
+    solution_path: String,
+    views: Vec<PreparedView>,
+    missing: Vec<String>,
+    missing_references: Vec<String>,
+}
+
 /// Prepare projection serving for `cshtml_rels` (relative to `user_project_dir`)
-/// and cache their source maps. Runs `dotnet` off the UI thread.
+/// and cache their source maps. Runs everything blocking off the UI thread.
+///
+/// SIDECAR-FIRST: each projection is emitted in-memory by the live sidecar (the
+/// same engine the keystroke path uses) — `dotnet build` of the user project is
+/// only a LAST-RESORT fallback when the sidecar is unavailable. Opening or saving
+/// a `.cshtml` therefore never builds the user's dependency graph.
 #[tauri::command]
 pub async fn razor_prepare(
+    app: tauri::AppHandle,
     state: State<'_, RazorState>,
     // Kept for the binding's shape, but the shadow is materialized in the OS temp
     // dir (see `shadow_workspace_for`) — NEVER inside the opened folder, which
@@ -160,100 +191,239 @@ pub async fn razor_prepare(
     config: String,
     cshtml_rels: Vec<String>,
 ) -> Result<RazorPrepareResult, String> {
+    use tauri::Manager;
     let _ = workspace_dir;
+    let sidecar = state.clone_sidecar_ref();
+    let sidecar_src = resolve_sidecar_source_root(&app);
+    let app_data = app.path().app_data_dir().ok();
+
     let project_dir = user_project_dir.clone();
-    let csproj_for_shadow = user_csproj_path.clone();
-    let prepared = tauri::async_runtime::spawn_blocking(move || {
-        let rels: Vec<PathBuf> = cshtml_rels.iter().map(PathBuf::from).collect();
-        // Key the shadow by the .csproj path, so two projects in the same dir don't
-        // share (and clobber) one shadow.
-        let shadow_ws = shadow_workspace_for(Path::new(&csproj_for_shadow));
-        runtime::prepare(
-            &shadow_ws,
-            Path::new(&project_dir),
-            Path::new(&user_csproj_path),
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        prepare_blocking(
+            sidecar,
+            sidecar_src,
+            app_data,
+            &project_dir,
+            &user_csproj_path,
             &config,
-            &rels,
+            &cshtml_rels,
         )
     })
     .await
     .map_err(|e| format!("razor prepare join error: {e}"))?
     .map_err(|e| e.to_string())?;
 
-    let missing: Vec<String> = prepared
-        .missing
-        .iter()
-        .map(|p| p.to_string_lossy().to_string())
-        .collect();
-
-    let proj_dir_path = Path::new(&user_project_dir);
-    let d = &prepared.derived;
     let mut available = Vec::new();
     {
         let mut maps = state.maps.lock().map_err(|_| "razor state poisoned".to_string())?;
         let mut pending = state.pending.lock().map_err(|_| "razor state poisoned".to_string())?;
         let mut contexts = state.contexts.lock().map_err(|_| "razor state poisoned".to_string())?;
-        for proj in prepared.projections {
-            let abs = Path::new(&user_project_dir).join(&proj.cshtml_rel);
-            let key = canonical_key(&abs);
-            let rel_str = proj.cshtml_rel.to_string_lossy().to_string();
+        for view in outcome.views {
+            let key = canonical_key(&view.abs);
             // A fresh prepare (open/save) is authoritative: drop any in-flight
             // pending live map so a late live commit can't clobber it.
             pending.remove(&key);
-
-            // Collect the HIERARCHICAL `_ViewImports`/`_ViewStart` chain for THIS
-            // view (project root → the view's own folder), so subfolder/Area views
-            // get the nearest imports/layout — matching what `dotnet build` globs
-            // (the live `.g.cs` would otherwise diverge from build/on-save).
-            let imports = collect_hierarchical_imports(proj_dir_path, &proj.cshtml_rel);
-
-            // Per-cshtml file list = the import chain (each with its text) + this
-            // file (its own TargetPath; its text travels in cshtmlText at emit).
-            let mut files = imports.specs.clone();
-            files.push(FileSpec {
-                path: abs.to_string_lossy().to_string(),
-                target_path_b64: target_path_b64(&rel_str),
-                text: None,
-            });
-
-            let inputs = ProjectInputs {
-                project_dir: user_project_dir.clone(),
-                references: d.reference_paths.clone(),
-                root_namespace: d.root_namespace.clone(),
-                razor_lang_version: if d.razor_lang_version.is_empty() {
-                    "8.0".to_string()
-                } else {
-                    d.razor_lang_version.clone()
-                },
-                using_microsoft_net_sdk_web: d.using_microsoft_net_sdk_web,
-                tfm: d.tfm.clone(),
-                // Singular fields carry the NEAREST import/viewstart for sidecars on
-                // the old protocol; the full chain rides in `files`.
-                view_imports_path: imports.nearest_imports.as_ref().map(|(p, _)| p.clone()),
-                view_imports_text: imports.nearest_imports.as_ref().map(|(_, t)| t.clone()),
-                view_start_path: imports.nearest_start.as_ref().map(|(p, _)| p.clone()),
-                view_start_text: imports.nearest_start.as_ref().map(|(_, t)| t.clone()),
-                files,
-            };
-            contexts.insert(
-                key.clone(),
-                ProjectionContext { inputs, cshtml_abs: abs.to_string_lossy().to_string() },
-            );
-
-            maps.insert(key, proj.source_map);
+            contexts.insert(key.clone(), view.context);
+            maps.insert(key, view.map);
             available.push(RazorProjectionInfo {
-                cshtml_rel: rel_str,
-                cshtml_path: abs.to_string_lossy().to_string(),
-                generated_path: proj.shadow_gcs.to_string_lossy().to_string(),
+                cshtml_rel: view.rel_str,
+                cshtml_path: view.abs.to_string_lossy().to_string(),
+                generated_path: view.generated_path,
             });
         }
     }
 
     Ok(RazorPrepareResult {
-        shadow_dir: prepared.plan.shadow_dir.to_string_lossy().to_string(),
-        solution_path: prepared.plan.solution_path.to_string_lossy().to_string(),
+        shadow_dir: outcome.shadow_dir,
+        solution_path: outcome.solution_path,
         available,
+        missing: outcome.missing,
+        missing_references: outcome.missing_references,
+    })
+}
+
+/// The blocking body of [`razor_prepare`]: shell (derive/plan/materialize/restore)
+/// → per-view sidecar emit (skipping views whose on-disk projection is current)
+/// → one dotnet-build fallback for whatever the sidecar couldn't produce.
+fn prepare_blocking(
+    sidecar: Arc<Sidecar>,
+    sidecar_src: Option<PathBuf>,
+    app_data: Option<PathBuf>,
+    user_project_dir: &str,
+    user_csproj_path: &str,
+    config: &str,
+    cshtml_rels: &[String],
+) -> std::io::Result<PrepareOutcome> {
+    let rels: Vec<PathBuf> = cshtml_rels.iter().map(PathBuf::from).collect();
+    let proj_dir_path = Path::new(user_project_dir);
+    let csproj_path = Path::new(user_csproj_path);
+    // Key the shadow by the .csproj path, so two projects in the same dir don't
+    // share (and clobber) one shadow.
+    let shadow_ws = shadow_workspace_for(csproj_path);
+
+    let shell = runtime::prepare_shell(
+        &shadow_ws,
+        proj_dir_path,
+        csproj_path,
+        config,
+        &rels,
+        runtime::DEFAULT_DOTNET_TIMEOUT,
+    )?;
+    let d = &shell.derived;
+
+    // Missing reference DLLs (unbuilt ProjectReferences): semantics will degrade
+    // for their types. Surfaced to the frontend; never silently dropped.
+    let missing_references: Vec<String> = d
+        .reference_paths
+        .iter()
+        .filter(|p| !Path::new(p.as_str()).exists())
+        .cloned()
+        .collect();
+    if !missing_references.is_empty() {
+        eprintln!(
+            "[razor:refs] {} referenced DLL(s) missing on disk (project not built?) — first: {}",
+            missing_references.len(),
+            missing_references[0]
+        );
+    }
+
+    // Sidecar availability is best-effort: a build failure keeps us on the
+    // dotnet-build fallback (logged, not fatal). Cheap when the fingerprint
+    // matches (no dotnet spawn).
+    let sidecar_ready = match (&sidecar_src, &app_data) {
+        (Some(root), Some(cache)) => match sidecar.ensure_built(root, cache) {
+            Ok(_) => true,
+            Err(e) => {
+                eprintln!("[razor:sidecar] unavailable, falling back to build: {e}");
+                false
+            }
+        },
+        _ => false,
+    };
+
+    let mut views: Vec<PreparedView> = Vec::new();
+    let mut fallback: Vec<usize> = Vec::new(); // indices into plan.projections
+    let mut contexts_by_idx: Vec<ProjectionContext> = Vec::new();
+
+    for (idx, pf) in shell.plan.projections.iter().enumerate() {
+        let abs = proj_dir_path.join(&pf.cshtml_rel);
+        let rel_str = pf.cshtml_rel.to_string_lossy().to_string();
+
+        // Collect the HIERARCHICAL `_ViewImports`/`_ViewStart` chain for THIS
+        // view (project root → the view's own folder), so subfolder/Area views
+        // get the nearest imports/layout.
+        let imports = collect_hierarchical_imports(proj_dir_path, &pf.cshtml_rel);
+        let mut files = imports.specs.clone();
+        files.push(FileSpec {
+            path: abs.to_string_lossy().to_string(),
+            target_path_b64: target_path_b64(&rel_str),
+            text: None,
+        });
+        let inputs = ProjectInputs {
+            project_dir: user_project_dir.to_string(),
+            references: d.reference_paths.clone(),
+            root_namespace: d.root_namespace.clone(),
+            razor_lang_version: if d.razor_lang_version.is_empty() {
+                "8.0".to_string()
+            } else {
+                d.razor_lang_version.clone()
+            },
+            using_microsoft_net_sdk_web: d.using_microsoft_net_sdk_web,
+            tfm: d.tfm.clone(),
+            // Singular fields carry the NEAREST import/viewstart for sidecars on
+            // the old protocol; the full chain rides in `files`.
+            view_imports_path: imports.nearest_imports.as_ref().map(|(p, _)| p.clone()),
+            view_imports_text: imports.nearest_imports.as_ref().map(|(_, t)| t.clone()),
+            view_start_path: imports.nearest_start.as_ref().map(|(p, _)| p.clone()),
+            view_start_text: imports.nearest_start.as_ref().map(|(_, t)| t.clone()),
+            files,
+        };
+        let context = ProjectionContext {
+            inputs,
+            cshtml_abs: abs.to_string_lossy().to_string(),
+        };
+        contexts_by_idx.push(context.clone());
+
+        // Re-open with no edit: the on-disk projection is still current — parse
+        // it instead of re-emitting (instant).
+        if runtime::projection_current(proj_dir_path, csproj_path, pf) {
+            if let Ok(generated) = std::fs::read_to_string(&pf.shadow_gcs) {
+                views.push(PreparedView {
+                    rel_str,
+                    map: RazorSourceMap::parse(&generated, &abs.to_string_lossy()),
+                    generated_path: pf.shadow_gcs.to_string_lossy().to_string(),
+                    context,
+                    abs,
+                });
+                continue;
+            }
+        }
+
+        // PRIMARY: sidecar in-memory emit (same engine as the keystroke path;
+        // COLD budget — the first emit of a project loads its references).
+        if sidecar_ready {
+            let text = std::fs::read_to_string(&abs).unwrap_or_default();
+            if !text.is_empty() {
+                match sidecar.emit_cold(&context.inputs, &context.cshtml_abs, &text) {
+                    Ok(generated) if !generated.is_empty() => {
+                        if let Some(parent) = pf.shadow_gcs.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        // Content-aware write: Roslyn watches the shadow dir.
+                        let _ = exec::write_if_changed(&pf.shadow_gcs, &generated);
+                        views.push(PreparedView {
+                            rel_str,
+                            map: RazorSourceMap::parse(&generated, &abs.to_string_lossy()),
+                            generated_path: pf.shadow_gcs.to_string_lossy().to_string(),
+                            context,
+                            abs,
+                        });
+                        continue;
+                    }
+                    Ok(_) => eprintln!("[razor:sidecar] cold emit EMPTY for {rel_str}"),
+                    Err(e) => eprintln!("[razor:sidecar] cold emit failed for {rel_str}: {e}"),
+                }
+            }
+        }
+        fallback.push(idx);
+    }
+
+    // LAST RESORT: one scoped `dotnet build` for the views the sidecar couldn't
+    // produce (sidecar unbuilt/crashed, unreadable source, generator failure).
+    let mut missing: Vec<String> = Vec::new();
+    if !fallback.is_empty() {
+        eprintln!(
+            "[razor:timing] emit-fallback for {} view(s) (sidecar path unavailable)",
+            fallback.len()
+        );
+        if let Err(e) =
+            runtime::emit_fallback(&shell.plan, proj_dir_path, runtime::DEFAULT_DOTNET_TIMEOUT)
+        {
+            eprintln!("[razor:error] emit-fallback failed: {e}");
+        }
+        for idx in fallback {
+            let pf = &shell.plan.projections[idx];
+            let abs = proj_dir_path.join(&pf.cshtml_rel);
+            let rel_str = pf.cshtml_rel.to_string_lossy().to_string();
+            match std::fs::read_to_string(&pf.shadow_gcs) {
+                Ok(generated) => views.push(PreparedView {
+                    rel_str,
+                    map: RazorSourceMap::parse(&generated, &abs.to_string_lossy()),
+                    generated_path: pf.shadow_gcs.to_string_lossy().to_string(),
+                    context: contexts_by_idx[idx].clone(),
+                    abs,
+                }),
+                Err(_) => missing.push(rel_str), // no projection at all (degraded)
+            }
+        }
+    }
+
+    Ok(PrepareOutcome {
+        shadow_dir: shell.plan.shadow_dir.to_string_lossy().to_string(),
+        solution_path: shell.plan.solution_path.to_string_lossy().to_string(),
+        views,
         missing,
+        missing_references,
     })
 }
 

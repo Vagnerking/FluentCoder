@@ -205,15 +205,27 @@ impl Sidecar {
         Self::default()
     }
 
-    /// Warm a project session (pays the cold generator cost up front).
+    /// Warm a project session (pays the cold generator cost up front). Uses the
+    /// COLD timeout: creating the session in a large project means loading
+    /// hundreds of reference DLLs + the TagHelper scan — killing the child at 5s
+    /// (the old single timeout) threw the warm state away and looped kill/retry
+    /// forever on big projects.
     pub fn warm(&self, inputs: &ProjectInputs, cshtml_path: &str, cshtml_text: &str) -> Result<(), String> {
-        let _ = self.request("warm", inputs, Some(cshtml_path), Some(cshtml_text))?;
+        let _ = self.request("warm", inputs, Some(cshtml_path), Some(cshtml_text), COLD_TIMEOUT)?;
         Ok(())
     }
 
-    /// Emit the `.g.cs` for `cshtml_path` from `cshtml_text`. Returns the text.
+    /// Emit the `.g.cs` for `cshtml_path` from `cshtml_text` on the per-keystroke
+    /// budget (the session is warm: ~ms). Returns the text.
     pub fn emit(&self, inputs: &ProjectInputs, cshtml_path: &str, cshtml_text: &str) -> Result<String, String> {
-        let text = self.request("emit", inputs, Some(cshtml_path), Some(cshtml_text))?;
+        let text = self.request("emit", inputs, Some(cshtml_path), Some(cshtml_text), LIVE_TIMEOUT)?;
+        text.ok_or_else(|| "sidecar emit returned no text".to_string())
+    }
+
+    /// [`emit`] on the COLD budget — for prepare-time (open/save) emits that may
+    /// create the project session first. Never used on the keystroke path.
+    pub fn emit_cold(&self, inputs: &ProjectInputs, cshtml_path: &str, cshtml_text: &str) -> Result<String, String> {
+        let text = self.request("emit", inputs, Some(cshtml_path), Some(cshtml_text), COLD_TIMEOUT)?;
         text.ok_or_else(|| "sidecar emit returned no text".to_string())
     }
 
@@ -324,6 +336,7 @@ impl Sidecar {
         inputs: &ProjectInputs,
         cshtml_path: Option<&str>,
         cshtml_text: Option<&str>,
+        timeout: Duration,
     ) -> Result<Option<String>, String> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let req = Request {
@@ -346,11 +359,11 @@ impl Sidecar {
         let line = serde_json::to_string(&req).map_err(|e| e.to_string())?;
 
         // One try; on a broken pipe (crashed sidecar) respawn once and retry.
-        match self.round_trip(&line) {
+        match self.round_trip(&line, timeout) {
             Ok(resp) => Self::interpret(resp),
             Err(_) => {
                 self.shutdown(); // drop the dead handle
-                let resp = self.round_trip(&line)?;
+                let resp = self.round_trip(&line, timeout)?;
                 Self::interpret(resp)
             }
         }
@@ -366,7 +379,7 @@ impl Sidecar {
 
     /// Write one request line and read one response line, spawning the process if
     /// needed. Serialized by the `handle` mutex (one request in flight).
-    fn round_trip(&self, line: &str) -> Result<Response, String> {
+    fn round_trip(&self, line: &str, timeout: Duration) -> Result<Response, String> {
         let mut guard = self.handle.lock().map_err(|_| "sidecar lock poisoned".to_string())?;
         if guard.is_none() {
             *guard = Some(self.spawn()?);
@@ -383,7 +396,7 @@ impl Sidecar {
         // Bounded wait on the reader thread. A stuck/crashed sidecar must not block
         // forever (and starve shutdown) — on timeout/disconnect we kill the child
         // and drop the handle so the next request respawns.
-        match h.lines.recv_timeout(REQUEST_TIMEOUT) {
+        match h.lines.recv_timeout(timeout) {
             Ok(resp_line) => serde_json::from_str::<Response>(resp_line.trim_end())
                 .map_err(|e| format!("sidecar bad response: {e}")),
             Err(RecvTimeoutError::Timeout) => {
@@ -445,9 +458,16 @@ impl Sidecar {
     }
 }
 
-/// Per-request timeout: the sidecar answers in ms when healthy; a request beyond
-/// this means a crash/hang — kill + respawn, and the caller falls back to build.
-pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+/// Per-request timeout for WARM (keystroke) emits: the sidecar answers in ms when
+/// the session is warm; beyond this means a crash/hang — kill + respawn, and the
+/// caller falls back to reprepare.
+pub const LIVE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Per-request timeout for session-creating work (warm / first emit of a project):
+/// loading hundreds of MetadataReferences + the TagHelper scan takes tens of
+/// seconds in a monorepo. Killing the child on the live budget threw all of that
+/// away and re-paid it on every retry — the "never warms up" loop.
+pub const COLD_TIMEOUT: Duration = Duration::from_secs(180);
 
 #[cfg(test)]
 mod tests {

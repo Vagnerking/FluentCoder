@@ -31,24 +31,27 @@ pub fn resolve_emitted(pf: &ProjectionFile) -> Option<&Path> {
     }
 }
 
-/// Materialize the plan: create the shadow project, copy projected `.g.cs`, and
-/// write the solution. Idempotent (overwrites). Does NOT run `dotnet` or Roslyn.
-pub fn materialize(plan: &BrokerPlan) -> io::Result<()> {
-    fs::create_dir_all(&plan.shadow_dir)?;
-    fs::write(&plan.shadow_csproj_path, &plan.shadow_csproj_content)?;
-
-    for pf in &plan.projections {
-        if let Some(emitted) = resolve_emitted(pf) {
-            if let Some(parent) = pf.shadow_gcs.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::copy(emitted, &pf.shadow_gcs)?;
-        } else if pf.shadow_gcs.exists() {
-            // No fresh projection this run — remove any STALE copy so we never
-            // serve outdated C# (Roslyn would otherwise analyze old generated code).
-            fs::remove_file(&pf.shadow_gcs)?;
+/// Write `content` to `path` only when it differs from what's on disk. Returns
+/// whether a write happened. Avoids gratuitous mtime bumps on every prepare —
+/// file watchers (and Roslyn's project system) treat a rewritten csproj/sln as
+/// "project changed" and reload, so an unconditional write per save caused
+/// solution-reload churn.
+pub fn write_if_changed(path: &Path, content: &str) -> io::Result<bool> {
+    if let Ok(existing) = fs::read_to_string(path) {
+        if existing == content {
+            return Ok(false);
         }
     }
+    fs::write(path, content)?;
+    Ok(true)
+}
+
+/// Materialize the shadow SHELL: the csproj + solution (content-aware writes).
+/// Does not touch the projected `.g.cs` — pair with [`materialize_projections`]
+/// (dotnet-build fallback) or a direct sidecar write of the projection text.
+pub fn materialize_shell(plan: &BrokerPlan) -> io::Result<()> {
+    fs::create_dir_all(&plan.shadow_dir)?;
+    write_if_changed(&plan.shadow_csproj_path, &plan.shadow_csproj_content)?;
 
     let sln_dir = plan
         .solution_path
@@ -62,8 +65,33 @@ pub fn materialize(plan: &BrokerPlan) -> io::Result<()> {
             ("ShadowRazor", &plan.shadow_csproj_path),
         ],
     );
-    fs::write(&plan.solution_path, sln)?;
+    write_if_changed(&plan.solution_path, &sln)?;
     Ok(())
+}
+
+/// Copy the dotnet-build-emitted `.g.cs` files into the shadow (the FALLBACK
+/// emit path). Removes a stale shadow copy when the emit produced nothing.
+pub fn materialize_projections(plan: &BrokerPlan) -> io::Result<()> {
+    for pf in &plan.projections {
+        if let Some(emitted) = resolve_emitted(pf) {
+            if let Some(parent) = pf.shadow_gcs.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(emitted, &pf.shadow_gcs)?;
+        } else if pf.shadow_gcs.exists() {
+            // No fresh projection this run — remove any STALE copy so we never
+            // serve outdated C# (Roslyn would otherwise analyze old generated code).
+            fs::remove_file(&pf.shadow_gcs)?;
+        }
+    }
+    Ok(())
+}
+
+/// Materialize the plan: create the shadow project, copy projected `.g.cs`, and
+/// write the solution. Idempotent (overwrites). Does NOT run `dotnet` or Roslyn.
+pub fn materialize(plan: &BrokerPlan) -> io::Result<()> {
+    materialize_shell(plan)?;
+    materialize_projections(plan)
 }
 
 /// Render a classic `.sln` referencing `projects` (name, abs `.csproj`) with
