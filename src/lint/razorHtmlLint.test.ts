@@ -92,3 +92,36 @@ test("reports the offset range of the stray tag", () => {
   assert.equal(r.length, 1);
   assert.equal(src.slice(r[0].start, r[0].end), "</span>");
 });
+
+// --- unified scanner (delegates Razor regions to buildVirtualHtml) ---
+
+test("generics in an @if body are not phantom tags (List<string> bug)", () => {
+  // The old local scanner didn't understand keyword blocks: `<string>` read as an
+  // open tag and the later real close tags all became "stray".
+  const src = "@if (ok) {\n  List<string> xs = new();\n  <p>x</p>\n}\n<div></div>";
+  assert.equal(scanRazorMarkup(src).length, 0);
+});
+
+test("a stray close INSIDE an @if markup body is still flagged", () => {
+  const src = "@if (ok) { <p>x</p></span> }";
+  const r = scanRazorMarkup(src);
+  assert.equal(r.length, 1);
+  assert.equal(src.slice(r[0].start, r[0].end), "</span>");
+});
+
+test("a `}` inside a C# string in @{ } does not desync the tag scan", () => {
+  // Quote-awareness comes from the projection now; the old naive depth counter
+  // ended the block at the `}` inside the string and mis-parsed what followed.
+  const src = '@{ var s = "}"; }\n<div><p>a</p></div>';
+  assert.equal(scanRazorMarkup(src).length, 0);
+});
+
+test("@model directive arguments never produce markup findings", () => {
+  const src = "@model List<MyApp.Models.Item>\n<p>x</p>";
+  assert.equal(scanRazorMarkup(src).length, 0);
+});
+
+test("an email @ in text does not swallow following markup", () => {
+  const src = "<p>contato@empresa.com</p><div></div>";
+  assert.equal(scanRazorMarkup(src).length, 0);
+});
