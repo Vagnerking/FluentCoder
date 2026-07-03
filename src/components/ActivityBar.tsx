@@ -26,6 +26,7 @@ const VIEWS: { id: string; label: string; icon: IconAction }[] = [
   { id: 'search', label: 'Pesquisar', icon: 'search' },
   { id: 'git', label: 'Controle do Código-Fonte', icon: 'sourceControl' },
   { id: 'debug', label: 'Executar e Depurar', icon: 'run' },
+  { id: 'solution', label: 'Solution Explorer', icon: 'solution' },
   { id: 'agents', label: 'Agentes', icon: 'agents' },
   { id: 'backlinks', label: 'Backlinks', icon: 'backlinks' },
   { id: 'graph', label: 'Grafo de Contextos', icon: 'graph' },

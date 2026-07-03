@@ -22,6 +22,7 @@ import { FileExplorer } from "./components/FileExplorer";
 import { SearchPanel } from "./components/SearchPanel";
 import { GitPanel } from "./components/GitPanel";
 import { RunPanel } from "./components/RunPanel";
+import { SolutionPanel } from "./components/SolutionPanel";
 import { PlaceholderPanel } from "./components/PlaceholderPanel";
 import { EditorGrid } from "./components/EditorGrid";
 import { EditorGroupView } from "./components/EditorGroupView";
@@ -3833,6 +3834,14 @@ export default function App() {
         );
       case "debug":
         return <RunPanel rootPath={rootPath} onRun={handleRun} />;
+      case "solution":
+        return (
+          <SolutionPanel
+            rootPath={rootPath}
+            onOpenFile={(path, name) => handleOpenFile({ name, path, isDir: false })}
+            onRun={handleRun}
+          />
+        );
       case "backlinks":
         return (
           <BacklinksPanel
