@@ -152,6 +152,16 @@ pub struct RemapPos {
     pub character: u32,
 }
 
+/// One 0-based LSP range on the wire (batch remap input/output).
+#[derive(Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemapRange {
+    pub start_line: u32,
+    pub start_character: u32,
+    pub end_line: u32,
+    pub end_character: u32,
+}
+
 /// One fully-prepared view, produced off the UI thread and installed into
 /// [`RazorState`] afterwards (locks are held only for the in-memory inserts —
 /// never across filesystem/process I/O).
@@ -741,6 +751,44 @@ pub fn razor_remap_to_source(
     let map = maps.get(&canonical_key(Path::new(&cshtml_path)))?;
     remap::generated_pos_to_source(map, LspPos::new(line, character))
         .map(|p| RemapPos { line: p.line, character: p.character })
+}
+
+/// Remap N generated-C# ranges back to the `.cshtml` in ONE IPC round-trip —
+/// the diagnostics publish path was doing 2 position IPCs per diagnostic per
+/// pull (hundreds of calls per save in a file with many errors). Entry `i` of
+/// the result corresponds to entry `i` of `ranges`; `None` = unmappable
+/// (synthetic C#). Uses the CLAMPED range mapper: for diagnostics, a squiggle
+/// truncated at its region's end beats a silently dropped one.
+#[tauri::command]
+pub fn razor_remap_ranges_to_source(
+    state: State<'_, RazorState>,
+    cshtml_path: String,
+    ranges: Vec<RemapRange>,
+) -> Vec<Option<RemapRange>> {
+    let Ok(maps) = state.maps.lock() else {
+        return ranges.iter().map(|_| None).collect();
+    };
+    let Some(map) = maps.get(&canonical_key(Path::new(&cshtml_path))) else {
+        return ranges.iter().map(|_| None).collect();
+    };
+    ranges
+        .iter()
+        .map(|r| {
+            remap::generated_range_to_source_clamped(
+                map,
+                remap::LspRange {
+                    start: LspPos::new(r.start_line, r.start_character),
+                    end: LspPos::new(r.end_line, r.end_character),
+                },
+            )
+            .map(|out| RemapRange {
+                start_line: out.start.line,
+                start_character: out.start.character,
+                end_line: out.end.line,
+                end_character: out.end.character,
+            })
+        })
+        .collect()
 }
 
 /// Drop a document's cached source map + live-emit context (on `.cshtml` close).
