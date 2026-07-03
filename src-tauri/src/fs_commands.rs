@@ -308,9 +308,16 @@ pub fn read_dir(
 }
 
 /// Reads a text file and returns its contents.
+///
+/// A leading UTF-8 BOM is STRIPPED: it is an encoding artifact, not text —
+/// rendered literally it shows up as a garbage glyph at (1,1) (seen on
+/// Roslyn's metadata-as-source files and VS-created `.cs`), and it silently
+/// shifts every LSP position on line 1 by one column. `write_file` re-adds it
+/// for files that had one, so round-trips stay byte-identical.
 #[tauri::command]
 pub fn read_file(path: String) -> Result<String, String> {
-    fs::read_to_string(&path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))
+    let text = fs::read_to_string(&path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+    Ok(text.strip_prefix('\u{feff}').map(str::to_string).unwrap_or(text))
 }
 
 /// Reads a file's raw bytes and returns them as a base64 `data:` URL.
@@ -412,6 +419,19 @@ fn base64_encode(input: &[u8]) -> String {
 pub fn write_file(path: String, contents: String) -> Result<(), String> {
     if let Some(parent) = Path::new(&path).parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    // BOM preservation (pair of `read_file`'s strip): if the file on disk
+    // currently starts with a UTF-8 BOM, keep it on save — otherwise every
+    // save of a VS-created file would produce a noisy one-byte-ish git diff.
+    // New files and BOM-less files are never given one.
+    let had_bom = fs::read(&path)
+        .map(|b| b.starts_with(&[0xEF, 0xBB, 0xBF]))
+        .unwrap_or(false);
+    if had_bom && !contents.starts_with('\u{feff}') {
+        let mut bytes = Vec::with_capacity(contents.len() + 3);
+        bytes.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+        bytes.extend_from_slice(contents.as_bytes());
+        return fs::write(&path, bytes).map_err(|e| format!("Falha ao salvar '{path}': {e}"));
     }
     fs::write(&path, contents).map_err(|e| format!("Falha ao salvar '{path}': {e}"))
 }
@@ -559,12 +579,37 @@ pub fn reveal_in_explorer(workspace_root: String, path: String) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::{
-        build_exclude_matcher, copy_path, create_file, create_folder, move_path, rename_path,
-        workspace_relative,
+        build_exclude_matcher, copy_path, create_file, create_folder, move_path, read_file,
+        rename_path, workspace_relative, write_file,
     };
     use std::fs;
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn read_strips_utf8_bom_and_write_preserves_it() {
+        let id = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("fluent-bom-test-{id}"));
+        fs::create_dir_all(&dir).unwrap();
+        let with_bom = dir.join("bom.cs");
+        let without = dir.join("plain.cs");
+        fs::write(&with_bom, [0xEF, 0xBB, 0xBF, b'h', b'i']).unwrap();
+        fs::write(&without, b"hi").unwrap();
+
+        // The BOM never reaches the editor as text…
+        assert_eq!(read_file(with_bom.to_string_lossy().to_string()).unwrap(), "hi");
+        assert_eq!(read_file(without.to_string_lossy().to_string()).unwrap(), "hi");
+
+        // …but a save round-trip keeps the file byte-identical (BOM stays)…
+        write_file(with_bom.to_string_lossy().to_string(), "hello".into()).unwrap();
+        assert_eq!(fs::read(&with_bom).unwrap(), [0xEF, 0xBB, 0xBF, b'h', b'e', b'l', b'l', b'o']);
+
+        // …and BOM-less files never gain one.
+        write_file(without.to_string_lossy().to_string(), "hello".into()).unwrap();
+        assert_eq!(fs::read(&without).unwrap(), b"hello");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn exclude_matcher_hides_build_dirs_by_name() {
