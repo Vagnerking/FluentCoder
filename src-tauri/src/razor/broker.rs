@@ -147,6 +147,7 @@ pub fn plan(inputs: &BrokerInputs) -> BrokerPlan {
             inputs.user_csproj_path,
             inputs.config,
             &generated_output_dir,
+            Some(&inputs.derived.tfm),
         ),
         emit_cwd: inputs.user_project_dir.to_path_buf(),
         projections,
@@ -248,6 +249,11 @@ mod tests {
         // config propagated so the build emits into the <config> we read
         let ci = args.iter().position(|a| a == "-c").expect("-c present");
         assert_eq!(args[ci + 1], "Debug");
+        // the derived TFM is pinned (multi-target: exactly one TFM builds and
+        // writes the pinned output) and project refs are never built
+        let fi = args.iter().position(|a| a == "-f").expect("-f present");
+        assert_eq!(args[fi + 1], "net8.0");
+        assert!(args.iter().any(|a| a == "-p:BuildProjectReferences=false"));
         // cwd is the user project dir (for global.json SDK resolution)
         assert_eq!(p.emit_cwd, std::path::Path::new("C:/ws/App"));
     }
