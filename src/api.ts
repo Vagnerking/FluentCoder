@@ -991,6 +991,35 @@ export function dapResolveDotnetTarget(csprojPath: string): Promise<string> {
   return invoke<string>("dap_resolve_dotnet_target", { csprojPath });
 }
 
+// ── .NET test runner — roadmap csharp-ide-parity, Fase C ─────────────────────
+
+/** One test outcome from a TRX run. */
+export interface DotnetTestResult {
+  name: string;
+  /** `Passed` | `Failed` | `NotExecuted` (TRX vocabulary). */
+  outcome: string;
+  durationMs: number | null;
+  message: string | null;
+}
+
+export interface DotnetTestRun {
+  results: DotnetTestResult[];
+  outputTail: string;
+}
+
+/** Lists fully-qualified test names (builds the project as a side effect). */
+export function dotnetTestList(csprojPath: string): Promise<string[]> {
+  return invoke<string[]>("dotnet_test_list", { csprojPath });
+}
+
+/** Runs all tests (or only `filter` = one FullyQualifiedName). */
+export function dotnetTestRun(
+  csprojPath: string,
+  filter?: string
+): Promise<DotnetTestRun> {
+  return invoke<DotnetTestRun>("dotnet_test_run", { csprojPath, filter: filter ?? null });
+}
+
 /**
  * Starts a language server ON THE REMOTE host (issue #8, Phase 6) and bridges its
  * stdio to a local WebSocket — returns the same `{ port, token }` as

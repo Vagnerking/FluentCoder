@@ -1,13 +1,36 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import {
+  dotnetTestList,
+  dotnetTestRun,
   listProjectFiles,
   runConfigsDetect,
   runConfigsLoad,
   runConfigsSave,
   type DotnetProcess,
+  type DotnetTestResult,
 } from "../api";
 import type { RunConfig } from "../types";
 import { debugSession } from "../dap/debugSession";
+
+/** Loads the workspace's `.csproj` paths once per root (shared by the .NET sections). */
+function useCsprojs(rootPath: string): string[] {
+  const [csprojs, setCsprojs] = useState<string[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void listProjectFiles(rootPath)
+      .then((files) => {
+        if (cancelled) return;
+        setCsprojs(
+          files.filter((f) => f.name.toLowerCase().endsWith(".csproj")).map((f) => f.path)
+        );
+      })
+      .catch(() => setCsprojs([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [rootPath]);
+  return csprojs;
+}
 
 interface RunPanelProps {
   /** Open folder; configs live in `<root>/.project/run.json`. Null = none. */
@@ -149,6 +172,7 @@ export function RunPanel({ rootPath, onRun }: RunPanelProps) {
 
       <div className="run-lists">
         <DebugSection rootPath={rootPath} />
+        <TestsSection rootPath={rootPath} />
 
         <div className="git-group">
           <div className="git-group-header">
@@ -235,26 +259,13 @@ function buildCommand(cfg: RunConfig): string {
  */
 function DebugSection({ rootPath }: { rootPath: string }) {
   const state = useSyncExternalStore(debugSession.subscribe, debugSession.getState);
-  const [csprojs, setCsprojs] = useState<string[]>([]);
+  const csprojs = useCsprojs(rootPath);
   const [selected, setSelected] = useState<string>("");
   const [procs, setProcs] = useState<DotnetProcess[] | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    void listProjectFiles(rootPath)
-      .then((files) => {
-        if (cancelled) return;
-        const found = files
-          .filter((f) => f.name.toLowerCase().endsWith(".csproj"))
-          .map((f) => f.path);
-        setCsprojs(found);
-        setSelected((cur) => cur || found[0] || "");
-      })
-      .catch(() => setCsprojs([]));
-    return () => {
-      cancelled = true;
-    };
-  }, [rootPath]);
+    setSelected((cur) => cur || csprojs[0] || "");
+  }, [csprojs]);
 
   const busy = state.status === "starting";
   const active = state.status === "running" || state.status === "stopped";
@@ -433,6 +444,143 @@ function DebugSection({ rootPath }: { rootPath: string }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * .NET tests section (roadmap csharp-ide-parity, Fase C): discover tests of a
+ * `.csproj` (`dotnet test --list-tests`) and run all / one, with pass/fail and
+ * duration inline (outcomes come from the locale-independent TRX report).
+ */
+function TestsSection({ rootPath }: { rootPath: string }) {
+  const csprojs = useCsprojs(rootPath);
+  const [selected, setSelected] = useState<string>("");
+  const [tests, setTests] = useState<string[] | null>(null);
+  const [results, setResults] = useState<Map<string, DotnetTestResult>>(new Map());
+  const [busy, setBusy] = useState<"" | "discover" | "run">("");
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSelected((cur) => cur || csprojs[0] || "");
+  }, [csprojs]);
+
+  // Workspace/project switch invalidates discovery.
+  useEffect(() => {
+    setTests(null);
+    setResults(new Map());
+    setError(null);
+  }, [selected]);
+
+  if (csprojs.length === 0) return null;
+
+  const discover = async () => {
+    setBusy("discover");
+    setError(null);
+    try {
+      setTests(await dotnetTestList(selected));
+    } catch (err) {
+      setError(String(err));
+      setTests(null);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const run = async (filter?: string) => {
+    setBusy("run");
+    setError(null);
+    try {
+      const out = await dotnetTestRun(selected, filter);
+      setResults((prev) => {
+        const next = new Map(prev);
+        for (const r of out.results) next.set(r.name, r);
+        return next;
+      });
+      if (out.results.length === 0) setError(out.outputTail);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  /** TRX names can be `Ns.Class.Method` or carry args — match by prefix too. */
+  const resultFor = (fqn: string): DotnetTestResult | undefined =>
+    results.get(fqn) ??
+    [...results.values()].find((r) => r.name === fqn || r.name.startsWith(`${fqn}(`));
+
+  return (
+    <div className="git-group debug-section">
+      <div className="git-group-header">
+        <span>Testes (.NET)</span>
+        {tests && <span className="git-count">{tests.length}</span>}
+      </div>
+      <div className="debug-launcher">
+        <select
+          className="search-input"
+          value={selected}
+          onChange={(e) => setSelected(e.target.value)}
+          disabled={busy !== ""}
+        >
+          {csprojs.map((p) => (
+            <option key={p} value={p}>
+              {p.split(/[\/]/).pop()}
+            </option>
+          ))}
+        </select>
+        <div className="run-draft-actions">
+          <button
+            className="git-commit-btn"
+            disabled={!selected || busy !== ""}
+            onClick={() => void discover()}
+          >
+            {busy === "discover" ? "Descobrindo…" : "Descobrir testes"}
+          </button>
+          {tests && tests.length > 0 && (
+            <button
+              className="git-link-btn"
+              disabled={busy !== ""}
+              onClick={() => void run()}
+            >
+              {busy === "run" ? "Executando…" : "Executar todos"}
+            </button>
+          )}
+        </div>
+        {error && <div className="git-error">{error}</div>}
+      </div>
+
+      {tests && tests.length === 0 && (
+        <div className="panel-empty">Nenhum teste neste projeto.</div>
+      )}
+      {tests?.map((t) => {
+        const r = resultFor(t);
+        const icon =
+          r?.outcome === "Passed" ? "✓" : r?.outcome === "Failed" ? "✗" : "·";
+        const cls =
+          r?.outcome === "Passed"
+            ? "test-pass"
+            : r?.outcome === "Failed"
+              ? "test-fail"
+              : "";
+        return (
+          <div key={t} className="test-row" title={r?.message ?? t}>
+            <button
+              className="run-play"
+              title={`Executar ${t}`}
+              disabled={busy !== ""}
+              onClick={() => void run(t)}
+            >
+              ▶
+            </button>
+            <span className={`test-icon ${cls}`}>{icon}</span>
+            <span className="test-name">{t.split(".").slice(-2).join(".")}</span>
+            {r?.durationMs != null && (
+              <span className="test-duration">{Math.round(r.durationMs)}ms</span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -13,6 +13,7 @@ mod session;
 mod snap;
 mod ssh;
 mod terminal;
+mod testrunner;
 mod walk;
 mod window;
 
@@ -151,6 +152,8 @@ pub fn run() {
             dap::dap_stop_session,
             dap::dap_list_dotnet_processes,
             dap::dap_resolve_dotnet_target,
+            testrunner::dotnet_test_list,
+            testrunner::dotnet_test_run,
             razor::commands::razor_prepare,
             razor::commands::razor_emit_live,
             razor::commands::razor_commit_live_map,

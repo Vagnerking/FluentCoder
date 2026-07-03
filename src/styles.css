@@ -4188,3 +4188,27 @@ button .codicon { pointer-events: none; }
   opacity: 0.9;
   user-select: text;
 }
+
+/* ── Test runner (roadmap csharp-ide-parity, Fase C) ─────────────────────── */
+.test-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 2px 8px;
+  overflow: hidden;
+}
+.test-icon { width: 12px; flex-shrink: 0; opacity: 0.7; }
+.test-icon.test-pass { color: #63c174; opacity: 1; }
+.test-icon.test-fail { color: #e5484d; opacity: 1; }
+.test-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.test-duration {
+  margin-left: auto;
+  opacity: 0.5;
+  font-size: 11px;
+  flex-shrink: 0;
+}
