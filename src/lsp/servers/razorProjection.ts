@@ -140,6 +140,40 @@ function openCshtmlModels(): monaco.editor.ITextModel[] {
     );
 }
 
+/**
+ * `openCshtmlModels()`, waiting up to `timeoutMs` for the first one to EXIST.
+ *
+ * Boot race (observed live on session restore): the manager starts this server
+ * the moment `cshtml` enters the opened-languages set, but the restored tab's
+ * Monaco model may not be created/re-typed yet — the old code threw
+ * "no .cshtml open to serve", the server latched into the error state, and the
+ * manager never retries (the language is already in its started set). Waiting
+ * for `onDidCreateModel`/`onDidChangeModelLanguage` closes the race without
+ * changing any lifecycle contract.
+ */
+function waitForCshtmlModels(timeoutMs = 10_000): Promise<monaco.editor.ITextModel[]> {
+  const now = openCshtmlModels();
+  if (now.length > 0) return Promise.resolve(now);
+  return new Promise((resolve) => {
+    const subs: monaco.IDisposable[] = [];
+    const timer = window.setTimeout(() => {
+      for (const s of subs) s.dispose();
+      resolve(openCshtmlModels()); // last look — [] means a genuine "nothing to serve"
+    }, timeoutMs);
+    const check = (): void => {
+      const models = openCshtmlModels();
+      if (models.length === 0) return;
+      window.clearTimeout(timer);
+      for (const s of subs) s.dispose();
+      resolve(models);
+    };
+    subs.push(monaco.editor.onDidCreateModel(check));
+    // A restored tab can also be created under another id and re-typed to
+    // `cshtml` afterwards — watch language flips too.
+    subs.push(monaco.editor.onDidChangeModelLanguage(check));
+  });
+}
+
 /** Longest-prefix `.csproj` that contains `cshtmlPath`, or null (loose file). */
 async function resolveProject(
   rootPath: string,
@@ -162,7 +196,10 @@ export async function startRazorProjectionServer(
   context?: ServerStartContext
 ): Promise<MonacoLanguageClient> {
   // 1. Resolve the project from the first open `.cshtml` and prepare its peers.
-  const models = openCshtmlModels();
+  //    WAIT for the model when needed: on session restore the server can start
+  //    before the restored tab's model exists (boot race — see
+  //    waitForCshtmlModels). Only a timeout means there is truly nothing to serve.
+  const models = await waitForCshtmlModels();
   if (models.length === 0) {
     throw new Error("razor projection: no .cshtml open to serve");
   }
