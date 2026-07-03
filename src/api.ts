@@ -948,6 +948,49 @@ export function stopLspServer(id: string): Promise<void> {
   return invoke("lsp_stop_server", { id: runtimeLspId(id) });
 }
 
+// ── DAP (debugger) bridge — roadmap csharp-ide-parity, Fase B ────────────────
+
+/** Downloads/locates netcoredbg; returns the executable path. */
+export function dapEnsureNetcoredbg(): Promise<string> {
+  return invoke<string>("dap_ensure_netcoredbg");
+}
+
+/** Spawns a debug adapter and its WS bridge; same shape as the LSP bridge. */
+export function dapStartSession(
+  id: string,
+  program: string,
+  args: string[],
+  cwd: string
+): Promise<LspBridgeInfo> {
+  return invoke<LspBridgeInfo>("dap_start_session", {
+    id: runtimeLspId(id),
+    program,
+    args,
+    cwd,
+  });
+}
+
+/** Stops a debug session (bridge kills the adapter process). */
+export function dapStopSession(id: string): Promise<void> {
+  return invoke("dap_stop_session", { id: runtimeLspId(id) });
+}
+
+/** A running .NET process candidate for attach. */
+export interface DotnetProcess {
+  pid: number;
+  name: string;
+}
+
+/** Lists running dotnet processes (attach picker). Best-effort. */
+export function dapListDotnetProcesses(): Promise<DotnetProcess[]> {
+  return invoke<DotnetProcess[]>("dap_list_dotnet_processes");
+}
+
+/** Builds the csproj and returns its output DLL (TargetPath) for launch. */
+export function dapResolveDotnetTarget(csprojPath: string): Promise<string> {
+  return invoke<string>("dap_resolve_dotnet_target", { csprojPath });
+}
+
 /**
  * Starts a language server ON THE REMOTE host (issue #8, Phase 6) and bridges its
  * stdio to a local WebSocket — returns the same `{ port, token }` as

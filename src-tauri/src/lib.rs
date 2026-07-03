@@ -150,6 +150,7 @@ pub fn run() {
             dap::dap_start_session,
             dap::dap_stop_session,
             dap::dap_list_dotnet_processes,
+            dap::dap_resolve_dotnet_target,
             razor::commands::razor_prepare,
             razor::commands::razor_emit_live,
             razor::commands::razor_commit_live_map,

@@ -3193,6 +3193,19 @@ export default function App() {
     );
   }
 
+  // Debugger navigation: the DAP session (dap/debugSession.ts) asks the app to
+  // reveal where execution stopped / a clicked stack frame. Re-subscribed every
+  // render so the handler never closes over a stale open-file flow.
+  useEffect(() => {
+    const onDebugStopped = (e: Event) => {
+      const d = (e as CustomEvent<{ path?: string; line?: number }>).detail;
+      if (!d?.path || !d.line) return;
+      handleOpenFile({ name: baseName(d.path), path: d.path, isDir: false }, d.line);
+    };
+    window.addEventListener("fluent:debug-stopped", onDebugStopped);
+    return () => window.removeEventListener("fluent:debug-stopped", onDebugStopped);
+  });
+
   /** Opens the bottom panel focused on a specific tab (e.g. Problems). */
   const showPanelTab = useCallback((tab: PanelTab) => {
     setPanelTab(tab);

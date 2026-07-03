@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import {
+  listProjectFiles,
   runConfigsDetect,
   runConfigsLoad,
   runConfigsSave,
+  type DotnetProcess,
 } from "../api";
 import type { RunConfig } from "../types";
+import { debugSession } from "../dap/debugSession";
 
 interface RunPanelProps {
   /** Open folder; configs live in `<root>/.project/run.json`. Null = none. */
@@ -145,6 +148,8 @@ export function RunPanel({ rootPath, onRun }: RunPanelProps) {
       )}
 
       <div className="run-lists">
+        <DebugSection rootPath={rootPath} />
+
         <div className="git-group">
           <div className="git-group-header">
             <span>Configurações</span>
@@ -220,4 +225,214 @@ function buildCommand(cfg: RunConfig): string {
     return `cd '${cfg.cwd.trim()}'; ${cfg.command}`;
   }
   return cfg.command;
+}
+
+/**
+ * .NET debugger section (roadmap csharp-ide-parity, Fase B): pick a `.csproj`
+ * and launch it under netcoredbg, or attach to a running `dotnet` process.
+ * While stopped, shows the call stack (click = reveal) and the top frame's
+ * variables; breakpoints are toggled in the editor gutter (EditorPane).
+ */
+function DebugSection({ rootPath }: { rootPath: string }) {
+  const state = useSyncExternalStore(debugSession.subscribe, debugSession.getState);
+  const [csprojs, setCsprojs] = useState<string[]>([]);
+  const [selected, setSelected] = useState<string>("");
+  const [procs, setProcs] = useState<DotnetProcess[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void listProjectFiles(rootPath)
+      .then((files) => {
+        if (cancelled) return;
+        const found = files
+          .filter((f) => f.name.toLowerCase().endsWith(".csproj"))
+          .map((f) => f.path);
+        setCsprojs(found);
+        setSelected((cur) => cur || found[0] || "");
+      })
+      .catch(() => setCsprojs([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [rootPath]);
+
+  const busy = state.status === "starting";
+  const active = state.status === "running" || state.status === "stopped";
+
+  // Nothing to debug in this workspace — keep the panel clean.
+  if (csprojs.length === 0 && !active) return null;
+
+  return (
+    <div className="git-group debug-section">
+      <div className="git-group-header">
+        <span>Depurar (.NET)</span>
+        <span className={`debug-status debug-status-${state.status}`}>
+          {state.status === "idle" && "pronto"}
+          {state.status === "starting" && "iniciando…"}
+          {state.status === "running" && "executando"}
+          {state.status === "stopped" && "pausado"}
+          {state.status === "error" && "erro"}
+        </span>
+      </div>
+
+      {!active && (
+        <div className="debug-launcher">
+          <select
+            className="search-input"
+            value={selected}
+            onChange={(e) => setSelected(e.target.value)}
+            disabled={busy}
+          >
+            {csprojs.map((p) => (
+              <option key={p} value={p}>
+                {p.split(/[\\/]/).pop()}
+              </option>
+            ))}
+          </select>
+          <div className="run-draft-actions">
+            <button
+              className="git-commit-btn"
+              disabled={!selected || busy}
+              title="Compila e inicia sob o depurador"
+              onClick={() => {
+                const cwd = selected.replace(/[\\/][^\\/]+$/, "");
+                void debugSession.launchProject(selected, cwd);
+              }}
+            >
+              ▶ Iniciar Depuração
+            </button>
+            <button
+              className="git-link-btn"
+              disabled={busy}
+              title="Anexar a um processo dotnet em execução"
+              onClick={() => {
+                void debugSession.listProcesses().then(setProcs);
+              }}
+            >
+              Anexar…
+            </button>
+          </div>
+          {procs && (
+            <div className="debug-attach-list">
+              {procs.length === 0 && <div className="panel-empty">Nenhum processo dotnet.</div>}
+              {procs.map((p) => (
+                <button
+                  key={p.pid}
+                  className="debug-frame-row"
+                  onClick={() => {
+                    setProcs(null);
+                    void debugSession.attach(p.pid);
+                  }}
+                >
+                  {p.name} · PID {p.pid}
+                </button>
+              ))}
+            </div>
+          )}
+          {state.status === "error" && state.error && (
+            <div className="git-error">{state.error}</div>
+          )}
+        </div>
+      )}
+
+      {active && (
+        <>
+          <div className="debug-toolbar">
+            <button
+              className="debug-btn"
+              title="Continuar (F5)"
+              disabled={state.status !== "stopped"}
+              onClick={() => void debugSession.continue_()}
+            >
+              ▶
+            </button>
+            <button
+              className="debug-btn"
+              title="Pausar"
+              disabled={state.status !== "running"}
+              onClick={() => void debugSession.pause()}
+            >
+              ⏸
+            </button>
+            <button
+              className="debug-btn"
+              title="Passo (step over)"
+              disabled={state.status !== "stopped"}
+              onClick={() => void debugSession.stepOver()}
+            >
+              ⤼
+            </button>
+            <button
+              className="debug-btn"
+              title="Entrar (step in)"
+              disabled={state.status !== "stopped"}
+              onClick={() => void debugSession.stepIn()}
+            >
+              ⤵
+            </button>
+            <button
+              className="debug-btn"
+              title="Sair (step out)"
+              disabled={state.status !== "stopped"}
+              onClick={() => void debugSession.stepOut()}
+            >
+              ⤴
+            </button>
+            <button
+              className="debug-btn debug-btn-stop"
+              title="Parar depuração"
+              onClick={() => void debugSession.stop()}
+            >
+              ⏹
+            </button>
+          </div>
+
+          {state.frames.length > 0 && (
+            <div className="debug-block">
+              <div className="debug-block-title">Pilha de chamadas</div>
+              {state.frames.map((f) => (
+                <button
+                  key={f.id}
+                  className="debug-frame-row"
+                  title={f.path}
+                  onClick={() => {
+                    if (f.path && f.line) {
+                      window.dispatchEvent(
+                        new CustomEvent("fluent:debug-stopped", {
+                          detail: { path: f.path, line: f.line },
+                        })
+                      );
+                    }
+                  }}
+                >
+                  {f.name}
+                  {f.line ? `:${f.line}` : ""}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {state.scopes.map((s) => (
+            <div key={s.name} className="debug-block">
+              <div className="debug-block-title">{s.name}</div>
+              {s.variables.map((v) => (
+                <div key={v.name} className="debug-var-row" title={v.type}>
+                  <span className="debug-var-name">{v.name}</span>
+                  <span className="debug-var-value">{v.value}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </>
+      )}
+
+      {state.output.length > 0 && (
+        <div className="debug-output">
+          {state.output.slice(-80).map((l, i) => (
+            <div key={i}>{l}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }

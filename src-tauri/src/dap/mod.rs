@@ -113,6 +113,44 @@ pub fn dap_stop_session(id: String, state: State<'_, DapState>) -> Result<(), St
     Ok(())
 }
 
+/// Builds `csproj` and returns the output assembly path (`TargetPath`) — what
+/// netcoredbg launches via `dotnet <dll>`. One MSBuild call does both (with
+/// `--getProperty`, the property prints after the build). `async` so the build
+/// never blocks the UI thread; a failing build surfaces its stderr tail.
+#[tauri::command]
+pub async fn dap_resolve_dotnet_target(csproj_path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut cmd = std::process::Command::new("dotnet");
+        cmd.args([
+            "build",
+            &csproj_path,
+            "-c",
+            "Debug",
+            "--getProperty:TargetPath",
+            "-v:quiet",
+            "-nologo",
+        ]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let out = cmd.output().map_err(|e| format!("dotnet build: {e}"))?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        // The property is the last non-empty stdout line; build errors also land
+        // on stdout with MSBuild, so surface a tail when the path looks wrong.
+        let target = stdout.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
+        if !out.status.success() || !target.to_lowercase().ends_with(".dll") {
+            let tail: String = stdout.chars().rev().take(600).collect::<String>().chars().rev().collect();
+            return Err(format!("build falhou ou TargetPath inválido: {tail}"));
+        }
+        Ok(target)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// A candidate process for "attach": a running `dotnet`/.NET app.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]

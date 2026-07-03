@@ -10,8 +10,9 @@ import type {
 } from "../types";
 import { languageForFile } from "../language";
 import { gitBlame } from "../api";
-import { toFileUri, fromFileUri } from "../lsp/uri";
+import { toFileUri, fromFileUri, canonicalFileUriKey } from "../lsp/uri";
 import { setupMonacoForLsp } from "../lsp/monacoSetup";
+import { debugSession } from "../dap/debugSession";
 
 // Console-only debug logging. (It used to mirror to a hardcoded path on another
 // machine and fire an IPC file write — with an ever-growing buffer — on EVERY
@@ -110,6 +111,50 @@ export function EditorPane({
   const decorationIdsRef = useRef<string[]>([]);
   // Current cursor line to highlight a specific blame.
   const cursorLineRef = useRef<number>(1);
+  // Debugger decorations (breakpoint glyphs + stopped-line highlight) — a
+  // separate id set so blame and debug never clobber each other's decorations.
+  const debugDecorationIdsRef = useRef<string[]>([]);
+
+  /** Renders breakpoints + the stopped line for the CURRENT model (by uri). */
+  const applyDebugDecorations = () => {
+    const ed = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!ed || !monaco) return;
+    const model = ed.getModel();
+    if (!model || model.isDisposed() || model.uri.scheme !== "file") return;
+    const path = fromFileUri(model.uri.toString());
+    const decs: editor.IModelDeltaDecoration[] = debugSession
+      .breakpointsFor(path)
+      .filter((line) => line <= model.getLineCount())
+      .map((line) => ({
+        range: new monaco.Range(line, 1, line, 1),
+        options: {
+          glyphMarginClassName: "debug-breakpoint-glyph",
+          glyphMarginHoverMessage: { value: "Breakpoint" },
+          stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+        },
+      }));
+    const stopped = debugSession.getState().stoppedAt;
+    if (
+      stopped &&
+      canonicalFileUriKey(toFileUri(stopped.path)) === canonicalFileUriKey(model.uri.toString()) &&
+      stopped.line <= model.getLineCount()
+    ) {
+      decs.push({
+        range: new monaco.Range(stopped.line, 1, stopped.line, 1),
+        options: {
+          isWholeLine: true,
+          className: "debug-stopped-line",
+          glyphMarginClassName: "debug-stopped-glyph",
+        },
+      });
+    }
+    debugDecorationIdsRef.current = ed.deltaDecorations(debugDecorationIdsRef.current, decs);
+  };
+
+  // Re-render debug decorations whenever the session state changes (breakpoint
+  // toggled anywhere, execution stopped/continued) — and on model switches.
+  useEffect(() => debugSession.subscribe(applyDebugDecorations));
 
   // Bind THIS editor's reveal/actions to the parent refs whenever they're handed
   // to us (i.e. this pane became the active group) and clear them when they're
@@ -388,6 +433,19 @@ export function EditorPane({
     editorRef.current = editorInstance;
     monacoRef.current = monaco;
 
+    // Breakpoint toggling: click on the glyph margin (left of the line numbers).
+    // The path comes from the CURRENT model uri (not the `file` prop) so the
+    // handler survives tab switches without re-registration.
+    editorInstance.onMouseDown((e) => {
+      if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) return;
+      const line = e.target.position?.lineNumber;
+      const model = editorInstance.getModel();
+      if (!line || !model || model.uri.scheme !== "file") return;
+      debugSession.toggleBreakpoint(fromFileUri(model.uri.toString()), line);
+    });
+    editorInstance.onDidChangeModel(() => applyDebugDecorations());
+    applyDebugDecorations();
+
     editorInstance.onDidChangeCursorPosition((e) => {
       const line = e.position.lineNumber;
       onCursorChange(line, e.position.column);
@@ -502,6 +560,8 @@ export function EditorPane({
         scrollBeyondLastLine: false,
         automaticLayout: true,
         tabSize: 2,
+        // Debugger gutter: explicit so breakpoint glyphs always have a lane.
+        glyphMargin: true,
         // Indentation: keep Monaco's smartest auto-indent on, detect the file's
         // own tabs/spaces, and let the language server format on type/paste so
         // code stays properly indented (VSCode-like) across languages.
