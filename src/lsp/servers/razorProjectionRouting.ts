@@ -78,6 +78,14 @@ export interface RoutedLocation {
 export type RemapFn = (line: number, character: number) => Promise<RemapPos | null>;
 
 /**
+ * Remap N 0-based ranges generated→source in ONE IPC (mirrors
+ * `razorRemapRangesToSource`). Entry `i` of the result matches entry `i` of the
+ * input; `null` = unmappable (synthetic C#). Replaces the per-endpoint position
+ * remap for ranges — 2 IPCs per diagnostic per pull became 1 IPC per pull.
+ */
+export type RemapRangesFn = (ranges: LspRange[]) => Promise<(LspRange | null)[]>;
+
+/**
  * Monaco `MarkerSeverity` numeric values (the enum is not imported to keep this
  * module monaco-free): Hint=1, Info=2, Warning=4, Error=8.
  */
@@ -106,23 +114,15 @@ function standardTags(tags?: number[]): number[] | undefined {
 }
 
 /**
- * Remap a 0-based LSP range to a 1-based Monaco range via `remap`. Returns null
- * if either endpoint is unmappable (synthetic) — the caller drops it.
+ * Remap a 0-based LSP range to a 1-based Monaco range via the batch remapper
+ * (single-element batch = 1 IPC). Returns null if unmappable (synthetic).
  */
 export async function remapRangeToMonaco(
   range: LspRange,
-  remap: RemapFn
+  remapRanges: RemapRangesFn
 ): Promise<RoutedRange | null> {
-  const start = await remap(range.start.line, range.start.character);
-  if (!start) return null;
-  const end = await remap(range.end.line, range.end.character);
-  if (!end) return null;
-  return {
-    startLineNumber: start.line + 1,
-    startColumn: start.character + 1,
-    endLineNumber: end.line + 1,
-    endColumn: end.character + 1,
-  };
+  const [mapped] = await remapRanges([range]);
+  return mapped ? lspRangeToMonaco(mapped) : null;
 }
 
 /**
@@ -163,23 +163,26 @@ export function isPhantomSelfAmbiguity(d: LspDiagnostic): boolean {
  */
 export async function routeDiagnostics(
   items: readonly LspDiagnostic[],
-  remapToSource: RemapFn
+  remapRanges: RemapRangesFn
 ): Promise<RoutedMarker[]> {
+  const kept = items.filter((d) => !isPhantomSelfAmbiguity(d)); // arch artifact, not user code
+  if (kept.length === 0) return [];
+  // ONE IPC for the whole pull (was 2 position IPCs per diagnostic).
+  const remapped = await remapRanges(kept.map((d) => d.range));
   const markers: RoutedMarker[] = [];
-  for (const d of items) {
-    if (isPhantomSelfAmbiguity(d)) continue; // architecture artifact, not user code
-    const range = await remapRangeToMonaco(d.range, remapToSource);
-    if (!range) continue; // unmappable → synthetic scaffolding, not user code
+  kept.forEach((d, i) => {
+    const mapped = remapped[i];
+    if (!mapped) return; // unmappable → synthetic scaffolding, not user code
     const tags = standardTags(d.tags);
     markers.push({
-      ...range,
+      ...lspRangeToMonaco(mapped),
       severity: lspSeverityToMonaco(d.severity),
       message: d.message,
       code: d.code != null ? String(d.code) : undefined,
       source: d.source ?? "razor",
       ...(tags ? { tags } : {}),
     } as RoutedMarker);
-  }
+  });
   return markers;
 }
 
@@ -204,11 +207,11 @@ export async function routeDefinition(
   opts: {
     projectedUriKey: string;
     cshtmlUri: string;
-    remapToSource: RemapFn;
+    remapRanges: RemapRangesFn;
     uriKey: (uri: string) => string;
   }
 ): Promise<RoutedLocation[]> {
-  const { projectedUriKey, cshtmlUri, remapToSource, uriKey } = opts;
+  const { projectedUriKey, cshtmlUri, remapRanges, uriKey } = opts;
   const out: RoutedLocation[] = [];
   for (const loc of asLocationArray(result)) {
     const uri = loc.uri ?? loc.targetUri;
@@ -216,7 +219,7 @@ export async function routeDefinition(
     if (!uri || !lspRange) continue;
 
     if (uriKey(uri) === projectedUriKey) {
-      const range = await remapRangeToMonaco(lspRange, remapToSource);
+      const range = await remapRangeToMonaco(lspRange, remapRanges);
       if (!range) continue; // target is synthetic scaffolding — drop
       out.push({ uri: cshtmlUri, range });
       continue;

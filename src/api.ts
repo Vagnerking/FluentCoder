@@ -1080,12 +1080,26 @@ export interface RazorPrepareResult {
   available: RazorProjectionInfo[];
   /** `.cshtml` (relative) requested but with no projection (degraded). */
   missing: string[];
+  /**
+   * Derived reference DLLs missing on disk (ProjectReferences never built).
+   * Semantics degrade for their types — surface honestly instead of letting
+   * Roslyn report false "type does not exist" errors.
+   */
+  missingReferences: string[];
 }
 
 /** A remapped 0-based LSP position. */
 export interface RazorRemapPos {
   line: number;
   character: number;
+}
+
+/** A 0-based LSP range on the batch-remap wire (camelCase of Rust RemapRange). */
+export interface RazorRemapRange {
+  startLine: number;
+  startCharacter: number;
+  endLine: number;
+  endCharacter: number;
 }
 
 /**
@@ -1119,6 +1133,22 @@ export function razorRemapToSource(
   character: number
 ): Promise<RazorRemapPos | null> {
   return invoke<RazorRemapPos | null>("razor_remap_to_source", { cshtmlPath, line, character });
+}
+
+/**
+ * Remap N projected-C# ranges back to the `.cshtml` in ONE IPC round-trip.
+ * Entry `i` of the result matches entry `i` of `ranges`; `null` = unmappable
+ * (synthetic C#). Diagnostics-grade mapping: spans crossing `#line` regions come
+ * back truncated at the region end rather than dropped.
+ */
+export function razorRemapRangesToSource(
+  cshtmlPath: string,
+  ranges: RazorRemapRange[]
+): Promise<(RazorRemapRange | null)[]> {
+  return invoke<(RazorRemapRange | null)[]>("razor_remap_ranges_to_source", {
+    cshtmlPath,
+    ranges,
+  });
 }
 
 /** Drop a `.cshtml`'s cached source map (on close). */

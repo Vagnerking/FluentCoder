@@ -31,12 +31,13 @@ import {
   razorEnsureSidecar,
   razorForget,
   razorPrepare,
+  razorRemapRangesToSource,
   razorRemapToGenerated,
-  razorRemapToSource,
   razorWarm,
   readFile,
   startLspServer,
   type RazorProjectionInfo,
+  type RazorPrepareResult,
 } from "../../api";
 import { createLanguageClient, registerClientDisposables } from "../client";
 import { lspLog } from "../debug";
@@ -59,7 +60,7 @@ import {
   remapRangeToMonaco,
   routeDefinition,
   routeDiagnostics,
-  type RemapFn,
+  type RemapRangesFn,
 } from "./razorProjectionRouting";
 import type { ServerStartContext } from ".";
 
@@ -181,6 +182,25 @@ export async function startRazorProjectionServer(
   const inProject = models.filter((m) => inThisProject(fromFileUri(m.uri.toString())));
   const cshtmlRels = inProject.map((m) => relativize(projectDir, fromFileUri(m.uri.toString())));
 
+  /**
+   * Honest degraded mode: the derive found reference DLLs that don't exist on
+   * disk (ProjectReferences the user never built). Types from those assemblies
+   * will look "missing" to Roslyn — say WHY (log + app event) instead of letting
+   * false errors stand unexplained. Building the project once resolves it.
+   */
+  const surfaceMissingRefs = (res: RazorPrepareResult): void => {
+    if (!res.missingReferences?.length) return;
+    lspLog("razor projection: DEGRADED — missing reference DLLs (build the project once)", {
+      count: res.missingReferences.length,
+      first: res.missingReferences[0],
+    });
+    window.dispatchEvent(
+      new CustomEvent("fluent:razor-degraded", {
+        detail: { missingReferences: res.missingReferences },
+      })
+    );
+  };
+
   lspLog("razor projection: preparing", { projectDir, count: cshtmlRels.length });
   const prepared = await razorPrepare({
     workspaceDir: rootPath,
@@ -189,6 +209,7 @@ export async function startRazorProjectionServer(
     config: CONFIG,
     cshtmlRels,
   });
+  surfaceMissingRefs(prepared);
   lspLog("razor projection: prepared", {
     solutionPath: prepared.solutionPath,
     available: prepared.available.length,
@@ -270,10 +291,31 @@ export async function startRazorProjectionServer(
       sentText.set(gcsUri, text);
     });
 
-  const remapToSourceFor =
-    (cshtmlPath: string): RemapFn =>
-    (line, character) =>
-      razorRemapToSource(cshtmlPath, line, character);
+  /**
+   * Batch range remap bound to one `.cshtml`: N ranges in ONE IPC round-trip
+   * (the per-endpoint position remap cost 2 IPCs per diagnostic per pull).
+   */
+  const remapRangesFor =
+    (cshtmlPath: string): RemapRangesFn =>
+    async (ranges) => {
+      const out = await razorRemapRangesToSource(
+        cshtmlPath,
+        ranges.map((r) => ({
+          startLine: r.start.line,
+          startCharacter: r.start.character,
+          endLine: r.end.line,
+          endCharacter: r.end.character,
+        }))
+      );
+      return out.map((r) =>
+        r
+          ? {
+              start: { line: r.startLine, character: r.startCharacter },
+              end: { line: r.endLine, character: r.endCharacter },
+            }
+          : null
+      );
+    };
 
   const inProjectModelFor = (cshtmlPath: string): monaco.editor.ITextModel | null => {
     const wantKey = canonicalFileUriKey(toFileUri(cshtmlPath));
@@ -363,7 +405,7 @@ export async function startRazorProjectionServer(
       return;
     }
     const items = (result?.items ?? []) as Parameters<typeof routeDiagnostics>[0];
-    const markers = await routeDiagnostics(items, remapToSourceFor(doc.cshtmlPath));
+    const markers = await routeDiagnostics(items, remapRangesFor(doc.cshtmlPath));
     // Staleness guard: the awaits above (server pull + range remap) yield, so the
     // doc may have been closed (forgetDoc) or replaced (reprepare/reopen) while we
     // were waiting. If so, forgetDoc already cleared this file's markers + store;
@@ -568,7 +610,7 @@ export async function startRazorProjectionServer(
         if (!snapshotStable(doc, model, snap, reqVersion)) return null; // superseded
         let range: monaco.IRange | undefined;
         if (res.range) {
-          const r = await remapRangeToMonaco(res.range, remapToSourceFor(doc.cshtmlPath));
+          const r = await remapRangeToMonaco(res.range, remapRangesFor(doc.cshtmlPath));
           range = r ?? undefined;
         }
         // Re-check AFTER the async remap: a live sync may have committed a newer
@@ -602,7 +644,7 @@ export async function startRazorProjectionServer(
         const routed = await routeDefinition(res, {
           projectedUriKey: canonicalFileUriKey(doc.gcsUri),
           cshtmlUri: doc.cshtmlUri,
-          remapToSource: remapToSourceFor(doc.cshtmlPath),
+          remapRanges: remapRangesFor(doc.cshtmlPath),
           uriKey: canonicalFileUriKey,
         });
         // Re-check AFTER the async route/remap (see hover).
@@ -648,7 +690,11 @@ export async function startRazorProjectionServer(
         // expression end, complete there, then restore. didChange crashes this
         // Roslyn, so we use the same didClose+didOpen lifecycle as openProjection.
         const dotItems = await provisionalDotCompletion(doc, model, position, token);
-        if (dotItems) {
+        // Only short-circuit when the provisional path actually produced items:
+        // an EMPTY array (Roslyn had nothing at the injected dot / the request
+        // failed benignly) used to be truthy and swallowed the normal completion
+        // path entirely — the user got no suggestions at all.
+        if (dotItems && dotItems.length > 0) {
           if (!snapshotStable(doc, model, snap, reqVersion)) return { suggestions: [] };
           return {
             suggestions: dotItems.map((it) => toCompletion(it as Record<string, unknown>, range)),
@@ -775,6 +821,7 @@ export async function startRazorProjectionServer(
         config: CONFIG,
         cshtmlRels: rels,
       });
+      surfaceMissingRefs(re);
       for (const info of re.available) await openProjection(info);
       pullAllDiagnostics();
     } catch (err) {
@@ -904,11 +951,20 @@ export async function startRazorProjectionServer(
     );
   };
 
+  // Models covered by the STARTUP prepare: attaching them must not schedule a
+  // second, immediate reprepare — the old unconditional schedule re-ran the whole
+  // pipeline ~500ms after the first one on every server start (duplicate work,
+  // and under the old dotnet-build emit a duplicate FULL build).
+  const initiallyPrepared = new Set(inProject.map((m) => canonicalFileUriKey(m.uri.toString())));
+
   const attachModel = (model: monaco.editor.ITextModel): void => {
     if (model.getLanguageId() !== CSHTML_PROJECTION_LANGUAGE_ID || model.uri.scheme !== "file") return;
     if (!inThisProject(fromFileUri(model.uri.toString()))) return; // other project (V1)
     // A newly-opened `.cshtml` matches disk → safe to reprepare immediately.
-    scheduleReprepare();
+    // One-shot skip for the docs the startup prepare just covered.
+    if (!initiallyPrepared.delete(canonicalFileUriKey(model.uri.toString()))) {
+      scheduleReprepare();
+    }
     // Live re-emit on every (debounced) edit, so detection follows the buffer.
     const sub = model.onDidChangeContent(() => {
       if (disposed) return;
@@ -924,12 +980,22 @@ export async function startRazorProjectionServer(
     monaco.editor.onWillDisposeModel((model) => forgetDoc(canonicalFileUriKey(model.uri.toString())))
   );
 
-  // Reprepare on SAVE (App dispatches `fluent:file-saved` after `write_file`).
-  // The broker reads disk, so saving is the only moment the on-disk `.cshtml`
-  // matches the buffer — keystroke-driven reprepare would rebuild stale content.
+  // On SAVE (App dispatches `fluent:file-saved` after `write_file`):
+  //  - a served VIEW just needs a live sync — buffer == disk and the sidecar emit
+  //    is ~ms (usually a no-op: the keystroke path already committed this version);
+  //  - a `_ViewImports`/`_ViewStart` (or a view we don't serve yet) changes the
+  //    CONTEXT of other views → full reprepare (cheap now: sidecar-first, no build).
   const onSaved = (e: Event): void => {
     const path = (e as CustomEvent<{ path?: string }>).detail?.path;
-    if (path && /\.cshtml$/i.test(path) && inThisProject(path)) scheduleReprepare();
+    if (!path || !/\.cshtml$/i.test(path) || !inThisProject(path)) return;
+    const isSharedImport = /_view(imports|start)\.cshtml$/i.test(path);
+    const key = canonicalFileUriKey(toFileUri(path));
+    const model = inProjectModelFor(path);
+    if (!isSharedImport && docs.has(key) && model) {
+      void syncLive(key, model);
+      return;
+    }
+    scheduleReprepare();
   };
   window.addEventListener("fluent:file-saved", onSaved);
   disposables.push({ dispose: () => window.removeEventListener("fluent:file-saved", onSaved) });
