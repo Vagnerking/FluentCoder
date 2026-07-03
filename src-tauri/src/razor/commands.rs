@@ -791,6 +791,43 @@ pub fn razor_remap_ranges_to_source(
         .collect()
 }
 
+/// [`razor_remap_ranges_to_source`] with the STRICT mapper — for `TextEdit`s
+/// (code actions / quick fixes), where a truncated range would APPLY an edit at
+/// the wrong span and corrupt the document. Any range not fully inside ONE
+/// mapped region comes back `None`; the caller must then DROP the whole action
+/// (contract: results born in synthetic text never become a `TextEdit`).
+#[tauri::command]
+pub fn razor_remap_ranges_to_source_strict(
+    state: State<'_, RazorState>,
+    cshtml_path: String,
+    ranges: Vec<RemapRange>,
+) -> Vec<Option<RemapRange>> {
+    let Ok(maps) = state.maps.lock() else {
+        return ranges.iter().map(|_| None).collect();
+    };
+    let Some(map) = maps.get(&canonical_key(Path::new(&cshtml_path))) else {
+        return ranges.iter().map(|_| None).collect();
+    };
+    ranges
+        .iter()
+        .map(|r| {
+            remap::generated_range_to_source(
+                map,
+                remap::LspRange {
+                    start: LspPos::new(r.start_line, r.start_character),
+                    end: LspPos::new(r.end_line, r.end_character),
+                },
+            )
+            .map(|out| RemapRange {
+                start_line: out.start.line,
+                start_character: out.start.character,
+                end_line: out.end.line,
+                end_character: out.end.character,
+            })
+        })
+        .collect()
+}
+
 /// Drop a document's cached source map + live-emit context (on `.cshtml` close).
 #[tauri::command]
 pub fn razor_forget(state: State<'_, RazorState>, cshtml_path: String) {
@@ -810,6 +847,73 @@ pub fn razor_forget(state: State<'_, RazorState>, cshtml_path: String) {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// End-to-end of the SIDECAR-FIRST prepare against the real SampleMvc fixture:
+    /// builds the sidecar, derives design-time, emits the projection in-memory,
+    /// writes the shadow `.g.cs`, parses the `#line` map — then asserts the
+    /// CS1061 range (`Model.NonExistentProperty`, .cshtml line 16) remaps
+    /// correctly through the BATCH (clamped) mapper the frontend now uses.
+    /// Shells out to `dotnet` (slow) → `#[ignore]`. Run with:
+    /// `cargo test --lib razor::commands::tests::e2e_sidecar_first -- --ignored --nocapture`
+    #[test]
+    #[ignore = "integration: runs dotnet + the sidecar (slow)"]
+    fn e2e_sidecar_first_prepare_sample_mvc() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
+        let fixture = repo_root.join("tools/razor-lsp-probe/fixtures/SampleMvc");
+        assert!(fixture.join("SampleMvc.csproj").exists(), "fixture missing");
+        let cache = std::env::temp_dir().join("fluent-razor-sidecar-first-test");
+        let _ = std::fs::create_dir_all(&cache);
+
+        let sidecar = Arc::new(Sidecar::new());
+        let outcome = prepare_blocking(
+            Arc::clone(&sidecar),
+            Some(repo_root),
+            Some(cache),
+            &fixture.to_string_lossy(),
+            &fixture.join("SampleMvc.csproj").to_string_lossy(),
+            "Debug",
+            &["Views/Home/Index.cshtml".to_string()],
+        )
+        .expect("prepare_blocking");
+        sidecar.shutdown();
+
+        assert!(outcome.missing.is_empty(), "missing: {:?}", outcome.missing);
+        assert!(outcome.missing_references.is_empty(), "refs: {:?}", outcome.missing_references);
+        assert_eq!(outcome.views.len(), 1, "one prepared view");
+        let view = &outcome.views[0];
+
+        // The projection landed on disk (what the frontend didOpens into Roslyn).
+        let gcs = std::fs::read_to_string(&view.generated_path).expect("shadow .g.cs on disk");
+        assert!(
+            gcs.contains("Model.NonExistentProperty"),
+            "projection must contain the probe expression"
+        );
+        assert!(view.map.region_count() > 0, "no #line regions parsed");
+
+        // Locate the probe line in the GENERATED text (0-based LSP), then remap
+        // its range through the same batch mapper the diagnostics path uses.
+        let gen_line = gcs
+            .lines()
+            .position(|l| l.trim_start().starts_with("Model.NonExistentProperty"))
+            .expect("probe line in .g.cs") as u32;
+        let len = "Model.NonExistentProperty".len() as u32;
+        let mapped = remap::generated_range_to_source_clamped(
+            &view.map,
+            remap::LspRange {
+                start: LspPos::new(gen_line, 0),
+                end: LspPos::new(gen_line, len),
+            },
+        )
+        .expect("CS1061 range must remap to the .cshtml");
+        // Index.cshtml line 16 (1-based) → LSP line 15; `@Model.` starts at col 8
+        // (0-based; the `#line (16,9)` directive is 1-based col 9).
+        assert_eq!(mapped.start.line, 15, "mapped to .cshtml line 16 (1-based)");
+        assert_eq!(mapped.start.character, 8, "mapped to the expression start");
+        eprintln!(
+            "[test] sidecar-first OK: gen line {} → cshtml ({},{})-({},{})",
+            gen_line, mapped.start.line, mapped.start.character, mapped.end.line, mapped.end.character
+        );
+    }
 
     fn temp_project() -> PathBuf {
         let id = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();

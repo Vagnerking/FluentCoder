@@ -32,6 +32,7 @@ import {
   razorForget,
   razorPrepare,
   razorRemapRangesToSource,
+  razorRemapRangesToSourceStrict,
   razorRemapToGenerated,
   razorWarm,
   readFile,
@@ -55,11 +56,14 @@ import {
 import { wireRoslynStartup } from "./roslynShared";
 import { ROSLYN_INIT_OPTIONS } from "./csharp";
 import {
+  monacoSeverityToLsp,
   pickProjectForCshtml,
   relativize,
   remapRangeToMonaco,
   routeDefinition,
   routeDiagnostics,
+  routeWorkspaceEdit,
+  type LspWorkspaceEdit,
   type RemapRangesFn,
 } from "./razorProjectionRouting";
 import type { ServerStartContext } from ".";
@@ -758,6 +762,188 @@ export async function startRazorProjectionServer(
           suggestions: items.map((it) => toCompletion(it as Record<string, unknown>, range)),
           incomplete: Array.isArray(res) ? false : Boolean(res.isIncomplete),
         };
+      },
+    })
+  );
+
+  // Code actions / quick fixes (Fase A2, csharp-ide-parity): forward the range
+  // to the projected `.g.cs`, offer Roslyn's actions, and remap every edit back
+  // with the STRICT mapper — an action whose edit touches synthetic C# is
+  // DROPPED whole (contract: no TextEdit born in synthetic text). Roslyn
+  // returns most actions unresolved (edit comes via `codeAction/resolve`), so
+  // the provider stashes the raw LSP action per Monaco action for resolution.
+  const rawActionByMonaco = new WeakMap<object, { raw: unknown; doc: ProjectionDoc }>();
+  const routeEditOpts = (doc: ProjectionDoc) => ({
+    projectedUriKey: canonicalFileUriKey(doc.gcsUri),
+    cshtmlUri: doc.cshtmlUri,
+    remapRangesStrict: (async (ranges) => {
+      const out = await razorRemapRangesToSourceStrict(
+        doc.cshtmlPath,
+        ranges.map((r) => ({
+          startLine: r.start.line,
+          startCharacter: r.start.character,
+          endLine: r.end.line,
+          endCharacter: r.end.character,
+        }))
+      );
+      return out.map((r) =>
+        r
+          ? {
+              start: { line: r.startLine, character: r.startCharacter },
+              end: { line: r.endLine, character: r.endCharacter },
+            }
+          : null
+      );
+    }) as RemapRangesFn,
+    uriKey: canonicalFileUriKey,
+  });
+
+  /** LSP WorkspaceEdit → Monaco edit set (null ⇒ drop the action). */
+  const toMonacoEdit = async (
+    doc: ProjectionDoc,
+    lspEdit: LspWorkspaceEdit | undefined
+  ): Promise<monaco.languages.WorkspaceEdit | null | undefined> => {
+    if (!lspEdit) return undefined; // no edit (yet) — fine, resolve may add one
+    const routed = await routeWorkspaceEdit(lspEdit, routeEditOpts(doc));
+    if (!routed) return null;
+    return {
+      edits: routed.map((e) => ({
+        resource: monaco.Uri.parse(e.uri),
+        versionId: undefined,
+        textEdit: {
+          range: {
+            startLineNumber: e.range.startLineNumber,
+            startColumn: e.range.startColumn,
+            endLineNumber: e.range.endLineNumber,
+            endColumn: e.range.endColumn,
+          },
+          text: e.text,
+        },
+      })),
+    };
+  };
+
+  disposables.push(
+    monaco.languages.registerCodeActionProvider(sel, {
+      provideCodeActions: async (model, range, context, token) => {
+        const empty = { actions: [], dispose: () => {} };
+        const doc = docFor(model);
+        if (!doc) return empty;
+        // HTML regions have no C# actions; skip the round-trip entirely.
+        if (htmlRegionAt(model, range.getStartPosition()) === "html") return empty;
+        if (token.isCancellationRequested || !(await ensureFresh(doc, model))) return empty;
+        const snap = doc.committedSourceVersion;
+        const reqVersion = model.getVersionId();
+        if (token.isCancellationRequested || docFor(model) !== doc) return empty;
+
+        // Map the requested range into the projection. Both endpoints must land
+        // in mapped C#; otherwise there is nothing actionable.
+        const genStart = await razorRemapToGenerated(
+          doc.cshtmlPath,
+          range.startLineNumber - 1,
+          range.startColumn - 1
+        );
+        if (!genStart) return empty;
+        const genEnd =
+          (await razorRemapToGenerated(
+            doc.cshtmlPath,
+            range.endLineNumber - 1,
+            range.endColumn - 1
+          )) ?? genStart;
+
+        // Forward the markers in range as LSP diagnostics (what quick fixes key
+        // on), remapped source→generated per endpoint. Unmappable ones are
+        // omitted — Roslyn recomputes from its own analysis anyway.
+        const lspDiagnostics: unknown[] = [];
+        for (const m of context.markers) {
+          const s = await razorRemapToGenerated(doc.cshtmlPath, m.startLineNumber - 1, m.startColumn - 1);
+          const e = await razorRemapToGenerated(doc.cshtmlPath, m.endLineNumber - 1, m.endColumn - 1);
+          if (!s || !e) continue;
+          lspDiagnostics.push({
+            range: { start: { line: s.line, character: s.character }, end: { line: e.line, character: e.character } },
+            severity: monacoSeverityToLsp(m.severity),
+            code: m.code != null ? String(typeof m.code === "object" ? m.code.value : m.code) : undefined,
+            message: m.message,
+            source: m.source,
+          });
+        }
+
+        let res: unknown[] | null = null;
+        try {
+          res = await mutateGenerated(doc.gcsUri, () =>
+            client.sendRequest<unknown[] | null>(
+              "textDocument/codeAction",
+              {
+                textDocument: { uri: doc.gcsUri },
+                range: {
+                  start: { line: genStart.line, character: genStart.character },
+                  end: { line: genEnd.line, character: genEnd.character },
+                },
+                context: { diagnostics: lspDiagnostics, triggerKind: 1 },
+              },
+              token
+            )
+          );
+        } catch (err) {
+          lspLog("razor projection: codeAction failed", String(err));
+          return empty;
+        }
+        if (!res || token.isCancellationRequested) return empty;
+        if (!snapshotStable(doc, model, snap, reqVersion)) return empty;
+
+        const actions: monaco.languages.CodeAction[] = [];
+        for (const raw of res) {
+          const a = raw as {
+            title?: string;
+            kind?: string;
+            isPreferred?: boolean;
+            disabled?: { reason?: string };
+            edit?: LspWorkspaceEdit;
+            command?: unknown;
+          };
+          // Plain Commands (server-side execution) aren't supported in V1; a
+          // CodeAction that ONLY carries a command is skipped likewise.
+          if (typeof a.title !== "string" || a.disabled) continue;
+          if (!a.edit && a.command && !("edit" in a)) continue;
+          const edit = await toMonacoEdit(doc, a.edit);
+          if (edit === null) continue; // synthetic span — dropped whole
+          const action: monaco.languages.CodeAction = {
+            title: a.title,
+            kind: a.kind,
+            isPreferred: a.isPreferred,
+            edit,
+          };
+          rawActionByMonaco.set(action, { raw, doc });
+          actions.push(action);
+        }
+        return { actions, dispose: () => {} };
+      },
+
+      resolveCodeAction: async (action, token) => {
+        // Already carries its edit (rare with Roslyn) — nothing to do.
+        if (action.edit) return action;
+        const stashed = rawActionByMonaco.get(action);
+        if (!stashed) return action;
+        const { raw, doc } = stashed;
+        // The doc may have been superseded (close/reprepare) since the list was
+        // built — resolving against a dead projection would remap wrong.
+        if (docs.get(canonicalFileUriKey(doc.cshtmlUri)) !== doc) return action;
+        try {
+          const resolved = await mutateGenerated(doc.gcsUri, () =>
+            client.sendRequest<{ edit?: LspWorkspaceEdit } | null>(
+              "codeAction/resolve",
+              raw,
+              token
+            )
+          );
+          if (resolved?.edit) {
+            const edit = await toMonacoEdit(doc, resolved.edit);
+            if (edit) action.edit = edit;
+          }
+        } catch (err) {
+          lspLog("razor projection: codeAction/resolve failed", String(err));
+        }
+        return action;
       },
     })
   );

@@ -230,6 +230,94 @@ export async function routeDefinition(
   return out;
 }
 
+// ── code actions: WorkspaceEdit routing (Fase A2, csharp-ide-parity) ─────────
+
+/** An LSP `TextEdit`. */
+export interface LspTextEdit {
+  range: LspRange;
+  newText: string;
+}
+
+/** The subset of an LSP `WorkspaceEdit` we can route. */
+export interface LspWorkspaceEdit {
+  changes?: Record<string, LspTextEdit[]>;
+  documentChanges?: unknown[];
+}
+
+/** A routed text edit: target uri + 1-based Monaco range + replacement text. */
+export interface RoutedTextEdit {
+  uri: string;
+  range: RoutedRange;
+  text: string;
+}
+
+/**
+ * Route a code-action `WorkspaceEdit` back to user-visible documents.
+ *
+ * Edits on the projected `.g.cs` are remapped to the `.cshtml` with the STRICT
+ * mapper; edits on real files pass through 1-based. Returns `null` — meaning
+ * the WHOLE ACTION must be dropped — when anything can't be represented
+ * faithfully: an unmappable projected range (synthetic C#: applying an
+ * approximated span would corrupt the document), a resource operation
+ * (create/rename/delete), an edit into a foreign `.g.cs`, or an unknown shape.
+ * Partial application is never an option for an edit set.
+ */
+export async function routeWorkspaceEdit(
+  edit: LspWorkspaceEdit,
+  opts: {
+    projectedUriKey: string;
+    cshtmlUri: string;
+    remapRangesStrict: RemapRangesFn;
+    uriKey: (uri: string) => string;
+  }
+): Promise<RoutedTextEdit[] | null> {
+  const { projectedUriKey, cshtmlUri, remapRangesStrict, uriKey } = opts;
+
+  // Normalize `changes` + `documentChanges` into (uri, edits[]) pairs.
+  const byUri: Array<{ uri: string; edits: LspTextEdit[] }> = [];
+  for (const [uri, edits] of Object.entries(edit.changes ?? {})) {
+    byUri.push({ uri, edits: edits ?? [] });
+  }
+  for (const dc of edit.documentChanges ?? []) {
+    const d = dc as {
+      textDocument?: { uri?: string };
+      edits?: LspTextEdit[];
+      kind?: string;
+    };
+    if (typeof d.kind === "string") return null; // create/rename/delete — can't route
+    const uri = d.textDocument?.uri;
+    if (!uri || !Array.isArray(d.edits)) return null; // unknown shape — drop
+    byUri.push({ uri, edits: d.edits });
+  }
+
+  const out: RoutedTextEdit[] = [];
+  for (const { uri, edits } of byUri) {
+    if (uriKey(uri) === projectedUriKey) {
+      // ONE strict batch per projected doc; ANY miss kills the action.
+      const remapped = await remapRangesStrict(edits.map((e) => e.range));
+      for (let i = 0; i < edits.length; i++) {
+        const r = remapped[i];
+        if (!r) return null; // synthetic span — the action cannot apply safely
+        out.push({ uri: cshtmlUri, range: lspRangeToMonaco(r), text: edits[i].newText });
+      }
+      continue;
+    }
+    if (/\.g\.cs$/i.test(uri)) return null; // another projection we can't map
+    for (const e of edits) {
+      out.push({ uri, range: lspRangeToMonaco(e.range), text: e.newText });
+    }
+  }
+  return out;
+}
+
+/** Monaco `MarkerSeverity` → LSP `DiagnosticSeverity` (inverse of {@link lspSeverityToMonaco}). */
+export function monacoSeverityToLsp(severity: number): number {
+  if (severity >= 8) return 1; // Error
+  if (severity >= 4) return 2; // Warning
+  if (severity >= 2) return 3; // Info
+  return 4; // Hint
+}
+
 /** Convert a 0-based LSP range to a 1-based Monaco range (no remap). */
 export function lspRangeToMonaco(range: LspRange): RoutedRange {
   return {

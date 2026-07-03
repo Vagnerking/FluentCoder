@@ -1151,6 +1151,21 @@ export function razorRemapRangesToSource(
   });
 }
 
+/**
+ * STRICT batch remap — for `TextEdit` ranges (code actions/quick fixes): a
+ * range not fully inside one mapped region comes back `null` and the caller
+ * must drop the whole action (an approximated edit span would corrupt code).
+ */
+export function razorRemapRangesToSourceStrict(
+  cshtmlPath: string,
+  ranges: RazorRemapRange[]
+): Promise<(RazorRemapRange | null)[]> {
+  return invoke<(RazorRemapRange | null)[]>("razor_remap_ranges_to_source_strict", {
+    cshtmlPath,
+    ranges,
+  });
+}
+
 /** Drop a `.cshtml`'s cached source map (on close). */
 export function razorForget(cshtmlPath: string): Promise<void> {
   return invoke<void>("razor_forget", { cshtmlPath });
