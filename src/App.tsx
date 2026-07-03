@@ -44,6 +44,11 @@ import {
   RAZOR_PROJECTION_FLAG_KEY,
   isRazorProjectionEnabled,
 } from "./lsp/razorProjectionFlag";
+import {
+  formatModelForSave,
+  isFormatOnSaveEnabled,
+  toggleFormatOnSave,
+} from "./lsp/formatOnSave";
 import { AboutDialog } from "./components/AboutDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { AgentsPanel } from "./components/AgentsPanel";
@@ -917,6 +922,17 @@ export default function App() {
             localStorage.setItem(RAZOR_PROJECTION_FLAG_KEY, "1");
           }
           location.reload();
+        },
+      },
+      {
+        id: "editor.toggleFormatOnSave",
+        title: isFormatOnSaveEnabled()
+          ? "Editor: desligar Formatar ao Salvar"
+          : "Editor: ligar Formatar ao Salvar (C#)",
+        detail: "Editor",
+        run: () => {
+          // Read live at every save (formatOnSave.ts) — no reload needed.
+          toggleFormatOnSave();
         },
       },
     ],
@@ -2247,7 +2263,16 @@ export default function App() {
         targetPath = dest;
       }
       try {
-        await writeFile(targetPath, file.content);
+        // Format on save (roadmap csharp-ide-parity A1): best-effort, never
+        // blocks the save — null means "save as-is" (flag off, no editor
+        // attached, unsupported language, or the formatter failed/timed out).
+        // Untitled buffers are skipped (their model uri predates targetPath).
+        let contentToWrite = file.content;
+        if (!isUntitled(file.path)) {
+          const formatted = await formatModelForSave(targetPath);
+          if (formatted != null) contentToWrite = formatted;
+        }
+        await writeFile(targetPath, contentToWrite);
         // Notify disk-based language tooling that this file's on-disk content is
         // now current. The CSHTML projection broker (ADR 0002) regenerates from
         // disk (`dotnet build`), so it must reprepare on save — not on every
@@ -2257,10 +2282,13 @@ export default function App() {
         );
         // Clear dirty (and follow the rename, for untitled buffers) in EVERY
         // group holding this file — it may be open in more than one split.
+        // `content` carries what actually hit the disk (formatted or not), so
+        // state and disk can't diverge if the format-edit change event races.
         setLayout((l) =>
           patchFileEverywhere(l, file.path, {
             path: targetPath,
             name: baseName(targetPath),
+            content: contentToWrite,
             dirty: false,
           })
         );
