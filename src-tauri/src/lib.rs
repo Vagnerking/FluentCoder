@@ -1,4 +1,5 @@
 mod agents;
+mod dap;
 mod file_index;
 mod fs_commands;
 mod git;
@@ -52,6 +53,7 @@ pub fn run() {
         })
         .manage(terminal::TerminalState::new())
         .manage(lsp::LspState::new())
+        .manage(dap::DapState::new())
         .manage(search::SearchState::new())
         .manage(agents::AcpState::new())
         .manage(razor::commands::RazorState::new())
@@ -144,6 +146,10 @@ pub fn run() {
             lsp::lsp_ensure_npm_server,
             lsp::lsp_ensure_system_server,
             lsp::lsp_ensure_razor_server,
+            dap::dap_ensure_netcoredbg,
+            dap::dap_start_session,
+            dap::dap_stop_session,
+            dap::dap_list_dotnet_processes,
             razor::commands::razor_prepare,
             razor::commands::razor_emit_live,
             razor::commands::razor_commit_live_map,
@@ -235,6 +241,7 @@ pub fn run() {
                     app.state::<terminal::TerminalState>().shutdown_all();
                     app.state::<agents::AcpState>().shutdown_all();
                     app.state::<lsp::LspState>().shutdown_all();
+                    app.state::<dap::DapState>().shutdown_all();
                     app.state::<razor::commands::RazorState>().shutdown_sidecar();
                     app.state::<ssh::SshState>().shutdown_all();
                     eprintln!("[exit] teardown done — forcing process exit");
@@ -246,6 +253,7 @@ pub fn run() {
                     app.state::<terminal::TerminalState>().shutdown_all();
                     app.state::<agents::AcpState>().shutdown_all();
                     app.state::<lsp::LspState>().shutdown_all();
+                    app.state::<dap::DapState>().shutdown_all();
                     app.state::<razor::commands::RazorState>().shutdown_sidecar();
                     app.state::<ssh::SshState>().shutdown_all();
                     eprintln!("[exit] teardown done — forcing process exit");

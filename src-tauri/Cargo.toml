@@ -63,6 +63,8 @@ uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
 # Locate node / typescript-language-server / npm on PATH.
 which = "6"
 # Official Agent Client Protocol SDK. The editor acts as the ACP client and
