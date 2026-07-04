@@ -25,7 +25,7 @@ interface TooltipProps {
   /** The interactive trigger (an icon-only button) the tooltip describes. */
   children: ReactElement;
   /** Where the bubble sits relative to the trigger. Defaults to "top". */
-  placement?: "top" | "bottom";
+  placement?: "top" | "bottom" | "left" | "right";
 }
 
 /** Hover delay (ms). Focus shows the tooltip immediately, like VS Code. */
@@ -70,10 +70,20 @@ export function Tooltip({ label, children, placement = "top" }: TooltipProps) {
     const el = (wrapper?.firstElementChild as HTMLElement | null) ?? wrapper;
     if (!el) return;
     const rect = el.getBoundingClientRect();
-    setCoords({
-      left: rect.left + rect.width / 2,
-      top: placement === "top" ? rect.top : rect.bottom,
-    });
+    switch (placement) {
+      case "right":
+        // Anchor to the trigger's right edge, vertically centred.
+        setCoords({ left: rect.right, top: rect.top + rect.height / 2 });
+        break;
+      case "left":
+        setCoords({ left: rect.left, top: rect.top + rect.height / 2 });
+        break;
+      case "bottom":
+        setCoords({ left: rect.left + rect.width / 2, top: rect.bottom });
+        break;
+      default: // "top"
+        setCoords({ left: rect.left + rect.width / 2, top: rect.top });
+    }
   }, [placement]);
 
   const show = useCallback(

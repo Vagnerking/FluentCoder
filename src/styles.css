@@ -4657,6 +4657,19 @@ button .codicon { pointer-events: none; }
   transform: translate(-50%, 6px);
 }
 
+/* Sit just to the right of the trigger (right edge is the anchor), vertically
+   centred. `white-space: nowrap` keeps single-line labels on one line beside a
+   narrow bar (e.g. the activity bar) instead of wrapping. */
+.tooltip-right {
+  transform: translate(6px, -50%);
+  white-space: nowrap;
+}
+
+.tooltip-left {
+  transform: translate(calc(-100% - 6px), -50%);
+  white-space: nowrap;
+}
+
 @keyframes tooltip-in {
   from {
     opacity: 0;

@@ -69,6 +69,14 @@ export function ActivityBar({
   const barRef = useRef<HTMLDivElement>(null);
   const [indicatorOffset, setIndicatorOffset] = useState<number | null>(null);
   const horizontal = orientation === 'horizontal';
+  // Lateral bar: the tooltip sits beside the icon (away from the screen edge the
+  // bar hugs), so it never overlaps the bar and never runs off-screen. Top
+  // (horizontal) bar: it sits below, as before.
+  const tipPlacement: 'right' | 'left' | 'bottom' = horizontal
+    ? 'bottom'
+    : side === 'right'
+      ? 'left'
+      : 'right';
 
   // Drag-reorderable order of the primary view icons (VSCode-style), persisted.
   // `dropTarget` tracks the hovered icon and which side (before/after) the dragged
@@ -172,7 +180,7 @@ export function ActivityBar({
       />
       <div className="activity-items">
         {orderedViews.map((v) => (
-          <Tooltip key={v.id} label={v.label} placement="bottom">
+          <Tooltip key={v.id} label={v.label} placement={tipPlacement}>
           <button
             className={`activity-item${activeView === v.id ? ' active' : ''}${
               dropTarget?.id === v.id
@@ -224,7 +232,7 @@ export function ActivityBar({
       </div>
       <div className="activity-items-bottom">
         {BOTTOM_VIEWS.map((v) => (
-          <Tooltip key={v.id} label={v.label} placement="top">
+          <Tooltip key={v.id} label={v.label} placement={tipPlacement}>
           <button
             className={`activity-item${activeView === v.id ? ' active' : ''}`}
             data-view={v.id}
