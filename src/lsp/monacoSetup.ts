@@ -13,7 +13,7 @@
 import type { Monaco } from "@monaco-editor/react";
 import type * as MonacoNS from "monaco-editor";
 import { installRazorHtmlLint } from "../lint/razorHtmlLint";
-import { installFileTextModelResolver } from "./textModelResolver";
+import { installDiskFileSystemOverlay } from "./textModelResolver";
 
 let didSetup = false;
 
@@ -23,9 +23,9 @@ export function setupMonacoForLsp(monaco: Monaco): void {
   didSetup = true;
 
   // Must run BEFORE the first editor instantiates the standalone services:
-  // resolves file:// models on demand so Ctrl+hover underlines definitions in
+  // resolves file:// reads from disk so Ctrl+hover underlines definitions in
   // files that were never opened (see textModelResolver.ts).
-  installFileTextModelResolver();
+  installDiskFileSystemOverlay();
 
   // Debug hook: the release build has no DevTools console REPL, so live
   // diagnosis (via CDP/remote debugging) needs a way to reach the monaco API

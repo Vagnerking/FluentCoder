@@ -4,7 +4,9 @@ import {
   CloseAction,
   ErrorAction,
   type DocumentSelector,
+  type LanguageClientOptions,
 } from "vscode-languageclient";
+import { canonicalizeDriveInFileUri } from "./uri";
 import { lspBridgeInfo } from "../api";
 import { createTransport, type LspTransport } from "./transport";
 import { installReferencesBridge } from "./references";
@@ -117,6 +119,25 @@ export async function createLanguageClient(
         index: 0,
       },
       initializationOptions: config.initializationOptions,
+      // ONE canonical wire form for file uris (raw drive colon, `file:///c:/…`).
+      // The native document-sync features serialize through the extHost `Uri`
+      // class, which percent-encodes the drive colon (`c%3A`) — a form our
+      // `installWindowsFileUriSerialization` patch deliberately avoids (Roslyn
+      // pushes `c%3A` docs into "Miscellaneous Files") and that MISMATCHES every
+      // hand-rolled sender (rebind, pulls, projection), all of which produce the
+      // raw form. Roslyn tracks docs by exact uri string: on ativus the native
+      // didOpen (`c%3A`) + our rebind didClose (`c:`) triggered a fatal
+      // InvalidOperationException ("Error processing queue, shutting down").
+      // This converter is the single choke point every native feature uses.
+      uriConverters: {
+        code2Protocol: (uri) => canonicalizeDriveInFileUri(uri.toString()),
+        protocol2Code: (value) =>
+          monaco.Uri.parse(value) as unknown as ReturnType<
+            NonNullable<
+              NonNullable<LanguageClientOptions["uriConverters"]>["protocol2Code"]
+            >
+          >,
+      },
       errorHandler: {
         error: (err, msg, count) => {
           lspLog("client ERROR", config.serverId, String(err), msg?.jsonrpc ?? "", count ?? "");
@@ -569,7 +590,7 @@ function installSemanticTokensBridge(
           const request = beginRequest(model);
           const result = await client.sendRequest<SemanticTokensResult | null>(
             "textDocument/semanticTokens/full",
-            { textDocument: { uri: model.uri.toString() } },
+            { textDocument: { uri: client.code2ProtocolConverter.asUri(model.uri as never) } },
             token
           );
           if (token.isCancellationRequested || !isLatestRequest(model, request)) {
@@ -605,7 +626,7 @@ function installSemanticTokensBridge(
           const result = await client.sendRequest<SemanticTokensResult | null>(
             "textDocument/semanticTokens/range",
             {
-              textDocument: { uri: model.uri.toString() },
+              textDocument: { uri: client.code2ProtocolConverter.asUri(model.uri as never) },
               range: {
                 start: { line: 0, character: 0 },
                 end: {
@@ -630,7 +651,7 @@ function installSemanticTokensBridge(
           void client
             .sendRequest<SemanticTokensResult | null>(
               "textDocument/semanticTokens/full",
-              { textDocument: { uri: model.uri.toString() } }
+              { textDocument: { uri: client.code2ProtocolConverter.asUri(model.uri as never) } }
             )
             .then((full) => {
               if (full) {
