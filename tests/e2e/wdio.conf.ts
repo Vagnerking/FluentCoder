@@ -7,8 +7,15 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '..', '..')
 
-// Caminho do binário compilado do app Tauri (modo debug).
-// Gerado por `cargo build` dentro de src-tauri.
+// Caminho do binário compilado do app Tauri.
+//
+// O E2E usa o binário RELEASE de propósito: o binário `--debug` (profile.dev,
+// opt-level baixo) sobe o WebView2 devagar demais sob o tauri-driver e o React
+// não chega a montar dentro da janela de espera do driver (DOM vazio, casca
+// nunca pinta) — verificado empiricamente: o mesmo caminho do wdio passa com o
+// binário release e trava com o debug. A build rápida (profile.dev + lld) segue
+// valendo para o CICLO DE DEV direto (`cargo build`, `tauri dev`, runs manuais);
+// o E2E, que é menos frequente, prioriza a confiabilidade do boot.
 const appBinary = path.resolve(
   projectRoot,
   'src-tauri',
@@ -99,6 +106,10 @@ export const config: WebdriverIO.Config = {
   // `cargo build` direto produz um binário que ainda aponta para o devUrl
   // (localhost:1420), e a WebView abre em "localhost refused to connect".
   // --no-bundle pula a geração de instaladores (.msi/.exe), bem mais rápido.
+  // Release (não --debug): o binário debug não pinta o WebView2 a tempo sob o
+  // driver (ver comentário em `appBinary`). O link ainda usa o rust-lld
+  // (.cargo/config.toml), que corta tempo do passo mais caro. Só-Windows-x64 já
+  // é o host, então não há cross-compile.
   onPrepare: () => {
     if (process.env.E2E_SKIP_BUILD !== '1') {
       const r = spawnSync('npx', ['tauri', 'build', '--no-bundle'], {

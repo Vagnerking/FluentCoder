@@ -44,6 +44,11 @@ import {
   RAZOR_PROJECTION_FLAG_KEY,
   isRazorProjectionEnabled,
 } from "./lsp/razorProjectionFlag";
+import {
+  formatModelForSave,
+  isFormatOnSaveEnabled,
+  toggleFormatOnSave,
+} from "./lsp/formatOnSave";
 import { AboutDialog } from "./components/AboutDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { AgentsPanel } from "./components/AgentsPanel";
@@ -931,6 +936,17 @@ export default function App() {
             localStorage.setItem(RAZOR_PROJECTION_FLAG_KEY, "1");
           }
           location.reload();
+        },
+      },
+      {
+        id: "editor.toggleFormatOnSave",
+        title: isFormatOnSaveEnabled()
+          ? "Editor: desligar Formatar ao Salvar"
+          : "Editor: ligar Formatar ao Salvar (C#)",
+        detail: "Editor",
+        run: () => {
+          // Read live at every save (formatOnSave.ts) — no reload needed.
+          toggleFormatOnSave();
         },
       },
     ],
@@ -2277,10 +2293,19 @@ export default function App() {
         targetPath = dest;
       }
       try {
+        // Format on save (roadmap csharp-ide-parity A1): best-effort, never
+        // blocks the save — null means "save as-is" (flag off, no editor
+        // attached, unsupported language, or the formatter failed/timed out).
+        // Untitled buffers are skipped (their model uri predates targetPath).
+        let contentToWrite = file.content;
+        if (!isUntitled(file.path)) {
+          const formatted = await formatModelForSave(targetPath);
+          if (formatted != null) contentToWrite = formatted;
+        }
         // Preserve the file's original encoding/BOM/line ending on save (VS Code
         // default). Untitled buffers have no detected encoding yet, so they fall
         // back to UTF-8 + LF inside writeFile.
-        await writeFile(targetPath, file.content, {
+        await writeFile(targetPath, contentToWrite, {
           encoding: file.encoding,
           eol: file.eol,
           bom: file.bom,
@@ -2294,10 +2319,13 @@ export default function App() {
         );
         // Clear dirty (and follow the rename, for untitled buffers) in EVERY
         // group holding this file — it may be open in more than one split.
+        // `content` carries what actually hit the disk (formatted or not), so
+        // state and disk can't diverge if the format-edit change event races.
         setLayout((l) =>
           patchFileEverywhere(l, file.path, {
             path: targetPath,
             name: baseName(targetPath),
+            content: contentToWrite,
             dirty: false,
           })
         );
@@ -2316,10 +2344,40 @@ export default function App() {
 
   /** Remove a tab from `openFiles`, moving focus off it if it was active. */
   /** Removes a tab from a group, moving focus off it and collapsing an emptied
-   *  group (except the last one). */
+   *  group (except the last one). Orphaned models are disposed by the
+   *  reconciliation effect below (see `keepCurrentModel`). */
   const removeTabFromGroup = useCallback((groupId: string, path: string) => {
     setLayout((l) => closeFile(l, groupId, path));
   }, []);
+
+  // Dispose Monaco models for files that were open and are now closed in EVERY
+  // group. `EditorPane` sets `keepCurrentModel`, so Monaco no longer disposes a
+  // model on tab switch (which previously tore down the Razor projection / LSP
+  // document and made C# diagnostics vanish after revisiting a tab). The flip
+  // side: we must dispose models on REAL close ourselves, or they'd leak and keep
+  // stale LSP documents (or, for untitled buffers, their unsaved contents) alive.
+  // Reconciling against the set of open paths covers every close path (close,
+  // close-all/others/left/right, detach) at once, and the split-group guard is
+  // automatic — a path still open in another group stays in `openNow`. Disposing
+  // fires onWillDisposeModel → the broker's forgetDoc and the client's didClose:
+  // the correct teardown for a closed document. Untitled buffers are tracked too
+  // (their model URI is the synthetic `untitled:` path, matching EditorPane).
+  const openFilePathsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const openNow = new Set<string>();
+    for (const group of Object.values(layout.groups)) {
+      for (const f of group.files) openNow.add(f.path);
+    }
+    for (const path of openFilePathsRef.current) {
+      if (openNow.has(path)) continue;
+      // Mirror EditorPane's `modelPath`: untitled buffers keep their synthetic
+      // `untitled:` URI; on-disk files go through the `file://` scheme.
+      const uri = isUntitled(path) ? path : toFileUri(path);
+      const model = monaco.editor.getModel(monaco.Uri.parse(uri));
+      if (model && !model.isDisposed()) model.dispose();
+    }
+    openFilePathsRef.current = openNow;
+  }, [layout]);
 
   /** Reorders tabs within a group: drops `fromPath` just before/after `toPath`. */
   const reorderTabsInGroup = useCallback(
@@ -3201,6 +3259,19 @@ export default function App() {
       problem.line
     );
   }
+
+  // Debugger navigation: the DAP session (dap/debugSession.ts) asks the app to
+  // reveal where execution stopped / a clicked stack frame. Re-subscribed every
+  // render so the handler never closes over a stale open-file flow.
+  useEffect(() => {
+    const onDebugStopped = (e: Event) => {
+      const d = (e as CustomEvent<{ path?: string; line?: number }>).detail;
+      if (!d?.path || !d.line) return;
+      handleOpenFile({ name: baseName(d.path), path: d.path, isDir: false }, d.line);
+    };
+    window.addEventListener("fluent:debug-stopped", onDebugStopped);
+    return () => window.removeEventListener("fluent:debug-stopped", onDebugStopped);
+  });
 
   /** Opens the bottom panel focused on a specific tab (e.g. Problems). */
   const showPanelTab = useCallback((tab: PanelTab) => {

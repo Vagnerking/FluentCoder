@@ -1,0 +1,14 @@
+@model MyApp.Models.Pedido
+@*
+    Fixture de ERRO deliberado: a <div> abre e fecha como </section> (tag de
+    fechamento sem abertura correspondente). O linter de markup deve flagrar
+    </section> com range preciso. As regiões Razor ao redor NÃO devem produzir
+    ruído — só o erro real de markup.
+*@
+<div class="pedido">
+    <h1>Pedido @Model.Numero</h1>
+    @foreach (var item in Model.Itens)
+    {
+        <p>@item.Nome</p>
+    }
+</section>

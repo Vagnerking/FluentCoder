@@ -10,12 +10,14 @@
  */
 
 import type { MonacoLanguageClient } from "monaco-languageclient";
+import * as monaco from "monaco-editor";
 import {
+  addClientContributions,
   enableLanguageClientSemanticTokens,
   stabilizeLanguageClientSemanticTokens,
   repullDiagnostics,
 } from "../client";
-import { toFileUri } from "../uri";
+import { canonicalFileUriKey, toFileUri } from "../uri";
 import { lspLog } from "../debug";
 import { listProjectFiles } from "../../api";
 import {
@@ -73,7 +75,34 @@ export function wireRoslynStartup(
     .sendNotification("workspace/didChangeConfiguration", { settings: {} })
     .catch((err) => lspLog("didChangeConfiguration notify failed", String(err)));
 
-  // 2. Project initialization complete.
+  // Once the workspace is loaded, any `.cs`/`.cshtml` model that appears LATER
+  // (the classic case: a session-restore tab whose Monaco model is created after
+  // the server already finished `solution/open`) must still be (re)bound to
+  // Roslyn — otherwise the document is never `didOpen`ed, no diagnostics/semantic
+  // tokens flow, and it only "wakes up" when the user focuses the tab (which
+  // triggers the v10 client's own didOpen). Gate the late-bind on this flag so we
+  // never push documents before the solution is ready.
+  let workspaceInitialized = false;
+  // Models created BEFORE init completes are parked here and rebound in the init
+  // handler. This closes the race the simple `workspaceInitialized` guard left
+  // open: a model created AFTER `reopenRoslynDocuments()` snapshotted `getModels()`
+  // but BEFORE init finished would otherwise be covered by neither the batch nor
+  // the late listener, and never get rebound (no diagnostics until refocus).
+  const pendingPreInit = new Set<monaco.editor.ITextModel>();
+
+  const rebindOne = (model: monaco.editor.ITextModel): void => {
+    if (model.isDisposed()) return;
+    void rebindRoslynDocument(client, model)
+      .then(() => {
+        enableLanguageClientSemanticTokens(client);
+        stabilizeLanguageClientSemanticTokens(client);
+        repullDiagnostics(client);
+      })
+      .catch((err) =>
+        lspLog("late model rebind failed; re-pulling diagnostics", serverId, String(err))
+      );
+  };
+
   client.onNotification("workspace/projectInitializationComplete", () => {
     lspLog("Roslyn project initialization COMPLETE", serverId, rootPath);
     const workspace = roslynWorkspaces.get(client);
@@ -85,8 +114,10 @@ export function wireRoslynStartup(
         loaded: true,
       });
     }
+    let reboundKeys = new Set<string>();
     void reopenRoslynDocuments(client, reopenLanguages)
-      .then(() => {
+      .then((keys) => {
+        reboundKeys = keys;
         enableLanguageClientSemanticTokens(client);
         stabilizeLanguageClientSemanticTokens(client);
         repullDiagnostics(client);
@@ -95,8 +126,44 @@ export function wireRoslynStartup(
         lspLog("reopenRoslynDocuments failed; re-pulling diagnostics", String(err));
         repullDiagnostics(client);
       })
-      .finally(() => onProjectInitialized?.());
+      .finally(() => {
+        // Flip the flag FIRST so any model created from now on takes the direct
+        // path, then drain those parked during startup — SKIPPING models the
+        // batch reopen already covered. A second didClose+didOpen wave for the
+        // same doc is NOT harmless: Roslyn treats a `didClose` for a document it
+        // no longer tracks as a fatal `InvalidOperationException` and SHUTS ITS
+        // REQUEST QUEUE DOWN ("Error processing queue, shutting down") — seen
+        // live on a heavy workspace (ativus, 3 restored .cs tabs): the double
+        // wave raced the client's own document sync and killed the csharp
+        // server permanently (the v10 error handler is DoNotRestart).
+        workspaceInitialized = true;
+        const parked = [...pendingPreInit];
+        pendingPreInit.clear();
+        for (const model of parked) {
+          if (reboundKeys.has(canonicalFileUriKey(model.uri.toString()))) continue;
+          rebindOne(model);
+        }
+        onProjectInitialized?.();
+      });
   });
+
+  // Bind any matching model regardless of WHEN it appears. Only the shared C#
+  // path uses this (`reopenLanguages` non-empty); the projection starter manages
+  // its own `.g.cs` lifecycle (`reopenLanguages: []`), so it's a no-op there.
+  // Pre-init creations are parked (drained by the init handler); post-init ones
+  // rebind immediately.
+  if (reopenLanguages.length > 0) {
+    const onCreate = monaco.editor.onDidCreateModel((model) => {
+      if (!reopenLanguages.includes(model.getLanguageId())) return;
+      if (model.uri.scheme !== "file") return;
+      if (!workspaceInitialized) {
+        pendingPreInit.add(model);
+        return;
+      }
+      rebindOne(model);
+    });
+    addClientContributions(client, [onCreate]);
+  }
 
   // 3. Workspace loading (fire-and-forget).
   void openRoslynWorkspace(client, serverId, rootPath, context, solutionPath);
@@ -108,30 +175,60 @@ const roslynWorkspaces = new WeakMap<
   { solutionPath?: string; projectCount: number }
 >();
 
+/**
+ * Rebinds every open model of `languages`; returns the canonical uri keys it
+ * covered so the pre-init parked drain can SKIP them — a duplicate rebind wave
+ * for the same doc is fatal to Roslyn (see the init-complete handler).
+ */
 async function reopenRoslynDocuments(
   client: MonacoLanguageClient,
   languages: string[]
-): Promise<void> {
-  const monaco = await import("monaco-editor");
+): Promise<Set<string>> {
   const models = monaco.editor
     .getModels()
     .filter((model) => languages.includes(model.getLanguageId()));
 
+  const keys = new Set<string>();
   for (const model of models) {
-    const uri = model.uri.toString();
-    await client.sendNotification("textDocument/didClose", {
-      textDocument: { uri },
-    });
-    await client.sendNotification("textDocument/didOpen", {
-      textDocument: {
-        uri,
-        languageId: model.getLanguageId(),
-        version: model.getVersionId(),
-        text: model.getValue(),
-      },
-    });
-    lspLog("Roslyn document rebound after project load", uri);
+    await rebindRoslynDocument(client, model);
+    keys.add(canonicalFileUriKey(model.uri.toString()));
   }
+  return keys;
+}
+
+/**
+ * Re-sends one model to Roslyn as a clean `didClose` + `didOpen`. Idempotent: if
+ * the v10 client already auto-opened the model, the `didClose` first makes the
+ * re-open a no-op delta rather than a duplicate. Used both by the post-init
+ * batch reopen and by the late-model listener (boot/restore tabs).
+ */
+async function rebindRoslynDocument(
+  client: MonacoLanguageClient,
+  model: monaco.editor.ITextModel
+): Promise<void> {
+  if (model.isDisposed()) return;
+  // MUST serialize the uri exactly like the client's own document-sync does
+  // (`code2ProtocolConverter.asUri` percent-encodes the drive colon: `c%3A`).
+  // A hand-rolled `model.uri.toString()` produced the RAW `c:` form — Roslyn
+  // tracks documents by exact uri string, so the rebind's didClose targeted a
+  // "different" document than the native didOpen had registered →
+  // InvalidOperationException → "Error processing queue, shutting down" (the
+  // csharp server died permanently on heavy workspaces with restored tabs).
+  const uri = client.code2ProtocolConverter.asUri(
+    model.uri as unknown as Parameters<typeof client.code2ProtocolConverter.asUri>[0]
+  );
+  await client.sendNotification("textDocument/didClose", {
+    textDocument: { uri },
+  });
+  await client.sendNotification("textDocument/didOpen", {
+    textDocument: {
+      uri,
+      languageId: model.getLanguageId(),
+      version: model.getVersionId(),
+      text: model.getValue(),
+    },
+  });
+  lspLog("Roslyn document rebound", uri);
 }
 
 async function openRoslynWorkspace(

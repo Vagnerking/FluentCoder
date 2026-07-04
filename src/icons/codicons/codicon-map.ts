@@ -90,6 +90,7 @@ export type IconAction =
   | "agents"
   | "graph"
   | "backlinks"
+  | "solution"
   | "send"
   | "modeAsk"
   | "modePlan"
@@ -209,6 +210,7 @@ export const CODICON_MAP: Record<IconAction, string> = {
   agents: "hubot",
   graph: "type-hierarchy",
   backlinks: "references",
+  solution: "layers",
   send: "send",
   modeAsk: "comment",
   modePlan: "checklist",

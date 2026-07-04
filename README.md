@@ -38,18 +38,21 @@ Hosts Windows com `cmd.exe` ou PowerShell como shell SSH ainda não são suporta
 | Editor     | [Monaco Editor](https://microsoft.github.io/monaco-editor/) |
 | Terminal   | [xterm.js](https://xtermjs.org/)                      |
 | Bundler    | [Vite 6](https://vitejs.dev/)                         |
-| LSP        | monaco-languageclient + vscode-languageclient         |
+| LSP        | monaco-languageclient v10 + `@codingame/monaco-vscode-api` |
 
 ## Pré-requisitos
 
-- [Node.js](https://nodejs.org/) (LTS recomendado)
+- [Node.js](https://nodejs.org/) **>= 22** (a stack `@codingame/monaco-vscode-api` exige Node moderno) e npm **>= 11**
 - [Rust](https://www.rust-lang.org/tools/install) (toolchain estável) com Cargo
 - Dependências de sistema do Tauri para a sua plataforma — veja o [guia de pré-requisitos do Tauri](https://tauri.app/start/prerequisites/)
 
 ## Como começar
 
 ```bash
-# Instalar dependências do frontend
+# Instalar dependências do frontend.
+# O .npmrc do projeto força legacy-peer-deps=true: @monaco-editor/react declara
+# peer monaco-editor "<1", mas usamos o alias @codingame/monaco-vscode-editor-api
+# (mesma superfície monaco.*). Ver src/lsp/COMPAT.md.
 npm install
 
 # Rodar o app em modo de desenvolvimento (Vite + janela Tauri)

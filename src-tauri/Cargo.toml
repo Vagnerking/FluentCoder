@@ -70,6 +70,8 @@ uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
 # Locate node / typescript-language-server / npm on PATH.
 which = "6"
 # Official Agent Client Protocol SDK. The editor acts as the ACP client and
@@ -97,3 +99,28 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
+
+# Build de DEV / validação local rápida — NÃO é o release de produção.
+#
+# O `profile.release` acima é otimizado para o BINÁRIO (LTO + codegen-units=1 +
+# opt-level="s"): ótimo pro CI/instalador, mas é justamente o que faz a build
+# levar minutos (LTO com 1 unidade serializa toda a compilação e o link). Para o
+# CICLO DE DEV — editar Rust → `cargo build`/`tauri dev` → rodar — usamos o
+# `profile.dev` abaixo, o mais rápido:
+#   - opt-level = 1  → app fluido em runtime (dev puro = 0 fica lento) mantendo a
+#                      compilação rápida; junto com o incremental, a rebuild do
+#                      nosso crate cai para ~segundos-a-um-minuto (só o link pesa).
+#   - incremental    → reaproveita artefatos entre builds.
+#   - o passe caro (LTO/codegen-units=1/strip) fica SÓ no release de produção.
+#
+# (O E2E via tauri-driver usa o binário RELEASE, não este: o binário dev não
+# pinta o WebView2 a tempo sob o driver. Ver tests/e2e/wdio.conf.ts.)
+[profile.dev]
+opt-level = 1
+incremental = true
+
+# Dependências de terceiros mudam raramente: compilá-las otimizadas uma vez torna
+# o app fluido em runtime sem custar tempo nas rebuilds do NOSSO código (que
+# continua em opt-level baixo). Só o nosso crate recompila no ciclo de dev.
+[profile.dev.package."*"]
+opt-level = 2

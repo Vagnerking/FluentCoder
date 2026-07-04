@@ -31,12 +31,56 @@ pub fn resolve_emitted(pf: &ProjectionFile) -> Option<&Path> {
     }
 }
 
-/// Materialize the plan: create the shadow project, copy projected `.g.cs`, and
-/// write the solution. Idempotent (overwrites). Does NOT run `dotnet` or Roslyn.
-pub fn materialize(plan: &BrokerPlan) -> io::Result<()> {
-    fs::create_dir_all(&plan.shadow_dir)?;
-    fs::write(&plan.shadow_csproj_path, &plan.shadow_csproj_content)?;
+/// Write `content` to `path` only when it differs from what's on disk. Returns
+/// whether a write happened. Avoids gratuitous mtime bumps on every prepare —
+/// file watchers (and Roslyn's project system) treat a rewritten csproj/sln as
+/// "project changed" and reload, so an unconditional write per save caused
+/// solution-reload churn.
+pub fn write_if_changed(path: &Path, content: &str) -> io::Result<bool> {
+    if let Ok(existing) = fs::read_to_string(path) {
+        if existing == content {
+            return Ok(false);
+        }
+    }
+    fs::write(path, content)?;
+    Ok(true)
+}
 
+/// Materialize the shadow SHELL: the csproj + solution (content-aware writes).
+/// Does not touch the projected `.g.cs` — pair with [`materialize_projections`]
+/// (dotnet-build fallback) or a direct sidecar write of the projection text.
+pub fn materialize_shell(plan: &BrokerPlan) -> io::Result<()> {
+    fs::create_dir_all(&plan.shadow_dir)?;
+    write_if_changed(&plan.shadow_csproj_path, &plan.shadow_csproj_content)?;
+
+    let sln_dir = plan
+        .solution_path
+        .parent()
+        .unwrap_or(&plan.shadow_dir)
+        .to_path_buf();
+    // The solution contains ONLY the shadow project — NOT the user project.
+    //
+    // Including the user project as a second solution member made Roslyn load it
+    // as its own compilation, where a `Microsoft.NET.Sdk.Web` project regenerates
+    // its `Views_*` page classes (and picks up any persisted `obj/.../generated/
+    // *.g.cs` left by a `dotnet build` / the VS Code C# extension). The shadow
+    // ALSO compiles the same page class from the projected `.g.cs`, so the type
+    // ended up defined TWICE across the two solution projects → a flood of
+    // CS0101/CS0111/CS0229 that suppressed the real user diagnostic (the CS1061
+    // vanished). The `Properties=` Razor-suppression metadata on the
+    // ProjectReference fixes the BUILD graph but NOT how Roslyn loads a project
+    // that is its own solution node, so the only reliable fix is to keep the user
+    // project OUT of the solution. The shadow still `ProjectReference`s it, so
+    // Roslyn resolves the user's types (WeatherModel, etc.) transitively WITH the
+    // suppression applied — definitions still navigate into the real source.
+    let sln = render_solution(&sln_dir, &[("ShadowRazor", &plan.shadow_csproj_path)]);
+    write_if_changed(&plan.solution_path, &sln)?;
+    Ok(())
+}
+
+/// Copy the dotnet-build-emitted `.g.cs` files into the shadow (the FALLBACK
+/// emit path). Removes a stale shadow copy when the emit produced nothing.
+pub fn materialize_projections(plan: &BrokerPlan) -> io::Result<()> {
     for pf in &plan.projections {
         if let Some(emitted) = resolve_emitted(pf) {
             if let Some(parent) = pf.shadow_gcs.parent() {
@@ -49,21 +93,14 @@ pub fn materialize(plan: &BrokerPlan) -> io::Result<()> {
             fs::remove_file(&pf.shadow_gcs)?;
         }
     }
-
-    let sln_dir = plan
-        .solution_path
-        .parent()
-        .unwrap_or(&plan.shadow_dir)
-        .to_path_buf();
-    let sln = render_solution(
-        &sln_dir,
-        &[
-            ("UserProject", &plan.user_csproj_path),
-            ("ShadowRazor", &plan.shadow_csproj_path),
-        ],
-    );
-    fs::write(&plan.solution_path, sln)?;
     Ok(())
+}
+
+/// Materialize the plan: create the shadow project, copy projected `.g.cs`, and
+/// write the solution. Idempotent (overwrites). Does NOT run `dotnet` or Roslyn.
+pub fn materialize(plan: &BrokerPlan) -> io::Result<()> {
+    materialize_shell(plan)?;
+    materialize_projections(plan)
 }
 
 /// Render a classic `.sln` referencing `projects` (name, abs `.csproj`) with
@@ -230,8 +267,11 @@ mod tests {
             "// generated"
         );
         let sln = fs::read_to_string(&plan.solution_path).unwrap();
+        // Solution contains ONLY the shadow project; the user project is pulled
+        // in transitively via the shadow's ProjectReference (not as its own
+        // solution node), so Roslyn never double-compiles the Razor page class.
         assert!(sln.contains("ShadowRazor.csproj"));
-        assert!(sln.contains("App.csproj"));
+        assert!(!sln.contains("App.csproj"), "user project must NOT be a solution member:\n{sln}");
 
         let _ = fs::remove_dir_all(&root);
     }

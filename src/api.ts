@@ -1006,6 +1006,78 @@ export function stopLspServer(id: string): Promise<void> {
   return invoke("lsp_stop_server", { id: runtimeLspId(id) });
 }
 
+// ── DAP (debugger) bridge — roadmap csharp-ide-parity, Fase B ────────────────
+
+/** Downloads/locates netcoredbg; returns the executable path. */
+export function dapEnsureNetcoredbg(): Promise<string> {
+  return invoke<string>("dap_ensure_netcoredbg");
+}
+
+/** Spawns a debug adapter and its WS bridge; same shape as the LSP bridge. */
+export function dapStartSession(
+  id: string,
+  program: string,
+  args: string[],
+  cwd: string
+): Promise<LspBridgeInfo> {
+  return invoke<LspBridgeInfo>("dap_start_session", {
+    id: runtimeLspId(id),
+    program,
+    args,
+    cwd,
+  });
+}
+
+/** Stops a debug session (bridge kills the adapter process). */
+export function dapStopSession(id: string): Promise<void> {
+  return invoke("dap_stop_session", { id: runtimeLspId(id) });
+}
+
+/** A running .NET process candidate for attach. */
+export interface DotnetProcess {
+  pid: number;
+  name: string;
+}
+
+/** Lists running dotnet processes (attach picker). Best-effort. */
+export function dapListDotnetProcesses(): Promise<DotnetProcess[]> {
+  return invoke<DotnetProcess[]>("dap_list_dotnet_processes");
+}
+
+/** Builds the csproj and returns its output DLL (TargetPath) for launch. */
+export function dapResolveDotnetTarget(csprojPath: string): Promise<string> {
+  return invoke<string>("dap_resolve_dotnet_target", { csprojPath });
+}
+
+// ── .NET test runner — roadmap csharp-ide-parity, Fase C ─────────────────────
+
+/** One test outcome from a TRX run. */
+export interface DotnetTestResult {
+  name: string;
+  /** `Passed` | `Failed` | `NotExecuted` (TRX vocabulary). */
+  outcome: string;
+  durationMs: number | null;
+  message: string | null;
+}
+
+export interface DotnetTestRun {
+  results: DotnetTestResult[];
+  outputTail: string;
+}
+
+/** Lists fully-qualified test names (builds the project as a side effect). */
+export function dotnetTestList(csprojPath: string): Promise<string[]> {
+  return invoke<string[]>("dotnet_test_list", { csprojPath });
+}
+
+/** Runs all tests (or only `filter` = one FullyQualifiedName). */
+export function dotnetTestRun(
+  csprojPath: string,
+  filter?: string
+): Promise<DotnetTestRun> {
+  return invoke<DotnetTestRun>("dotnet_test_run", { csprojPath, filter: filter ?? null });
+}
+
 /**
  * Starts a language server ON THE REMOTE host (issue #8, Phase 6) and bridges its
  * stdio to a local WebSocket — returns the same `{ port, token }` as
@@ -1138,12 +1210,26 @@ export interface RazorPrepareResult {
   available: RazorProjectionInfo[];
   /** `.cshtml` (relative) requested but with no projection (degraded). */
   missing: string[];
+  /**
+   * Derived reference DLLs missing on disk (ProjectReferences never built).
+   * Semantics degrade for their types — surface honestly instead of letting
+   * Roslyn report false "type does not exist" errors.
+   */
+  missingReferences: string[];
 }
 
 /** A remapped 0-based LSP position. */
 export interface RazorRemapPos {
   line: number;
   character: number;
+}
+
+/** A 0-based LSP range on the batch-remap wire (camelCase of Rust RemapRange). */
+export interface RazorRemapRange {
+  startLine: number;
+  startCharacter: number;
+  endLine: number;
+  endCharacter: number;
 }
 
 /**
@@ -1179,9 +1265,47 @@ export function razorRemapToSource(
   return invoke<RazorRemapPos | null>("razor_remap_to_source", { cshtmlPath, line, character });
 }
 
+/**
+ * Remap N projected-C# ranges back to the `.cshtml` in ONE IPC round-trip.
+ * Entry `i` of the result matches entry `i` of `ranges`; `null` = unmappable
+ * (synthetic C#). Diagnostics-grade mapping: spans crossing `#line` regions come
+ * back truncated at the region end rather than dropped.
+ */
+export function razorRemapRangesToSource(
+  cshtmlPath: string,
+  ranges: RazorRemapRange[]
+): Promise<(RazorRemapRange | null)[]> {
+  return invoke<(RazorRemapRange | null)[]>("razor_remap_ranges_to_source", {
+    cshtmlPath,
+    ranges,
+  });
+}
+
+/**
+ * STRICT batch remap — for `TextEdit` ranges (code actions/quick fixes): a
+ * range not fully inside one mapped region comes back `null` and the caller
+ * must drop the whole action (an approximated edit span would corrupt code).
+ */
+export function razorRemapRangesToSourceStrict(
+  cshtmlPath: string,
+  ranges: RazorRemapRange[]
+): Promise<(RazorRemapRange | null)[]> {
+  return invoke<(RazorRemapRange | null)[]>("razor_remap_ranges_to_source_strict", {
+    cshtmlPath,
+    ranges,
+  });
+}
+
 /** Drop a `.cshtml`'s cached source map (on close). */
 export function razorForget(cshtmlPath: string): Promise<void> {
   return invoke<void>("razor_forget", { cshtmlPath });
+}
+
+/** Append a line to the shared Razor/C# pipeline diagnostic log
+ * (`<app_data_dir>/razor-diag.log`), so the frontend LSP chain lands in the
+ * same ordered trace as the backend broker steps. Best-effort fire-and-forget. */
+export function razorDiagLog(line: string): Promise<void> {
+  return invoke<void>("razor_diag_log", { line });
 }
 
 /** Result of a live emit (per-keystroke projection via the sidecar). */

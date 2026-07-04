@@ -75,6 +75,18 @@ pub fn source_range_to_generated(map: &RazorSourceMap, r: LspRange) -> Option<Ls
     })
 }
 
+/// [`generated_range_to_source`] with cross-region CLAMPING — for DIAGNOSTICS,
+/// where a truncated-but-visible squiggle beats a silently dropped one. Never
+/// use for `TextEdit`s (those must map exactly; see the source-map contract on
+/// synthetic ranges).
+pub fn generated_range_to_source_clamped(map: &RazorSourceMap, r: LspRange) -> Option<LspRange> {
+    let (s, e) = map.to_source_range_clamped(to_map(r.start)?, to_map(r.end)?)?;
+    Some(LspRange {
+        start: from_map(s)?,
+        end: from_map(e)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -4399,6 +4399,190 @@ button .codicon { pointer-events: none; }
   border-color: rgba(96, 205, 255, 0.4);
 }
 
+/* ── Debugger (roadmap csharp-ide-parity, Fase B) ─────────────────────────── */
+
+/* Breakpoint dot in the glyph margin. */
+.debug-breakpoint-glyph {
+  background: radial-gradient(circle at 50% 50%, #e5484d 0 42%, transparent 46%);
+  cursor: pointer;
+}
+/* Yellow arrow-ish marker + line highlight where execution is stopped. */
+.debug-stopped-glyph {
+  background: radial-gradient(circle at 50% 50%, #f5d90a 0 38%, transparent 44%);
+}
+.debug-stopped-line {
+  background: rgba(245, 217, 10, 0.12);
+}
+
+.debug-section .debug-status {
+  font-size: 11px;
+  opacity: 0.8;
+}
+.debug-status-stopped { color: #f5d90a; }
+.debug-status-running { color: #63c174; }
+.debug-status-error { color: #e5484d; }
+
+.debug-launcher {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+}
+
+.debug-toolbar {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+}
+.debug-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 4px 8px;
+}
+.debug-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+.debug-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.debug-btn-stop { color: #e5484d; }
+
+.debug-block {
+  padding: 2px 0;
+}
+.debug-block-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  opacity: 0.6;
+  padding: 4px 8px 2px;
+}
+.debug-frame-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 3px 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.debug-frame-row:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.debug-var-row {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  padding: 2px 12px;
+  overflow: hidden;
+}
+.debug-var-name {
+  color: #9cdcfe;
+  flex-shrink: 0;
+}
+.debug-var-value {
+  opacity: 0.85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.debug-attach-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.debug-output {
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  max-height: 180px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  opacity: 0.9;
+  user-select: text;
+}
+
+/* ── Test runner (roadmap csharp-ide-parity, Fase C) ─────────────────────── */
+.test-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 2px 8px;
+  overflow: hidden;
+}
+.test-icon { width: 12px; flex-shrink: 0; opacity: 0.7; }
+.test-icon.test-pass { color: #63c174; opacity: 1; }
+.test-icon.test-fail { color: #e5484d; opacity: 1; }
+.test-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.test-duration {
+  margin-left: auto;
+  opacity: 0.5;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+/* ── Solution Explorer (roadmap csharp-ide-parity, Fase D) ────────────────── */
+.sln-project { padding: 2px 0; }
+.sln-project-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+}
+.sln-expander {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 3px 2px;
+  overflow: hidden;
+}
+.sln-expander:hover { background: rgba(255, 255, 255, 0.05); }
+.sln-project-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+.sln-file-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 8px 2px 28px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+}
+.sln-file-row:hover {
+  background: rgba(255, 255, 255, 0.06);
+  opacity: 1;
 /* ---- Tooltip (F2-AUD-005) ---- */
 /* The Tooltip wrapper anchors hover/focus events even when the child control is
    disabled. `display: contents` keeps it invisible to layout. */

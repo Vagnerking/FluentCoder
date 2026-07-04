@@ -1,0 +1,24 @@
+@model MyApp.ViewModels.CarrinhoViewModel
+@*
+    View padrão de um View Component (Views/Shared/Components/Carrinho/Default.cshtml).
+    Recebe o modelo montado no InvokeAsync do componente.
+*@
+<div class="carrinho">
+    @if (Model.Itens.Count == 0)
+    {
+        <p class="vazio">Seu carrinho está vazio.</p>
+    }
+    else
+    {
+        <ul>
+            @foreach (var linha in Model.Itens)
+            {
+                <li>
+                    <span>@linha.Produto</span>
+                    <span>@linha.Quantidade x @linha.PrecoUnitario.ToString("C")</span>
+                </li>
+            }
+        </ul>
+        <div class="total">Total: @Model.Total.ToString("C")</div>
+    }
+</div>

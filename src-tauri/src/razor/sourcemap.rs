@@ -93,6 +93,12 @@ impl RazorSourceMap {
             classic_line: Option<u32>,
         }
         let mut open: Option<Open> = None;
+        // The file the compiler currently REPORTS positions against. C# semantics:
+        // a bare `#line N` keeps the file of the last named directive; `#line
+        // default`/`hidden` resets to the generated file itself. Assuming a bare
+        // `#line N` belonged to the target fabricated regions pointing at the
+        // `.cshtml` from spans that actually report the `.g.cs`.
+        let mut reported_file: Option<String> = None;
 
         // close the open region at generated line `before_line` (inclusive)
         macro_rules! close_open {
@@ -129,26 +135,42 @@ impl RazorSourceMap {
                     offset,
                     file,
                 } => {
+                    let matches_target = norm_path(&file) == target;
+                    reported_file = Some(file);
                     open = Some(Open {
                         src_start,
                         src_end,
                         gen_start: Pos::new(gen_line + 1, offset.unwrap_or(1)),
-                        matches_target: norm_path(&file) == target,
+                        matches_target,
                         classic_line: None,
                     });
                 }
                 Directive::Classic { line, file } => {
                     // classic = line-only mapping; columns pass through. src_end is
                     // computed at close (spans line-for-line with the generated region).
+                    // A bare `#line N` keeps the previously reported file (C#
+                    // semantics) — it is NOT assumed to be the target.
+                    if let Some(f) = file {
+                        reported_file = Some(f);
+                    }
+                    let matches_target = reported_file
+                        .as_deref()
+                        .map(norm_path)
+                        .map(|f| f == target)
+                        .unwrap_or(false);
                     open = Some(Open {
                         src_start: Pos::new(line, 1),
                         src_end: Pos::new(line, u32::MAX),
                         gen_start: Pos::new(gen_line + 1, 1),
-                        matches_target: file.as_deref().map(norm_path).map(|f| f == target).unwrap_or(true),
+                        matches_target,
                         classic_line: Some(line),
                     });
                 }
-                Directive::End => { /* already closed above */ }
+                Directive::End => {
+                    // `#line default`/`hidden`: positions report the generated
+                    // file again — a following bare `#line N` must not claim the target.
+                    reported_file = None;
+                }
             }
         }
         // Close a trailing region at EOF.
@@ -230,7 +252,9 @@ impl RazorSourceMap {
     }
 
     /// Map an exclusive `[.., end)` endpoint within `region`: try `end`, else
-    /// `end-1` then re-add a column. Both attempts must stay in the SAME region.
+    /// `end-1` then re-add a column, else — for the common "through end of line"
+    /// form whose exclusive end sits at COLUMN 1 OF THE NEXT LINE — map the end
+    /// of the previous line. All attempts must stay in the SAME region.
     fn map_excl_end<RI, MP>(&self, end: Pos, region: usize, region_index: RI, map: MP) -> Option<Pos>
     where
         RI: Fn(Pos) -> Option<usize>,
@@ -248,6 +272,18 @@ impl RazorSourceMap {
                     return Some(Pos::new(p.line, p.col.saturating_add(1)));
                 }
             }
+        } else if end.line > 1 {
+            // end == (L, 1): the span covers up to the END of line L-1. Backing
+            // one column was impossible (col 1), and dropping the whole range
+            // here lost every "to end of line" diagnostic/highlight. Map line
+            // L-1 and return the start of the NEXT source line as the exclusive
+            // end (same LSP meaning).
+            let prev_line = Pos::new(end.line - 1, 1);
+            if region_index(prev_line) == Some(region) {
+                if let Some(p) = map(prev_line) {
+                    return Some(Pos::new(p.line.saturating_add(1), 1));
+                }
+            }
         }
         None
     }
@@ -261,6 +297,29 @@ impl RazorSourceMap {
         let region = self.gen_region_index(start)?;
         let s = self.to_source(start)?;
         let e = self.map_excl_end(end, region, |p| self.gen_region_index(p), |p| self.to_source(p))?;
+        Some((s, e))
+    }
+
+    /// [`to_source_range`] with a CLAMP fallback for spans that cross regions:
+    /// when the start maps but the end lands in another region (or synthetic C# —
+    /// e.g. a Roslyn diagnostic spanning a `@{ }` block the Razor compiler sliced
+    /// into several `#line` regions), the result is truncated at the start
+    /// region's source end instead of being dropped entirely. For DIAGNOSTICS:
+    /// a truncated-but-visible squiggle beats a silently missing one. Never use
+    /// for `TextEdit`s (edits must map exactly).
+    pub fn to_source_range_clamped(&self, start: Pos, end: Pos) -> Option<(Pos, Pos)> {
+        if let Some(r) = self.to_source_range(start, end) {
+            return Some(r);
+        }
+        if (end.line, end.col) < (start.line, start.col) {
+            return None; // reversed
+        }
+        let idx = self.gen_region_index(start)?;
+        let s = self.to_source(start)?;
+        let e = self.regions[idx].src_end;
+        if (e.line, e.col) <= (s.line, s.col) {
+            return None; // clamp collapsed the span to nothing
+        }
         Some((s, e))
     }
 
@@ -507,9 +566,93 @@ Model.City
     }
 
     #[test]
+    fn excl_end_at_next_line_col1_maps_to_end_of_prev_line() {
+        let m = map();
+        // region 2: gen lines 11-12 <- src (2,3)-(4,1). A "to end of line" span
+        // over gen line 11 has exclusive end (12,1) — col 1, so the old one-column
+        // backup couldn't apply and the whole range was dropped.
+        let (s, e) = m.to_source_range(Pos::new(11, 1), Pos::new(12, 1)).unwrap();
+        assert_eq!(s, Pos::new(2, 3));
+        // exclusive end = start of the NEXT source line (same LSP meaning).
+        assert_eq!(e, Pos::new(3, 1));
+    }
+
+    #[test]
+    fn cross_region_range_is_clamped_for_diagnostics() {
+        let m = map();
+        // start in region 1 (gen line 5), end in region 2 (gen line 11): the
+        // strict mapper rejects, the clamped one truncates at region 1's src end.
+        assert_eq!(m.to_source_range(Pos::new(5, 1), Pos::new(11, 2)), None);
+        let (s, e) = m.to_source_range_clamped(Pos::new(5, 1), Pos::new(11, 2)).unwrap();
+        assert_eq!(s, Pos::new(8, 13));
+        assert_eq!(e, Pos::new(8, 23)); // region 1 source end
+        // Reversed input still rejected; fully synthetic start still None.
+        assert_eq!(m.to_source_range_clamped(Pos::new(5, 7), Pos::new(5, 1)), None);
+        assert_eq!(m.to_source_range_clamped(Pos::new(1, 1), Pos::new(5, 2)), None);
+    }
+
+    #[test]
+    fn bare_line_directive_keeps_reported_file_semantics() {
+        // C# semantics: `#line N` (no file) keeps the last named file; after
+        // `#line default` positions report the .g.cs again, so a bare directive
+        // must NOT fabricate a region pointing at the target.
+        let target = "C:/proj/Views/Home/Index.cshtml";
+        // Named classic for the target, then default, then a BARE #line.
+        let gen = "#line 10 \"C:\\proj\\Views\\Home\\Index.cshtml\"\nreal();\n#line default\nsynthetic();\n#line 99\nghost();\n#line default\n";
+        let m = RazorSourceMap::parse(gen, target);
+        assert_eq!(m.region_count(), 1, "bare #line after default must not map to target");
+        assert_eq!(m.to_source(Pos::new(2, 1)), Some(Pos::new(10, 1)));
+        assert_eq!(m.to_source(Pos::new(6, 1)), None, "ghost() reports the .g.cs, not the target");
+
+        // A bare #line while the target IS the reported file keeps mapping to it.
+        let gen2 = "#line 10 \"C:\\proj\\Views\\Home\\Index.cshtml\"\nreal();\n#line 20\nmore();\n#line default\n";
+        let m2 = RazorSourceMap::parse(gen2, target);
+        assert_eq!(m2.region_count(), 2);
+        assert_eq!(m2.to_source(Pos::new(4, 1)), Some(Pos::new(20, 1)));
+
+        // A bare #line with NO prior named file (start of file) reports the .g.cs.
+        let gen3 = "#line 5\norphan();\n#line default\n";
+        let m3 = RazorSourceMap::parse(gen3, target);
+        assert_eq!(m3.region_count(), 0);
+    }
+
+    #[test]
     fn crlf_generated_text() {
         let gen = "#line (8,13)-(8,23) \"C:\\proj\\Views\\Home\\Index.cshtml\"\r\nModel.City\r\n#line default\r\n";
         let m = RazorSourceMap::parse(gen, "C:/proj/Views/Home/Index.cshtml");
         assert_eq!(m.to_source(Pos::new(2, 7)), Some(Pos::new(8, 19)));
+    }
+
+    // Real `.g.cs` captured from the SampleMvc fixture under the current .NET SDK
+    // (enhanced `#line` form). Guards the projection's diagnostic remap against
+    // SDK codegen drift: a `pulled>0, mapped=0` regression (Roslyn returns the
+    // CS1061 but every range is dropped) reproduces here as `to_source` → None.
+    // The `#line` inside the fixture points at this exact absolute path.
+    const REAL_GEN: &str = include_str!("test_fixtures/Index_cshtml.g.cs");
+    const REAL_TARGET: &str = "C:/Users/Vagner/Documents/GitHub/Projetos Pessoais/CodeEditor-v10-integration/tools/razor-lsp-probe/fixtures/SampleMvc/Views/Home/Index.cshtml";
+
+    #[test]
+    fn real_gcs_parses_at_least_one_region() {
+        let m = RazorSourceMap::parse(REAL_GEN, REAL_TARGET);
+        assert!(
+            m.region_count() > 0,
+            "no #line region matched the target .cshtml — path match or directive parsing broke for the current SDK's codegen"
+        );
+    }
+
+    #[test]
+    fn real_gcs_maps_the_cs1061_line() {
+        let m = RazorSourceMap::parse(REAL_GEN, REAL_TARGET);
+        // In the fixture, `#line (16,9)-(16,34)` precedes `Model.NonExistentProperty`
+        // on generated line 161 (1-based). `NonExistentProperty` starts after
+        // `Model.` (6 chars) → generated col 7. It must map back to the `.cshtml`
+        // line 16 (the source of the CS1061). If this returns None, the broker
+        // drops the diagnostic and the squiggle never shows.
+        let mapped = m.to_source(Pos::new(161, 7));
+        assert!(
+            mapped.is_some(),
+            "CS1061 generated position did not map back to the .cshtml (mapped=0 regression)"
+        );
+        assert_eq!(mapped.unwrap().line, 16, "should map to .cshtml line 16");
     }
 }

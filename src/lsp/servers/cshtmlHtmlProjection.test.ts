@@ -264,3 +264,119 @@ test("regionAt: an @attr inside a tag is Razor; the tag name around it is HTML",
   assert.equal(regionAt(mask, at(src, "attr")), "razor", "@attr run is blanked → Razor");
   assert.equal(regionAt(mask, at(src, "class")), "html");
 });
+
+// --- keyword statement blocks (@if/@foreach/…) with markup re-entry ---
+
+test("buildVirtualHtml: @if blanks keyword+condition+braces but KEEPS the markup body", () => {
+  const src = `@if (Model.Ok) {\n  <p>@Model.Name</p>\n}\n<span>after</span>`;
+  const out = vh(src);
+  assert.ok(!out.includes("if"), "keyword blanked");
+  assert.ok(!out.includes("Model.Ok"), "condition blanked");
+  assert.ok(!out.includes("{") && !out.includes("}"), "braces blanked");
+  assert.ok(out.includes("<p>"), "markup inside the block KEPT");
+  assert.ok(out.includes("</p>"), "close tag kept");
+  assert.ok(!out.includes("Model.Name"), "@expr inside the markup blanked");
+  assert.ok(out.includes("<span>after</span>"), "markup after the block kept");
+});
+
+test("buildVirtualHtml: @foreach keeps its <li> body as HTML", () => {
+  const src = `<ul>@foreach (var i in Model.Items) { <li>@i.Name</li> }</ul>`;
+  const out = vh(src);
+  assert.ok(out.includes("<ul>") && out.includes("</ul>"));
+  assert.ok(out.includes("<li>") && out.includes("</li>"), "li body re-entered as markup");
+  assert.ok(!out.includes("foreach") && !out.includes("Model.Items"));
+});
+
+test("buildVirtualHtml: generics inside a code block are NOT phantom tags", () => {
+  // The old scanner leaked `List<string>` into the HTML view — `<string>` read as
+  // an open tag and every later close tag became "stray".
+  const src = `@if (a) {\n  List<string> xs = new();\n  <p>x</p>\n}`;
+  const out = vh(src);
+  assert.ok(!out.includes("<string>"), "generic type argument blanked with the C#");
+  assert.ok(out.includes("<p>x</p>"), "markup line kept");
+});
+
+test("buildVirtualHtml: @if/else if/else chain — all C# blanked, all markup kept", () => {
+  const src = `@if (a) { <b>1</b> } else if (b) { <i>2</i> } else { <u>3</u> }`;
+  const out = vh(src);
+  assert.ok(!out.includes("else"), "else keywords blanked");
+  assert.ok(out.includes("<b>1</b>") && out.includes("<i>2</i>") && out.includes("<u>3</u>"));
+});
+
+test("buildVirtualHtml: @try/catch/finally and @do/while chains", () => {
+  const srcTry = `@try { <p>t</p> } catch (Exception ex) { <p>c</p> } finally { <p>f</p> }`;
+  const outTry = vh(srcTry);
+  assert.ok(!outTry.includes("catch") && !outTry.includes("finally") && !outTry.includes("Exception"));
+  assert.ok(outTry.includes("<p>t</p>") && outTry.includes("<p>c</p>") && outTry.includes("<p>f</p>"));
+
+  const srcDo = `@do { <p>x</p> } while (a < 3);<span>after</span>`;
+  const outDo = vh(srcDo);
+  assert.ok(!outDo.includes("while") && !outDo.includes("a < 3"), "while tail blanked");
+  assert.ok(outDo.includes("<p>x</p>") && outDo.includes("<span>after</span>"));
+});
+
+test("buildVirtualHtml: @using STATEMENT (parens) is a block; @using IMPORT blanks the line", () => {
+  const stmt = `@using (var s = Open()) { <p>x</p> }`;
+  const outStmt = vh(stmt);
+  assert.ok(outStmt.includes("<p>x</p>"), "statement body markup kept");
+  assert.ok(!outStmt.includes("Open"), "statement condition blanked");
+
+  const imp = `@using Foo.Bar.Baz\n<p>x</p>`;
+  const outImp = vh(imp);
+  assert.ok(!outImp.includes("Foo.Bar.Baz"), "import ARGUMENT blanked (whole line)");
+  assert.ok(outImp.includes("<p>x</p>"));
+});
+
+test("buildVirtualHtml: @: inside a code block keeps the rest of the line as markup", () => {
+  const src = `@if (a) {\n  @: plain <b>text</b> here\n}`;
+  const out = vh(src);
+  assert.ok(out.includes("plain") && out.includes("<b>text</b>"), "markup line kept");
+});
+
+// --- directive lines ---
+
+test("buildVirtualHtml: directive ARGUMENTS are blanked (whole line), not just the word", () => {
+  // The old scanner blanked only `@model`, leaking `Foo.Bar` as HTML text.
+  const src = `@model Foo.Bar\n@inject IMyService Svc\n@addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers\n<p>x</p>`;
+  const out = vh(src);
+  assert.ok(!out.includes("Foo.Bar"), "@model argument blanked");
+  assert.ok(!out.includes("IMyService") && !out.includes("Svc"), "@inject arguments blanked");
+  assert.ok(!out.includes("TagHelpers"), "@addTagHelper argument blanked");
+  assert.ok(out.includes("<p>x</p>"), "HTML after directives kept");
+});
+
+test("buildVirtualHtml: @functions block is fully blanked (pure C#)", () => {
+  const src = `@functions {\n  public int X { get; set; }\n}\n<p>ok</p>`;
+  const out = vh(src);
+  assert.ok(!out.includes("public") && !out.includes("get;"), "members blanked");
+  assert.ok(out.includes("<p>ok</p>"));
+});
+
+test("buildVirtualHtml: @section keeps its markup body as HTML", () => {
+  const src = `@section Scripts {\n  <script src="x.js"></script>\n}\n<p>ok</p>`;
+  const out = vh(src);
+  assert.ok(!out.includes("section") && !out.includes("Scripts"), "header blanked");
+  assert.ok(out.includes(`<script src="x.js"></script>`), "section body kept as HTML");
+  assert.ok(out.includes("<p>ok</p>"), "content after the section kept");
+});
+
+// --- email / literal `@` ---
+
+test("buildVirtualHtml: an email @ is literal text, not a Razor expression", () => {
+  const src = `<p>contato@empresa.com</p>`;
+  const out = vh(src);
+  assert.equal(out, src, "email domain must NOT be blanked");
+  const { mask } = buildVirtualHtml(src);
+  assert.equal(regionAt(mask, at(src, "empresa")), "html");
+});
+
+test("buildVirtualHtml: email inside an attribute value is literal too", () => {
+  const src = `<a href="mailto:a@b.com">m</a>`;
+  assert.equal(vh(src), src);
+});
+
+test("buildVirtualHtml: @$\"...\" interpolated-verbatim string does not desync a block", () => {
+  const src = `@{ var p = @$"C:\\x\\{name}"; }<p>after</p>`;
+  const out = vh(src);
+  assert.ok(out.trimStart().startsWith("<p>after</p>"), `block fully blanked, got: ${out}`);
+});

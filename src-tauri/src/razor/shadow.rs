@@ -50,10 +50,51 @@ pub fn render_shadow_csproj(spec: &ShadowSpec) -> String {
         s.push_str(&format!("    <RootNamespace>{}</RootNamespace>\n", esc(ns)));
     }
     s.push_str("  </PropertyGroup>\n\n");
+    // The dotnet-build FALLBACK emits the generator's FULL output tree under
+    // `<shadow>/generated/` (every view in the project), and materialize PINS
+    // the requested views into `<shadow>/projected/` — which is what Roslyn
+    // opens and what the source maps are parsed from. Only the pinned copies may
+    // compile: both dirs sit under the csproj, so the default `**/*.cs` glob
+    // used to pick BOTH copies of every pinned view — the page class existed
+    // twice and the workspace flooded with CS0101/CS0111/CS0579 (~20 phantom
+    // diagnostics per open view, the `pulled:N, mapped:0..2` signature) and
+    // go-to-definition inside those classes (e.g. an extension-method call in a
+    // `@{ }` block) degraded to nothing.
     s.push_str("  <ItemGroup>\n");
+    s.push_str("    <Compile Remove=\"generated/**/*.cs\" />\n");
+    s.push_str("  </ItemGroup>\n\n");
+    s.push_str("  <ItemGroup>\n");
+    // Reference the user project for its TYPES, but suppress its Razor page
+    // generation across the reference. A `Microsoft.NET.Sdk.Web` user project
+    // emits its own `Views_*` page classes (`AspNetCoreGeneratedDocument.*`);
+    // the shadow ALSO compiles the same class from the projected `.g.cs`, so
+    // without this the Roslyn workspace sees the type defined twice and floods
+    // with CS0101/CS0111/CS0229/CS0579 — which suppress the real user
+    // diagnostic (e.g. the CS1061 never surfaces). The `Properties` metadata
+    // sets MSBuild global properties for the referenced project's evaluation,
+    // turning its Razor source generation off so only the shadow's projected
+    // `.g.cs` defines the page class. (A newer .NET SDK reintroduced the
+    // duplication that made `.cshtml` diagnostics vanish.)
+    //
+    // `EmitCompilerGeneratedFiles=false` is the key one when ANOTHER tool (VS
+    // Code's C#/Razor extension, or a plain `dotnet build`) has already
+    // materialized the page classes under `obj/.../generated/`: with emit ON
+    // those persisted `.g.cs` are picked back up and the duplicate type returns
+    // even though the generator itself is disabled. Forcing it OFF on the
+    // reference keeps those out of the shadow's view of the project.
+    let suppress_razor = [
+        "EnableDefaultRazorGenerateItems=false",
+        "GenerateRazorAssemblyInfo=false",
+        "RazorCompileOnBuild=false",
+        "IncludeRazorContentInPack=false",
+        "EnableDefaultRazorComponentItems=false",
+        "EmitCompilerGeneratedFiles=false",
+    ]
+    .join("%3B"); // MSBuild-escaped ';' inside the Properties attribute value
     s.push_str(&format!(
-        "    <ProjectReference Include=\"{}\" />\n",
-        esc(spec.user_csproj_rel)
+        "    <ProjectReference Include=\"{}\" Properties=\"{}\" />\n",
+        esc(spec.user_csproj_rel),
+        suppress_razor
     ));
     for fr in spec.framework_references {
         s.push_str(&format!("    <FrameworkReference Include=\"{}\" />\n", esc(fr)));
@@ -95,8 +136,33 @@ mod tests {
     #[test]
     fn references_user_project_and_framework() {
         let xml = render_shadow_csproj(&spec());
-        assert!(xml.contains("<ProjectReference Include=\"..\\SampleMvc\\SampleMvc.csproj\" />"));
+        // The reference now carries Razor-suppression Properties (see below), so
+        // assert on the Include plus the opening tag rather than a bare self-close.
+        assert!(xml.contains("<ProjectReference Include=\"..\\SampleMvc\\SampleMvc.csproj\""));
         assert!(xml.contains("<FrameworkReference Include=\"Microsoft.AspNetCore.App\" />"));
+    }
+
+    #[test]
+    fn suppresses_razor_generation_on_user_reference() {
+        // Without this, a Web-SDK user project emits its own Views_* page classes
+        // AND the shadow compiles the same class from the projected .g.cs → the
+        // type is defined twice (CS0101/CS0111/CS0229), which suppresses the real
+        // user diagnostic. The reference must turn the user's Razor generation off.
+        let xml = render_shadow_csproj(&spec());
+        assert!(
+            xml.contains("EnableDefaultRazorGenerateItems=false"),
+            "ProjectReference must disable the user project's Razor generation"
+        );
+        assert!(xml.contains("RazorCompileOnBuild=false"));
+        // The key one when another tool already wrote the generated page classes
+        // under obj/.../generated/ (VS Code C# ext, or a `dotnet build`): emit OFF
+        // keeps those persisted `.g.cs` out of the shadow's compilation.
+        assert!(
+            xml.contains("EmitCompilerGeneratedFiles=false"),
+            "ProjectReference must keep persisted generated files out of the shadow"
+        );
+        // `;` separators must be MSBuild-escaped inside the attribute value.
+        assert!(xml.contains("%3B"));
     }
 
     #[test]
@@ -104,6 +170,20 @@ mod tests {
         let xml = render_shadow_csproj(&spec());
         assert!(xml.contains("<TargetFramework>net8.0</TargetFramework>"));
         assert!(xml.contains("<RootNamespace>SampleMvc</RootNamespace>"));
+    }
+
+    #[test]
+    fn excludes_the_fallback_generated_tree_from_compile() {
+        // The dotnet-build fallback emits the FULL generator tree under
+        // `<shadow>/generated/`; only the PINNED copies in `projected/` may
+        // compile. Without this Remove, every pinned view's page class existed
+        // twice (generated/ + projected/) → CS0101/CS0111/CS0579 flood and
+        // degraded go-to-definition inside those classes.
+        let xml = render_shadow_csproj(&spec());
+        assert!(
+            xml.contains("<Compile Remove=\"generated/**/*.cs\" />"),
+            "shadow csproj must exclude the fallback's generated/ tree from compile"
+        );
     }
 
     #[test]

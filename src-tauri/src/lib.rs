@@ -1,4 +1,5 @@
 mod agents;
+mod dap;
 mod file_index;
 mod fs_commands;
 mod git;
@@ -12,6 +13,7 @@ mod session;
 mod snap;
 mod ssh;
 mod terminal;
+mod testrunner;
 mod text_io;
 mod walk;
 mod window;
@@ -49,10 +51,16 @@ pub fn run() {
                 }
             }
             window::restore_main_window(app.handle());
+            // Point the Razor/C# pipeline diagnostic log at the app data dir so a
+            // failing projection run leaves an inspectable trace (razor-diag.log).
+            if let Ok(dir) = app.path().app_data_dir() {
+                razor::diag::init(dir);
+            }
             Ok(())
         })
         .manage(terminal::TerminalState::new())
         .manage(lsp::LspState::new())
+        .manage(dap::DapState::new())
         .manage(search::SearchState::new())
         .manage(agents::AcpState::new())
         .manage(razor::commands::RazorState::new())
@@ -146,6 +154,13 @@ pub fn run() {
             lsp::lsp_ensure_npm_server,
             lsp::lsp_ensure_system_server,
             lsp::lsp_ensure_razor_server,
+            dap::dap_ensure_netcoredbg,
+            dap::dap_start_session,
+            dap::dap_stop_session,
+            dap::dap_list_dotnet_processes,
+            dap::dap_resolve_dotnet_target,
+            testrunner::dotnet_test_list,
+            testrunner::dotnet_test_run,
             razor::commands::razor_prepare,
             razor::commands::razor_emit_live,
             razor::commands::razor_commit_live_map,
@@ -153,7 +168,10 @@ pub fn run() {
             razor::commands::razor_ensure_sidecar,
             razor::commands::razor_remap_to_generated,
             razor::commands::razor_remap_to_source,
+            razor::commands::razor_remap_ranges_to_source,
+            razor::commands::razor_remap_ranges_to_source_strict,
             razor::commands::razor_forget,
+            razor::commands::razor_diag_log,
             ssh::ssh_connect,
             ssh::ssh_list_dir,
             ssh::ssh_read_file,
@@ -235,6 +253,7 @@ pub fn run() {
                     app.state::<terminal::TerminalState>().shutdown_all();
                     app.state::<agents::AcpState>().shutdown_all();
                     app.state::<lsp::LspState>().shutdown_all();
+                    app.state::<dap::DapState>().shutdown_all();
                     app.state::<razor::commands::RazorState>().shutdown_sidecar();
                     app.state::<ssh::SshState>().shutdown_all();
                     eprintln!("[exit] teardown done — forcing process exit");
@@ -246,6 +265,7 @@ pub fn run() {
                     app.state::<terminal::TerminalState>().shutdown_all();
                     app.state::<agents::AcpState>().shutdown_all();
                     app.state::<lsp::LspState>().shutdown_all();
+                    app.state::<dap::DapState>().shutdown_all();
                     app.state::<razor::commands::RazorState>().shutdown_sidecar();
                     app.state::<ssh::SshState>().shutdown_all();
                     eprintln!("[exit] teardown done — forcing process exit");

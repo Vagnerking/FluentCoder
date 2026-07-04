@@ -5,6 +5,9 @@
 //! analyzes that projection; this module maps positions/results back to the
 //! `.cshtml`. Independent of the (retiring) homegrown `cshtml` engine.
 
+// Diagnostic log for the whole projection pipeline (backend + frontend).
+pub mod diag;
+
 // Foundational bricks: consumed by the projection broker in a later slice.
 #[allow(dead_code)]
 pub mod sourcemap;

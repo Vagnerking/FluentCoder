@@ -13,11 +13,7 @@
 import type { Monaco } from "@monaco-editor/react";
 import type * as MonacoNS from "monaco-editor";
 import { installRazorHtmlLint } from "../lint/razorHtmlLint";
-// `monaco-editor`'s ESM API does not automatically bundle every basic-language
-// contribution. Register C#'s lazy Monarch loader explicitly; otherwise Roslyn
-// semantic tokens color symbols, but lexical-only tokens such as `if` and
-// `return` remain plain foreground text.
-import "monaco-editor/esm/vs/basic-languages/csharp/csharp.contribution.js";
+import { installDiskFileSystemOverlay } from "./textModelResolver";
 
 let didSetup = false;
 
@@ -25,6 +21,16 @@ let didSetup = false;
 export function setupMonacoForLsp(monaco: Monaco): void {
   if (didSetup) return;
   didSetup = true;
+
+  // Must run BEFORE the first editor instantiates the standalone services:
+  // resolves file:// reads from disk so Ctrl+hover underlines definitions in
+  // files that were never opened (see textModelResolver.ts).
+  installDiskFileSystemOverlay();
+
+  // Debug hook: the release build has no DevTools console REPL, so live
+  // diagnosis (via CDP/remote debugging) needs a way to reach the monaco API
+  // and the editor instances. Read-only surface; not used by product code.
+  (window as unknown as { __fluentMonaco?: Monaco }).__fluentMonaco = monaco;
 
   disableBuiltinTsWorker(monaco);
   registerReactLanguages(monaco);
@@ -81,11 +87,19 @@ function registerCshtmlProjectionLanguage(monaco: Monaco): void {
 }
 
 /**
- * Makes sure Monaco knows the `csharp` language id is bound to `.cs`. The
- * C#'s basic-language contribution is imported above so its Monarch tokenizer
- * can be loaded lazily. This fallback registration still protects against a
- * contribution-loading failure: the model remains `csharp`, allowing the LSP
- * document selector to match even if syntax highlighting is unavailable.
+ * Makes sure Monaco knows the `csharp` language id is bound to `.cs` AND that it
+ * has a Monarch tokenizer for lexical coloring.
+ *
+ * Why we register the grammar ourselves: the vanilla `monaco-editor` bundle
+ * shipped C#'s basic-language contribution (`vs/basic-languages/csharp`), but the
+ * v10 `@codingame/monaco-vscode-editor-api` build stubs every `vs/basic-languages/*`
+ * import to an empty module (its `exports` map points them at `empty.js`). So the
+ * old `import ".../csharp.contribution.js"` became a no-op and `.cs` files lost all
+ * keyword coloring until Roslyn's semantic tokens arrived — a regression against
+ * the lexical-coloring expectation in `editor.md`. We register a small Monarch
+ * grammar here so `if`/`return`/`public` etc. color immediately, while Roslyn's
+ * semantic tokens still upgrade types/members on top once the project loads.
+ * Idempotent (guarded by {@link csharpRegistered}).
  */
 function ensureCsharpLanguage(monaco: Monaco): void {
   const has = monaco.languages.getLanguages().some((l) => l.id === "csharp");
@@ -97,15 +111,109 @@ function ensureCsharpLanguage(monaco: Monaco): void {
       mimetypes: ["text/x-csharp"],
     });
   }
+  if (csharpRegistered) return;
+  monaco.languages.setLanguageConfiguration("csharp", csharpLanguageConfiguration());
+  monaco.languages.setMonarchTokensProvider("csharp", csharpMonarch());
+  csharpRegistered = true;
+}
+
+/** Bracket/comment/auto-close configuration for `.cs` files. */
+function csharpLanguageConfiguration(): MonacoNS.languages.LanguageConfiguration {
+  return {
+    comments: { lineComment: "//", blockComment: ["/*", "*/"] },
+    brackets: [
+      ["{", "}"],
+      ["[", "]"],
+      ["(", ")"],
+    ],
+    autoClosingPairs: [
+      { open: "{", close: "}" },
+      { open: "[", close: "]" },
+      { open: "(", close: ")" },
+      { open: '"', close: '"', notIn: ["string", "comment"] },
+      { open: "'", close: "'", notIn: ["string", "comment"] },
+    ],
+    surroundingPairs: [
+      { open: "{", close: "}" },
+      { open: "[", close: "]" },
+      { open: "(", close: ")" },
+      { open: '"', close: '"' },
+      { open: "'", close: "'" },
+    ],
+  };
+}
+
+/**
+ * Minimal Monarch grammar for C# — keywords, strings, char literals, numbers,
+ * comments, and operators. Scope is lexical highlighting only; Roslyn's semantic
+ * tokens layer the precise classifications (class/struct/enum/method/…) on top.
+ * Reuses {@link CSHARP_KEYWORDS}, the same keyword list the Razor grammar uses.
+ */
+function csharpMonarch(): MonacoNS.languages.IMonarchLanguage {
+  return {
+    defaultToken: "",
+    tokenPostfix: ".cs",
+    keywords: [...CSHARP_KEYWORDS],
+    escapes: /\\(?:[abfnrtv\\"']|x[0-9A-Fa-f]{1,4}|u[0-9A-Fa-f]{4})/,
+    tokenizer: {
+      root: [
+        [/[a-zA-Z_]\w*/, { cases: { "@keywords": "keyword", "@default": "identifier" } }],
+        [/\/\/.*$/, "comment"],
+        [/\/\*/, { token: "comment", next: "@blockComment" }],
+        [/@?"/, { token: "string.quote", next: "@string" }],
+        [/\$"/, { token: "string.quote", next: "@string" }],
+        [/'[^'\\]'/, "string"],
+        [/'\\.'/, "string"],
+        [/\d+(\.\d+)?([eE][-+]?\d+)?[fFdDmMuUlL]*/, "number"],
+        [/[{}()\[\]]/, "@brackets"],
+        [/[;,.]/, "delimiter"],
+        [/[+\-*/%=&|<>!~^?:]+/, "operator"],
+        [/[ \t\r\n]+/, ""],
+      ],
+      string: [
+        [/[^"\\]+/, "string"],
+        [/@escapes/, "string.escape"],
+        [/""/, "string.escape"],
+        [/"/, { token: "string.quote", next: "@pop" }],
+      ],
+      blockComment: [
+        [/[^*/]+/, "comment"],
+        [/\*\//, { token: "comment", next: "@pop" }],
+        [/[*/]/, "comment"],
+      ],
+    },
+  };
+}
+
+/**
+ * Minimal shape of the standalone TS/JS language contribution we touch. It is an
+ * OPTIONAL part of Monaco's API: the vanilla `monaco-editor` bundle ships it,
+ * but the v10 `@codingame/monaco-vscode-editor-api` build does NOT (TS/JS
+ * IntelliSense there comes from the real `typescript-language-server` instead).
+ * So `monaco.languages.typescript` is absent from the v10 type surface — we read
+ * it through a narrow cast and the runtime `if (!ts)` guard makes its absence a
+ * no-op (nothing to disable when the embedded worker was never bundled).
+ */
+interface TsDefaults {
+  setDiagnosticsOptions(opts: unknown): void;
+  setEagerModelSync(enabled: boolean): void;
+  setExtraLibs(libs: unknown[]): void;
+}
+interface MonacoTypescriptApi {
+  typescriptDefaults: TsDefaults;
+  javascriptDefaults: TsDefaults;
 }
 
 /**
  * Turns OFF the embedded TS/JS worker's diagnostics, suggestions, and
  * completion provider. Syntax highlighting (Monarch tokenizer) stays intact.
+ * On the v10 stack the embedded worker isn't bundled at all, so this is a
+ * defensive no-op there — the real LSP server is the single source either way.
  */
 function disableBuiltinTsWorker(monaco: Monaco): void {
-  const ts = monaco.languages.typescript;
-  if (!ts) return; // defensive: TS contribution might be tree-shaken out
+  const ts = (monaco.languages as unknown as { typescript?: MonacoTypescriptApi })
+    .typescript;
+  if (!ts) return; // v10 @codingame build (or tree-shaken vanilla): nothing to disable
 
   const off = {
     noSemanticValidation: true,
@@ -191,6 +299,27 @@ export const CSHTML_LANGUAGE_ID = "cshtml";
 
 let razorRegistered = false;
 let cshtmlRegistered = false;
+let csharpRegistered = false;
+
+/**
+ * C# keyword list shared by the standalone `csharp` Monarch grammar
+ * ({@link csharpMonarch}) and the Razor grammar's embedded C# tokenizer
+ * ({@link razorMonarch}), so the two never drift apart.
+ */
+const CSHARP_KEYWORDS = [
+  "abstract", "as", "base", "bool", "break", "byte", "case", "catch",
+  "char", "checked", "class", "const", "continue", "decimal", "default",
+  "delegate", "do", "double", "else", "enum", "event", "explicit",
+  "extern", "false", "finally", "fixed", "float", "for", "foreach",
+  "goto", "if", "implicit", "in", "int", "interface", "internal", "is",
+  "lock", "long", "namespace", "new", "null", "object", "operator",
+  "out", "override", "params", "private", "protected", "public",
+  "readonly", "ref", "return", "sbyte", "sealed", "short", "sizeof",
+  "stackalloc", "static", "string", "struct", "switch", "this", "throw",
+  "true", "try", "typeof", "uint", "ulong", "unchecked", "unsafe",
+  "ushort", "using", "var", "virtual", "void", "volatile", "while",
+  "async", "await", "dynamic", "nameof", "when", "yield",
+] as const;
 
 /**
  * Registers the `razor` language + Monarch tokenizer (ISSUE-29). Monaco ships no
@@ -264,20 +393,7 @@ function razorMonarch(): MonacoNS.languages.IMonarchLanguage {
       "try", "catch", "finally", "await",
     ],
 
-    csharpKeywords: [
-      "abstract", "as", "base", "bool", "break", "byte", "case", "catch",
-      "char", "checked", "class", "const", "continue", "decimal", "default",
-      "delegate", "do", "double", "else", "enum", "event", "explicit",
-      "extern", "false", "finally", "fixed", "float", "for", "foreach",
-      "goto", "if", "implicit", "in", "int", "interface", "internal", "is",
-      "lock", "long", "namespace", "new", "null", "object", "operator",
-      "out", "override", "params", "private", "protected", "public",
-      "readonly", "ref", "return", "sbyte", "sealed", "short", "sizeof",
-      "stackalloc", "static", "string", "struct", "switch", "this", "throw",
-      "true", "try", "typeof", "uint", "ulong", "unchecked", "unsafe",
-      "ushort", "using", "var", "virtual", "void", "volatile", "while",
-      "async", "await", "dynamic", "nameof", "when", "yield",
-    ],
+    csharpKeywords: [...CSHARP_KEYWORDS],
 
     escapes: /\\(?:[abfnrtv\\"']|x[0-9A-Fa-f]{1,4}|u[0-9A-Fa-f]{4})/,
 
