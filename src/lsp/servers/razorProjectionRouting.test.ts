@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   routeDiagnostics,
+  pickWorkspaceSymbolForMetadata,
   routeDefinition,
   remapRangeToMonaco,
   lspRangeToMonaco,
@@ -380,4 +381,71 @@ test("monacoSeverityToLsp inverts the severity table", () => {
   assert.equal(monacoSeverityToLsp(4), 2);
   assert.equal(monacoSeverityToLsp(2), 3);
   assert.equal(monacoSeverityToLsp(1), 4);
+});
+
+// ── pickWorkspaceSymbolForMetadata (metadata → fonte real) ───────────────────
+
+const wsLoc = (uri: string) => ({
+  uri,
+  range: { start: { line: 3, character: 10 }, end: { line: 3, character: 20 } },
+});
+
+test("workspace/symbol: membro escolhe o hit cujo container é o tipo do decompilado", () => {
+  const picked = pickWorkspaceSymbolForMetadata(
+    [
+      { name: "Cpf", containerName: "Pessoa", location: wsLoc("file:///c:/r/Pessoa.cs") },
+      { name: "Cpf", containerName: "ConsultaSerasaCrednet", location: wsLoc("file:///c:/r/Consulta.cs") },
+    ],
+    { word: "Cpf", containerHint: "ConsultaSerasaCrednet" }
+  );
+  assert.equal(picked?.location?.uri, "file:///c:/r/Consulta.cs");
+});
+
+test("workspace/symbol: tipo clicado usa namespace do decompilado para desambiguar", () => {
+  const picked = pickWorkspaceSymbolForMetadata(
+    [
+      { name: "PathFactory", kind: 5, containerName: "Outro.Ns", location: wsLoc("file:///c:/r/a/PathFactory.cs") },
+      { name: "PathFactory", kind: 5, containerName: "Ativus.Core.Factories", location: wsLoc("file:///c:/r/b/PathFactory.cs") },
+    ],
+    { word: "PathFactory", containerHint: "PathFactory", namespaceHint: "Ativus.Core.Factories" }
+  );
+  assert.equal(picked?.location?.uri, "file:///c:/r/b/PathFactory.cs");
+});
+
+test("workspace/symbol: métodos Roslyn com sufixo de assinatura contam como match", () => {
+  const picked = pickWorkspaceSymbolForMetadata(
+    [{ name: "ComponentPath(ComponentsEnum)", containerName: "PathFactory", location: wsLoc("file:///c:/r/PathFactory.cs") }],
+    { word: "ComponentPath", containerHint: "PathFactory" }
+  );
+  assert.equal(picked?.location?.uri, "file:///c:/r/PathFactory.cs");
+});
+
+test("workspace/symbol: ambíguo sem evidência devolve null (mantém metadata)", () => {
+  const picked = pickWorkspaceSymbolForMetadata(
+    [
+      { name: "Nome", containerName: "Cliente", location: wsLoc("file:///c:/r/Cliente.cs") },
+      { name: "Nome", containerName: "Fornecedor", location: wsLoc("file:///c:/r/Fornecedor.cs") },
+    ],
+    { word: "Nome", containerHint: "ConsultaSerasaCrednet" }
+  );
+  assert.equal(picked, null);
+});
+
+test("workspace/symbol: hit único sem evidência ainda vale (inequívoco)", () => {
+  const picked = pickWorkspaceSymbolForMetadata(
+    [{ name: "DocumentoConsultaScr", containerName: "Ativus.Shared.Core.ValueObjects", location: wsLoc("file:///c:/r/Doc.cs") }],
+    { word: "DocumentoConsultaScr", containerHint: "DocumentoConsultaScr" }
+  );
+  assert.equal(picked?.location?.uri, "file:///c:/r/Doc.cs");
+});
+
+test("workspace/symbol: descarta hits em .g.cs e MetadataAsSource", () => {
+  const picked = pickWorkspaceSymbolForMetadata(
+    [
+      { name: "Cpf", containerName: "ConsultaSerasaCrednet", location: wsLoc("file:///c:/r/x.g.cs") },
+      { name: "Cpf", containerName: "ConsultaSerasaCrednet", location: wsLoc("file:///c:/t/MetadataAsSource/y/Consulta.cs") },
+    ],
+    { word: "Cpf", containerHint: "ConsultaSerasaCrednet" }
+  );
+  assert.equal(picked, null);
 });

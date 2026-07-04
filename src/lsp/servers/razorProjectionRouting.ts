@@ -234,6 +234,62 @@ export async function routeDefinition(
   return out;
 }
 
+// ── metadata → fonte real (workspace/symbol no cliente csharp principal) ─────
+
+/** Subset de um LSP `SymbolInformation` (resposta de `workspace/symbol`). */
+export interface WorkspaceSymbolLite {
+  name: string;
+  kind?: number;
+  containerName?: string;
+  location?: { uri?: string; range?: LspRange };
+}
+
+/** LSP `SymbolKind` de tipos (class/enum/interface/struct). */
+const TYPE_SYMBOL_KINDS = new Set([5, 10, 11, 23]);
+
+/**
+ * Escolhe, entre os hits de `workspace/symbol`, o fonte REAL de um alvo de
+ * definition que caiu em MetadataAsSource. O workspace shadow da projeção só
+ * referencia os projetos irmãos como DLL, então símbolos da própria solution
+ * viram decompilado; o cliente csharp principal (solution inteira) sabe o
+ * fonte. Sinais usados:
+ *   - `word`: o identificador clicado no `.cshtml`.
+ *   - `containerHint`: o nome do arquivo de metadata (= tipo container).
+ *   - `namespaceHint`: o namespace declarado no cabeçalho do decompilado.
+ * Só devolve um hit com evidência (container/namespace batendo, ou hit único
+ * inequívoco) — na dúvida devolve `null` e o caller mantém o metadata.
+ */
+export function pickWorkspaceSymbolForMetadata(
+  symbols: readonly WorkspaceSymbolLite[],
+  opts: { word: string; containerHint: string; namespaceHint?: string }
+): WorkspaceSymbolLite | null {
+  const { word, containerHint, namespaceHint } = opts;
+  const clickedType = word === containerHint;
+
+  const candidates = symbols.filter((s) => {
+    const uri = s.location?.uri;
+    if (!uri || !s.location?.range) return false;
+    if (/\.g\.cs$/i.test(uri) || /MetadataAsSource/i.test(uri)) return false;
+    // Roslyn nomeia métodos como `Nome(args)`; o resto é o identificador puro.
+    return s.name === word || s.name.startsWith(`${word}(`);
+  });
+  if (candidates.length === 0) return null;
+
+  const scored = candidates.map((s) => {
+    const container = s.containerName ?? "";
+    let score = 0;
+    if (!clickedType && container.includes(containerHint)) score += 2;
+    if (namespaceHint && container.includes(namespaceHint)) score += 2;
+    if (clickedType && TYPE_SYMBOL_KINDS.has(s.kind ?? -1)) score += 1;
+    return { s, score };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  const best = scored[0];
+  // Evidência: ou o melhor hit pontuou, ou ele é o ÚNICO candidato possível.
+  if (best.score === 0 && candidates.length > 1) return null;
+  return best.s;
+}
+
 // ── code actions: WorkspaceEdit routing (Fase A2, csharp-ide-parity) ─────────
 
 /** An LSP `TextEdit`. */

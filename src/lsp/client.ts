@@ -81,6 +81,22 @@ const clientContributions = new WeakMap<
 >();
 
 /**
+ * Clientes vivos por serverId, para consultas CROSS-servidor: a projeção
+ * Razor (workspace shadow, que só enxerga DLLs dos projetos irmãos) resolve
+ * alvos de definition que caíram em MetadataAsSource perguntando ao cliente
+ * `csharp` principal (que tem a solution inteira) via `workspace/symbol`.
+ */
+const runningClientsById = new Map<string, MonacoLanguageClient>();
+const serverIdByClient = new WeakMap<MonacoLanguageClient, string>();
+
+/** O cliente vivo de `serverId`, ou `undefined` se não está de pé. */
+export function getRunningClient(
+  serverId: string
+): MonacoLanguageClient | undefined {
+  return runningClientsById.get(serverId);
+}
+
+/**
  * Builds and starts a {@link MonacoLanguageClient} for the given config.
  *
  * Flow: boot the shared `@codingame/monaco-vscode-api` services (idempotent) →
@@ -201,6 +217,9 @@ export async function createLanguageClient(
   }
   lspLog("client.start() RESOLVED for", config.serverId, "state=", client.state);
 
+  runningClientsById.set(config.serverId, client);
+  serverIdByClient.set(client, config.serverId);
+
   // Projection clients (ADR 0002) want only the transport: their `.g.cs` is not
   // a Monaco model and their results are remapped to the `.cshtml` manually, so
   // the generic bridges would only register colliding providers for `csharp`.
@@ -266,6 +285,10 @@ export async function createLanguageClient(
 export function disposeLanguageClientContributions(
   client: MonacoLanguageClient
 ): void {
+  const serverId = serverIdByClient.get(client);
+  if (serverId && runningClientsById.get(serverId) === client) {
+    runningClientsById.delete(serverId);
+  }
   const contributions = clientContributions.get(client);
   clientContributions.delete(client);
   contributions?.disposables.forEach((contribution) => contribution.dispose());

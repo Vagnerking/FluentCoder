@@ -40,7 +40,11 @@ import {
   type RazorProjectionInfo,
   type RazorPrepareResult,
 } from "../../api";
-import { createLanguageClient, registerClientDisposables } from "../client";
+import {
+  createLanguageClient,
+  getRunningClient,
+  registerClientDisposables,
+} from "../client";
 import { lspLog } from "../debug";
 import { canonicalFileUriKey, fromFileUri, toFileUri } from "../uri";
 import { setDiagnostics, clearServerDiagnostics } from "../diagnosticsStore";
@@ -54,10 +58,12 @@ import {
   forgetAllHtmlVirtual,
 } from "./cshtmlHtmlService";
 import { wireRoslynStartup } from "./roslynShared";
-import { ROSLYN_INIT_OPTIONS } from "./csharp";
+import { CSHARP_SERVER_ID, ROSLYN_INIT_OPTIONS } from "./csharp";
 import {
+  lspRangeToMonaco,
   monacoSeverityToLsp,
   pickProjectForCshtml,
+  pickWorkspaceSymbolForMetadata,
   relativize,
   remapRangeToMonaco,
   routeDefinition,
@@ -65,6 +71,8 @@ import {
   routeWorkspaceEdit,
   type LspWorkspaceEdit,
   type RemapRangesFn,
+  type RoutedLocation,
+  type WorkspaceSymbolLite,
 } from "./razorProjectionRouting";
 import type { ServerStartContext } from ".";
 
@@ -189,6 +197,63 @@ async function resolveProject(
     files.filter((f) => f.name.toLowerCase().endsWith(".csproj")).map((f) => f.path),
     cshtmlPath
   );
+}
+
+/** `child` está sob `root` (case-insensitive, separadores normalizados)? */
+function pathIsUnder(child: string, root: string): boolean {
+  const norm = (p: string): string =>
+    p.replace(/\\/g, "/").toLowerCase().replace(/\/+$/, "") + "/";
+  return norm(child).startsWith(norm(root));
+}
+
+/**
+ * Troca um alvo de definition que caiu em MetadataAsSource pelo fonte REAL do
+ * workspace, quando houver. O workspace shadow da projeção referencia os
+ * projetos irmãos como DLL (design sidecar-first: nada de build da solution),
+ * então o Roslyn da projeção decompila símbolos da PRÓPRIA solution em vez de
+ * apontar o `.cs` de origem. O cabeçalho do decompilado identifica o assembly;
+ * se ele vem de dentro do workspace, pergunta ao cliente csharp principal
+ * (solution inteira) via `workspace/symbol` e usa o hit com evidência
+ * (container/namespace batendo). Assemblies externos (BCL, NuGet) ficam no
+ * decompilado — é o alvo correto. Best-effort: qualquer falha mantém o alvo
+ * original.
+ */
+async function metadataTargetToWorkspaceSource(
+  target: RoutedLocation,
+  word: string | undefined,
+  rootPath: string
+): Promise<RoutedLocation | null> {
+  if (!word) return null;
+  const csharp = getRunningClient(CSHARP_SERVER_ID);
+  if (!csharp) return null;
+  let header: string;
+  try {
+    header = (await readFile(fromFileUri(target.uri))).content.slice(0, 4000);
+  } catch {
+    return null;
+  }
+  // Cabeçalho: `#region Assembly …` seguido de `// <caminho do .dll>`.
+  const dll = header.match(/^\/\/\s+(.+\.dll)\s*$/im)?.[1];
+  if (!dll || !pathIsUnder(dll, rootPath)) return null;
+  const namespaceHint = header.match(/^namespace\s+([\w.]+)/m)?.[1];
+  const containerHint = (target.uri.split(/[\\/]/).pop() ?? "").replace(/\.cs$/i, "");
+  let symbols: unknown;
+  try {
+    symbols = await csharp.sendRequest("workspace/symbol", { query: word });
+  } catch {
+    return null;
+  }
+  const picked = pickWorkspaceSymbolForMetadata(
+    (Array.isArray(symbols) ? symbols : []) as WorkspaceSymbolLite[],
+    { word, containerHint, namespaceHint }
+  );
+  if (!picked?.location?.uri || !picked.location.range) return null;
+  lspLog("razor projection: definition metadata→fonte real", {
+    word,
+    de: target.uri.slice(-70),
+    para: picked.location.uri.slice(-70),
+  });
+  return { uri: picked.location.uri, range: lspRangeToMonaco(picked.location.range) };
 }
 
 /**
@@ -714,7 +779,19 @@ export async function startRazorProjectionServer(
         });
         // Re-check AFTER the async route/remap (see hover).
         if (!snapshotStable(doc, model, snap, reqVersion)) return null;
-        return routed.map((r) => ({ uri: monaco.Uri.parse(r.uri), range: r.range }));
+        // O workspace shadow referencia os projetos irmãos como DLL, então
+        // definitions de símbolos da PRÓPRIA solution caem em MetadataAsSource
+        // (decompilado). Antes de entregar, tenta trocar cada alvo desses pelo
+        // fonte real via workspace/symbol no cliente csharp principal.
+        const word = model.getWordAtPosition(position)?.word;
+        const upgraded = await Promise.all(
+          routed.map(async (r) =>
+            /MetadataAsSource/i.test(r.uri)
+              ? (await metadataTargetToWorkspaceSource(r, word, rootPath)) ?? r
+              : r
+          )
+        );
+        return upgraded.map((r) => ({ uri: monaco.Uri.parse(r.uri), range: r.range }));
       },
     })
   );
