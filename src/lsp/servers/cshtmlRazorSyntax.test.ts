@@ -469,6 +469,337 @@ test("parser: @: torna o resto da linha markup literal", () => {
   blanked(src, "Model.Nome");
 });
 
+// ═══════════════════════════ Layouts e sections ════════════════════════════
+
+test("layout: Layout = \"_Layout\" em @{ } é C# (blanked)", () => {
+  const src = `@{ Layout = "_Layout"; }\n<h1>x</h1>`;
+  invariant(src);
+  kept(src, "<h1>x</h1>");
+  blanked(src, "Layout", "_Layout");
+});
+
+test("layout: Layout = null (sem layout)", () => {
+  const src = `@{ Layout = null; }\n<h1>x</h1>`;
+  kept(src, "<h1>x</h1>");
+  blanked(src, "Layout", "null");
+});
+
+test("layout: @RenderBody() é chamada C# (blanked), <body> fica", () => {
+  const src = `<body>@RenderBody()</body>`;
+  invariant(src);
+  kept(src, "<body>", "</body>");
+  blanked(src, "RenderBody");
+});
+
+test("layout: @RenderSection(\"Scripts\", required: false)", () => {
+  const src = `<footer>@RenderSection("Scripts", required: false)</footer>`;
+  kept(src, "<footer>", "</footer>");
+  blanked(src, "RenderSection", "Scripts");
+});
+
+test("layout: @await RenderSectionAsync(\"Scripts\", required: true)", () => {
+  const src = `<div>@await RenderSectionAsync("Scripts", required: true)</div>`;
+  invariant(src);
+  kept(src, "<div>", "</div>");
+  blanked(src, "await", "RenderSectionAsync", "Scripts");
+});
+
+test("layout: @section Scripts { } — corpo markup preservado, @expr interno blanked", () => {
+  const src = `@section Scripts {\n  <script src="app.js"></script>\n  @Html.Raw(inline)\n}`;
+  invariant(src);
+  kept(src, `<script src="app.js"></script>`);
+  blanked(src, "section", "Scripts", "Html.Raw", "inline");
+});
+
+test("layout: @section Styles com <link>", () => {
+  const src = `@section Styles {\n  <link rel="stylesheet" href="site.css" />\n}`;
+  kept(src, `<link rel="stylesheet" href="site.css" />`);
+  blanked(src, "section", "Styles");
+});
+
+test("layout: @if (IsSectionDefined(...)) preserva markup do corpo", () => {
+  const src = `@if (IsSectionDefined("Scripts")) { <p>tem scripts</p> }`;
+  kept(src, "<p>tem scripts</p>");
+  blanked(src, "IsSectionDefined", "if");
+});
+
+test("layout: _ViewStart típico (só @{ Layout = ... })", () => {
+  const src = `@{\n    Layout = "_Layout";\n}`;
+  invariant(src);
+  blanked(src, "Layout", "_Layout");
+  // Nenhum markup — a saída é só espaços e newlines.
+  assert.equal(vh(src).trim(), "");
+});
+
+test("layout: layout aninhado — Layout aponta para outro _Layout", () => {
+  const src = `@{ Layout = "~/Views/Shared/_LayoutAdmin.cshtml"; }\n@RenderBody()`;
+  blanked(src, "Layout", "_LayoutAdmin", "RenderBody");
+});
+
+// ═══════════════ Partial Views e View Components (markup + C#) ═══════════════
+
+test("partial: <partial name=\"_X\" /> é Tag Helper (fica como HTML)", () => {
+  const src = `<partial name="_Row" />`;
+  invariant(src);
+  assert.equal(vh(src), src, "partial tag helper é markup");
+});
+
+test("partial: <partial name model=\"Model.Item\" /> — atributo com @expr? não, é literal", () => {
+  // model="Model.Item" é um valor de atributo do tag helper (avaliado no
+  // servidor); não tem `@`, então é markup literal e fica.
+  const src = `<partial name="_Row" model="Model.Item" />`;
+  assert.equal(vh(src), src);
+});
+
+test("partial: <partial for=\"Propriedade\" /> fica como HTML", () => {
+  const src = `<partial name="_Field" for="Nome" />`;
+  assert.equal(vh(src), src);
+});
+
+test("partial: @await Html.PartialAsync(\"_X\") — blanked", () => {
+  const src = `<div>@await Html.PartialAsync("_Card")</div>`;
+  kept(src, "<div>", "</div>");
+  blanked(src, "await", "PartialAsync", "_Card");
+});
+
+test("partial: @await Html.PartialAsync(\"_X\", model) — blanked", () => {
+  const src = `<div>@await Html.PartialAsync("_Card", Model.Item)</div>`;
+  kept(src, "<div>", "</div>");
+  blanked(src, "PartialAsync", "Model.Item");
+});
+
+test("partial: partial dentro de @foreach (loop) preserva ambos", () => {
+  const src = `@foreach (var it in Model.Itens) {\n  <partial name="_Row" model="it" />\n}`;
+  kept(src, `<partial name="_Row" model="it" />`);
+  blanked(src, "foreach", "Model.Itens");
+});
+
+test("viewcomponent: @await Component.InvokeAsync(\"Nome\") — blanked", () => {
+  const src = `<aside>@await Component.InvokeAsync("Cart")</aside>`;
+  invariant(src);
+  kept(src, "<aside>", "</aside>");
+  blanked(src, "await", "Component.InvokeAsync", "Cart");
+});
+
+test("viewcomponent: com parâmetros anônimos new { }", () => {
+  const src = `<aside>@await Component.InvokeAsync("Cart", new { id = Model.Id, qtd = 3 })</aside>`;
+  kept(src, "<aside>", "</aside>");
+  blanked(src, "Component.InvokeAsync", "Model.Id");
+});
+
+test("viewcomponent: <vc:my-component> tag helper fica como HTML", () => {
+  const src = `<vc:cart-summary count="3"></vc:cart-summary>`;
+  assert.equal(vh(src), src);
+});
+
+// ═══════════════════════════════ Tag Helpers ═══════════════════════════════
+
+test("taghelper: anchor asp-controller/asp-action — atributos ficam", () => {
+  const src = `<a asp-controller="Home" asp-action="Index">Início</a>`;
+  invariant(src);
+  assert.equal(vh(src), src, "tag helper é HTML processado no servidor");
+});
+
+test("taghelper: anchor com asp-route-id e múltiplos asp-route-*", () => {
+  const src = `<a asp-action="Detalhe" asp-route-id="@Model.Id" asp-route-tab="info">ver</a>`;
+  kept(src, "asp-action", "asp-route-id", "asp-route-tab", "<a ", "</a>");
+  blanked(src, "Model.Id");
+});
+
+test("taghelper: form asp-controller/asp-action method post", () => {
+  const src = `<form asp-controller="Cliente" asp-action="Salvar" method="post"></form>`;
+  assert.equal(vh(src), src);
+});
+
+test("taghelper: input asp-for", () => {
+  const src = `<input asp-for="Nome" class="form-control" />`;
+  assert.equal(vh(src), src);
+});
+
+test("taghelper: input asp-for propriedade aninhada", () => {
+  const src = `<input asp-for="Endereco.Cidade" />`;
+  assert.equal(vh(src), src);
+});
+
+test("taghelper: label asp-for", () => {
+  const src = `<label asp-for="Nome"></label>`;
+  assert.equal(vh(src), src);
+});
+
+test("taghelper: textarea asp-for com conteúdo", () => {
+  const src = `<textarea asp-for="Descricao" rows="4"></textarea>`;
+  assert.equal(vh(src), src);
+});
+
+test("taghelper: select asp-for asp-items com @expr no atributo", () => {
+  const src = `<select asp-for="Status" asp-items="Model.StatusOptions"></select>`;
+  // asp-items="Model.StatusOptions" é literal (valor do tag helper, sem @).
+  assert.equal(vh(src), src);
+});
+
+test("taghelper: span asp-validation-for", () => {
+  const src = `<span asp-validation-for="Nome" class="text-danger"></span>`;
+  assert.equal(vh(src), src);
+});
+
+test("taghelper: div asp-validation-summary", () => {
+  const src = `<div asp-validation-summary="ModelOnly" class="text-danger"></div>`;
+  assert.equal(vh(src), src);
+});
+
+test("taghelper: img asp-append-version com ~/ e @expr misto", () => {
+  const src = `<img src="~/img/logo.png" asp-append-version="true" alt="@Model.Alt" />`;
+  kept(src, `src="~/img/logo.png"`, "asp-append-version");
+  blanked(src, "Model.Alt");
+});
+
+test("taghelper: environment include/exclude com markup interno", () => {
+  const src = `<environment include="Development"><script src="dev.js"></script></environment>`;
+  assert.equal(vh(src), src, "conteúdo do environment é markup");
+});
+
+test("taghelper: environment exclude com @expr interno blanked", () => {
+  const src = `<environment exclude="Development"><span>@Model.Build</span></environment>`;
+  kept(src, "<environment", "</environment>", "<span>", "</span>");
+  blanked(src, "Model.Build");
+});
+
+test("taghelper: cache com corpo dinâmico", () => {
+  const src = `<cache expires-after="@TimeSpan.FromMinutes(5)"><p>@Model.Now</p></cache>`;
+  kept(src, "<cache", "</cache>", "<p>", "</p>");
+  blanked(src, "TimeSpan.FromMinutes", "Model.Now");
+});
+
+test("taghelper: component type render-mode", () => {
+  const src = `<component type="typeof(App)" render-mode="ServerPrerendered" />`;
+  assert.equal(vh(src), src);
+});
+
+test("taghelper: customizado <my-widget> com atributo custom", () => {
+  const src = `<my-widget title="Painel" data-id="@Model.Id"></my-widget>`;
+  kept(src, "<my-widget", "</my-widget>", `title="Painel"`);
+  blanked(src, "Model.Id");
+});
+
+// ═══════════════ Static files, ~/, anti-forgery, HTML/URL helpers ═══════════
+
+test("static: ~/ em href fica literal (resolvido no servidor)", () => {
+  const src = `<link href="~/css/site.css" rel="stylesheet" />`;
+  assert.equal(vh(src), src);
+});
+
+test("static: <script src=\"~/js/app.js\">", () => {
+  const src = `<script src="~/js/app.js"></script>`;
+  assert.equal(vh(src), src);
+});
+
+test("helper: @Url.Content(\"~/img/x.png\") em atributo", () => {
+  const src = `<img src="@Url.Content("~/img/x.png")" />`;
+  kept(src, "<img src=", "/>");
+  blanked(src, "Url.Content");
+});
+
+test("helper: @Html.AntiForgeryToken() dentro de form", () => {
+  const src = `<form method="post">@Html.AntiForgeryToken()</form>`;
+  kept(src, `<form method="post">`, "</form>");
+  blanked(src, "Html.AntiForgeryToken");
+});
+
+for (const helper of [
+  "Html.DisplayFor(m => m.Nome)",
+  "Html.EditorFor(m => m.Nome)",
+  "Html.TextBoxFor(m => m.Nome)",
+  "Html.HiddenFor(m => m.Id)",
+  "Html.CheckBoxFor(m => m.Ativo)",
+  "Html.DropDownListFor(m => m.Status, Model.Opts)",
+  "Html.ValidationMessageFor(m => m.Nome)",
+  "Html.ValidationSummary()",
+  "Html.Partial(\"_X\")",
+  "Html.Raw(Model.Html)",
+  "Url.Action(\"Index\", \"Home\")",
+  "Url.RouteUrl(\"default\")",
+]) {
+  test(`helper: @${helper.split("(")[0]} — expressão C# blanked`, () => {
+    const src = `<div>@${helper}</div>`;
+    kept(src, "<div>", "</div>");
+    blanked(src, helper.split("(")[0]);
+  });
+}
+
+// ══════════════════════════ Encoding e segurança ═══════════════════════════
+
+test("segurança: @Model.Texto não injeta markup (fica blanked)", () => {
+  // Mesmo que o dado do usuário contenha `<`, a EXPRESSÃO é blanked na projeção;
+  // o encoding real acontece em runtime. O ponto aqui: o identificador não vira
+  // tag no HTML virtual.
+  const src = `<p>@Model.ComentarioDoUsuario</p>`;
+  blanked(src, "Model.ComentarioDoUsuario");
+  kept(src, "<p>", "</p>");
+});
+
+test("segurança: @Html.Raw distinto de @expr — ambos blanked na projeção", () => {
+  const src = `<div>@Html.Raw(Model.Html) e @Model.Texto</div>`;
+  blanked(src, "Html.Raw", "Model.Html", "Model.Texto");
+  kept(src, "<div>", "</div>");
+});
+
+test("segurança: conteúdo em <script> com @expr blanked", () => {
+  const src = `<script>var id = @Model.Id;</script>`;
+  kept(src, "<script>", "</script>", "var id = ");
+  blanked(src, "Model.Id");
+});
+
+// ═══════════════════════ Razor Pages / MVC / Areas ═════════════════════════
+
+test("pages: @page + @model + handler markup", () => {
+  const src = `@page\n@model IndexModel\n<form method="post"><button asp-page-handler="Delete">x</button></form>`;
+  kept(src, `<form method="post">`, "asp-page-handler", "</form>");
+  blanked(src, "IndexModel");
+});
+
+test("pages: @page \"{id:int}\" rota tipada", () => {
+  const src = `@page "{id:int}"\n@model DetalheModel\n<h1>@Model.Titulo</h1>`;
+  kept(src, "<h1>", "</h1>");
+  blanked(src, "id:int", "DetalheModel", "Model.Titulo");
+});
+
+test("pages: asp-page e asp-page-handler em anchor", () => {
+  const src = `<a asp-page="/Clientes/Editar" asp-route-id="@Model.Id">editar</a>`;
+  kept(src, "asp-page", "asp-route-id");
+  blanked(src, "Model.Id");
+});
+
+test("mvc: view com @model + @foreach + partial", () => {
+  const src = `@model IEnumerable<Cliente>\n<table>@foreach (var c in Model) { <tr><td>@c.Nome</td></tr> }</table>`;
+  kept(src, "<table>", "</table>", "<tr>", "<td>", "</td>", "</tr>");
+  blanked(src, "IEnumerable", "foreach", "c.Nome");
+});
+
+test("areas: asp-area em anchor tag helper", () => {
+  const src = `<a asp-area="Admin" asp-controller="Home" asp-action="Index">admin</a>`;
+  assert.equal(vh(src), src);
+});
+
+// ═══════════════════════ Cultura / formatação (C# em expr) ══════════════════
+
+test("cultura: @Model.Data.ToString(\"dd/MM/yyyy\") blanked", () => {
+  const src = `<span>@Model.Data.ToString("dd/MM/yyyy")</span>`;
+  kept(src, "<span>", "</span>");
+  blanked(src, "Model.Data", "dd/MM/yyyy");
+});
+
+test("cultura: @Model.Valor.ToString(\"C\", cultura) blanked", () => {
+  const src = `<span>@Model.Valor.ToString("C2")</span>`;
+  kept(src, "<span>", "</span>");
+  blanked(src, "Model.Valor", "C2");
+});
+
+test("cultura: string interpolada com formato @($\"{x:N2}\")", () => {
+  const src = `<b>@($"{Model.Preco:N2}")</b>`;
+  kept(src, "<b>", "</b>");
+  blanked(src, "Model.Preco", "N2");
+});
+
 // ══════════════════ regionAt: roteamento de completion ══════════════════════
 
 test("region: caret após @Model. classifica como Razor (member completion)", () => {
