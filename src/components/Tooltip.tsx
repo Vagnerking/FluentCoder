@@ -8,6 +8,7 @@ import {
   type KeyboardEvent,
   type ReactElement,
 } from "react";
+import { createPortal } from "react-dom";
 
 /** A `disabled` element doesn't emit hover/focus, so the wrapper carries them. */
 function isDisabled(el: ReactElement): boolean {
@@ -37,8 +38,11 @@ const HOVER_DELAY = 400;
  * hides on mouseleave / blur / Esc.
  *
  * The bubble is positioned with `position: fixed`, measured from the trigger's
- * bounding rect, so it escapes any `overflow: hidden` ancestor (sidebars,
- * activity bar). The trigger keeps its `aria-label`; we add `aria-describedby`
+ * bounding rect, and rendered through a portal into `<body>` so it escapes any
+ * `overflow: hidden` ancestor AND any ancestor with `backdrop-filter`/`transform`
+ * (which would otherwise become the containing block for `position: fixed`, e.g.
+ * the activity bar — trapping the bubble to its 48px width and wrapping the text
+ * letter-by-letter). The trigger keeps its `aria-label`; we add `aria-describedby`
  * pointing at the bubble so screen readers can read the same hint.
  */
 export function Tooltip({ label, children, placement = "top" }: TooltipProps) {
@@ -142,16 +146,19 @@ export function Tooltip({ label, children, placement = "top" }: TooltipProps) {
       >
         {child}
       </span>
-      {open && coords && (
-        <span
-          role="tooltip"
-          id={id}
-          className={`tooltip tooltip-${placement}`}
-          style={{ left: coords.left, top: coords.top }}
-        >
-          {label}
-        </span>
-      )}
+      {open &&
+        coords &&
+        createPortal(
+          <span
+            role="tooltip"
+            id={id}
+            className={`tooltip tooltip-${placement}`}
+            style={{ left: coords.left, top: coords.top }}
+          >
+            {label}
+          </span>,
+          document.body,
+        )}
     </>
   );
 }

@@ -384,6 +384,11 @@ body {
     var(--acrylic-tint-strong);
   border: 1px solid var(--acrylic-border);
   border-radius: var(--radius-card);
+  /* O Monaco cria camadas internas com z-index próprio que vazam sobre irmãos
+     de fluxo. Um contexto de empilhamento próprio, acima do editor (mas abaixo
+     dos overlays em 50+), mantém o chat na frente. */
+  position: relative;
+  z-index: 4;
 }
 /* Docked left → dock e alça antes do editor; docked right → depois dele.
    A alça fica sempre na costura, entre o dock e o editor. */
