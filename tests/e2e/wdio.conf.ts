@@ -7,13 +7,17 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '..', '..')
 
-// Caminho do binário compilado do app Tauri (modo debug).
-// Gerado por `cargo build` dentro de src-tauri.
+// Caminho do binário compilado do app Tauri.
+//
+// Buildado com `tauri build --debug`: mesmo modo produção de ASSETS (dist/
+// embutido, sem devUrl), mas o Rust compila com `profile.dev` — sem LTO,
+// incremental, opt-level baixo. Build de teste em segundos em vez de minutos.
+// O binário do `--debug` sai em `target/debug/` (não `target/release/`).
 const appBinary = path.resolve(
   projectRoot,
   'src-tauri',
   'target',
-  'release',
+  'debug',
   os.platform() === 'win32' ? 'fluent-coder.exe' : 'fluent-coder',
 )
 
@@ -99,15 +103,18 @@ export const config: WebdriverIO.Config = {
   // `cargo build` direto produz um binário que ainda aponta para o devUrl
   // (localhost:1420), e a WebView abre em "localhost refused to connect".
   // --no-bundle pula a geração de instaladores (.msi/.exe), bem mais rápido.
+  // --debug compila o Rust com profile.dev (sem LTO, incremental) mas ainda
+  // embute os assets de dist/ (modo produção de assets): build de teste em
+  // segundos. Só-Windows-x64 já é o host, então não há cross-compile.
   onPrepare: () => {
     if (process.env.E2E_SKIP_BUILD !== '1') {
-      const r = spawnSync('npx', ['tauri', 'build', '--no-bundle'], {
+      const r = spawnSync('npx', ['tauri', 'build', '--no-bundle', '--debug'], {
         cwd: projectRoot,
         stdio: 'inherit',
         shell: os.platform() === 'win32',
       })
       if (r.status !== 0) {
-        throw new Error(`"tauri build --no-bundle" falhou (status ${r.status})`)
+        throw new Error(`"tauri build --no-bundle --debug" falhou (status ${r.status})`)
       }
     }
     if (razorProjectionE2e) {

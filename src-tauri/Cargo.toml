@@ -99,3 +99,27 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
+
+# Build de TESTE (e2e / validação local) — NÃO é o release de produção.
+#
+# O `profile.release` acima é otimizado para o BINÁRIO (LTO + codegen-units=1 +
+# opt-level="s"): ótimo pro CI/instalador, mas é justamente o que faz a build de
+# teste levar minutos (LTO com 1 unidade serializa toda a compilação e o link).
+#
+# A CLI do Tauri 2.11 não expõe `--profile`, só `--debug` (usa `profile.dev`).
+# `tauri build --debug` roda em modo PRODUÇÃO de assets (embute dist/, sem devUrl)
+# mas compila o Rust com `profile.dev` — que é o mais rápido: opt-level 0, sem
+# LTO, incremental. É o que o wdio usa. Ajustamos o `dev` abaixo para o app rodar
+# fluido nos testes sem sacrificar velocidade de build:
+#   - opt-level = 1  → suaviza o app (dev puro = 0 fica lento em runtime) mantendo
+#                      a compilação rápida; deps já vêm otimizadas via o override.
+#   - o passe caro (LTO/codegen-units=1/strip) fica SÓ no release de produção.
+[profile.dev]
+opt-level = 1
+incremental = true
+
+# Dependências de terceiros mudam raramente: compilá-las otimizadas uma vez torna
+# o app fluido em runtime sem custar tempo nas rebuilds do NOSSO código (que
+# continua em opt-level baixo). Só o nosso crate recompila no ciclo de validação.
+[profile.dev.package."*"]
+opt-level = 2
