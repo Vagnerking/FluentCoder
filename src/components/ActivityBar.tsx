@@ -22,12 +22,13 @@ interface ActivityBarProps {
   onDragStart?: (e: PointerEvent<HTMLElement>) => void;
 }
 
+// Agents são a sidebar secundária (do lado oposto), com toggle na title bar —
+// não uma view da barra lateral principal.
 const VIEWS: { id: string; label: string; icon: IconAction }[] = [
   { id: 'explorer', label: 'Explorador', icon: 'explorer' },
   { id: 'search', label: 'Pesquisar', icon: 'search' },
   { id: 'git', label: 'Controle do Código-Fonte', icon: 'sourceControl' },
   { id: 'debug', label: 'Executar e Depurar', icon: 'run' },
-  { id: 'agents', label: 'Agentes', icon: 'agents' },
   { id: 'backlinks', label: 'Backlinks', icon: 'backlinks' },
   { id: 'graph', label: 'Grafo de Contextos', icon: 'graph' },
 ];

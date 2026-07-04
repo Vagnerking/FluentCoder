@@ -220,6 +220,9 @@ const DRAG_HOLD_MS = 600;
  * the explorer below it. Side/hidden modes use the smaller minimum. */
 const SIDEBAR_MIN = 180;
 const SIDEBAR_MIN_TOP = 280;
+// Sidebar secundária (chat de agentes), no lado oposto à principal.
+const AGENTS_SIDEBAR_MIN = 320;
+const AGENTS_SIDEBAR_DEFAULT = 500;
 
 function isUntitled(path: string): boolean {
   return path.startsWith(UNTITLED_PREFIX);
@@ -328,6 +331,14 @@ export default function App() {
   const [activityBarPos, setActivityBarPos] = useState<ActivityBarPos>(() =>
     readStoredActivityPos("ui.activityBarPos", "side")
   );
+  // Secondary side bar hosting the AI agents chat: docks on the side OPPOSITE
+  // the primary sidebar, toggled from the title bar, resizable and persisted.
+  const [agentsSidebarOpen, setAgentsSidebarOpen] = useState(false);
+  const [agentsSidebarWidth, setAgentsSidebarWidth] = useState(() =>
+    readStoredNumber("ui.agentsSidebarWidth", AGENTS_SIDEBAR_DEFAULT)
+  );
+  // The agents chat lives on the opposite edge from the primary sidebar.
+  const agentsSide = sidebarSide === "left" ? "right" : "left";
   const [branch, setBranch] = useState<string | null>(null);
 
   // The editor area is a tree of groups (VS Code-style split grid). `layout` is
@@ -827,6 +838,13 @@ export default function App() {
       /* storage unavailable — ignore */
     }
   }, [activityBarPos]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("ui.agentsSidebarWidth", String(agentsSidebarWidth));
+    } catch {
+      /* storage unavailable — ignore */
+    }
+  }, [agentsSidebarWidth]);
   useEffect(() => {
     try {
       localStorage.setItem("ui.panelHeight", String(panelHeight));
@@ -1600,15 +1618,13 @@ export default function App() {
 
   function handleCreateAgent() {
     if (!rootPath) return;
-    setActiveView("agents");
-    setSidebarOpen(true);
+    setAgentsSidebarOpen(true);
     setAgentSelection({ kind: "config", agentId: null });
     setAgentError(null);
   }
 
   function handleEditAgent(agentId: string) {
-    setActiveView("agents");
-    setSidebarOpen(true);
+    setAgentsSidebarOpen(true);
     setAgentSelection({ kind: "config", agentId });
     setAgentError(null);
   }
@@ -3995,32 +4011,6 @@ export default function App() {
             }
           />
         );
-      case "agents":
-        return (
-          <AgentSidebar
-            rootPath={rootPath}
-            store={agentStore}
-            selection={agentSelection}
-            busy={agentBusy}
-            status={agentStatus}
-            error={agentError}
-            mode={agentMode}
-            onModeChange={setAgentMode}
-            onCreate={handleCreateAgent}
-            onSaveAgent={handleSaveAgent}
-            onCancelConfig={() => setAgentSelection(null)}
-            onSelectAgent={handleSelectAgent}
-            onEditAgent={handleEditAgent}
-            onDeleteAgent={handleDeleteAgent}
-            onNewConversation={handleNewAgentConversation}
-            onOpenConversation={handleOpenAgentConversation}
-            onRenameConversation={handleRenameConversation}
-            onDeleteConversation={handleDeleteConversation}
-            onSendMessage={handleSendAgentMessage}
-            onStop={handleStopAgent}
-            onRevert={handleRevertMessage}
-          />
-        );
       case "account":
         return <PlaceholderPanel title="Contas" />;
       case "settings":
@@ -4058,6 +4048,36 @@ export default function App() {
       onOpenFolder={handleOpenFolder}
       onConnectRemote={() => void openSshFlow()}
       onOpenRecent={handleOpenRecent}
+    />
+  );
+
+  // The AI agents chat as a self-contained secondary side bar node.
+  const agentsSidebarNode = (
+    <AgentSidebar
+      rootPath={rootPath}
+      store={agentStore}
+      selection={agentSelection}
+      busy={agentBusy}
+      status={agentStatus}
+      error={agentError}
+      mode={agentMode}
+      onModeChange={setAgentMode}
+      onCreate={handleCreateAgent}
+      onSaveAgent={handleSaveAgent}
+      onCancelConfig={() => setAgentSelection(null)}
+      onSelectAgent={handleSelectAgent}
+      onEditAgent={handleEditAgent}
+      onDeleteAgent={handleDeleteAgent}
+      onNewConversation={handleNewAgentConversation}
+      onOpenConversation={handleOpenAgentConversation}
+      onRenameConversation={handleRenameConversation}
+      onDeleteConversation={handleDeleteConversation}
+      onSendMessage={handleSendAgentMessage}
+      onStop={handleStopAgent}
+      onRevert={handleRevertMessage}
+      onOpenFile={(path, line) =>
+        handleOpenFile({ name: baseName(path), path, isDir: false }, line)
+      }
     />
   );
 
@@ -4150,6 +4170,8 @@ export default function App() {
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
         panelOpen={panelOpen}
         onTogglePanel={() => setPanelOpen((v) => !v)}
+        agentsOpen={agentsSidebarOpen}
+        onToggleAgents={() => setAgentsSidebarOpen((v) => !v)}
         menus={menus}
       />
 
@@ -4173,8 +4195,7 @@ export default function App() {
                   if (v === "graph") handleShowGraph();
                   else {
                     setActiveView(v);
-                    // Picking a view must reveal its panel — the agents chat,
-                    // for one, lives exclusively in the sidebar.
+                    // Picking a view always reveals the primary sidebar.
                     setSidebarOpen(true);
                   }
                 }}
@@ -4308,6 +4329,47 @@ export default function App() {
             />
           </div>
         </main>
+
+        {/* Secondary side bar (AI agents chat), docked on the edge OPPOSITE the
+            primary sidebar. Flex `order` (see .agents-dock rules) puts it and
+            its resize handle on the correct side. */}
+        {agentsSidebarOpen && (
+          <div
+            className={`agents-resize-handle agents-resize-${agentsSide}`}
+            title="Arraste para redimensionar o chat"
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture(e.pointerId);
+              const startX = e.clientX;
+              const startW = Math.max(agentsSidebarWidth, AGENTS_SIDEBAR_MIN);
+              const onMove = (me: PointerEvent) => {
+                const delta = me.clientX - startX;
+                // Docked left, dragging right widens; docked right, dragging
+                // left widens.
+                const signed = agentsSide === "left" ? delta : -delta;
+                setAgentsSidebarWidth(
+                  Math.max(
+                    AGENTS_SIDEBAR_MIN,
+                    Math.min(startW + signed, window.innerWidth * 0.7),
+                  ),
+                );
+              };
+              const onUp = () => {
+                window.removeEventListener("pointermove", onMove);
+                window.removeEventListener("pointerup", onUp);
+              };
+              window.addEventListener("pointermove", onMove);
+              window.addEventListener("pointerup", onUp);
+            }}
+          />
+        )}
+        {agentsSidebarOpen && (
+          <aside
+            className={`agents-dock agents-dock-${agentsSide}`}
+            style={{ width: Math.max(agentsSidebarWidth, AGENTS_SIDEBAR_MIN) }}
+          >
+            {agentsSidebarNode}
+          </aside>
+        )}
       </div>
 
       {/* A tab from another window is hovering over this one. Over a tab strip →

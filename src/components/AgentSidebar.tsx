@@ -19,6 +19,7 @@ import type {
   AgentStore,
 } from "../agents/types";
 import { AGENT_MODES } from "../agents/types";
+import { parseFileRef, resolveWorkspacePath } from "../agents/fileRef";
 import { Codicon } from "../icons/codicons/Codicon";
 import type { IconAction } from "../icons/codicons/codicon-map";
 
@@ -73,6 +74,8 @@ interface AgentSidebarProps {
   onSendMessage: (message: string, mode: AgentMode) => Promise<void>;
   onStop: () => void;
   onRevert: (conversationId: string, userMessageId: string) => Promise<void>;
+  /** Abre um arquivo citado pelo agente no editor (linha opcional, 1-based). */
+  onOpenFile: (path: string, line?: number) => void;
 }
 
 /**
@@ -194,6 +197,8 @@ export function AgentSidebar(props: AgentSidebarProps) {
         onSend={props.onSendMessage}
         onStop={props.onStop}
         onRevert={props.onRevert}
+        onOpenFile={props.onOpenFile}
+        workspacePath={rootPath}
       />
     </div>
   );
@@ -459,6 +464,8 @@ function AgentChat({
   onSend,
   onStop,
   onRevert,
+  onOpenFile,
+  workspacePath,
 }: {
   agent: AgentDefinition;
   conversation: AgentConversation;
@@ -471,6 +478,8 @@ function AgentChat({
   onSend: (message: string, mode: AgentMode) => Promise<void>;
   onStop: () => void;
   onRevert: (conversationId: string, userMessageId: string) => Promise<void>;
+  onOpenFile: (path: string, line?: number) => void;
+  workspacePath: string | null;
 }) {
   const [draft, setDraft] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
@@ -593,7 +602,11 @@ function AgentChat({
                 </button>
               )}
             </div>
-            <MessageBody message={message} />
+            <MessageBody
+              message={message}
+              onOpenFile={onOpenFile}
+              workspacePath={workspacePath}
+            />
           </article>
         ))}
         {status && busy && (
@@ -824,9 +837,18 @@ function AgentConfigForm({
  * code, tables…) so they're rendered with react-markdown + GFM. HTML is NOT
  * enabled (no rehype-raw): the content is untrusted LLM output, so we keep the
  * sanitized default to avoid XSS. User messages stay plain text, preserving the
- * exact whitespace they typed.
+ * exact whitespace they typed. Inline `code` que parece um caminho de arquivo
+ * vira um botão que abre o arquivo no editor.
  */
-function MessageBody({ message }: { message: AgentMessage }) {
+function MessageBody({
+  message,
+  onOpenFile,
+  workspacePath,
+}: {
+  message: AgentMessage;
+  onOpenFile: (path: string, line?: number) => void;
+  workspacePath: string | null;
+}) {
   if (!message.content) {
     return (
       <p className="agent-message-placeholder">
@@ -844,10 +866,61 @@ function MessageBody({ message }: { message: AgentMessage }) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          // Open links in the user's browser, never navigate the app shell.
-          a: ({ node: _node, ...props }) => (
-            <a {...props} target="_blank" rel="noreferrer noopener" />
-          ),
+          a: ({ node: _node, href, children, ...props }) => {
+            // Um link cujo destino é um arquivo do workspace abre no editor;
+            // demais links (http…) abrem no navegador do usuário.
+            const ref = href ? parseFileRef(href) : null;
+            if (ref) {
+              return (
+                <button
+                  type="button"
+                  className="agent-file-link"
+                  title={`Abrir ${ref.path}`}
+                  onClick={() =>
+                    onOpenFile(
+                      resolveWorkspacePath(workspacePath, ref.path),
+                      ref.line,
+                    )
+                  }
+                >
+                  {children}
+                </button>
+              );
+            }
+            return (
+              <a {...props} href={href} target="_blank" rel="noreferrer noopener">
+                {children}
+              </a>
+            );
+          },
+          code: ({ node: _node, className, children, ...props }) => {
+            // Blocos de código (```lang) trazem className `language-*`; só o
+            // `code` inline (sem className) é candidato a referência de arquivo.
+            const raw = String(children);
+            const ref = !className ? parseFileRef(raw) : null;
+            if (ref) {
+              return (
+                <button
+                  type="button"
+                  className="agent-file-link code"
+                  title={`Abrir ${ref.path}`}
+                  onClick={() =>
+                    onOpenFile(
+                      resolveWorkspacePath(workspacePath, ref.path),
+                      ref.line,
+                    )
+                  }
+                >
+                  {children}
+                </button>
+              );
+            }
+            return (
+              <code className={className} {...props}>
+                {children}
+              </code>
+            );
+          },
         }}
       >
         {message.content}

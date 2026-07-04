@@ -371,6 +371,40 @@ body {
 .body.sidebar-right .sidebar-resize-handle { order: 1; }
 .body.sidebar-right .primary-dock { order: 2; }
 
+/* ---- Secondary side bar (AI agents chat), on the edge opposite the primary
+   sidebar. Flex `order` puts it and its handle on the correct side. ---- */
+.agents-dock {
+  flex-shrink: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background:
+    linear-gradient(145deg, rgba(119, 158, 190, 0.07), transparent 35%),
+    var(--acrylic-tint-strong);
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-card);
+}
+/* Docked left → dock e alça antes do editor; docked right → depois dele.
+   A alça fica sempre na costura, entre o dock e o editor. */
+.agents-dock-left { order: -2; }
+.agents-resize-left { order: -1; }
+.agents-resize-right { order: 9; }
+.agents-dock-right { order: 10; }
+
+.agents-resize-handle {
+  flex: 0 0 6px;
+  align-self: stretch;
+  margin: 0 -8px;
+  z-index: 3;
+  cursor: ew-resize;
+  border-radius: 4px;
+}
+.agents-resize-handle:hover,
+.agents-resize-handle:active {
+  background: var(--accent);
+}
+
 /* ---- Horizontal (top) activity bar ---- */
 .activity-bar {
   /* Smooth morph between lateral and top placements. */
@@ -2524,7 +2558,9 @@ select:focus-visible,
 .agent-message {
   margin-bottom: 10px;
   padding: 9px 11px;
-  color: var(--text-secondary);
+  /* Texto da conversa em contraste alto (não secundário/muted, que deixava o
+     chat lavado). */
+  color: var(--text);
   background: var(--acrylic-control);
   border: 1px solid var(--acrylic-border);
   border-radius: var(--radius-card);
@@ -2639,14 +2675,21 @@ select:focus-visible,
 }
 
 .agent-message-markdown strong {
-  font-weight: 650;
-  color: var(--text-secondary);
+  font-weight: 700;
+  color: var(--text);
 }
 
 .agent-message-markdown a {
   color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+.agent-message-markdown h1,
+.agent-message-markdown h2,
+.agent-message-markdown h3,
+.agent-message-markdown h4 {
+  color: var(--text);
 }
 
 .agent-message-markdown ul,
@@ -2682,8 +2725,43 @@ select:focus-visible,
   font-size: 12.5px;
   padding: 1px 5px;
   border-radius: var(--radius-control);
-  background: var(--acrylic-control);
-  border: 1px solid var(--acrylic-border);
+  /* Código inline em contraste maior — o cinza-sobre-cinza anterior sumia. */
+  color: #9cdcfe;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+/* Referência de arquivo clicável: aparência de link, mas abre no editor. */
+.agent-file-link {
+  appearance: none;
+  padding: 0;
+  color: var(--accent);
+  background: none;
+  border: none;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.agent-file-link:hover {
+  filter: brightness(1.12);
+}
+
+/* Variante monospace: um `code` inline que é caminho de arquivo. */
+.agent-file-link.code {
+  font-family: var(--font-mono, monospace);
+  font-size: 12.5px;
+  padding: 1px 5px;
+  border-radius: var(--radius-control);
+  color: var(--accent);
+  background: rgba(96, 205, 255, 0.12);
+  border: 1px solid rgba(96, 205, 255, 0.28);
+  text-decoration: none;
+}
+
+.agent-file-link.code:hover {
+  background: rgba(96, 205, 255, 0.2);
 }
 
 .agent-message-markdown pre {
