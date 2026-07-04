@@ -1078,19 +1078,6 @@ export function dotnetTestRun(
   return invoke<DotnetTestRun>("dotnet_test_run", { csprojPath, filter: filter ?? null });
 }
 
-// ── Solution explorer — roadmap csharp-ide-parity, Fase D ────────────────────
-
-/** One project inside a `.sln` (absolute project path). */
-export interface SlnProject {
-  name: string;
-  csprojPath: string;
-}
-
-/** Parses a classic `.sln` into its project list (solution folders skipped). */
-export function slnParse(slnPath: string): Promise<SlnProject[]> {
-  return invoke<SlnProject[]>("sln_parse", { slnPath });
-}
-
 /**
  * Starts a language server ON THE REMOTE host (issue #8, Phase 6) and bridges its
  * stdio to a local WebSocket — returns the same `{ port, token }` as

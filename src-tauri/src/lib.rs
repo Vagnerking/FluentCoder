@@ -10,7 +10,6 @@ mod razor;
 mod runner;
 mod search;
 mod session;
-mod sln;
 mod snap;
 mod ssh;
 mod terminal;
@@ -160,7 +159,6 @@ pub fn run() {
             dap::dap_stop_session,
             dap::dap_list_dotnet_processes,
             dap::dap_resolve_dotnet_target,
-            sln::sln_parse,
             testrunner::dotnet_test_list,
             testrunner::dotnet_test_run,
             razor::commands::razor_prepare,
