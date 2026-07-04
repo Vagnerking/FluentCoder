@@ -9,6 +9,7 @@ import type {
   GitCommit,
   GitStashEntry,
   GitStatus,
+  Eol,
   GraphData,
   KnowledgeIndex,
   McpConfig,
@@ -106,13 +107,53 @@ export async function readDir(path: string): Promise<FileNode[]> {
   }));
 }
 
-/** Reads a text file's contents (remote over SFTP when a session is attached). */
-export function readFile(path: string): Promise<string> {
+export type { Eol };
+
+/** A decoded text file plus the metadata needed to round-trip it on save. */
+export interface DecodedFile {
+  /** Contents, normalised to LF line endings. */
+  content: string;
+  /** Encoding label (e.g. "UTF-8", "UTF-16LE", "windows-1252"). */
+  encoding: string;
+  /** Whether the file began with a byte-order mark. */
+  bom: boolean;
+  /** Original line-ending style. */
+  eol: Eol;
+}
+
+/**
+ * Reads a text file with encoding + line-ending detection (remote over SFTP
+ * when a session is attached). Local files go through the Rust detector (BOM,
+ * UTF-16, Windows-1252/Latin-1 heuristic); remote SFTP reads are assumed UTF-8
+ * + LF since the SFTP path returns a decoded string.
+ */
+export async function readFile(path: string): Promise<DecodedFile> {
   const remote = getActiveRemote();
   if (remote) {
-    return invoke<string>("ssh_read_file", { connId: remote.connId, path });
+    const content = await invoke<string>("ssh_read_file", {
+      connId: remote.connId,
+      path,
+    });
+    return { content, encoding: "UTF-8", bom: false, eol: "Lf" };
   }
-  return invoke<string>("read_file", { path });
+  return invoke<DecodedFile>("read_file", { path });
+}
+
+/**
+ * Re-reads a local file forcing a specific encoding ("Reopen with Encoding").
+ * Not available on remote SSH workspaces — the encoding detector only runs on
+ * the local FS command, so we reject rather than read the remote path locally.
+ */
+export function readFileWithEncoding(
+  path: string,
+  encoding: string
+): Promise<DecodedFile> {
+  if (getActiveRemote()) {
+    return Promise.reject(
+      new Error("Reabrir com codificação ainda não é suportado em workspaces remotos.")
+    );
+  }
+  return invoke<DecodedFile>("read_file_with_encoding", { path, encoding });
 }
 
 /**
@@ -128,13 +169,30 @@ export function readFileBase64(path: string): Promise<string> {
   return invoke<string>("read_file_base64", { path });
 }
 
-/** Writes contents to a file (remote over SFTP when a session is attached). */
-export function writeFile(path: string, contents: string): Promise<void> {
+/**
+ * Writes contents to a file (remote over SFTP when a session is attached).
+ *
+ * `contents` is the editor's LF buffer. When `encoding`/`eol`/`bom` are given
+ * (the normal save of an opened file), the local backend re-applies them so the
+ * file keeps its original encoding/BOM/line ending. The remote SFTP path writes
+ * the buffer as-is (UTF-8/LF).
+ */
+export function writeFile(
+  path: string,
+  contents: string,
+  opts?: { encoding?: string; eol?: Eol; bom?: boolean }
+): Promise<void> {
   const remote = getActiveRemote();
   if (remote) {
     return invoke("ssh_write_file", { connId: remote.connId, path, contents });
   }
-  return invoke("write_file", { path, contents });
+  return invoke("write_file", {
+    path,
+    contents,
+    encoding: opts?.encoding ?? null,
+    eol: opts?.eol ?? null,
+    bom: opts?.bom ?? null,
+  });
 }
 
 // ---- Remote SSH (issue #8) ----
@@ -1254,6 +1312,13 @@ export function razorRemapRangesToSourceStrict(
 /** Drop a `.cshtml`'s cached source map (on close). */
 export function razorForget(cshtmlPath: string): Promise<void> {
   return invoke<void>("razor_forget", { cshtmlPath });
+}
+
+/** Append a line to the shared Razor/C# pipeline diagnostic log
+ * (`<app_data_dir>/razor-diag.log`), so the frontend LSP chain lands in the
+ * same ordered trace as the backend broker steps. Best-effort fire-and-forget. */
+export function razorDiagLog(line: string): Promise<void> {
+  return invoke<void>("razor_diag_log", { line });
 }
 
 /** Result of a live emit (per-keystroke projection via the sidecar). */

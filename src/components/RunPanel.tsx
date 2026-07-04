@@ -31,6 +31,7 @@ function useCsprojs(rootPath: string): string[] {
   }, [rootPath]);
   return csprojs;
 }
+import { Tooltip } from "./Tooltip";
 
 interface RunPanelProps {
   /** Open folder; configs live in `<root>/.project/run.json`. Null = none. */
@@ -124,13 +125,16 @@ export function RunPanel({ rootPath, onRun }: RunPanelProps) {
     <div className="run-panel">
       <div className="explorer-header run-header">
         <span className="explorer-title">EXECUTAR E DEPURAR</span>
-        <button
-          className="git-icon-btn"
-          title="Nova configuração"
-          onClick={() => setDraft(draft ? null : { ...EMPTY_DRAFT })}
-        >
-          +
-        </button>
+        <Tooltip label={draft ? "Fechar nova configuração" : "Nova configuração"}>
+          <button
+            className="git-icon-btn"
+            aria-label={draft ? "Fechar nova configuração" : "Nova configuração"}
+            aria-expanded={Boolean(draft)}
+            onClick={() => setDraft(draft ? null : { ...EMPTY_DRAFT })}
+          >
+            +
+          </button>
+        </Tooltip>
       </div>
 
       {error && <div className="git-error">{error}</div>}
@@ -184,24 +188,28 @@ export function RunPanel({ rootPath, onRun }: RunPanelProps) {
           ) : (
             configs.map((c, i) => (
               <div key={`${c.name}-${i}`} className="run-row" title={c.command}>
-                <button
-                  className="run-play"
-                  title={`Executar: ${c.command}`}
-                  onClick={() => onRun(buildCommand(c))}
-                >
-                  ▶
-                </button>
+                <Tooltip label={`Executar: ${c.command}`}>
+                  <button
+                    className="run-play"
+                    aria-label={`Executar: ${c.command}`}
+                    onClick={() => onRun(buildCommand(c))}
+                  >
+                    ▶
+                  </button>
+                </Tooltip>
                 <div className="run-info">
                   <span className="run-name">{c.name}</span>
                   <span className="run-cmd">{c.command}</span>
                 </div>
-                <button
-                  className="run-remove"
-                  title="Remover"
-                  onClick={() => removeConfig(i)}
-                >
-                  ✕
-                </button>
+                <Tooltip label="Remover">
+                  <button
+                    className="run-remove"
+                    aria-label="Remover"
+                    onClick={() => removeConfig(i)}
+                  >
+                    ✕
+                  </button>
+                </Tooltip>
               </div>
             ))
           )}
@@ -215,24 +223,28 @@ export function RunPanel({ rootPath, onRun }: RunPanelProps) {
             </div>
             {suggestions.map((s, i) => (
               <div key={`sug-${i}`} className="run-row" title={s.command}>
-                <button
-                  className="run-play"
-                  title={`Executar: ${s.command}`}
-                  onClick={() => onRun(buildCommand(s))}
-                >
-                  ▶
-                </button>
+                <Tooltip label={`Executar: ${s.command}`}>
+                  <button
+                    className="run-play"
+                    aria-label={`Executar: ${s.command}`}
+                    onClick={() => onRun(buildCommand(s))}
+                  >
+                    ▶
+                  </button>
+                </Tooltip>
                 <div className="run-info">
                   <span className="run-name">{s.name}</span>
                   <span className="run-cmd">{s.command}</span>
                 </div>
-                <button
-                  className="git-link-btn"
-                  title="Adicionar às configurações"
-                  onClick={() => addConfig(s)}
-                >
-                  +
-                </button>
+                <Tooltip label="Adicionar às configurações">
+                  <button
+                    className="git-link-btn"
+                    aria-label="Adicionar às configurações"
+                    onClick={() => addConfig(s)}
+                  >
+                    +
+                  </button>
+                </Tooltip>
               </div>
             ))}
           </div>

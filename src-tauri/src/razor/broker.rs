@@ -190,7 +190,7 @@ mod tests {
         assert!(p.shadow_csproj_content.contains("Sdk=\"Microsoft.NET.Sdk\""));
         assert!(p
             .shadow_csproj_content
-            .contains("<ProjectReference Include=\"C:/ws/App/App.csproj\" />"));
+            .contains("<ProjectReference Include=\"C:/ws/App/App.csproj\""));
         assert!(p
             .shadow_csproj_content
             .contains("<FrameworkReference Include=\"Microsoft.AspNetCore.App\" />"));

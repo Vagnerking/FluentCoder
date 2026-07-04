@@ -147,15 +147,16 @@ function openCshtmlModels(): monaco.editor.ITextModel[] {
 /**
  * `openCshtmlModels()`, waiting up to `timeoutMs` for the first one to EXIST.
  *
- * Boot race (observed live on session restore): the manager starts this server
- * the moment `cshtml` enters the opened-languages set, but the restored tab's
- * Monaco model may not be created/re-typed yet — the old code threw
- * "no .cshtml open to serve", the server latched into the error state, and the
- * manager never retries (the language is already in its started set). Waiting
- * for `onDidCreateModel`/`onDidChangeModelLanguage` closes the race without
- * changing any lifecycle contract.
+ * Boot race (observed live on session restore; also fixed independently on the
+ * v10 branch as `awaitCshtmlModels` — convergent evolution): the manager starts
+ * this server the moment `cshtml` enters the opened-languages set, but the
+ * restored tab's Monaco model may not be created/re-typed yet — the old code
+ * threw "no .cshtml open to serve", the server latched into the error state,
+ * and the manager never retries (the language is already in its started set).
+ * Waiting for `onDidCreateModel`/`onDidChangeModelLanguage` closes the race
+ * without changing any lifecycle contract.
  */
-function waitForCshtmlModels(timeoutMs = 10_000): Promise<monaco.editor.ITextModel[]> {
+function waitForCshtmlModels(timeoutMs = 15_000): Promise<monaco.editor.ITextModel[]> {
   const now = openCshtmlModels();
   if (now.length > 0) return Promise.resolve(now);
   return new Promise((resolve) => {
@@ -392,6 +393,14 @@ export async function startRazorProjectionServer(
       lspLog("razor projection: read .g.cs failed", info.generatedPath, String(err));
       return;
     }
+    // Which `.g.cs` (and how big) is being opened in Roslyn — the source map is
+    // built from THIS file, so its line count must match the positions Roslyn
+    // later reports. A mismatch (e.g. build vs sidecar layout) shows up as the
+    // diagnostics landing outside every region (mapped=0).
+    lspLog("razor projection: openProjection .g.cs", {
+      path: info.generatedPath,
+      lines: text.split("\n").length,
+    });
 
     // Run through the per-doc snapshot queue so this authoritative reopen can't
     // interleave with a live sync / provider ensureFresh for the same doc.
@@ -432,6 +441,7 @@ export async function startRazorProjectionServer(
   const pullDiagnostics = async (doc: ProjectionDoc): Promise<void> => {
     if (disposed) return;
     let result: { items?: unknown[] } | null = null;
+    const startedAt = typeof performance !== "undefined" ? performance.now() : 0;
     try {
       // Serialize against the provisional-completion swap so diagnostics aren't
       // pulled from a temporarily-injected `.g.cs`.
@@ -447,6 +457,20 @@ export async function startRazorProjectionServer(
     }
     const items = (result?.items ?? []) as Parameters<typeof routeDiagnostics>[0];
     const markers = await routeDiagnostics(items, remapRangesFor(doc.cshtmlPath));
+    // Visibility into the exact point where diagnostics tend to vanish: how many
+    // Roslyn returned for the `.g.cs` vs how many survived the `#line` remap onto
+    // the `.cshtml`. `pulled>0, mapped=0` ⇒ remap dropped them (source-map/range
+    // bug); `pulled=0` ⇒ Roslyn classified nothing (project not loaded / wrong
+    // .g.cs / shadow unrestored). Both previously looked identical (silent).
+    // `ms` is the Roslyn pull round-trip — surfaces a slow/degraded server.
+    const pullMs =
+      startedAt > 0 ? Math.round(performance.now() - startedAt) : undefined;
+    lspLog("razor projection: diagnostics", {
+      cshtml: doc.cshtmlPath,
+      pulled: items.length,
+      mapped: markers.length,
+      ...(pullMs !== undefined ? { ms: pullMs } : {}),
+    });
     // Staleness guard: the awaits above (server pull + range remap) yield, so the
     // doc may have been closed (forgetDoc) or replaced (reprepare/reopen) while we
     // were waiting. If so, forgetDoc already cleared this file's markers + store;
@@ -1174,20 +1198,17 @@ export async function startRazorProjectionServer(
     );
   };
 
-  // Models covered by the STARTUP prepare: attaching them must not schedule a
-  // second, immediate reprepare — the old unconditional schedule re-ran the whole
-  // pipeline ~500ms after the first one on every server start (duplicate work,
-  // and under the old dotnet-build emit a duplicate FULL build).
-  const initiallyPrepared = new Set(inProject.map((m) => canonicalFileUriKey(m.uri.toString())));
-
-  const attachModel = (model: monaco.editor.ITextModel): void => {
+  const attachModel = (model: monaco.editor.ITextModel, initial = false): void => {
     if (model.getLanguageId() !== CSHTML_PROJECTION_LANGUAGE_ID || model.uri.scheme !== "file") return;
     if (!inThisProject(fromFileUri(model.uri.toString()))) return; // other project (V1)
-    // A newly-opened `.cshtml` matches disk → safe to reprepare immediately.
-    // One-shot skip for the docs the startup prepare just covered.
-    if (!initiallyPrepared.delete(canonicalFileUriKey(model.uri.toString()))) {
-      scheduleReprepare();
-    }
+    // Reprepare ONLY for models that appear AFTER startup. The models already
+    // open at start are covered by the initial `prepared`/`openProjection` in
+    // `onProjectInitialized`; firing a reprepare for them here would run a second
+    // `razorPrepare` (emit + materialize) that races the `.g.cs` Roslyn just
+    // opened — observed as `reprepare failed: os error 32` (file lock) and a
+    // desynced map, so every diagnostic dropped (`pulled>0, mapped=0`). A
+    // genuinely new tab, by contrast, has no projection yet and must reprepare.
+    if (!initial) scheduleReprepare();
     // Live re-emit on every (debounced) edit, so detection follows the buffer.
     const sub = model.onDidChangeContent(() => {
       if (disposed) return;
@@ -1196,9 +1217,19 @@ export async function startRazorProjectionServer(
     disposables.push(sub);
   };
 
-  disposables.push(monaco.editor.onDidCreateModel(attachModel));
-  // Attach to any `.cshtml` already open when the server starts.
-  for (const m of openCshtmlModels()) attachModel(m);
+  disposables.push(monaco.editor.onDidCreateModel((m) => attachModel(m)));
+  // Attach to any `.cshtml` already open when the server starts. Mark a model
+  // `initial` (suppress its reprepare) ONLY if the startup `prepared` actually
+  // projected it — otherwise a `.cshtml` that opened AFTER `awaitCshtmlModels()`
+  // snapshotted (but before this loop) isn't in `prepared` and would be left
+  // without a projection; those must reprepare like a genuinely new tab.
+  const projectedKeys = new Set(
+    prepared.available.map((info) => canonicalFileUriKey(toFileUri(info.cshtmlPath)))
+  );
+  for (const m of openCshtmlModels()) {
+    const isProjected = projectedKeys.has(canonicalFileUriKey(m.uri.toString()));
+    attachModel(m, isProjected);
+  }
   disposables.push(
     monaco.editor.onWillDisposeModel((model) => forgetDoc(canonicalFileUriKey(model.uri.toString())))
   );
@@ -1281,7 +1312,7 @@ export async function startRazorProjectionServer(
 
 /** Read the projected `.g.cs` from disk via the app's FS command. */
 async function readGenerated(path: string): Promise<string> {
-  return readFile(path);
+  return (await readFile(path)).content;
 }
 
 /** LSP hover contents → Monaco markdown. */

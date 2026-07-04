@@ -1,6 +1,7 @@
-import { useEffect, useId, useRef } from "react";
+import { useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import type { ConfirmButton, ConfirmDialogProps } from "../types";
+import { useModalFocus } from "./useModalFocus";
 
 /**
  * Reusable confirmation modal (Fluent 2). Purely presentational: it shows a
@@ -22,50 +23,16 @@ export function ConfirmDialog<T>({
   onChoice,
 }: ConfirmDialogProps<T>) {
   const surfaceRef = useRef<HTMLDivElement>(null);
+  const defaultBtnRef = useRef<HTMLButtonElement>(null);
   const titleId = useId();
   const messageId = useId();
-  // The element focused before the modal opened, restored on unmount.
-  const previouslyFocused = useRef<HTMLElement | null>(null);
 
-  useEffect(() => {
-    previouslyFocused.current = document.activeElement as HTMLElement | null;
-
-    // Focus the default button (or the first one) so Enter/Tab start there.
-    const surface = surfaceRef.current;
-    const focusables = surface
-      ? Array.from(surface.querySelectorAll<HTMLButtonElement>("button"))
-      : [];
-    const defaultIndex = buttons.findIndex((b) => b.default);
-    (focusables[defaultIndex >= 0 ? defaultIndex : 0] ?? surface)?.focus();
-
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onChoice(null);
-        return;
-      }
-      // Focus trap: keep Tab/Shift+Tab cycling within the modal's buttons.
-      if (e.key === "Tab" && focusables.length > 0) {
-        const first = focusables[0];
-        const last = focusables[focusables.length - 1];
-        const active = document.activeElement;
-        if (e.shiftKey && active === first) {
-          e.preventDefault();
-          last.focus();
-        } else if (!e.shiftKey && active === last) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      previouslyFocused.current?.focus?.();
-    };
-    // Buttons are stable for the lifetime of an open dialog.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Shared modal contract: trap + restore for free, Esc cancels, and the
+  // default button (or the first) takes initial focus (F2-AUD-007).
+  useModalFocus(surfaceRef, {
+    onEscape: () => onChoice(null),
+    initialFocus: defaultBtnRef,
+  });
 
   return createPortal(
     <div className="confirm-overlay" onMouseDown={() => onChoice(null)}>
@@ -86,18 +53,25 @@ export function ConfirmDialog<T>({
           {message}
         </p>
         <div className="confirm-actions">
-          {buttons.map((btn: ConfirmButton<T>, i) => (
-            <button
-              key={i}
-              type="button"
-              className={`confirm-button confirm-${btn.variant}${
-                btn.default ? " is-default" : ""
-              }`}
-              onClick={() => onChoice(btn.value)}
-            >
-              {btn.label}
-            </button>
-          ))}
+          {(() => {
+            // The default button gets the ref for initial focus; if no button
+            // is flagged default, the first one does.
+            const defaultIndex = buttons.findIndex((b) => b.default);
+            const focusIndex = defaultIndex >= 0 ? defaultIndex : 0;
+            return buttons.map((btn: ConfirmButton<T>, i) => (
+              <button
+                key={i}
+                ref={i === focusIndex ? defaultBtnRef : undefined}
+                type="button"
+                className={`confirm-button confirm-${btn.variant}${
+                  btn.default ? " is-default" : ""
+                }`}
+                onClick={() => onChoice(btn.value)}
+              >
+                {btn.label}
+              </button>
+            ));
+          })()}
         </div>
       </div>
     </div>,

@@ -88,6 +88,7 @@ import {
   pickSavePath,
   readDir,
   readFile,
+  readFileWithEncoding,
   setExplorerWorkspaceRoot,
   sessionLoad,
   sessionSetLastFolder,
@@ -229,6 +230,19 @@ function isUntitled(path: string): boolean {
 
 /** Editor tab size — kept in one place so the StatusBar and Monaco agree. */
 const TAB_SIZE = 2;
+
+/** Encodings offered in the "Reopen with Encoding" picker. `id` is the label
+ *  understood by the Rust backend (encoding_rs `for_label`). */
+const COMMON_ENCODINGS: { id: string; label: string }[] = [
+  { id: "UTF-8", label: "UTF-8" },
+  { id: "UTF-16LE", label: "UTF-16 LE" },
+  { id: "UTF-16BE", label: "UTF-16 BE" },
+  { id: "windows-1252", label: "Windows 1252 (Latin-1)" },
+  { id: "ISO-8859-1", label: "ISO 8859-1" },
+  { id: "windows-1251", label: "Windows 1251 (Cyrillic)" },
+  { id: "Shift_JIS", label: "Shift JIS" },
+  { id: "GBK", label: "GBK (Simplified Chinese)" },
+];
 
 /** Reads a persisted layout number from localStorage, falling back on error. */
 function readStoredNumber(key: string, fallback: number): number {
@@ -1430,9 +1444,16 @@ export default function App() {
               for (const t of sg.tabs) {
                 const mode: OpenMode = (t.mode ?? defaultModeFor(t.path)) as OpenMode;
                 let content = "";
+                let encoding: string | undefined;
+                let bom: boolean | undefined;
+                let eol: OpenFile["eol"];
                 if (mode === "text") {
                   try {
-                    content = await readFile(t.path);
+                    const decoded = await readFile(t.path);
+                    content = decoded.content;
+                    encoding = decoded.encoding;
+                    bom = decoded.bom;
+                    eol = decoded.eol;
                   } catch {
                     continue; // file gone — skip this tab
                   }
@@ -1443,6 +1464,9 @@ export default function App() {
                   content,
                   dirty: false,
                   mode,
+                  encoding,
+                  bom,
+                  eol,
                 });
               }
               const activePath =
@@ -2044,14 +2068,17 @@ export default function App() {
       try {
         const active = await getActiveEditor();
         if (active) {
-          const content =
-            resolvedMode === "text" ? await readFile(node.path) : "";
+          const decoded =
+            resolvedMode === "text" ? await readFile(node.path) : null;
           await openInDetached(active.label, {
             path: node.path,
             name: node.name,
-            content,
+            content: decoded?.content ?? "",
             dirty: false,
             mode: resolvedMode,
+            encoding: decoded?.encoding,
+            bom: decoded?.bom,
+            eol: decoded?.eol,
           });
           return true;
         }
@@ -2063,8 +2090,8 @@ export default function App() {
       try {
         // Preview modes (image/video/audio) load their own bytes via base64;
         // only the text editor needs the file contents up front.
-        const content =
-          resolvedMode === "text" ? await readFile(node.path) : "";
+        const decoded =
+          resolvedMode === "text" ? await readFile(node.path) : null;
         // Dedupe INSIDE the functional update: the `already` check above reads a
         // snapshot, so two quick opens of the same file both pass it and would
         // each append a tab. Re-checking `prev` here makes "one tab per file"
@@ -2080,9 +2107,12 @@ export default function App() {
             {
               path: node.path,
               name: node.name,
-              content,
+              content: decoded?.content ?? "",
               dirty: false,
               mode: resolvedMode,
+              encoding: decoded?.encoding,
+              bom: decoded?.bom,
+              eol: decoded?.eol,
             },
           ];
         });
@@ -2273,7 +2303,14 @@ export default function App() {
           const formatted = await formatModelForSave(targetPath);
           if (formatted != null) contentToWrite = formatted;
         }
-        await writeFile(targetPath, contentToWrite);
+        // Preserve the file's original encoding/BOM/line ending on save (VS Code
+        // default). Untitled buffers have no detected encoding yet, so they fall
+        // back to UTF-8 + LF inside writeFile.
+        await writeFile(targetPath, contentToWrite, {
+          encoding: file.encoding,
+          eol: file.eol,
+          bom: file.bom,
+        });
         // Notify disk-based language tooling that this file's on-disk content is
         // now current. The CSHTML projection broker (ADR 0002) regenerates from
         // disk (`dotnet build`), so it must reprepare on save — not on every
@@ -2308,10 +2345,40 @@ export default function App() {
 
   /** Remove a tab from `openFiles`, moving focus off it if it was active. */
   /** Removes a tab from a group, moving focus off it and collapsing an emptied
-   *  group (except the last one). */
+   *  group (except the last one). Orphaned models are disposed by the
+   *  reconciliation effect below (see `keepCurrentModel`). */
   const removeTabFromGroup = useCallback((groupId: string, path: string) => {
     setLayout((l) => closeFile(l, groupId, path));
   }, []);
+
+  // Dispose Monaco models for files that were open and are now closed in EVERY
+  // group. `EditorPane` sets `keepCurrentModel`, so Monaco no longer disposes a
+  // model on tab switch (which previously tore down the Razor projection / LSP
+  // document and made C# diagnostics vanish after revisiting a tab). The flip
+  // side: we must dispose models on REAL close ourselves, or they'd leak and keep
+  // stale LSP documents (or, for untitled buffers, their unsaved contents) alive.
+  // Reconciling against the set of open paths covers every close path (close,
+  // close-all/others/left/right, detach) at once, and the split-group guard is
+  // automatic — a path still open in another group stays in `openNow`. Disposing
+  // fires onWillDisposeModel → the broker's forgetDoc and the client's didClose:
+  // the correct teardown for a closed document. Untitled buffers are tracked too
+  // (their model URI is the synthetic `untitled:` path, matching EditorPane).
+  const openFilePathsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const openNow = new Set<string>();
+    for (const group of Object.values(layout.groups)) {
+      for (const f of group.files) openNow.add(f.path);
+    }
+    for (const path of openFilePathsRef.current) {
+      if (openNow.has(path)) continue;
+      // Mirror EditorPane's `modelPath`: untitled buffers keep their synthetic
+      // `untitled:` URI; on-disk files go through the `file://` scheme.
+      const uri = isUntitled(path) ? path : toFileUri(path);
+      const model = monaco.editor.getModel(monaco.Uri.parse(uri));
+      if (model && !model.isDisposed()) model.dispose();
+    }
+    openFilePathsRef.current = openNow;
+  }, [layout]);
 
   /** Reorders tabs within a group: drops `fromPath` just before/after `toPath`. */
   const reorderTabsInGroup = useCallback(
@@ -3352,6 +3419,77 @@ export default function App() {
     });
   }, [activeFile]);
 
+  /**
+   * "Reopen with Encoding" (VS Code): re-decode the file on disk forcing the
+   * chosen encoding and replace the buffer. Only for saved local files — a
+   * dirty buffer would lose edits (we warn), and remote/untitled have no path
+   * to re-read.
+   */
+  const handleSelectEncoding = useCallback(() => {
+    if (!activeFile || isUntitled(activeFile.path)) return;
+    const file = activeFile;
+    const items: QuickPickItem[] = COMMON_ENCODINGS.map((enc) => ({
+      id: enc.id,
+      label: enc.label + (file.encoding === enc.id ? "  (atual)" : ""),
+      icon: "file",
+      keywords: enc.id,
+    }));
+    setQuickPick({
+      title: "Reabrir com Codificação",
+      placeholder: `Codificação para ${file.name}…`,
+      items,
+      onPick: async (it) => {
+        if (file.dirty) {
+          const ok = window.confirm(
+            "Reabrir com outra codificação descarta as alterações não salvas deste arquivo. Continuar?"
+          );
+          if (!ok) return;
+        }
+        try {
+          const decoded = await readFileWithEncoding(file.path, it.id);
+          setLayout((l) =>
+            patchFileEverywhere(l, file.path, {
+              content: decoded.content,
+              encoding: decoded.encoding,
+              bom: decoded.bom,
+              eol: decoded.eol,
+              dirty: false,
+            })
+          );
+        } catch (err) {
+          alert(`Não foi possível reabrir com ${it.id}:\n${err}`);
+        }
+      },
+    });
+  }, [activeFile]);
+
+  /**
+   * Changes the active file's line ending (LF/CRLF). The buffer stays LF in
+   * memory; we record the choice and mark the file dirty so the next save
+   * re-applies it on disk.
+   */
+  const handleSelectEol = useCallback(() => {
+    if (!activeFile) return;
+    const file = activeFile;
+    const items: QuickPickItem[] = (["Lf", "Crlf"] as const).map((id) => ({
+      id,
+      label: (id === "Lf" ? "LF" : "CRLF") + (file.eol === id ? "  (atual)" : ""),
+      description: id === "Lf" ? "\\n (Unix/macOS)" : "\\r\\n (Windows)",
+      icon: "textEditor",
+      keywords: id,
+    }));
+    setQuickPick({
+      title: "Selecionar Fim de Linha",
+      placeholder: "Estilo de quebra de linha…",
+      items,
+      onPick: (it) => {
+        const eol = it.id as OpenFile["eol"];
+        if (file.eol === eol) return;
+        setLayout((l) => patchFileEverywhere(l, file.path, { eol, dirty: true }));
+      },
+    });
+  }, [activeFile]);
+
   // True when there's an active editor buffer; gates Edit/Selection/Go items.
   const hasEditor = activeFile != null;
 
@@ -3869,9 +4007,9 @@ export default function App() {
           />
         );
       case "account":
-        return <PlaceholderPanel title="CONTAS" />;
+        return <PlaceholderPanel title="Contas" />;
       case "settings":
-        return <PlaceholderPanel title="GERENCIAR" />;
+        return <PlaceholderPanel title="Gerenciar" />;
       default:
         return (
           <FileExplorer
@@ -4227,6 +4365,16 @@ export default function App() {
         onShowProblems={() => showPanelTab("problems")}
         onSelectTsVersion={handleSelectTsVersion}
         onSelectLanguage={activeFile ? handleSelectLanguageMode : undefined}
+        encoding={activeFile?.encoding ?? null}
+        eol={activeFile?.eol ? (activeFile.eol === "Lf" ? "LF" : "CRLF") : null}
+        onSelectEncoding={
+          // Reopen-with-encoding re-reads from the local FS, so it's offered
+          // only for saved local files (not untitled, not remote SSH).
+          activeFile && !isUntitled(activeFile.path) && !remoteSession
+            ? handleSelectEncoding
+            : undefined
+        }
+        onSelectEol={activeFile ? handleSelectEol : undefined}
       />
 
 

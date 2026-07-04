@@ -137,10 +137,14 @@ export async function remapRangeToMonaco(
  * always a false positive here. A REAL ambiguity (two DIFFERENT members) keeps its
  * distinct names, so we only drop the self-ambiguous case.
  *
- * (The standalone Roslyn LSP offers no supported way to suppress the user
- * project's Razor generation per-workspace — `Directory.Solution.props` isn't
- * honored by its per-project MSBuild load, and a metadata reference still carries
- * the page classes — so we filter the phantom at the diagnostic boundary.)
+ * As of the shadow-csproj fix (the `ProjectReference` now sets
+ * `EnableDefaultRazorGenerateItems=false` etc. on the user project — see
+ * `shadow.rs`), the duplication is eliminated at the source and this phantom no
+ * longer appears for the common Web-SDK case. This filter is KEPT as a defensive
+ * net: a project that still surfaces the duplicate type by another path (e.g. a
+ * pre-built metadata reference carrying the page classes, or a custom Razor
+ * target) would otherwise resurface the self-ambiguous CS0229. A REAL ambiguity
+ * cites two DIFFERENT members, so dropping only the self-identical case is safe.
  *
  * LOCALE-AGNOSTIC: CS0229's message always cites the two ambiguous members in
  * single quotes (`'A' ... 'B'`), but the surrounding words ("Ambiguity between …

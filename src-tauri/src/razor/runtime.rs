@@ -113,7 +113,7 @@ fn derive_cached(csproj: &Path, project_dir: &Path, timeout: Duration) -> io::Re
         Ok(d) => d,
         Err(first_err) => {
             // One-shot restore retry: covers the "assets missing" first-ever case.
-            eprintln!("[razor:derive] no-restore eval failed ({first_err}); retrying with restore");
+            crate::rdiag!("[razor:derive] no-restore eval failed ({first_err}); retrying with restore");
             run_derive(
                 derive::derive_command_with_restore(&csproj_str, None),
                 project_dir,
@@ -312,6 +312,48 @@ fn prepare_lock_for(csproj: &Path) -> Arc<Mutex<()>> {
     guard.entry(project_key(csproj)).or_default().clone()
 }
 
+/// Run a process to completion and return its exit status (stdout/stderr
+/// discarded), with the same timeout + no-console-window behavior as
+/// {@link run_capturing}. Unlike `run_capturing` — which returns `Ok` on ANY
+/// exit so callers like the emit can tolerate the deliberate compile failure —
+/// this surfaces the exit CODE, so the restore path can tell a real
+/// `dotnet restore` failure from success (a non-zero restore leaves the shadow
+/// unloadable → no C# diagnostics).
+fn run_to_status(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    timeout: Duration,
+) -> io::Result<std::process::ExitStatus> {
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .current_dir(cwd)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = cmd.spawn()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("`{program}` timed out after {}s", timeout.as_secs()),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// A materialized projection ready to serve.
 pub struct PreparedProjection {
     pub cshtml_rel: PathBuf,
@@ -386,7 +428,7 @@ pub fn prepare_shell(
     //    design-time — no restore, no builds).
     let t = Instant::now();
     let derived = derive_cached(user_csproj_path, user_project_dir, timeout)?;
-    eprintln!("[razor:timing] derive {:?}", t.elapsed());
+    crate::rdiag!("[razor:timing] derive {:?}", t.elapsed());
 
     // 2. plan (pure).
     let plan = broker::plan(&BrokerInputs {
@@ -402,12 +444,12 @@ pub fn prepare_shell(
     // 3. materialize the shell (csproj + sln, content-aware: no mtime churn).
     let t = Instant::now();
     exec::materialize_shell(&plan)?;
-    eprintln!("[razor:timing] materialize-shell {:?}", t.elapsed());
+    crate::rdiag!("[razor:timing] materialize-shell {:?}", t.elapsed());
 
     // 4. restore the shadow so Roslyn can load it.
     restore_shadow(&plan, timeout);
 
-    eprintln!("[razor:timing] prepare-shell TOTAL {:?}", started.elapsed());
+    crate::rdiag!("[razor:timing] prepare-shell TOTAL {:?}", started.elapsed());
     Ok(ShellPrepared { plan, derived })
 }
 
@@ -424,7 +466,7 @@ fn restore_shadow(plan: &BrokerPlan, timeout: Duration) {
     let fp_current = content_fingerprint(&plan.shadow_csproj_content);
     let fp_on_disk = std::fs::read_to_string(&fp_path).unwrap_or_default();
     if assets.exists() && fp_on_disk == fp_current {
-        eprintln!("[razor:timing] restore SKIPPED (shadow already restored)");
+        crate::rdiag!("[razor:timing] restore SKIPPED (shadow already restored)");
         return;
     }
     let t = Instant::now();
@@ -444,9 +486,9 @@ fn restore_shadow(plan: &BrokerPlan, timeout: Duration) {
             out.exit_code_display(),
             out.stderr_tail()
         ),
-        Err(e) => eprintln!("[razor:error] shadow restore failed to run: {e}"),
+        Err(e) => crate::rdiag!("[razor:error] shadow restore failed to run: {e}"),
     }
-    eprintln!("[razor:timing] restore {:?}", t.elapsed());
+    crate::rdiag!("[razor:timing] restore {:?}", t.elapsed());
 }
 
 /// True when `pf`'s on-disk shadow projection is newer than every input that can
@@ -497,7 +539,7 @@ pub fn emit_fallback(
         }
     });
     if emit_current {
-        eprintln!("[razor:timing] emit-fallback SKIPPED (projections up-to-date)");
+        crate::rdiag!("[razor:timing] emit-fallback SKIPPED (projections up-to-date)");
     } else {
         let t = Instant::now();
         let (eprog, eargs) = &plan.emit_command;
@@ -506,13 +548,13 @@ pub fn emit_fallback(
             // Non-zero emit is TOLERATED (the generator still emits when the
             // user's C# has errors) but no longer silent: if the .g.cs ends up
             // missing, this line says why.
-            eprintln!(
+            crate::rdiag!(
                 "[razor:error] emit-fallback exited {} — {}",
                 out.exit_code_display(),
                 out.stderr_tail()
             );
         }
-        eprintln!("[razor:timing] emit-fallback {:?}", t.elapsed());
+        crate::rdiag!("[razor:timing] emit-fallback {:?}", t.elapsed());
     }
     exec::materialize_projections(plan)
 }
@@ -529,6 +571,7 @@ pub fn prepare_with_timeout(
     cshtml_rels: &[PathBuf],
     timeout: Duration,
 ) -> io::Result<PreparedShadow> {
+    let started = Instant::now();
     let shell = prepare_shell(
         workspace_dir,
         user_project_dir,
@@ -544,7 +587,15 @@ pub fn prepare_with_timeout(
     let mut missing = Vec::new();
     for pf in &shell.plan.projections {
         if !pf.shadow_gcs.exists() {
-            missing.push(pf.cshtml_rel.clone()); // emit produced no projection (degraded)
+            // Emit produced no projection for this `.cshtml` (degraded). Without a
+            // `.g.cs` there is nothing for Roslyn to analyze → no diagnostics for
+            // this file; surface it so a partial/failed emit is diagnosable.
+            crate::rdiag!(
+                "[razor:error] no projected .g.cs for {} (expected {}) — emit degraded; this file gets no C# diagnostics",
+                pf.cshtml_rel.display(),
+                pf.shadow_gcs.display()
+            );
+            missing.push(pf.cshtml_rel.clone());
             continue;
         }
         let generated = std::fs::read_to_string(&pf.shadow_gcs)?;
@@ -557,6 +608,21 @@ pub fn prepare_with_timeout(
         });
     }
 
+    // The full prepare (derive + emit + materialize + restore + source maps) is
+    // the cold-path cost of opening a `.cshtml`. Flag a slow one so a heavy
+    // project (e.g. many ProjectReferences, cold NuGet/restore) is visible as a
+    // concrete number in razor-diag.log rather than just "opening .cshtml is slow".
+    let total = started.elapsed();
+    if total.as_secs() >= 3 {
+        crate::rdiag!(
+            "[razor:timing] prepare TOTAL {:?} (SLOW — {} projection(s), {} missing)",
+            total,
+            projections.len(),
+            missing.len()
+        );
+    } else {
+        crate::rdiag!("[razor:timing] prepare TOTAL {:?}", total);
+    }
     Ok(PreparedShadow {
         plan: shell.plan,
         projections,

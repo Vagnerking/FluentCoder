@@ -1,6 +1,7 @@
 import Editor, { BeforeMount, OnMount } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { whenMonacoReady } from "../monaco-loader";
 import type {
   BlameHunk,
   EditorActionsApi,
@@ -13,6 +14,7 @@ import { gitBlame } from "../api";
 import { toFileUri, fromFileUri, canonicalFileUriKey } from "../lsp/uri";
 import { setupMonacoForLsp } from "../lsp/monacoSetup";
 import { debugSession } from "../dap/debugSession";
+import { palette } from "../theme/palette";
 
 // Console-only debug logging. (It used to mirror to a hardcoded path on another
 // machine and fire an IPC file write — with an ever-growing buffer — on EVERY
@@ -92,6 +94,31 @@ export function EditorPane({
 }: EditorPaneProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
+  // The v10 `@codingame` services must finish `initialize()` before the first
+  // editor mounts (documented constraint) — `whenMonacoReady` also points
+  // `@monaco-editor/react` at the shared Monaco instance. Gate the <Editor> on
+  // it so the editor never mounts against a CDN/uninitialized Monaco.
+  const [monacoReady, setMonacoReady] = useState(false);
+  // If `initialize()` rejects (see vscodeServices.ts) `whenMonacoReady` never
+  // resolves; without handling the rejection the pane would sit on the
+  // "Carregando editor…" placeholder forever and Node/the browser would log an
+  // unhandled promise rejection. Capture the failure so we can surface it
+  // instead of hanging silently.
+  const [monacoError, setMonacoError] = useState<unknown>(null);
+  useEffect(() => {
+    let alive = true;
+    whenMonacoReady.then(
+      () => {
+        if (alive) setMonacoReady(true);
+      },
+      (err) => {
+        if (alive) setMonacoError(err);
+      }
+    );
+    return () => {
+      alive = false;
+    };
+  }, []);
   // This editor's own reveal fn + actions api, set on mount. Kept internally so
   // we can (re)bind them to the parent's refs whenever THIS pane becomes the
   // active group — Monaco panes are not remounted on group switch, so binding
@@ -322,11 +349,13 @@ export function EditorPane({
     monaco.editor.defineTheme("fluent-acrylic-dark", {
       base: "vs-dark",
       inherit: true,
-      // Semantic-token color rules: the standalone theme matches a token's
-      // [type,...modifiers] against these `rules` keyed by the bare LSP semantic
-      // type names (class, enum, method…). Without them, semantic highlighting
-      // flows but types render in the default foreground (no visible coloring).
-      // Pairs with `'semanticHighlighting.enabled': true` on the editor options.
+      // Token color rules. With `'semanticHighlighting.enabled': false` (see the
+      // editor options below) these now drive the LEXICAL (Monarch) tokens — the
+      // standalone theme matches each token scope (`keyword`, `keyword.if`,
+      // `type`, `string`…) against these `rules`. They are also the rules that
+      // WOULD color LSP semantic tokens if semantic highlighting were re-enabled
+      // via the full VS Code theme path (the deferred follow-up noted below), so
+      // the bare LSP type names (class, enum, method…) are kept here too.
       rules: [
         // C# Monarch emits specific scopes such as `keyword.if` and
         // `keyword.return`. Keep declarations/modifiers blue and make
@@ -388,18 +417,24 @@ export function EditorPane({
         { token: "enum name", foreground: "B8D7A3" },
         { token: "type parameter name", foreground: "4EC9B0" },
       ],
+      // Chrome colors derive from the shared palette so the editor surfaces
+      // track the CSS token layer (F2-AUD-001). Monaco needs literals at
+      // registration time, so we read them from `palette` (hex without `#`
+      // where Monaco expects a bare token is not required — it accepts `#rgb`).
+      // Syntax-token foregrounds in `rules` above are a separate highlighting
+      // concern and intentionally stay inline.
       colors: {
-        "editor.background": "#1C222B",
-        "editorGutter.background": "#1C222B",
-        "editorLineNumber.foreground": "#7D8795",
-        "editorLineNumber.activeForeground": "#D6E2F0",
+        "editor.background": palette.editorBg,
+        "editorGutter.background": palette.editorBg,
+        "editorLineNumber.foreground": palette.textMuted,
+        "editorLineNumber.activeForeground": palette.textActive,
         "editor.lineHighlightBackground": "#FFFFFF0A",
         "editor.selectionBackground": "#60CDFF35",
         "editor.inactiveSelectionBackground": "#60CDFF20",
-        "editorCursor.foreground": "#60CDFF",
+        "editorCursor.foreground": palette.accent,
         "editorIndentGuide.background1": "#FFFFFF12",
         "editorIndentGuide.activeBackground1": "#8BB7D94D",
-        "minimap.background": "#1C222B",
+        "minimap.background": palette.editorBg,
         "scrollbarSlider.background": "#B8C7D526",
         "scrollbarSlider.hoverBackground": "#B8C7D540",
         "scrollbarSlider.activeBackground": "#B8C7D55A",
@@ -408,23 +443,23 @@ export function EditorPane({
         // against this theme's customized surfaces — the dropdown of
         // references becomes unreadable. Opaque surface (no acrylic alpha)
         // so the editor text never bleeds through the list.
-        "editorSuggestWidget.background": "#202734",
-        "editorSuggestWidget.border": "#3A4150",
-        "editorSuggestWidget.foreground": "#D6E2F0",
+        "editorSuggestWidget.background": palette.surfaceOverlay,
+        "editorSuggestWidget.border": palette.surfaceOverlayBorder,
+        "editorSuggestWidget.foreground": palette.textActive,
         "editorSuggestWidget.selectedBackground": "#2C5E80",
-        "editorSuggestWidget.selectedForeground": "#FFFFFF",
-        "editorSuggestWidget.highlightForeground": "#60CDFF",
+        "editorSuggestWidget.selectedForeground": palette.textBright,
+        "editorSuggestWidget.highlightForeground": palette.accent,
         "editorSuggestWidget.focusHighlightForeground": "#9DDCFF",
         // Hover, signature-help and parameter-hint popups share the same
         // surface so all editor flyouts stay legible and consistent.
-        "editorHoverWidget.background": "#202734",
-        "editorHoverWidget.border": "#3A4150",
-        "editorHoverWidget.foreground": "#D6E2F0",
-        "editorWidget.background": "#202734",
-        "editorWidget.border": "#3A4150",
-        "editorWidget.foreground": "#D6E2F0",
+        "editorHoverWidget.background": palette.surfaceOverlay,
+        "editorHoverWidget.border": palette.surfaceOverlayBorder,
+        "editorHoverWidget.foreground": palette.textActive,
+        "editorWidget.background": palette.surfaceOverlay,
+        "editorWidget.border": palette.surfaceOverlayBorder,
+        "editorWidget.foreground": palette.textActive,
         // Inline (ghost text) completion preview — the dimmed italic text.
-        "editorGhostText.foreground": "#7D8795",
+        "editorGhostText.foreground": palette.textMuted,
       },
     });
   };
@@ -445,6 +480,12 @@ export function EditorPane({
     });
     editorInstance.onDidChangeModel(() => applyDebugDecorations());
     applyDebugDecorations();
+    // v10 (#77): força a aplicação do tema custom. Na stack @codingame a prop
+    // `theme` do @monaco-editor/react nem sempre aplica o tema definido em
+    // beforeMount (o serviço de tema do VS Code intercepta), deixando o editor
+    // no tema default claro → C# em azul/preto sobre fundo escuro = "apagado".
+    // Reaplicar aqui, após o define + mount, garante o fluent-acrylic-dark.
+    monaco.editor.setTheme("fluent-acrylic-dark");
 
     editorInstance.onDidChangeCursorPosition((e) => {
       const line = e.position.lineNumber;
@@ -534,6 +575,34 @@ export function EditorPane({
     );
   }
 
+  // Hold the editor back until the @codingame services are initialized. Without
+  // this the first <Editor> could call monaco.editor.create() before
+  // initialize() resolves (which the v10 stack forbids) or against the CDN
+  // Monaco (breaking the single-instance contract → empty getModels(), no LSP).
+  if (monacoError) {
+    // Boot failed — show the reason instead of an endless spinner so the user
+    // (and a screen reader, via role="alert") knows the editor won't appear.
+    return (
+      <div className="editor-empty">
+        <div className="editor-empty-inner" role="alert">
+          <p>Falha ao carregar o editor.</p>
+          <p>{monacoError instanceof Error ? monacoError.message : String(monacoError)}</p>
+        </div>
+      </div>
+    );
+  }
+  if (!monacoReady) {
+    return (
+      <div className="editor-empty">
+        {/* role="status" + aria-live so a screen reader announces the loading
+            state (and its resolution) instead of leaving AT users in silence. */}
+        <div className="editor-empty-inner" role="status" aria-live="polite">
+          <p>Carregando editor…</p>
+        </div>
+      </div>
+    );
+  }
+
   // Untitled buffers have no on-disk path; use their synthetic `untitled:` URI
   // directly so Monaco doesn't mangle it through `file://` (LSP/blame stay off —
   // they're plaintext until saved).
@@ -549,6 +618,16 @@ export function EditorPane({
       // documentSelector is `{ scheme: "file" }` attach to it. Passing the raw
       // Windows path would make Monaco treat the drive letter as the URI scheme.
       path={modelPath}
+      // KEEP the model alive across tab switches. By default @monaco-editor/react
+      // DISPOSES the previous model when `path` changes (switching tabs), which
+      // fires Monaco's `onWillDisposeModel` → the Razor broker's `forgetDoc`
+      // (clears the `.cshtml` diagnostics + drops the source map) and forces a
+      // slow, race-prone re-prepare on return. That made the C# projection error
+      // (and Roslyn diagnostics in general) vanish after visiting another file and
+      // coming back. With the model kept, switching tabs no longer tears the LSP
+      // document down; the real dispose happens only when the tab is truly closed
+      // (App's open-paths reconciliation effect, guarded against split groups).
+      keepCurrentModel
       language={languageForFile(file.name, file.path)}
       value={file.content}
       onChange={(value) => onChange(value ?? "")}
@@ -578,10 +657,28 @@ export function EditorPane({
         // entries don't overlap into an unreadable, doubled list.
         suggestFontSize: 13,
         suggestLineHeight: 22,
-        // Render LSP semantic tokens. Literal `true` (not 'configuredByTheme')
-        // because the standalone theme flag is hardcoded off; this turns the
-        // type/method/param coloring on, resolved via the theme `rules` above.
-        "semanticHighlighting.enabled": true,
+        // Desliga as sugestões baseadas em palavras do documento (os itens com
+        // ícone `abc`). Na stack @codingame/v10 elas vêm LIGADAS por default e
+        // poluíam o autocomplete do `.cshtml`: ao digitar `@Model` apareciam
+        // palavras soltas do arquivo em vez (ou antes) dos membros C# do Roslyn,
+        // e enquanto a completion da projeção (mais lenta) ainda não respondia,
+        // só o lixo `abc` aparecia. Com isso off, só os providers reais
+        // (Roslyn via projeção + HTML) preenchem o widget.
+        wordBasedSuggestions: "off",
+        // Semantic highlighting DESLIGADO na stack monaco-languageclient v10.
+        // Motivo (comprovado por experimento — ver docs/migration): a stack
+        // `@codingame/monaco-vscode-api` resolve as cores de semantic tokens
+        // pelo serviço de tema do VS Code (que exige theme/textmate
+        // service-overrides + `semanticTokenColors`), NÃO pelas `rules` do
+        // `defineTheme` standalone. Com o flag ligado, os semantic tokens do
+        // Roslyn sobrescreviam a camada Monarch e ficavam SEM cor — deixando o
+        // C# inteiro apagado. Com ele desligado, a tokenização léxica do grammar
+        // Monarch (`csharpMonarch` em monacoSetup.ts) volta a colorir keywords,
+        // tipos e strings, resolvida pelas `rules` do tema (que funcionam).
+        // Trade-off aceito: perde a classificação semântica fina do Roslyn
+        // (class vs struct vs enum, método vs variável). Reativar exige o
+        // caminho de tema VS Code completo (follow-up).
+        "semanticHighlighting.enabled": false,
       }}
     />
   );

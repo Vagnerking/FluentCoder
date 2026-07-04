@@ -62,6 +62,14 @@ interface StatusBarProps {
   onSelectTsVersion?: () => void;
   /** Opens the language-mode picker for the active file (VS Code's "Change Language Mode"). */
   onSelectLanguage?: () => void;
+  /** Detected encoding of the active file (e.g. "UTF-8"); null when none open. */
+  encoding?: string | null;
+  /** Active file's line-ending style label ("LF"/"CRLF"); null when none open. */
+  eol?: string | null;
+  /** Opens the "Reopen/Save with Encoding" picker. Omitted ⇒ not clickable. */
+  onSelectEncoding?: () => void;
+  /** Opens the line-ending picker (LF/CRLF). Omitted ⇒ not clickable. */
+  onSelectEol?: () => void;
 }
 
 /** Maps an LSP status to a codicon + label. */
@@ -110,6 +118,10 @@ export function StatusBar({
   onShowProblems,
   onSelectTsVersion,
   onSelectLanguage,
+  encoding,
+  eol,
+  onSelectEncoding,
+  onSelectEol,
 }: StatusBarProps) {
   // Friendly language name (VSCode-style), shared with the language-mode picker.
   const langDisplay = languageLabel(language);
@@ -128,8 +140,14 @@ export function StatusBar({
           <span
             className="status-item status-remote"
             title={`Conectado via SSH a ${remoteHost}.\nClique para gerenciar a conexão.`}
+            // Kept as a span (not <button>): `.status-item` is a flex chip with no
+            // native-button reset, so a real button would break the bar's layout.
+            // We give it full keyboard parity instead (F2-AUD-016 / F2-AUD-008).
             role={onManageRemote ? "button" : undefined}
             tabIndex={onManageRemote ? 0 : undefined}
+            aria-label={
+              onManageRemote ? `Gerenciar conexão SSH com ${remoteHost}` : undefined
+            }
             onClick={onManageRemote}
             onKeyDown={(e) => {
               if (onManageRemote && (e.key === "Enter" || e.key === " ")) {
@@ -179,8 +197,20 @@ export function StatusBar({
             <span
               className="status-item"
               onClick={onClickBranch}
+              onKeyDown={
+                onClickBranch
+                  ? (e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onClickBranch();
+                      }
+                    }
+                  : undefined
+              }
               title={onClickBranch ? "Trocar de branch" : undefined}
               role={onClickBranch ? "button" : undefined}
+              tabIndex={onClickBranch ? 0 : undefined}
+              aria-label={onClickBranch ? `Branch ${branch}; trocar de branch` : undefined}
             >
               <Codicon name="gitBranch" /> {branch}
             </span>
@@ -193,6 +223,11 @@ export function StatusBar({
           title={onShowProblems ? "Mostrar Problemas" : undefined}
           role={onShowProblems ? "button" : undefined}
           tabIndex={onShowProblems ? 0 : undefined}
+          aria-label={
+            onShowProblems
+              ? `${errorCount} erros, ${warningCount} avisos; mostrar Problemas`
+              : undefined
+          }
           onClick={onShowProblems}
           onKeyDown={
             onShowProblems
@@ -221,6 +256,7 @@ export function StatusBar({
             title={`${s.id}: ${LSP_LABEL[s.status]} (clique para ações)`}
             role="button"
             tabIndex={0}
+            aria-label={`${s.id}: ${LSP_LABEL[s.status]}; abrir ações do servidor`}
             onClick={(e) => {
               const rect = e.currentTarget.getBoundingClientRect();
               setLspMenu({ server: s, x: rect.left, y: rect.top });
@@ -280,6 +316,11 @@ export function StatusBar({
             title={onSelectLanguage ? "Selecionar modo de linguagem" : undefined}
             role={onSelectLanguage ? "button" : undefined}
             tabIndex={onSelectLanguage ? 0 : undefined}
+            aria-label={
+              onSelectLanguage
+                ? `Linguagem: ${langDisplay}; selecionar modo de linguagem`
+                : undefined
+            }
             onClick={onSelectLanguage}
             onKeyDown={
               onSelectLanguage
@@ -295,7 +336,60 @@ export function StatusBar({
             {langDisplay}
           </span>
         )}
-        {fileName && <span className="status-item status-encoding">UTF-8</span>}
+        {fileName && encoding && (
+          <span
+            className={`status-item status-encoding${
+              onSelectEncoding ? " status-clickable" : ""
+            }`}
+            title={onSelectEncoding ? "Selecionar codificação" : undefined}
+            role={onSelectEncoding ? "button" : undefined}
+            tabIndex={onSelectEncoding ? 0 : undefined}
+            aria-label={
+              onSelectEncoding
+                ? `Codificação: ${encoding}; selecionar codificação`
+                : undefined
+            }
+            onClick={onSelectEncoding}
+            onKeyDown={
+              onSelectEncoding
+                ? (e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onSelectEncoding();
+                    }
+                  }
+                : undefined
+            }
+          >
+            {encoding}
+          </span>
+        )}
+        {fileName && eol && (
+          <span
+            className={`status-item status-eol${
+              onSelectEol ? " status-clickable" : ""
+            }`}
+            title={onSelectEol ? "Selecionar fim de linha" : undefined}
+            role={onSelectEol ? "button" : undefined}
+            tabIndex={onSelectEol ? 0 : undefined}
+            aria-label={
+              onSelectEol ? `Fim de linha: ${eol}; selecionar fim de linha` : undefined
+            }
+            onClick={onSelectEol}
+            onKeyDown={
+              onSelectEol
+                ? (e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onSelectEol();
+                    }
+                  }
+                : undefined
+            }
+          >
+            {eol}
+          </span>
+        )}
         {fileName && (
           <span className="status-item status-tabsize">Tab Size: {tabSize}</span>
         )}

@@ -7,6 +7,7 @@ import {
 } from 'react';
 import { Codicon } from '../icons/codicons/Codicon';
 import type { IconAction } from '../icons/codicons/codicon-map';
+import { Tooltip } from './Tooltip';
 
 interface ActivityBarProps {
   activeView: string;
@@ -172,8 +173,8 @@ export function ActivityBar({
       />
       <div className="activity-items">
         {orderedViews.map((v) => (
+          <Tooltip key={v.id} label={v.label} placement="bottom">
           <button
-            key={v.id}
             className={`activity-item${activeView === v.id ? ' active' : ''}${
               dropTarget?.id === v.id
                 ? dropTarget.after
@@ -184,7 +185,6 @@ export function ActivityBar({
             data-view={v.id}
             draggable
             aria-label={v.label}
-            title={v.label}
             onClick={() => onViewChange(v.id)}
             onDragStart={(e) => {
               dragIdRef.current = v.id;
@@ -220,20 +220,21 @@ export function ActivityBar({
           >
             <Codicon name={v.icon} size={24} />
           </button>
+          </Tooltip>
         ))}
       </div>
       <div className="activity-items-bottom">
         {BOTTOM_VIEWS.map((v) => (
+          <Tooltip key={v.id} label={v.label} placement="top">
           <button
-            key={v.id}
             className={`activity-item${activeView === v.id ? ' active' : ''}`}
             data-view={v.id}
             aria-label={v.label}
-            title={v.label}
             onClick={() => onViewChange(v.id)}
           >
             <Codicon name={v.icon} size={24} />
           </button>
+          </Tooltip>
         ))}
       </div>
     </div>

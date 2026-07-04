@@ -209,13 +209,11 @@ export function installDiagnosticsBridge(
   );
   const usePull = shouldUsePullDiagnostics(mode, hasStaticPullCapability);
   if (usePull) {
-    // One semantic provider per language: drop the compatibility-shim pull
-    // feature so it can't compete with our direct-to-markers pull.
-    try {
-      client.getFeature("textDocument/diagnostic")?.dispose();
-    } catch {
-      /* feature absent or not disposable — ignore */
-    }
+    // The native DiagnosticFeature was already neutralized before start()
+    // (see createLanguageClient → disableNativeClientFeature for
+    // `textDocument/diagnostic`), so our direct-to-markers pull below is the
+    // sole diagnostics source for this server — no duplicate markers, and the
+    // per-`serverId` owner dedup stays intact.
 
     const pullIdentifiers: Array<string | undefined> =
       identifiers && identifiers.length > 0 ? [...identifiers] : [undefined];

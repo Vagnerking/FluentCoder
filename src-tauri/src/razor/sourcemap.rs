@@ -622,4 +622,37 @@ Model.City
         let m = RazorSourceMap::parse(gen, "C:/proj/Views/Home/Index.cshtml");
         assert_eq!(m.to_source(Pos::new(2, 7)), Some(Pos::new(8, 19)));
     }
+
+    // Real `.g.cs` captured from the SampleMvc fixture under the current .NET SDK
+    // (enhanced `#line` form). Guards the projection's diagnostic remap against
+    // SDK codegen drift: a `pulled>0, mapped=0` regression (Roslyn returns the
+    // CS1061 but every range is dropped) reproduces here as `to_source` → None.
+    // The `#line` inside the fixture points at this exact absolute path.
+    const REAL_GEN: &str = include_str!("test_fixtures/Index_cshtml.g.cs");
+    const REAL_TARGET: &str = "C:/Users/Vagner/Documents/GitHub/Projetos Pessoais/CodeEditor-v10-integration/tools/razor-lsp-probe/fixtures/SampleMvc/Views/Home/Index.cshtml";
+
+    #[test]
+    fn real_gcs_parses_at_least_one_region() {
+        let m = RazorSourceMap::parse(REAL_GEN, REAL_TARGET);
+        assert!(
+            m.region_count() > 0,
+            "no #line region matched the target .cshtml — path match or directive parsing broke for the current SDK's codegen"
+        );
+    }
+
+    #[test]
+    fn real_gcs_maps_the_cs1061_line() {
+        let m = RazorSourceMap::parse(REAL_GEN, REAL_TARGET);
+        // In the fixture, `#line (16,9)-(16,34)` precedes `Model.NonExistentProperty`
+        // on generated line 161 (1-based). `NonExistentProperty` starts after
+        // `Model.` (6 chars) → generated col 7. It must map back to the `.cshtml`
+        // line 16 (the source of the CS1061). If this returns None, the broker
+        // drops the diagnostic and the squiggle never shows.
+        let mapped = m.to_source(Pos::new(161, 7));
+        assert!(
+            mapped.is_some(),
+            "CS1061 generated position did not map back to the .cshtml (mapped=0 regression)"
+        );
+        assert_eq!(mapped.unwrap().line, 16, "should map to .cshtml line 16");
+    }
 }

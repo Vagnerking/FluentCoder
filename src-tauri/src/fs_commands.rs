@@ -307,17 +307,27 @@ pub fn read_dir(
     Ok(entries)
 }
 
-/// Reads a text file and returns its contents.
+/// Reads a text file, detecting its encoding and line ending like VS Code.
 ///
-/// A leading UTF-8 BOM is STRIPPED: it is an encoding artifact, not text —
-/// rendered literally it shows up as a garbage glyph at (1,1) (seen on
-/// Roslyn's metadata-as-source files and VS-created `.cs`), and it silently
-/// shifts every LSP position on line 1 by one column. `write_file` re-adds it
-/// for files that had one, so round-trips stay byte-identical.
+/// Returns the LF-normalised content plus the detected encoding/BOM/EOL so the
+/// editor can show them in the status bar and round-trip them on save. This is
+/// why a UTF-16 or BOM-prefixed file (e.g. Roslyn's decompiled metadata) opens
+/// as clean text instead of showing a stray `◇`/`?` at the start.
 #[tauri::command]
-pub fn read_file(path: String) -> Result<String, String> {
-    let text = fs::read_to_string(&path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
-    Ok(text.strip_prefix('\u{feff}').map(str::to_string).unwrap_or(text))
+pub fn read_file(path: String) -> Result<crate::text_io::DecodedFile, String> {
+    let bytes = fs::read(&path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+    Ok(crate::text_io::decode(&bytes))
+}
+
+/// Re-reads a file forcing a specific encoding ("Reopen with Encoding"). The EOL
+/// is still auto-detected from the freshly decoded text.
+#[tauri::command]
+pub fn read_file_with_encoding(
+    path: String,
+    encoding: String,
+) -> Result<crate::text_io::DecodedFile, String> {
+    let bytes = fs::read(&path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+    crate::text_io::decode_with(&bytes, &encoding)
 }
 
 /// Reads a file's raw bytes and returns them as a base64 `data:` URL.
@@ -415,25 +425,31 @@ fn base64_encode(input: &[u8]) -> String {
 }
 
 /// Writes `contents` to `path`, creating parent directories if needed.
+///
+/// `contents` is the editor's LF buffer. When `encoding`/`eol` are supplied
+/// (the normal save path), the file is re-encoded to its original encoding,
+/// BOM and line ending so an edit never silently rewrites those — matching
+/// VS Code's "preserve" default. Omitting them falls back to UTF-8 + LF.
 #[tauri::command]
-pub fn write_file(path: String, contents: String) -> Result<(), String> {
+pub fn write_file(
+    path: String,
+    contents: String,
+    encoding: Option<String>,
+    eol: Option<crate::text_io::Eol>,
+    bom: Option<bool>,
+) -> Result<(), String> {
     if let Some(parent) = Path::new(&path).parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    // BOM preservation (pair of `read_file`'s strip): if the file on disk
-    // currently starts with a UTF-8 BOM, keep it on save — otherwise every
-    // save of a VS-created file would produce a noisy one-byte-ish git diff.
-    // New files and BOM-less files are never given one.
-    let had_bom = fs::read(&path)
-        .map(|b| b.starts_with(&[0xEF, 0xBB, 0xBF]))
-        .unwrap_or(false);
-    if had_bom && !contents.starts_with('\u{feff}') {
-        let mut bytes = Vec::with_capacity(contents.len() + 3);
-        bytes.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
-        bytes.extend_from_slice(contents.as_bytes());
-        return fs::write(&path, bytes).map_err(|e| format!("Falha ao salvar '{path}': {e}"));
-    }
-    fs::write(&path, contents).map_err(|e| format!("Falha ao salvar '{path}': {e}"))
+    let bytes = match encoding {
+        Some(enc) => {
+            let eol = eol.unwrap_or(crate::text_io::Eol::Lf);
+            crate::text_io::encode_for_save(&contents, &enc, eol, bom.unwrap_or(false))?
+        }
+        // Legacy/new-file path: plain UTF-8, no BOM, content as-is.
+        None => contents.into_bytes(),
+    };
+    fs::write(&path, bytes).map_err(|e| format!("Falha ao salvar '{path}': {e}"))
 }
 
 /// Creates an empty file without ever overwriting an existing path.
@@ -579,37 +595,12 @@ pub fn reveal_in_explorer(workspace_root: String, path: String) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::{
-        build_exclude_matcher, copy_path, create_file, create_folder, move_path, read_file,
-        rename_path, workspace_relative, write_file,
+        build_exclude_matcher, copy_path, create_file, create_folder, move_path, rename_path,
+        workspace_relative,
     };
     use std::fs;
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
-
-    #[test]
-    fn read_strips_utf8_bom_and_write_preserves_it() {
-        let id = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let dir = std::env::temp_dir().join(format!("fluent-bom-test-{id}"));
-        fs::create_dir_all(&dir).unwrap();
-        let with_bom = dir.join("bom.cs");
-        let without = dir.join("plain.cs");
-        fs::write(&with_bom, [0xEF, 0xBB, 0xBF, b'h', b'i']).unwrap();
-        fs::write(&without, b"hi").unwrap();
-
-        // The BOM never reaches the editor as text…
-        assert_eq!(read_file(with_bom.to_string_lossy().to_string()).unwrap(), "hi");
-        assert_eq!(read_file(without.to_string_lossy().to_string()).unwrap(), "hi");
-
-        // …but a save round-trip keeps the file byte-identical (BOM stays)…
-        write_file(with_bom.to_string_lossy().to_string(), "hello".into()).unwrap();
-        assert_eq!(fs::read(&with_bom).unwrap(), [0xEF, 0xBB, 0xBF, b'h', b'e', b'l', b'l', b'o']);
-
-        // …and BOM-less files never gain one.
-        write_file(without.to_string_lossy().to_string(), "hello".into()).unwrap();
-        assert_eq!(fs::read(&without).unwrap(), b"hello");
-
-        let _ = fs::remove_dir_all(&dir);
-    }
 
     #[test]
     fn exclude_matcher_hides_build_dirs_by_name() {

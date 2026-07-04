@@ -15,6 +15,7 @@ mod snap;
 mod ssh;
 mod terminal;
 mod testrunner;
+mod text_io;
 mod walk;
 mod window;
 
@@ -51,6 +52,11 @@ pub fn run() {
                 }
             }
             window::restore_main_window(app.handle());
+            // Point the Razor/C# pipeline diagnostic log at the app data dir so a
+            // failing projection run leaves an inspectable trace (razor-diag.log).
+            if let Ok(dir) = app.path().app_data_dir() {
+                razor::diag::init(dir);
+            }
             Ok(())
         })
         .manage(terminal::TerminalState::new())
@@ -71,6 +77,7 @@ pub fn run() {
             agents::acp_stop_workspace,
             fs_commands::read_dir,
             fs_commands::read_file,
+            fs_commands::read_file_with_encoding,
             fs_commands::read_file_base64,
             fs_commands::write_file,
             fs_commands::create_file,
@@ -166,6 +173,7 @@ pub fn run() {
             razor::commands::razor_remap_ranges_to_source,
             razor::commands::razor_remap_ranges_to_source_strict,
             razor::commands::razor_forget,
+            razor::commands::razor_diag_log,
             ssh::ssh_connect,
             ssh::ssh_list_dir,
             ssh::ssh_read_file,
