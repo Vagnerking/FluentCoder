@@ -50,6 +50,19 @@ pub fn render_shadow_csproj(spec: &ShadowSpec) -> String {
         s.push_str(&format!("    <RootNamespace>{}</RootNamespace>\n", esc(ns)));
     }
     s.push_str("  </PropertyGroup>\n\n");
+    // The dotnet-build FALLBACK emits the generator's FULL output tree under
+    // `<shadow>/generated/` (every view in the project), and materialize PINS
+    // the requested views into `<shadow>/projected/` — which is what Roslyn
+    // opens and what the source maps are parsed from. Only the pinned copies may
+    // compile: both dirs sit under the csproj, so the default `**/*.cs` glob
+    // used to pick BOTH copies of every pinned view — the page class existed
+    // twice and the workspace flooded with CS0101/CS0111/CS0579 (~20 phantom
+    // diagnostics per open view, the `pulled:N, mapped:0..2` signature) and
+    // go-to-definition inside those classes (e.g. an extension-method call in a
+    // `@{ }` block) degraded to nothing.
+    s.push_str("  <ItemGroup>\n");
+    s.push_str("    <Compile Remove=\"generated/**/*.cs\" />\n");
+    s.push_str("  </ItemGroup>\n\n");
     s.push_str("  <ItemGroup>\n");
     // Reference the user project for its TYPES, but suppress its Razor page
     // generation across the reference. A `Microsoft.NET.Sdk.Web` user project
@@ -157,6 +170,20 @@ mod tests {
         let xml = render_shadow_csproj(&spec());
         assert!(xml.contains("<TargetFramework>net8.0</TargetFramework>"));
         assert!(xml.contains("<RootNamespace>SampleMvc</RootNamespace>"));
+    }
+
+    #[test]
+    fn excludes_the_fallback_generated_tree_from_compile() {
+        // The dotnet-build fallback emits the FULL generator tree under
+        // `<shadow>/generated/`; only the PINNED copies in `projected/` may
+        // compile. Without this Remove, every pinned view's page class existed
+        // twice (generated/ + projected/) → CS0101/CS0111/CS0579 flood and
+        // degraded go-to-definition inside those classes.
+        let xml = render_shadow_csproj(&spec());
+        assert!(
+            xml.contains("<Compile Remove=\"generated/**/*.cs\" />"),
+            "shadow csproj must exclude the fallback's generated/ tree from compile"
+        );
     }
 
     #[test]
