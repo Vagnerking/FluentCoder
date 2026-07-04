@@ -1,0 +1,21 @@
+@model MyApp.Models.Pedido
+@{
+    var total = Model.Itens.Sum(i => i.Preco);
+    ViewData["Title"] = "Pedido";
+}
+<h1>Pedido #@Model.Numero</h1>
+
+@if (Model.Itens.Any())
+{
+    <ul class="itens">
+        @foreach (var item in Model.Itens)
+        {
+            <li>@item.Nome — <strong>@item.Preco.ToString("C")</strong></li>
+        }
+    </ul>
+    <p>Total: <b>@total.ToString("C")</b></p>
+}
+else
+{
+    <p class="vazio">Nenhum item.</p>
+}
