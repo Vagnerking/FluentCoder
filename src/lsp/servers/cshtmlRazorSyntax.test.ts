@@ -877,3 +877,33 @@ test("region: nome de tag é HTML, @expr adjacente é Razor", () => {
   assert.equal(regionAt(mask, at(src, "div")), "html");
   assert.equal(regionAt(mask, at(src, "Nome")), "razor");
 });
+
+test("region: caret dentro de @if (Model.| classifica Razor (C# completion)", () => {
+  const src = `@if (Model.Ok) {}`;
+  const { mask } = buildVirtualHtml(src);
+  const caret = src.indexOf("Model.") + "Model.".length;
+  assert.equal(regionAt(mask, caret), "razor");
+});
+
+test("region: caret dentro de @{ var x = a.| classifica Razor", () => {
+  const src = `@{ var x = a. }`;
+  const { mask } = buildVirtualHtml(src);
+  const caret = src.indexOf("a.") + "a.".length;
+  assert.equal(regionAt(mask, caret), "razor");
+});
+
+test("region: caret após @await Html.| classifica Razor (C# completion)", () => {
+  const src = `<div>@await Html.</div>`;
+  const { mask } = buildVirtualHtml(src);
+  const caret = src.indexOf("Html.") + "Html.".length;
+  assert.equal(regionAt(mask, caret), "razor");
+});
+
+test("region: valor de atributo do tag helper (asp-for=\"No|\") é HTML", () => {
+  // asp-for="..." é um valor de atributo literal (sem `@`); a completion ali é
+  // do HTML service, não do C#.
+  const src = `<input asp-for="No" />`;
+  const { mask } = buildVirtualHtml(src);
+  const caret = src.indexOf("No") + "No".length;
+  assert.equal(regionAt(mask, caret), "html");
+});
