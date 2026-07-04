@@ -163,3 +163,8 @@
       stack — patch de instância no ITextModelService é no-op no v10 (proxy).
       Métricas: underline 348ms frio/9ms quente; csharp 0 mortes; E2E razor
       3/3 (12s/19s/16s).
+- [x] 04/07 — Cores semânticas C# no v10 (commit abe17d9): bridge de semantic
+      tokens vira pump de pulls aplicado como decorations com paleta própria
+      (`semanticColorizer.ts`) — o engine nativo fica off (cores dele exigem
+      theme/textmate overrides). Classe/interface/enum/método/props coloridos
+      no ativus; re-pull on-edit (debounce 300ms); E2E 3/3.
