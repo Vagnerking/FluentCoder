@@ -1,74 +1,70 @@
 /**
- * File-backed `ITextModelService` override (bugfix: Ctrl+hover sem underline).
+ * File-backed `ITextModelService` (bugfix: Ctrl+hover sem underline).
  *
  * O contribution `GotoDefinitionAtPosition` do Monaco, para UM resultado de
  * definition, resolve o model do ALVO via `createModelReference(uri)` para
- * montar o preview — e só então desenha o underline do link. O serviço
- * standalone padrão (`StandaloneTextModelService`) rejeita URIs sem model já
- * aberto ("Model not found"), e o `.then(...)` do contribution não tem handler
- * de rejeição: alvo nunca aberto ⇒ underline nunca aparece (o Ctrl+click ainda
- * navega, pois passa pelo nosso `registerEditorOpener`). Por isso o sintoma
- * "não sublinha na primeira vez; depois de navegar e voltar, funciona" — a
- * navegação abre o model do alvo e o resolver passa a encontrá-lo.
+ * montar o preview — e só então desenha o underline do link. O resolver
+ * standalone rejeita URIs sem model já aberto ("Model not found"), e o
+ * `.then(...)` do contribution não tem handler de rejeição: alvo nunca aberto
+ * ⇒ underline nunca aparece (o Ctrl+click ainda navega, pois passa pelo nosso
+ * `registerEditorOpener`). Sintoma: "não sublinha na primeira vez; depois de
+ * navegar e voltar, funciona" — a navegação abre o model do alvo.
  *
- * Este override cria o model sob demanda lendo o arquivo via IPC (`readFile`,
- * que também descarta BOM). Modelos criados ficam vivos como cache — a
- * navegação subsequente para eles é instantânea, e o peek de references
- * cross-file passa a resolver também. Deep import do `StandaloneServices` é o
- * hook consagrado do monaco standalone (o monaco-languageclient 1.x usa o
- * mesmo caminho); precisa rodar ANTES da criação do primeiro editor.
+ * Estratégia: PATCH NA INSTÂNCIA do serviço já registrado (via
+ * `StandaloneServices.get`), com fallback ao comportamento original. Não dá
+ * para usar `StandaloneServices.initialize({overrides})`: o monaco-languageclient
+ * (monaco-vscode-api) inicializa os services no import do bundle e o initialize
+ * ignora overrides silenciosamente depois disso. O patch preserva o caminho que
+ * funciona (model aberto) e só adiciona o caso de miss: lê o arquivo via IPC
+ * (`readFile`, que também descarta BOM) e cria o model sob demanda — que fica
+ * vivo como cache (navegação instantânea; peek references cross-file resolve).
  */
 import * as monaco from "monaco-editor";
-// O ESM profundo do monaco não publica tipos — o shape usado (initialize com
-// overrides por nome de serviço) é estável no standalone 0.5x.
-// @ts-expect-error deep import sem d.ts
+// Deep imports sem d.ts — shapes estáveis no standalone 0.5x.
+// @ts-expect-error deep import sem tipos
 import { StandaloneServices } from "monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js";
+// @ts-expect-error deep import sem tipos
+import { ITextModelService } from "monaco-editor/esm/vs/editor/common/services/resolverService.js";
 import { readFile } from "../api";
 import { fromFileUri } from "./uri";
 import { lspLog } from "./debug";
 
 let installed = false;
 
-/** Instala o resolver uma única vez, antes de qualquer editor ser criado. */
+interface ModelReference {
+  object: { textEditorModel: monaco.editor.ITextModel };
+  dispose(): void;
+}
+
+/** Instala o patch uma única vez. Idempotente e best-effort. */
 export function installFileTextModelResolver(): void {
   if (installed) return;
   installed = true;
-
-  const service = {
-    canHandleResource(uri: monaco.Uri): boolean {
-      return uri.scheme === "file" || monaco.editor.getModel(uri) != null;
-    },
-    registerTextModelContentProvider(): { dispose(): void } {
-      return { dispose: () => {} };
-    },
-    async createModelReference(uri: monaco.Uri): Promise<{
-      object: { textEditorModel: monaco.editor.ITextModel };
-      dispose(): void;
-    }> {
-      let model = monaco.editor.getModel(uri);
-      if (!model || model.isDisposed()) {
-        if (uri.scheme !== "file") {
-          throw new Error(`Model not found: ${uri.toString()}`);
-        }
+  try {
+    const service = StandaloneServices.get(ITextModelService) as {
+      createModelReference(uri: monaco.Uri): Promise<ModelReference>;
+    };
+    const original = service.createModelReference.bind(service);
+    service.createModelReference = async (uri: monaco.Uri): Promise<ModelReference> => {
+      try {
+        return await original(uri);
+      } catch (err) {
+        if (uri.scheme !== "file") throw err;
         const text = await readFile(fromFileUri(uri.toString()));
         // Alguém pode ter criado o model enquanto líamos do disco (ex.: o
         // usuário abriu a tab) — criar de novo lançaria "duplicate model".
-        model =
+        const model =
           monaco.editor.getModel(uri) ??
-          // Linguagem inferida pela extensão (ids já registrados no setup).
+          // Linguagem inferida pela extensão (ids registrados no setup).
           monaco.editor.createModel(text, undefined, uri);
+        // Referência "imortal" (mesma semântica do standalone): o model vive
+        // como cache de preview/navegação; dispose é no-op.
+        return { object: { textEditorModel: model }, dispose: () => {} };
       }
-      // Referência "imortal" (mesma semântica do standalone): o model criado
-      // fica vivo como cache de navegação/preview; dispose é no-op.
-      return { object: { textEditorModel: model }, dispose: () => {} };
-    },
-  };
-
-  try {
-    StandaloneServices.initialize({ textModelService: service });
+    };
+    lspLog("textModelResolver: patch aplicado (createModelReference com fallback a disco)");
   } catch (err) {
-    // Best-effort: se algo já inicializou os serviços antes de nós, o override
-    // não se aplica — o editor segue funcional, só sem o fix do underline.
-    lspLog("textModelResolver: initialize falhou (override não aplicado)", String(err));
+    // Sem o patch o editor segue funcional — só sem o fix do underline.
+    lspLog("textModelResolver: patch NÃO aplicado", String(err));
   }
 }

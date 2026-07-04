@@ -32,6 +32,11 @@ export function setupMonacoForLsp(monaco: Monaco): void {
   // files that were never opened (see textModelResolver.ts).
   installFileTextModelResolver();
 
+  // Debug hook: the release build has no DevTools console REPL, so live
+  // diagnosis (via CDP/remote debugging) needs a way to reach the monaco API
+  // and the editor instances. Read-only surface; not used by product code.
+  (window as unknown as { __fluentMonaco?: Monaco }).__fluentMonaco = monaco;
+
   disableBuiltinTsWorker(monaco);
   registerReactLanguages(monaco);
   registerRazorLanguage(monaco);
