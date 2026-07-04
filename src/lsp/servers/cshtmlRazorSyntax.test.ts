@@ -469,6 +469,62 @@ test("parser: @: torna o resto da linha markup literal", () => {
   blanked(src, "Model.Nome");
 });
 
+// ═══════════════════ Diretivas adicionais (Blazor-adjacent) ════════════════
+
+test("diretiva: @implements IDisposable — linha blanked", () => {
+  const src = `@implements System.IDisposable\n<p>x</p>`;
+  invariant(src);
+  kept(src, "<p>x</p>");
+  blanked(src, "IDisposable");
+});
+
+test("diretiva: @attribute [Authorize] — linha blanked", () => {
+  const src = `@attribute [Authorize]\n<p>x</p>`;
+  kept(src, "<p>x</p>");
+  blanked(src, "Authorize");
+});
+
+test("diretiva: @typeparam T — linha blanked", () => {
+  const src = `@typeparam T\n<p>@item</p>`;
+  kept(src, "<p>", "</p>");
+  const out = vh(src);
+  assert.ok(!/typeparam|T/.test(out.split("\n")[0]), `@typeparam blanked: ${out}`);
+});
+
+test("diretiva: @preservewhitespace true — linha blanked", () => {
+  const src = `@preservewhitespace true\n<p>x</p>`;
+  kept(src, "<p>x</p>");
+  blanked(src, "preservewhitespace");
+});
+
+test("diretiva: múltiplos @using empilhados", () => {
+  const src = `@using MyApp\n@using MyApp.Models\n@using MyApp.Helpers\n<p>x</p>`;
+  invariant(src);
+  kept(src, "<p>x</p>");
+  blanked(src, "MyApp.Models", "MyApp.Helpers");
+});
+
+test("expr: object initializer aninhado em @await Component.InvokeAsync", () => {
+  const src = `<div>@await Component.InvokeAsync("X", new { a = new { b = 1 } })</div>`;
+  invariant(src);
+  kept(src, "<div>", "</div>");
+  blanked(src, "Component.InvokeAsync", "new {");
+});
+
+test("expr: ternário em @(cond ? a : b)", () => {
+  const src = `<p>@(ok ? "sim" : "não")</p>`;
+  invariant(src);
+  kept(src, "<p>", "</p>");
+  blanked(src, '"sim"', '"não"');
+});
+
+test("bloco: @{ } multi-linha com re-entrada de markup no meio", () => {
+  const src = `@{\n  var x = 1;\n  <p>@x</p>\n  var y = 2;\n}`;
+  invariant(src);
+  kept(src, "<p>", "</p>");
+  blanked(src, "var x", "var y");
+});
+
 // ═══════════════════════════ Layouts e sections ════════════════════════════
 
 test("layout: Layout = \"_Layout\" em @{ } é C# (blanked)", () => {
