@@ -61,6 +61,12 @@ export function scanIncompleteRazorExpressions(text: string): RawMarker[] {
       i++;
       continue;
     }
+    const next = text[i + 1];
+    // `@@` escape is ALWAYS a literal `@` (checked BEFORE the email/literal
+    // heuristic below): in `a@@b.` the text is literally `a@b.`, so the trailing
+    // `.` is not a dangling Razor member. Skipping both `@` here also prevents the
+    // second `@` from being read as a transition into `b.`.
+    if (next === "@") { i += 2; continue; }
     // Razor's email/literal exception: `@` is a transition only when it ISN'T
     // preceded by a non-whitespace text char. `suporte@example.com.` is literal
     // text (the `@` follows `e`), not an expression — don't flag its trailing dot.
@@ -69,9 +75,7 @@ export function scanIncompleteRazorExpressions(text: string): RawMarker[] {
       i++;
       continue;
     }
-    const next = text[i + 1];
     // Skip the constructs that aren't implicit expressions.
-    if (next === "@") { i += 2; continue; } // `@@` escape
     if (next === "*") { const e = text.indexOf("*@", i + 2); i = e < 0 ? n : e + 2; continue; }
     if (next === ":") {
       // `@:` turns the REST OF THE LINE into literal markup — a later `@expr.`
