@@ -79,6 +79,18 @@ test("o prompt inclui contexto, histórico e a fronteira do workspace", () => {
   assert.match(prompt, /NOVA MENSAGEM DO USUÁRIO\nMostre a correção/);
 });
 
+test("agente sem prompt inicial não injeta a seção de contexto vazia", () => {
+  const prompt = buildAgentPrompt(
+    { ...agent, initialPrompt: "" },
+    [],
+    "Oi.",
+  );
+
+  assert.doesNotMatch(prompt, /CONTEXTO INICIAL DO AGENTE/);
+  assert.match(prompt, /RESTRIÇÃO OBRIGATÓRIA DE WORKSPACE/);
+  assert.match(prompt, /NOVA MENSAGEM DO USUÁRIO\nOi\./);
+});
+
 test("substitui apenas a conversa selecionada", () => {
   const store: AgentStore = {
     version: 1,

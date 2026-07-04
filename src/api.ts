@@ -879,6 +879,7 @@ export function acpPrompt(
   contextPrompt: string,
   prompt: string,
   mode: AgentMode,
+  nativeSessionId: string | null,
   onEvent: (event: AcpEvent) => void,
 ): Promise<void> {
   if (getActiveRemote())
@@ -897,6 +898,7 @@ export function acpPrompt(
     contextPrompt,
     prompt,
     mode,
+    nativeSessionId,
     onEvent: channel,
   });
 }

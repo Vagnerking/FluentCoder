@@ -57,6 +57,12 @@ export interface AgentConversation {
   messages: AgentMessage[];
   createdAt: string;
   updatedAt: string;
+  /**
+   * Session/thread id da conversa no provedor (session do Claude Code, thread
+   * do Codex). Permite retomar a conversa nativamente — sem reenviar o
+   * histórico inteiro a cada reinício do app/processo.
+   */
+  nativeSessionId?: string;
 }
 
 export interface AgentStore {
@@ -81,5 +87,6 @@ export interface AgentDraft {
 export type AcpEvent =
   | { type: "text"; content: string }
   | { type: "status"; message: string }
+  | { type: "session"; sessionId: string }
   | { type: "done"; stopReason: string }
   | { type: "error"; message: string };

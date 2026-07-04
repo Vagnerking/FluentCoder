@@ -42,6 +42,11 @@ function normalizeConversation(
     : { ...conversation, messages };
 }
 
+/**
+ * Fallback de contexto completo, usado apenas quando a conversa ainda não tem
+ * uma sessão nativa retomável no provedor (primeira mensagem, ou sessão nativa
+ * perdida). Com sessão nativa, só a nova mensagem é enviada.
+ */
 export function buildAgentPrompt(
   agent: AgentDefinition,
   messages: AgentMessage[],
@@ -54,13 +59,12 @@ export function buildAgentPrompt(
     )
     .join("\n\n");
 
+  const initialPrompt = agent.initialPrompt.trim();
   return [
-    "CONTEXTO INICIAL DO AGENTE",
-    agent.initialPrompt.trim(),
-    "",
+    initialPrompt ? `CONTEXTO INICIAL DO AGENTE\n${initialPrompt}\n` : "",
     "RESTRIÇÃO OBRIGATÓRIA DE WORKSPACE",
-    `Você só pode ler contexto dentro deste workspace: ${agent.workspacePath}`,
-    "Não solicite, leia ou infira conteúdo de paths externos. O cliente rejeitará acessos fora dessa raiz.",
+    `Trabalhe somente dentro deste workspace: ${agent.workspacePath}`,
+    "Não solicite, leia ou infira conteúdo de paths externos ao workspace.",
     transcript ? `\nHISTÓRICO DA CONVERSA\n${transcript}` : "",
     `\nNOVA MENSAGEM DO USUÁRIO\n${userMessage.trim()}`,
   ]

@@ -2130,12 +2130,6 @@ select:focus-visible,
   box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.16);
 }
 
-.agent-color-dot.large {
-  width: 12px;
-  height: 12px;
-  flex-basis: 12px;
-}
-
 .agent-row-name {
   min-width: 0;
   overflow: hidden;
@@ -2245,118 +2239,52 @@ select:focus-visible,
   display: flex;
 }
 
-.agent-center-bar {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  height: 36px;
-  min-height: 36px;
-  padding: 0 12px;
-  color: var(--text-secondary);
-  background: rgba(34, 42, 53, 0.7);
-  border-bottom: 1px solid var(--acrylic-border);
-}
-
-.agent-center-workspace {
+/* Cabeçalho do painel (reusa o padrão do explorador) com ações à direita. */
+.agent-side-header .explorer-title {
+  flex: 1;
   min-width: 0;
-  margin-left: auto;
-  color: var(--text-muted);
-  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* Empty/config states keep the discreet accent radial (functional branding on
-   an otherwise blank surface). The live chat surface stays flat so the decoration
-   never competes with conversation content (F2-AUD-011). */
-.agent-empty-state,
-.agent-config-page {
-  height: 100%;
-  background:
-    radial-gradient(circle at 50% 24%, rgba(96, 205, 255, 0.06), transparent 34%),
-    var(--editor-bg);
-}
-.agent-chat {
-  height: 100%;
-  background: var(--editor-bg);
+.agent-side-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
-.agent-empty-state {
+/* Estado vazio do painel: orienta a criar o primeiro agente. */
+.agent-side-empty {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  padding: 24px;
+  gap: 8px;
+  height: 100%;
+  padding: 24px 16px;
   color: var(--text-muted);
   text-align: center;
 }
 
-.agent-empty-state h1 {
+.agent-side-empty h2 {
   color: var(--text);
-  font-size: 24px;
-  line-height: 32px;
+  font-size: 14px;
+  line-height: 20px;
   font-weight: 600;
 }
 
-.agent-empty-state p {
-  max-width: 480px;
-  font-size: 14px;
-  line-height: 20px;
-}
-
-.agent-config-page {
-  overflow: auto;
-  padding: 32px;
-}
-
-.agent-config-card {
-  width: min(720px, 100%);
-  margin: 0 auto;
-  padding: 24px;
-  background: var(--acrylic-tint-strong);
-  border: 1px solid var(--acrylic-border);
-  border-radius: var(--radius-card);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
-}
-
-.agent-config-heading {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 24px;
-}
-
-.agent-config-heading h1 {
-  margin-top: 3px;
-  color: var(--text);
-  font-size: 24px;
-  line-height: 32px;
-}
-
-.agent-config-heading p {
-  margin-top: 4px;
-  color: var(--text-muted);
-  font-size: 14px;
-  line-height: 20px;
-}
-
-.agent-eyebrow {
-  color: var(--accent);
+.agent-side-empty p {
   font-size: 12px;
   line-height: 16px;
-  font-weight: 600;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
 }
 
-.agent-config-color-preview {
-  width: 32px;
-  height: 32px;
-  border: 2px solid rgba(255, 255, 255, 0.45);
-  border-radius: 50%;
-  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.07);
+/* Formulário compacto de agente, rolável dentro do painel. */
+.agent-side-config {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 12px 16px;
 }
 
 .agent-field {
@@ -2374,8 +2302,7 @@ select:focus-visible,
 
 .agent-field input,
 .agent-field textarea,
-.agent-field select,
-.agent-composer textarea {
+.agent-field select {
   width: 100%;
   color: var(--text);
   background: var(--acrylic-control);
@@ -2392,7 +2319,7 @@ select:focus-visible,
 }
 
 .agent-field textarea {
-  min-height: 148px;
+  min-height: 96px;
   padding: 9px 10px;
   resize: vertical;
   line-height: 20px;
@@ -2401,15 +2328,13 @@ select:focus-visible,
 
 .agent-field input:hover,
 .agent-field textarea:hover,
-.agent-field select:hover,
-.agent-composer textarea:hover {
+.agent-field select:hover {
   background: var(--acrylic-control-hover);
 }
 
 .agent-field input:focus,
 .agent-field textarea:focus,
-.agent-field select:focus,
-.agent-composer textarea:focus {
+.agent-field select:focus {
   border-color: var(--accent);
   box-shadow: inset 0 -1px 0 var(--accent);
 }
@@ -2517,61 +2442,88 @@ select:focus-visible,
   background: var(--acrylic-control-hover);
 }
 
-.agent-chat {
+/* Chat na sidebar: coluna com seletor de agente, mensagens e composer fixo. */
+.agent-side-chat {
   display: flex;
   flex-direction: column;
+  flex: 1;
   min-height: 0;
 }
 
-.agent-chat-header {
+/* Linha do agente ativo — abre o histórico/seletor ao clicar. */
+.agent-side-agent {
+  appearance: none;
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 58px;
-  padding: 10px 18px;
-  background: rgba(28, 34, 43, 0.92);
-  border-bottom: 1px solid var(--border-subtle);
+  gap: 7px;
+  min-height: 32px;
+  margin: 2px 8px 4px;
+  padding: 0 8px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  text-align: left;
 }
 
-.agent-chat-header h1 {
-  color: var(--text);
-  font-size: 16px;
-  line-height: 22px;
+.agent-side-agent:hover {
+  background: var(--fill-subtle-hover);
 }
 
-.agent-chat-header span {
+.agent-side-agent-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.agent-side-agent-provider,
+.agent-row-provider {
+  margin-left: auto;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 11px;
   line-height: 16px;
+}
+
+.agent-row-provider {
+  flex: 0 0 auto;
+  padding-left: 8px;
 }
 
 .agent-messages {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 24px max(24px, calc((100% - 780px) / 2));
+  padding: 4px 12px 12px;
 }
 
-.agent-chat-welcome {
+.agent-side-welcome {
   display: grid;
   justify-items: center;
   gap: 6px;
-  padding: 48px 16px;
+  padding: 40px 12px;
   color: var(--text-muted);
   text-align: center;
 }
 
-.agent-chat-welcome h2 {
+.agent-side-welcome h2 {
   color: var(--text);
-  font-size: 16px;
-  line-height: 22px;
+  font-size: 14px;
+  line-height: 20px;
 }
 
+.agent-side-welcome p {
+  font-size: 12px;
+  line-height: 16px;
+}
+
+/* Mensagens ocupam a largura do painel; o papel é dado pelo cabeçalho e pela
+   borda de acento, não pelo alinhamento (não há espaço lateral na sidebar). */
 .agent-message {
-  width: fit-content;
-  max-width: min(78%, 700px);
-  margin-bottom: 16px;
-  padding: 12px 14px;
+  margin-bottom: 10px;
+  padding: 9px 11px;
   color: var(--text-secondary);
   background: var(--acrylic-control);
   border: 1px solid var(--acrylic-border);
@@ -2579,7 +2531,6 @@ select:focus-visible,
 }
 
 .agent-message.user {
-  margin-left: auto;
   background: var(--fill-selected);
   border-color: rgba(96, 205, 255, 0.2);
 }
@@ -2787,59 +2738,81 @@ select:focus-visible,
   display: flex;
   align-items: center;
   gap: 7px;
+  padding: 2px 2px 6px;
   color: var(--text-muted);
   font-size: 12px;
 }
 
 .agent-chat-error {
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
+/* Composer fixo no rodapé do painel, no padrão das extensões de chat: caixa
+   única com o campo em cima e a barra de modo + enviar embaixo. */
 .agent-composer {
-  width: min(820px, calc(100% - 48px));
-  margin: 0 auto 20px;
+  padding: 6px 10px 10px;
+  border-top: 1px solid var(--border-subtle);
 }
 
-.agent-composer-row {
-  position: relative;
+.agent-composer-box {
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border-strong);
+  border-radius: var(--radius-card);
 }
 
-.agent-composer textarea {
-  min-height: 82px;
-  padding: 12px 48px 12px 13px;
+.agent-composer-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: inset 0 -1px 0 var(--accent);
+}
+
+.agent-composer-box textarea {
+  width: 100%;
+  min-height: 38px;
+  max-height: 160px;
+  padding: 9px 11px 4px;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  outline: none;
   resize: none;
+  font: inherit;
   line-height: 20px;
   user-select: text;
 }
 
-.agent-composer textarea:disabled {
-  opacity: 0.64;
+.agent-composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 6px 6px;
 }
 
-/* Mode picker (Ask / Plan / Dev) above the input. */
+/* Mode picker (Ask / Plan / Dev) inside the composer box. */
 .agent-mode-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 8px;
+  gap: 4px;
+  min-width: 0;
 }
 
 .agent-mode-option {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 4px 10px;
-  font-size: 12px;
+  gap: 4px;
+  padding: 3px 8px;
+  font-size: 11.5px;
   font-weight: 600;
   color: var(--text-muted);
-  background: var(--acrylic-control);
-  border: 1px solid var(--acrylic-border);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--radius-control);
   cursor: pointer;
 }
 
 .agent-mode-option:hover:not(:disabled) {
   color: var(--text-secondary);
+  background: var(--fill-subtle-hover);
 }
 
 .agent-mode-option.active {
@@ -2853,25 +2826,14 @@ select:focus-visible,
   opacity: 0.6;
 }
 
-.agent-mode-hint {
-  margin-left: 4px;
-  font-size: 11.5px;
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .agent-send-button {
   appearance: none;
-  position: absolute;
-  right: 9px;
-  bottom: 9px;
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   color: #06131a;
   background: var(--accent);
   border: 0;
@@ -2890,24 +2852,10 @@ select:focus-visible,
 }
 
 /* Shown in place of Send while the agent is running: stops the in-flight
-   prompt (kills the adapter subprocess) instead of submitting. */
+   prompt (interrompe o turno no provedor) instead of submitting. */
 .agent-send-button.stop {
   color: #fff;
   background: #c4314b;
-}
-
-@media (max-width: 820px) {
-  .agent-config-page {
-    padding: 16px;
-  }
-
-  .agent-config-card {
-    padding: 16px;
-  }
-
-  .agent-message {
-    max-width: 92%;
-  }
 }
 
 /* ---- Reduced motion (F2-AUD-004) ----
@@ -4583,6 +4531,8 @@ button .codicon { pointer-events: none; }
 .sln-file-row:hover {
   background: rgba(255, 255, 255, 0.06);
   opacity: 1;
+}
+
 /* ---- Tooltip (F2-AUD-005) ---- */
 /* The Tooltip wrapper anchors hover/focus events even when the child control is
    disabled. `display: contents` keeps it invisible to layout. */

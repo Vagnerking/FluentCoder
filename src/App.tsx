@@ -51,15 +51,13 @@ import {
 } from "./lsp/formatOnSave";
 import { AboutDialog } from "./components/AboutDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
-import { AgentsPanel } from "./components/AgentsPanel";
-import { AgentWorkspace } from "./components/AgentWorkspace";
+import { AgentSidebar } from "./components/AgentSidebar";
 import { BranchPicker } from "./components/BranchPicker";
 import { SshConnectDialog } from "./components/SshConnectDialog";
 import { RemoteFolderBrowser } from "./components/RemoteFolderBrowser";
 import { RemoteConnectionMenu } from "./components/RemoteConnectionMenu";
 import { QuickPick, type QuickPickItem } from "./components/QuickPick";
 import { QuickInput } from "./components/QuickInput";
-import { Codicon } from "./icons/codicons/Codicon";
 import {
   acpCancel,
   acpPrompt,
@@ -1603,12 +1601,14 @@ export default function App() {
   function handleCreateAgent() {
     if (!rootPath) return;
     setActiveView("agents");
+    setSidebarOpen(true);
     setAgentSelection({ kind: "config", agentId: null });
     setAgentError(null);
   }
 
   function handleEditAgent(agentId: string) {
     setActiveView("agents");
+    setSidebarOpen(true);
     setAgentSelection({ kind: "config", agentId });
     setAgentError(null);
   }
@@ -1920,11 +1920,25 @@ export default function App() {
         contextPrompt,
         message,
         mode,
+        conversation.nativeSessionId ?? null,
         (event) => {
           // Discard events that arrived after a workspace switch.
           if (isStaleWorkspace()) return;
           if (event.type === "status") {
             setAgentStatus(event.message);
+            return;
+          }
+          if (event.type === "session") {
+            // Persist the provider's native session/thread id so the next
+            // send (or app restart) resumes the conversation without
+            // replaying the whole transcript.
+            void persistForSend(
+              applyToConversation((current) =>
+                current.nativeSessionId === event.sessionId
+                  ? current
+                  : { ...current, nativeSessionId: event.sessionId },
+              ),
+            );
             return;
           }
           if (event.type === "text") {
@@ -3983,18 +3997,28 @@ export default function App() {
         );
       case "agents":
         return (
-          <AgentsPanel
+          <AgentSidebar
             rootPath={rootPath}
             store={agentStore}
             selection={agentSelection}
+            busy={agentBusy}
+            status={agentStatus}
+            error={agentError}
+            mode={agentMode}
+            onModeChange={setAgentMode}
             onCreate={handleCreateAgent}
+            onSaveAgent={handleSaveAgent}
+            onCancelConfig={() => setAgentSelection(null)}
             onSelectAgent={handleSelectAgent}
-            onEdit={handleEditAgent}
-            onDelete={handleDeleteAgent}
+            onEditAgent={handleEditAgent}
+            onDeleteAgent={handleDeleteAgent}
             onNewConversation={handleNewAgentConversation}
             onOpenConversation={handleOpenAgentConversation}
             onRenameConversation={handleRenameConversation}
             onDeleteConversation={handleDeleteConversation}
+            onSendMessage={handleSendAgentMessage}
+            onStop={handleStopAgent}
+            onRevert={handleRevertMessage}
           />
         );
       case "account":
@@ -4147,7 +4171,12 @@ export default function App() {
                   // The graph is an editor tab, not a sidebar panel: its icon
                   // opens (or focuses) the graph tab and leaves the sidebar as is.
                   if (v === "graph") handleShowGraph();
-                  else setActiveView(v);
+                  else {
+                    setActiveView(v);
+                    // Picking a view must reveal its panel — the agents chat,
+                    // for one, lives exclusively in the sidebar.
+                    setSidebarOpen(true);
+                  }
                 }}
                 side={sidebarSide}
                 orientation={activityBarPos === "top" ? "horizontal" : "vertical"}
@@ -4211,15 +4240,6 @@ export default function App() {
           // detached group stays active while you pick its next file.
           onMouseDownCapture={() => void clearActiveEditor()}
         >
-          {activeView === "agents" && (
-            <div className="agent-center-bar">
-              <Codicon name="agents" size={15} />
-              <span>Agentes</span>
-              <span className="agent-center-workspace">
-                {rootPath ?? "Nenhum workspace aberto"}
-              </span>
-            </div>
-          )}
           {/* Editor + bottom panel. The panel can dock bottom (column) or to a
               side (row); the dock class flips the axis and the handle/orientation. */}
           <div
@@ -4228,30 +4248,11 @@ export default function App() {
             }${armingPanel ? " arming-panel" : ""}`}
           >
             <div className="editor-host">
-              {activeView === "agents" ? (
-                <AgentWorkspace
-                  rootPath={rootPath}
-                  store={agentStore}
-                  selection={agentSelection}
-                  busy={agentBusy}
-                  status={agentStatus}
-                  error={agentError}
-                  mode={agentMode}
-                  onModeChange={setAgentMode}
-                  onCreate={handleCreateAgent}
-                  onSaveAgent={handleSaveAgent}
-                  onCancelConfig={() => setAgentSelection(null)}
-                  onSendMessage={handleSendAgentMessage}
-                  onStop={handleStopAgent}
-                  onRevert={handleRevertMessage}
-                />
-              ) : (
-                <EditorGrid
-                  node={layout.root}
-                  renderGroup={renderGroup}
-                  onResize={resizeGroupBranch}
-                />
-              )}
+              <EditorGrid
+                node={layout.root}
+                renderGroup={renderGroup}
+                onResize={resizeGroupBranch}
+              />
             </div>
             {panelOpen && (
               <div
