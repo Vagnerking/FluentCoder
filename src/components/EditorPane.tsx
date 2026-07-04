@@ -665,19 +665,19 @@ export function EditorPane({
         // só o lixo `abc` aparecia. Com isso off, só os providers reais
         // (Roslyn via projeção + HTML) preenchem o widget.
         wordBasedSuggestions: "off",
-        // Semantic highlighting DESLIGADO na stack monaco-languageclient v10.
-        // Motivo (comprovado por experimento — ver docs/migration): a stack
+        // Semantic highlighting NATIVO desligado na stack monaco-languageclient
+        // v10. Motivo (comprovado por experimento — ver docs/migration): a stack
         // `@codingame/monaco-vscode-api` resolve as cores de semantic tokens
         // pelo serviço de tema do VS Code (que exige theme/textmate
         // service-overrides + `semanticTokenColors`), NÃO pelas `rules` do
         // `defineTheme` standalone. Com o flag ligado, os semantic tokens do
         // Roslyn sobrescreviam a camada Monarch e ficavam SEM cor — deixando o
-        // C# inteiro apagado. Com ele desligado, a tokenização léxica do grammar
-        // Monarch (`csharpMonarch` em monacoSetup.ts) volta a colorir keywords,
-        // tipos e strings, resolvida pelas `rules` do tema (que funcionam).
-        // Trade-off aceito: perde a classificação semântica fina do Roslyn
-        // (class vs struct vs enum, método vs variável). Reativar exige o
-        // caminho de tema VS Code completo (follow-up).
+        // C# inteiro apagado. O Monarch (`csharpMonarch` em monacoSetup.ts)
+        // colore o léxico via `rules` do tema, e a classificação semântica fina
+        // do Roslyn (class vs struct vs enum, método vs variável) é aplicada
+        // por DECORATIONS pelo bridge de semantic tokens — ver
+        // src/lsp/semanticColorizer.ts. Este flag deve permanecer false: ligar
+        // o engine nativo reintroduziria a camada sem cor POR CIMA de tudo.
         "semanticHighlighting.enabled": false,
       }}
     />

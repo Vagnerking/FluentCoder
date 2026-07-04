@@ -14,6 +14,10 @@ import { installDiagnosticsBridge } from "./diagnostics";
 import { ensureVscodeServices } from "./vscodeServices";
 import { disableNativeClientFeature } from "./nativeFeatures";
 import type { DiagnosticMode } from "./diagnosticMode";
+import {
+  applySemanticTokenDecorations,
+  clearSemanticTokenDecorations,
+} from "./semanticColorizer";
 import { lspLog } from "./debug";
 
 /** Configuration for a single LSP client. Server-agnostic. */
@@ -461,8 +465,6 @@ function installSemanticTokensBridge(
   // stabilization to work without a competing native provider repainting tokens.
 
   const legend = capability.legend as SemanticTokensLegend;
-  const languageSelector =
-    selector as unknown as monaco.languages.LanguageSelector;
   const contributions: monaco.IDisposable[] = [];
   const refresh = createVoidEvent();
   let semanticTokensEnabled = !deferSemanticTokens;
@@ -575,103 +577,94 @@ function installSemanticTokensBridge(
       if (!e.newModelUrl || !semanticTokensEnabled) return;
       const model = monaco.editor.getModel(e.newModelUrl);
       if (model && servedLanguages.has(model.getLanguageId())) {
-        refresh.fire();
+        void pullAndPaint(model);
       }
     });
 
-  if (capability.full) {
-    contributions.push(
-      monaco.languages.registerDocumentSemanticTokensProvider(languageSelector, {
-        getLegend: () => legend,
-        onDidChange: refresh.event,
-        provideDocumentSemanticTokens: async (model, _lastResultId, token) => {
-          logProviderCall(model, "full");
-          if (!semanticTokensEnabled) return null;
-          const request = beginRequest(model);
-          const result = await client.sendRequest<SemanticTokensResult | null>(
-            "textDocument/semanticTokens/full",
-            { textDocument: { uri: client.code2ProtocolConverter.asUri(model.uri as never) } },
-            token
-          );
-          if (token.isCancellationRequested || !isLatestRequest(model, request)) {
-            return null;
-          }
-          if (result) {
-            lastTokenHashByModel.set(model.uri.toString(), hashTokens(result.data));
-            logSemanticTokenSamples(serverId, model, result, legend);
-          }
-          return result
-            ? {
-                data: Uint32Array.from(result.data),
-                resultId: result.resultId,
-              }
-            : null;
-        },
-        releaseDocumentSemanticTokens: () => {},
-      })
-    );
-  } else if (capability.range) {
-    contributions.push(
-      // Monaco's range-provider API has no onDidChange event. Expose Roslyn's
-      // range-only capability as a full-document provider so workspace refresh
-      // notifications can invalidate cached tokens after project loading.
-      monaco.languages.registerDocumentSemanticTokensProvider(languageSelector, {
-        getLegend: () => legend,
-        onDidChange: refresh.event,
-        provideDocumentSemanticTokens: async (model, _lastResultId, token) => {
-          logProviderCall(model, "range");
-          if (!semanticTokensEnabled) return null;
-          const request = beginRequest(model);
-          const lastLine = model.getLineCount();
-          const result = await client.sendRequest<SemanticTokensResult | null>(
-            "textDocument/semanticTokens/range",
-            {
-              textDocument: { uri: client.code2ProtocolConverter.asUri(model.uri as never) },
-              range: {
-                start: { line: 0, character: 0 },
-                end: {
-                  line: lastLine - 1,
-                  character: model.getLineMaxColumn(lastLine) - 1,
-                },
+  // Pull de tokens + pintura por DECORATIONS (semanticColorizer). O engine
+  // nativo de semantic highlighting fica DESLIGADO no v10 (as cores dele vêm
+  // do serviço de tema do VS Code, que este app não instala — ver EditorPane);
+  // com isso um DocumentSemanticTokensProvider registrado jamais seria
+  // invocado. Este pump substitui o provider: mesmos requests LSP, mas o
+  // resultado vira decorations com a paleta própria, por cima do Monarch.
+  const pullAndPaint = async (
+    model: monaco.editor.ITextModel
+  ): Promise<void> => {
+    if (!semanticTokensEnabled || model.isDisposed()) return;
+    logProviderCall(model, capability.full ? "full" : "range");
+    const request = beginRequest(model);
+    let result: SemanticTokensResult | null = null;
+    try {
+      if (capability.full) {
+        result = await client.sendRequest<SemanticTokensResult | null>(
+          "textDocument/semanticTokens/full",
+          { textDocument: { uri: client.code2ProtocolConverter.asUri(model.uri as never) } }
+        );
+      } else {
+        const lastLine = model.getLineCount();
+        result = await client.sendRequest<SemanticTokensResult | null>(
+          "textDocument/semanticTokens/range",
+          {
+            textDocument: { uri: client.code2ProtocolConverter.asUri(model.uri as never) },
+            range: {
+              start: { line: 0, character: 0 },
+              end: {
+                line: lastLine - 1,
+                character: model.getLineMaxColumn(lastLine) - 1,
               },
             },
-            token
-          );
-          if (token.isCancellationRequested || !isLatestRequest(model, request)) {
-            return null;
           }
-          if (result) {
-            lastTokenHashByModel.set(model.uri.toString(), hashTokens(result.data));
-            logSemanticTokenSamples(serverId, model, result, legend);
-          }
-          // DIAG: probe semanticTokens/full for the SAME model and log its
-          // classification, to compare against the range result above. If full
-          // returns enum/struct/class where range returns variable, the fix is
-          // to use the full request, not to keep refreshing.
-          void client
-            .sendRequest<SemanticTokensResult | null>(
-              "textDocument/semanticTokens/full",
-              { textDocument: { uri: client.code2ProtocolConverter.asUri(model.uri as never) } }
-            )
-            .then((full) => {
-              if (full) {
-                lspLog("DIAG full-probe result for", model.uri.toString().slice(-40));
-                logSemanticTokenSamples(serverId + "(full-probe)", model, full, legend);
-              } else {
-                lspLog("DIAG full-probe returned null for", model.uri.toString().slice(-40));
-              }
-            })
-            .catch((err) => lspLog("DIAG full-probe FAILED", String(err)));
-          return result
-            ? {
-                data: Uint32Array.from(result.data),
-                resultId: result.resultId,
-              }
-            : null;
-        },
-        releaseDocumentSemanticTokens: () => {},
-      })
-    );
+        );
+      }
+    } catch (err) {
+      lspLog("semantic tokens pull failed", serverId, String(err));
+      return;
+    }
+    // Um pull mais novo já partiu para este model — descarta o resultado
+    // velho em vez de pintar classificação obsoleta por cima da nova.
+    if (!isLatestRequest(model, request) || model.isDisposed()) return;
+    if (result) {
+      lastTokenHashByModel.set(model.uri.toString(), hashTokens(result.data));
+      logSemanticTokenSamples(serverId, model, result, legend);
+      applySemanticTokenDecorations(model, result.data, legend);
+    }
+  };
+
+  const pullAllServedModels = (): void => {
+    for (const model of monaco.editor.getModels()) {
+      if (servedLanguages.has(model.getLanguageId())) void pullAndPaint(model);
+    }
+  };
+
+  if (capability.full || capability.range) {
+    // O refresh event (server refresh, enable, stabilize) agora alimenta o
+    // pump diretamente.
+    contributions.push(refresh.event(pullAllServedModels));
+
+    // Re-pull em edição: o engine nativo fazia isso sozinho; o pump precisa
+    // do próprio debounce por model.
+    const changeDebounce = new Map<string, number>();
+    const watchModelEdits = (model: monaco.editor.ITextModel): void => {
+      if (!servedLanguages.has(model.getLanguageId())) return;
+      const key = model.uri.toString();
+      const sub = model.onDidChangeContent(() => {
+        window.clearTimeout(changeDebounce.get(key));
+        changeDebounce.set(
+          key,
+          window.setTimeout(() => void pullAndPaint(model), 300)
+        );
+      });
+      const disposal = model.onWillDispose(() => {
+        window.clearTimeout(changeDebounce.get(key));
+        changeDebounce.delete(key);
+        clearSemanticTokenDecorations(model);
+        sub.dispose();
+        disposal.dispose();
+      });
+      contributions.push(sub, disposal);
+    };
+    monaco.editor.getModels().forEach(watchModelEdits);
+    contributions.push(monaco.editor.onDidCreateModel(watchModelEdits));
   }
 
   if (contributions.length > 0) {
