@@ -209,9 +209,38 @@ function implicitRunEnd(chars: string[], at: number, n: number): number {
       if (j >= lineEnd) break;
       continue;
     }
-    break; // whitespace / `<` / operator outside a bracket → end of implicit expr
+    // Generic method call: `@Model.Get<int>()`. A `<` is a generic type-argument
+    // list (not a less-than operator) only when it forms a balanced `<…>` of pure
+    // type-arg chars and is immediately followed by `(` (the call). This keeps a
+    // real comparison — `@Model.Count < 5` (space, no trailing `(`) — as the END
+    // of the implicit expression instead of swallowing the markup after it.
+    if (ch === "<") {
+      const gen = genericArgsEnd(chars, j, lineEnd);
+      if (gen > 0 && chars[gen] === "(") { j = gen; continue; }
+    }
+    break; // whitespace / operator / non-generic `<` → end of implicit expr
   }
   return j;
+}
+
+/**
+ * If `open` (index of `<`) begins a C# generic type-argument list, returns the
+ * index just past its matching `>`; otherwise 0. The contents must be only
+ * type-argument chars — identifiers, `.`, `,`, whitespace, and nested `<…>`
+ * (e.g. `Dictionary<string, List<int>>`). Bounded to `lineEnd` so an unbalanced
+ * `<` (a real less-than being typed) can't run away.
+ */
+function genericArgsEnd(chars: string[], open: number, lineEnd: number): number {
+  let j = open + 1;
+  let depth = 1;
+  while (j < lineEnd) {
+    const ch = chars[j];
+    if (ch === "<") { depth++; j++; continue; }
+    if (ch === ">") { depth--; j++; if (depth === 0) return j; continue; }
+    if (/[A-Za-z0-9_.,\s]/.test(ch)) { j++; continue; }
+    return 0; // anything else → not a generic list
+  }
+  return 0; // never closed on this line
 }
 
 /**
@@ -350,6 +379,35 @@ function processMarkup(
       // `List<string>`, bogus regions, linter noise).
       if (BLOCK_KEYWORDS.has(word)) {
         i = processStatementChain(src, chars, mask, i, to, word);
+        continue;
+      }
+
+      // `@await expr` — awaited implicit expression (`@await Html.PartialAsync(…)`,
+      // `@await Component.InvokeAsync(…)`). `await` is a C# keyword prefix, not the
+      // expression itself: blank `@await` + the whitespace, then scan the trailing
+      // expression as an implicit run so `Html.PartialAsync("_X")` doesn't leak
+      // into the HTML view as phantom text. Guard with a word boundary so an
+      // identifier like `@awaitable` isn't mistaken for the keyword.
+      if (word === "await" && !/[A-Za-z0-9_]/.test(chars[i + 1 + word.length] ?? "")) {
+        let e = skipInlineWs(chars, i + 1 + word.length, to);
+        // The expression proper starts at `e`. implicitRunEnd expects to sit on a
+        // leading char it can consume; it scans identifiers/`.`/balanced `()[]`.
+        // Reuse it by treating `e-1` as the pseudo-`@` anchor (it consumes from
+        // e onward). Simpler: walk the same grammar inline from `e`.
+        while (e < to) {
+          const ch = chars[e];
+          if (/[A-Za-z0-9_.]/.test(ch)) { e++; continue; }
+          if (ch === "(" || ch === "[") {
+            const lineEnd = lineEndFrom(chars, e, to);
+            const end = scanBalancedEnd(chars, e, to);
+            e = end <= lineEnd ? end : lineEnd;
+            if (e >= lineEnd) break;
+            continue;
+          }
+          break;
+        }
+        blank(chars, mask, i, e);
+        i = e;
         continue;
       }
 
