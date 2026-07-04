@@ -149,3 +149,17 @@
       clássico, roundtrip com o gerador do broker), SolutionPanel (view nova
       na ActivityBar, ícone layers), projetos + arquivos + build/debug por
       projeto. Fora do V1: gestão de solution/referências, startup project.
+- [x] 03/07 — Merge `feat/monaco-v10-migration` (commit 790665d): mlc 10.7.0 +
+      @codingame 25.1.2; 11 conflitos ("infra v10 deles / pipeline Razor
+      sidecar-first nosso / text_io deles"). 214 unit + tsc limpos.
+- [x] 04/07 — Fixes pós-merge de URI/fs (commit bba1f9d), validados no
+      ativus-new (32 projetos): (1) `uriConverters` no clientOptions — o sync
+      nativo v10 serializava `c%3A` vs `c:` dos senders manuais e o Roslyn
+      morria com "Error processing queue" no didClose do rebind; agora UMA
+      forma canônica no fio. (2) `fromFileUri` decodifica `%3A` (decodeURI
+      pula reservados) — Ctrl+click em MetadataAsSource abria dialog "os
+      error 3". (3) underline ctrl+hover: overlay de filesystem readonly via
+      IPC (`registerFileSystemOverlay(-1)`) atrás do provider in-memory da
+      stack — patch de instância no ITextModelService é no-op no v10 (proxy).
+      Métricas: underline 348ms frio/9ms quente; csharp 0 mortes; E2E razor
+      3/3 (12s/19s/16s).
