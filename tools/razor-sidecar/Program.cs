@@ -383,13 +383,26 @@ sealed class ProjectSession
     {
         string dll = ResolveRazorCompilerDll();
         var asm = Assembly.LoadFrom(dll);
+        // Which compiler actually loaded decides the CODEGEN SHAPE (the SDK-10
+        // compiler maps the `@model` type with enhanced #line; the 8.0-band one
+        // doesn't) — log it so a wrong resolution is visible in the stderr trail
+        // instead of silently degrading ctrl+click on the model type.
+        Sidecar.Log($"razor compiler: {dll} (assembly v{asm.GetName().Version})");
         var type = asm.GetType("Microsoft.NET.Sdk.Razor.SourceGenerators.RazorSourceGenerator")
                    ?? throw new Exception($"RazorSourceGenerator type not in {dll}");
         return (IIncrementalGenerator)Activator.CreateInstance(type)!;
     }
 
     /// Locate `Microsoft.CodeAnalysis.Razor.Compiler.dll` in the installed SDKs.
-    /// Prefers the band matching the pinned Roslyn (8.0.x); falls back to newest.
+    /// Prefers the NEWEST SDK by semantic version — the same resolution `dotnet
+    /// build` uses (sans global.json) — so the LIVE emit produces the SAME codegen
+    /// as the prepare/fallback `dotnet build` emit. The old 8.0-band pin made the
+    /// two paths diverge: the 8.0 generator emits SHA-1 checksums and NO `#line`
+    /// mapping for the `@model` type, so any view that went through the live emit
+    /// lost ctrl+click/hover on the model type while untouched views (build emit,
+    /// new generator) kept it. Loading the newest generator requires the host
+    /// Roslyn to be >= its reference (csproj pins CodeAnalysis 5.6.0); OLDER
+    /// generators still load fine because smaller references resolve upward.
     /// Portable across Windows/macOS/Linux and custom .NET installs: honors an
     /// explicit override, then `DOTNET_ROOT`, then the running runtime's own dotnet
     /// root, then the OS default — instead of assuming `%ProgramFiles%\dotnet`.
@@ -406,22 +419,35 @@ sealed class ProjectSession
             tried.Add(sdksRoot);
             if (!Directory.Exists(sdksRoot)) continue;
             var candidates = Directory.GetDirectories(sdksRoot)
-                .Select(d => Path.Combine(d,
+                .Select(d => (dir: d, dll: Path.Combine(d,
                     "Sdks", "Microsoft.NET.Sdk.Razor", "source-generators",
-                    "Microsoft.CodeAnalysis.Razor.Compiler.dll"))
-                .Where(File.Exists)
+                    "Microsoft.CodeAnalysis.Razor.Compiler.dll")))
+                .Where(c => File.Exists(c.dll))
                 .ToList();
             if (candidates.Count == 0) continue;
-            // Prefer 8.0.x (matches the pinned Roslyn 4.9.x); else newest. Match the
-            // `8.0.` band with an OS-agnostic separator so it works on Linux/macOS too.
-            var pinned = candidates.FirstOrDefault(p =>
-                p.Contains($"{Path.DirectorySeparatorChar}8.0.", StringComparison.OrdinalIgnoreCase) ||
-                p.Contains("/8.0.", StringComparison.OrdinalIgnoreCase));
-            return pinned ?? candidates.OrderByDescending(p => p).First();
+            // Newest SDK first, by PARSED version. A plain string sort is wrong
+            // here ("8.0.421" > "10.0.301" lexicographically) and would silently
+            // pick an old generator on any machine with SDK 10+ next to an 8.x.
+            return candidates
+                .OrderByDescending(c => SdkDirVersion(c.dir))
+                .First()
+                .dll;
         }
         throw new Exception(
             $"no Razor.Compiler.dll under any dotnet SDK dir (tried: {string.Join(", ", tried)}). " +
             "Set DOTNET_ROOT or RAZOR_COMPILER_DLL.");
+    }
+
+    /// Parse an SDK directory name ("10.0.301", "9.0.100-preview.3.24081.1") into
+    /// an orderable Version; the prerelease suffix is dropped (SDK dirs of the
+    /// same numeric version don't coexist, so that precision isn't needed).
+    /// Unparsable names sort lowest instead of throwing.
+    private static Version SdkDirVersion(string dir)
+    {
+        var name = Path.GetFileName(dir.TrimEnd(Path.DirectorySeparatorChar, '/'));
+        int dash = name.IndexOf('-');
+        if (dash >= 0) name = name[..dash];
+        return Version.TryParse(name, out var v) ? v : new Version(0, 0);
     }
 
     /// Candidate `dotnet/sdk` directories, most-specific first: DOTNET_ROOT

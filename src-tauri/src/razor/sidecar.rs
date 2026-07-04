@@ -96,6 +96,16 @@ fn fingerprint_matches(path: &Path, want: &str) -> bool {
     std::fs::read_to_string(path).map(|s| s == want).unwrap_or(false)
 }
 
+/// The fingerprint of the sidecar build currently in `cache` (written by
+/// [`Sidecar::ensure_built`]), if any. Lets the prepare path detect that the
+/// EMITTER changed — new sidecar source, protocol, or Razor-compiler resolution —
+/// and force a one-time re-emit of pinned projections that the input-mtime
+/// freshness skip would otherwise keep forever (the stale `.g.cs` is always
+/// "fresher" than its unchanged `.cshtml`).
+pub fn built_fingerprint(cache: &Path) -> Option<String> {
+    std::fs::read_to_string(cache.join("razor-sidecar").join(".fingerprint")).ok()
+}
+
 /// One file fed to the generator as an AdditionalText (path + base64 TargetPath).
 /// `text` carries the in-memory content for files the generator must read besides
 /// the edited target — the hierarchical `_ViewImports`/`_ViewStart` chain. When

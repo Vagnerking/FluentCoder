@@ -10,9 +10,13 @@
     line in, one response object per line out. stderr is for logging only.
 
     Built on first use into the app cache (not shipped prebuilt) so the host
-    Roslyn version can match the user's SDK band. Pinned here to the band proven
-    by the spike (8.0.421 → Microsoft.CodeAnalysis 4.9.x); the Razor.Compiler.dll
-    binds to this version or its types fail to load.
+    Roslyn version can match the user's SDK. O host Roslyn precisa ser >= o
+    Microsoft.CodeAnalysis que o Razor.Compiler.dll do SDK referencia (senão os
+    tipos do generator falham ao carregar com ReflectionTypeLoadException).
+    Referências MENORES resolvem para cima no .NET (o compilador do SDK 8, que
+    referencia 4.9, carrega num host 5.6) — então o host acompanha o compilador
+    MAIS NOVO instalado, que é o que o `dotnet build` também usa. Ver
+    ResolveRazorCompilerDll no Program.cs.
   -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -27,10 +31,15 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Must match the Microsoft.CodeAnalysis the SDK's Razor generator references
-         (8.0.421 → 4.9.0.0). Mismatch → ReflectionTypeLoadException on the
-         generator. See tools/razor-lsp-probe/sidecar-spike/README-findings.md. -->
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.9.2" />
+    <!-- Precisa ser >= ao Microsoft.CodeAnalysis referenciado pelo Razor
+         generator do SDK mais novo em uso (SDK 10 → 5.5.0.0). Versão MENOR que a
+         referência → ReflectionTypeLoadException no generator; versão MAIOR
+         resolve para cima e também carrega os generators antigos (SDK 8 → 4.9).
+         A troca 4.9.2 → 5.6.0 é o que faz o emit LIVE produzir o mesmo codegen
+         do `dotnet build` (checksums SHA-256 + mapeamento #line do @model —
+         sem ele, ctrl+click/hover no tipo do @model morrem nas views que
+         passaram pelo live emit). Ver tools/razor-lsp-probe/sidecar-spike/. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.6.0" />
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
   </ItemGroup>
 

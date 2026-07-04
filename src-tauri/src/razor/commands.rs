@@ -21,7 +21,7 @@ use tauri::State;
 use super::exec;
 use super::remap::{self, LspPos};
 use super::runtime;
-use super::sidecar::{FileSpec, ProjectInputs, Sidecar};
+use super::sidecar::{built_fingerprint, FileSpec, ProjectInputs, Sidecar};
 use super::sourcemap::RazorSourceMap;
 
 /// Everything the live sidecar needs to re-emit ONE `.cshtml` from buffer text.
@@ -311,6 +311,31 @@ fn prepare_blocking(
         _ => false,
     };
 
+    // The freshness skip below (`projection_current`) compares the projection
+    // against its INPUTS (cshtml/csproj/imports mtimes) — it can't see that the
+    // EMITTER changed. A sidecar upgrade changes the CODEGEN SHAPE (ex.: o
+    // compilador Razor do SDK 10 mapeia o tipo do `@model` com `#line`; o da
+    // banda 8.0 não), so a projection pinned by the OLD emitter would keep
+    // ctrl+click/hover no tipo do @model quebrados PARA SEMPRE — the stale
+    // `.g.cs` is always "fresher" than its unchanged `.cshtml`. Record the
+    // emitter fingerprint in the shadow; on mismatch, bypass the freshness skip
+    // once and re-emit every requested view.
+    let emitter_marker = shadow_ws.join(".fluent-emitter-fp");
+    let emitter_fp = if sidecar_ready {
+        app_data.as_ref().and_then(|c| built_fingerprint(c))
+    } else {
+        None
+    };
+    let emitter_stale = match &emitter_fp {
+        Some(fp) => std::fs::read_to_string(&emitter_marker)
+            .map(|recorded| &recorded != fp)
+            .unwrap_or(true),
+        None => false,
+    };
+    if emitter_stale {
+        eprintln!("[razor:sidecar] emitter changed — re-emitting pinned projections");
+    }
+
     let mut views: Vec<PreparedView> = Vec::new();
     let mut fallback: Vec<usize> = Vec::new(); // indices into plan.projections
     let mut contexts_by_idx: Vec<ProjectionContext> = Vec::new();
@@ -355,8 +380,9 @@ fn prepare_blocking(
         contexts_by_idx.push(context.clone());
 
         // Re-open with no edit: the on-disk projection is still current — parse
-        // it instead of re-emitting (instant).
-        if runtime::projection_current(proj_dir_path, csproj_path, pf) {
+        // it instead of re-emitting (instant). Bypassed when the EMITTER changed
+        // (see `emitter_stale` above): same inputs, different codegen.
+        if !emitter_stale && runtime::projection_current(proj_dir_path, csproj_path, pf) {
             if let Ok(generated) = std::fs::read_to_string(&pf.shadow_gcs) {
                 views.push(PreparedView {
                     rel_str,
@@ -426,6 +452,12 @@ fn prepare_blocking(
                 Err(_) => missing.push(rel_str), // no projection at all (degraded)
             }
         }
+    }
+
+    // Record which emitter produced this sweep, so the next prepare with the
+    // SAME sidecar build can trust the freshness skip again.
+    if let Some(fp) = &emitter_fp {
+        let _ = std::fs::write(&emitter_marker, fp);
     }
 
     Ok(PrepareOutcome {
@@ -929,6 +961,18 @@ mod tests {
         );
         assert!(view.map.region_count() > 0, "no #line regions parsed");
 
+        // The `@model` TYPE must be source-mapped (`#line (1,8)-(1,37)` around
+        // `SampleMvc.Models.WeatherModel` — Index.cshtml line 1, after `@model `).
+        // Only the NEW Razor compiler emits this mapping; the old 8.0-band one the
+        // sidecar used to pin does NOT — which silently killed ctrl+click/hover on
+        // the model type for any view emitted live. Guards the sidecar's compiler
+        // resolution (newest SDK) from regressing.
+        assert!(
+            gcs.contains("#line (1,8)"),
+            "the @model type must be #line-mapped by the sidecar emit (old Razor \
+             compiler resolved? see ResolveRazorCompilerDll in the sidecar)"
+        );
+
         // Locate the probe line in the GENERATED text (0-based LSP), then remap
         // its range through the same batch mapper the diagnostics path uses.
         let gen_line = gcs
@@ -1087,3 +1131,4 @@ mod tests {
         );
     }
 }
+
