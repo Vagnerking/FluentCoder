@@ -159,7 +159,6 @@ export function ActivityBar({
             }
           : undefined
       }
-      title={onToggleSide ? 'Clique direito: mover a barra lateral de lado' : undefined}
     >
       <span
         className="activity-indicator"
