@@ -77,5 +77,17 @@ Mesmo protocolo da extensão IDE oficial (validado no código da tag
 ## Regras de UI
 
 - Prompt inicial do agente é **opcional** (só o nome é obrigatório).
-- Criar/editar agente, histórico e chat acontecem todos dentro do painel da
-  sidebar, seguindo o [guia Fluent 2](../design/fluent-design.md).
+- O chat é uma **sidebar secundária**, ancorada na borda **oposta** à barra
+  lateral principal (nunca na principal). Largura redimensionável, padrão
+  500px, persistida em `ui.agentsSidebarWidth`. O lado é derivado:
+  `agentsSide = oposto de sidebarSide`, então as duas nunca colidem.
+- O toggle mostra/oculta essa sidebar e fica na **title bar**, à esquerda dos
+  botões de layout (barra lateral / painel).
+- Criar/editar agente, histórico e chat acontecem todos dentro dessa sidebar,
+  seguindo o [guia Fluent 2](../design/fluent-design.md).
+- Texto da conversa em contraste alto (`--text`), não secundário/muted.
+- Arquivos citados pelo agente (`caminho`, `caminho:linha`) são clicáveis e
+  abrem no editor. A detecção é pura em `src/agents/fileRef.ts` (`parseFileRef`
+  / `resolveWorkspacePath`); só `code` inline sem `language-*` e links cujo
+  destino tenha extensão conhecida viram link — evita transformar
+  `obj.Metodo()` ou identificadores em falso-positivo.
