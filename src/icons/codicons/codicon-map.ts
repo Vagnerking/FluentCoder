@@ -94,7 +94,11 @@ export type IconAction =
   | "send"
   | "modeAsk"
   | "modePlan"
-  | "modeDev"
+  | "modeEdit"
+  | "modeAuto"
+  | "modeBypass"
+  | "model"
+  | "attachContext"
   | "chevronRight"
   | "chevronDown"
   | "close"
@@ -214,7 +218,11 @@ export const CODICON_MAP: Record<IconAction, string> = {
   send: "send",
   modeAsk: "comment",
   modePlan: "checklist",
-  modeDev: "tools",
+  modeEdit: "code",
+  modeAuto: "zap",
+  modeBypass: "shield",
+  model: "sparkle",
+  attachContext: "mention",
   chevronRight: "chevron-right",
   chevronDown: "chevron-down",
   close: "close",

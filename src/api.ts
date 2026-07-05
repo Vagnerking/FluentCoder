@@ -879,6 +879,8 @@ export function acpPrompt(
   contextPrompt: string,
   prompt: string,
   mode: AgentMode,
+  model: string,
+  nativeSessionId: string | null,
   onEvent: (event: AcpEvent) => void,
 ): Promise<void> {
   if (getActiveRemote())
@@ -897,8 +899,20 @@ export function acpPrompt(
     contextPrompt,
     prompt,
     mode,
+    model,
+    nativeSessionId,
     onEvent: channel,
   });
+}
+
+/** Pré-aquece o processo do provedor para o workspace (o boot sai do caminho
+ *  do primeiro envio). Fire-and-forget; no-op sobre SSH. */
+export function acpWarm(
+  provider: "codex" | "claude",
+  workspaceRoot: string,
+): Promise<void> {
+  if (getActiveRemote()) return Promise.resolve();
+  return invoke("acp_warm", { provider, workspaceRoot });
 }
 
 /** Interrupts the in-flight turn while preserving any streamed response. */

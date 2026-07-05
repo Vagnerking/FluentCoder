@@ -51,19 +51,18 @@ import {
 } from "./lsp/formatOnSave";
 import { AboutDialog } from "./components/AboutDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
-import { AgentsPanel } from "./components/AgentsPanel";
-import { AgentWorkspace } from "./components/AgentWorkspace";
+import { AgentSidebar } from "./components/AgentSidebar";
 import { BranchPicker } from "./components/BranchPicker";
 import { SshConnectDialog } from "./components/SshConnectDialog";
 import { RemoteFolderBrowser } from "./components/RemoteFolderBrowser";
 import { RemoteConnectionMenu } from "./components/RemoteConnectionMenu";
 import { QuickPick, type QuickPickItem } from "./components/QuickPick";
 import { QuickInput } from "./components/QuickInput";
-import { Codicon } from "./icons/codicons/Codicon";
 import {
   acpCancel,
   acpPrompt,
   acpStopWorkspace,
+  acpWarm,
   agentsLoad,
   agentsSave,
   buildSearchIndex,
@@ -78,6 +77,7 @@ import {
   gitSnapshotRestore,
   gitStatus,
   isFreshWindow,
+  listProjectFiles,
   buildContextBundle,
   mcpConfig,
   mcpWriteProjectConfig,
@@ -183,17 +183,21 @@ import {
   buildAgentPrompt,
   createLocalId,
   EMPTY_AGENT_STORE,
+  formatEditorContextReference,
   normalizeAgentStore,
   replaceConversation,
 } from "./agents/store";
-import type {
-  AgentConversation,
-  AgentDraft,
-  AgentMessage,
-  AgentMode,
-  AgentSelection,
-  AgentStore,
+import {
+  READ_ONLY_MODES,
+  type AgentConversation,
+  type AgentDraft,
+  type AgentEditorContext,
+  type AgentMessage,
+  type AgentMode,
+  type AgentSelection,
+  type AgentStore,
 } from "./agents/types";
+import { acpResolveModel } from "./acp/providers";
 
 /** Returns the last path segment, handling both Windows and POSIX separators. */
 function baseName(path: string): string {
@@ -222,6 +226,9 @@ const DRAG_HOLD_MS = 600;
  * the explorer below it. Side/hidden modes use the smaller minimum. */
 const SIDEBAR_MIN = 180;
 const SIDEBAR_MIN_TOP = 280;
+// Sidebar secundária (chat de agentes), no lado oposto à principal.
+const AGENTS_SIDEBAR_MIN = 320;
+const AGENTS_SIDEBAR_DEFAULT = 500;
 
 function isUntitled(path: string): boolean {
   return path.startsWith(UNTITLED_PREFIX);
@@ -330,6 +337,14 @@ export default function App() {
   const [activityBarPos, setActivityBarPos] = useState<ActivityBarPos>(() =>
     readStoredActivityPos("ui.activityBarPos", "side")
   );
+  // Secondary side bar hosting the AI agents chat: docks on the side OPPOSITE
+  // the primary sidebar, toggled from the title bar, resizable and persisted.
+  const [agentsSidebarOpen, setAgentsSidebarOpen] = useState(false);
+  const [agentsSidebarWidth, setAgentsSidebarWidth] = useState(() =>
+    readStoredNumber("ui.agentsSidebarWidth", AGENTS_SIDEBAR_DEFAULT)
+  );
+  // The agents chat lives on the opposite edge from the primary sidebar.
+  const agentsSide = sidebarSide === "left" ? "right" : "left";
   const [branch, setBranch] = useState<string | null>(null);
 
   // The editor area is a tree of groups (VS Code-style split grid). `layout` is
@@ -584,8 +599,26 @@ export default function App() {
   }));
   const [agentSelection, setAgentSelection] = useState<AgentSelection>(null);
   const [agentBusy, setAgentBusy] = useState(false);
-  const [agentStatus, setAgentStatus] = useState<string | null>(null);
-  const [agentError, setAgentError] = useState<string | null>(null);
+  // Status/erro do chat amarrados à conversa que os produziu (`conversationId:
+  // null` = aviso global, ex.: falha ao carregar/persistir o store). A UI só
+  // exibe o aviso na conversa dona — abrir outro chat não mostra o erro alheio.
+  const [agentStatus, setAgentStatus] = useState<{
+    conversationId: string | null;
+    message: string;
+  } | null>(null);
+  const [agentError, setAgentError] = useState<{
+    conversationId: string | null;
+    message: string;
+  } | null>(null);
+  // Raciocínio em streaming do turno atual (thinking do Claude / resumo de
+  // reasoning do Codex). Efêmero: exibido ao vivo na conversa dona enquanto o
+  // modelo pensa e descartado quando a resposta começa — nunca persistido.
+  const [agentThought, setAgentThought] = useState<{
+    conversationId: string;
+    text: string;
+  } | null>(null);
+  // Conversa com turno em andamento (para o Stop reportar status no chat certo).
+  const streamingConversationIdRef = useRef<string | null>(null);
   // Operating mode for the chat composer. Lifted here (not local to AgentChat)
   // so the choice survives switching conversations, views, or sidebar panels.
   const [agentMode, setAgentMode] = useState<AgentMode>("ask");
@@ -829,6 +862,13 @@ export default function App() {
       /* storage unavailable — ignore */
     }
   }, [activityBarPos]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("ui.agentsSidebarWidth", String(agentsSidebarWidth));
+    } catch {
+      /* storage unavailable — ignore */
+    }
+  }, [agentsSidebarWidth]);
   useEffect(() => {
     try {
       localStorage.setItem("ui.panelHeight", String(panelHeight));
@@ -1564,7 +1604,7 @@ export default function App() {
       .catch((error) => {
         if (!cancelled) {
           setAgentStore({ ...EMPTY_AGENT_STORE });
-          setAgentError(String(error));
+          setAgentError({ conversationId: null, message: String(error) });
         }
       });
 
@@ -1580,9 +1620,11 @@ export default function App() {
       if (!rootPath) return;
       try {
         await agentsSave(rootPath, next);
-        setAgentError(null);
+        // Limpa apenas erros globais de persistência — não engole o erro de
+        // turno de uma conversa por causa de um save de outra origem.
+        setAgentError((prev) => (prev?.conversationId === null ? null : prev));
       } catch (error) {
-        setAgentError(String(error));
+        setAgentError({ conversationId: null, message: String(error) });
       }
     },
     [rootPath],
@@ -1602,13 +1644,13 @@ export default function App() {
 
   function handleCreateAgent() {
     if (!rootPath) return;
-    setActiveView("agents");
+    setAgentsSidebarOpen(true);
     setAgentSelection({ kind: "config", agentId: null });
     setAgentError(null);
   }
 
   function handleEditAgent(agentId: string) {
-    setActiveView("agents");
+    setAgentsSidebarOpen(true);
     setAgentSelection({ kind: "config", agentId });
     setAgentError(null);
   }
@@ -1626,6 +1668,7 @@ export default function App() {
       color: draft.color,
       initialPrompt: draft.initialPrompt,
       provider: draft.provider,
+      model: acpResolveModel(draft.provider, draft.model),
       workspacePath: rootPath,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -1649,6 +1692,95 @@ export default function App() {
       agentId,
       conversationId: conversation.id,
     });
+  }
+
+  /** Persiste o modelo escolhido no composer para o agente (fica lembrado). */
+  function handleAgentModelChange(agentId: string, model: string) {
+    const now = new Date().toISOString();
+    const agents = agentStore.agents.map((agent) =>
+      agent.id === agentId ? { ...agent, model, updatedAt: now } : agent,
+    );
+    void persistAgentStore({ ...agentStore, agents });
+  }
+
+  // Pré-aquece o provedor assim que um chat é selecionado: o boot do processo
+  // (e o initialize do app-server, no Codex) sai do caminho do primeiro envio.
+  // Idempotente no backend — reabrir o mesmo chat reutiliza o worker vivo.
+  useEffect(() => {
+    if (!rootPath || agentSelection?.kind !== "chat") return;
+    const agent = agentStore.agents.find(
+      (candidate) => candidate.id === agentSelection.agentId,
+    );
+    if (agent) void acpWarm(agent.provider, rootPath).catch(() => {});
+  }, [rootPath, agentSelection, agentStore.agents]);
+
+  /**
+   * Abre um arquivo citado pelo agente no chat. Agentes às vezes citam só o
+   * nome (`Controller.cs`) ou um caminho relativo inexato; quando o caminho
+   * resolvido não existe no workspace, procura pelo melhor candidato no mesmo
+   * índice do Quick Open (sufixo do caminho > nome do arquivo; empate = o
+   * menos aninhado) em vez de falhar com "arquivo não encontrado".
+   */
+  async function handleOpenAgentFile(path: string, line?: number) {
+    const open = (target: string) =>
+      handleOpenFile(
+        { name: baseName(target), path: target, isDir: false },
+        line,
+      );
+    if (!rootPath) {
+      open(path);
+      return;
+    }
+    let files: Awaited<ReturnType<typeof listProjectFiles>>;
+    try {
+      files = await listProjectFiles(rootPath);
+    } catch {
+      open(path);
+      return;
+    }
+    const norm = (value: string) => value.replace(/\\/g, "/").toLowerCase();
+    const wanted = norm(path);
+    // O caminho citado existe de fato — abre direto.
+    if (files.some((file) => norm(file.path) === wanted)) {
+      open(path);
+      return;
+    }
+    // Melhor candidato: caminho relativo citado como sufixo real; senão, só o
+    // nome do arquivo. Empates ficam com o caminho menos aninhado.
+    const root = norm(rootPath).replace(/\/+$/, "");
+    const rel = wanted.startsWith(`${root}/`)
+      ? wanted.slice(root.length + 1)
+      : wanted;
+    const name = rel.split("/").pop() ?? rel;
+    const byDepth = (a: { rel: string }, b: { rel: string }) =>
+      a.rel.length - b.rel.length;
+    const match =
+      files
+        .filter((file) => norm(file.rel) === rel || norm(file.rel).endsWith(`/${rel}`))
+        .sort(byDepth)[0] ??
+      files.filter((file) => norm(file.name) === name).sort(byDepth)[0];
+    // Sem candidato, abre o caminho original — o diálogo de erro padrão avisa.
+    open(match?.path ?? path);
+  }
+
+  /**
+   * Lê o arquivo ativo e a seleção atual do editor, para anexar ao envio do
+   * chat (como o Claude Code faz). `null` quando não há arquivo aberto.
+   */
+  function readEditorContext(): AgentEditorContext | null {
+    if (!activePath || isGraphTab(activePath)) return null;
+    const selection = editorActionsRef.current?.getSelection() ?? null;
+    return {
+      path: activePath,
+      name: baseName(activePath),
+      ...(selection
+        ? {
+            selectionText: selection.text,
+            startLine: selection.startLine,
+            endLine: selection.endLine,
+          }
+        : {}),
+    };
   }
 
   function handleSelectAgent(agentId: string) {
@@ -1743,7 +1875,11 @@ export default function App() {
     }
   }
 
-  async function handleSendAgentMessage(message: string, mode: AgentMode) {
+  async function handleSendAgentMessage(
+    message: string,
+    mode: AgentMode,
+    editorContext: AgentEditorContext | null,
+  ) {
     if (!rootPath || agentSelection?.kind !== "chat" || agentBusy) return;
     const agent = agentStore.agents.find(
       (candidate) => candidate.id === agentSelection.agentId,
@@ -1760,22 +1896,46 @@ export default function App() {
     const sendRoot = rootPath;
     const isStaleWorkspace = () => rootPathRef.current !== sendRoot;
 
+    // Status/erro deste envio pertencem a ESTA conversa: a UI só os exibe
+    // quando ela está selecionada, então trocar de chat não vaza avisos.
+    const sendConversationId = conversation.id;
+    const setSendStatus = (message: string | null) =>
+      setAgentStatus(
+        message === null
+          ? null
+          : { conversationId: sendConversationId, message },
+      );
+    const setSendError = (message: string) =>
+      setAgentError({ conversationId: sendConversationId, message });
+
     // In write-capable modes, snapshot the working tree first so this request is
     // individually revertible (no-op/null when the folder isn't a git repo).
     setAgentBusy(true);
-    setAgentError(null);
-    setAgentStatus(
-      mode === "ask"
+    streamingConversationIdRef.current = sendConversationId;
+    // Limpa apenas avisos desta conversa (ou globais) — erros de outras
+    // conversas continuam guardados para quando o usuário voltar a elas.
+    setAgentError((prev) =>
+      prev &&
+      prev.conversationId !== null &&
+      prev.conversationId !== sendConversationId
+        ? prev
+        : null,
+    );
+    // Modos somente leitura (ask/plan) não alteram arquivos — sem snapshot.
+    const readOnlyMode = READ_ONLY_MODES.has(mode);
+    setSendStatus(
+      readOnlyMode
         ? "Preparando a conversa…"
         : "Criando ponto de restauração…",
     );
     let revert: AgentMessage["revert"] | null;
     try {
-      revert = mode === "ask" ? null : await gitSnapshotCreate(sendRoot);
+      revert = readOnlyMode ? null : await gitSnapshotCreate(sendRoot);
     } catch (error) {
-      setAgentError(String(error));
-      setAgentStatus(null);
+      setSendError(String(error));
+      setSendStatus(null);
       setAgentBusy(false);
+      streamingConversationIdRef.current = null;
       return;
     }
 
@@ -1796,10 +1956,18 @@ export default function App() {
       createdAt: now,
       status: "streaming",
     };
+    // Referência do editor (arquivo/seleção) anexada ao prompt enviado ao
+    // provedor — não à `content` exibida, que continua sendo só o que o usuário
+    // digitou. Vai tanto no envio incremental (sessão retomada) quanto no
+    // contexto completo (sessão nova).
+    const reference = formatEditorContextReference(rootPath, editorContext);
+    const promptWithContext = reference
+      ? `${reference}\n\nMENSAGEM DO USUÁRIO\n${message}`
+      : message;
     const contextPrompt = buildAgentPrompt(
       agent,
       conversation.messages,
-      message,
+      promptWithContext,
     );
 
     // Apply an update by reconciling over the *current* store (functional
@@ -1827,15 +1995,24 @@ export default function App() {
     const persistForSend = (store: AgentStore | null): Promise<void> => {
       if (!store || isStaleWorkspace()) return saveQueue;
       saveQueue = saveQueue
-        .then(() => agentsSave(sendRoot, store))
-        .then(() => setAgentError(null))
+        .then(() =>
+          agentsSave(sendRoot, store).then(() =>
+            setAgentError((prev) =>
+              prev &&
+              prev.conversationId !== null &&
+              prev.conversationId !== sendConversationId
+                ? prev
+                : null,
+            ),
+          ),
+        )
         .catch((error) => {
-          setAgentError(String(error));
+          setSendError(String(error));
         });
       return saveQueue;
     };
 
-    setAgentStatus("Conectando ao agente…");
+    setSendStatus("Conectando ao agente…");
     void persistForSend(
       applyToConversation((current) => ({
         ...current,
@@ -1882,6 +2059,44 @@ export default function App() {
       }
     };
 
+    // O raciocínio chega no mesmo ritmo de tokens do texto; o mesmo coalescing
+    // por frame evita um re-render por delta. O estado é efêmero (fora do
+    // store) — some quando a resposta começa e nunca é persistido.
+    let pendingThoughtText = "";
+    let thoughtFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushThought = () => {
+      if (thoughtFlushTimer !== null) {
+        clearTimeout(thoughtFlushTimer);
+        thoughtFlushTimer = null;
+      }
+      if (!pendingThoughtText || isStaleWorkspace()) return;
+      const chunk = pendingThoughtText;
+      pendingThoughtText = "";
+      setAgentThought((prev) => ({
+        conversationId: sendConversationId,
+        text:
+          prev && prev.conversationId === sendConversationId
+            ? prev.text + chunk
+            : chunk,
+      }));
+    };
+    const appendThought = (content: string) => {
+      pendingThoughtText += content;
+      if (thoughtFlushTimer === null) {
+        thoughtFlushTimer = setTimeout(flushThought, 24);
+      }
+    };
+    const clearThought = () => {
+      pendingThoughtText = "";
+      if (thoughtFlushTimer !== null) {
+        clearTimeout(thoughtFlushTimer);
+        thoughtFlushTimer = null;
+      }
+      setAgentThought((prev) =>
+        prev && prev.conversationId === sendConversationId ? null : prev,
+      );
+    };
+
     // Finalization is event-driven so Stop immediately preserves the partial
     // response. Text deltas remain batched in memory and are flushed once here,
     // avoiding one disk write and Markdown render per token.
@@ -1918,17 +2133,39 @@ export default function App() {
         sendRoot,
         conversation.id,
         contextPrompt,
-        message,
+        promptWithContext,
         mode,
+        acpResolveModel(agent.provider, agent.model),
+        conversation.nativeSessionId ?? null,
         (event) => {
           // Discard events that arrived after a workspace switch.
           if (isStaleWorkspace()) return;
           if (event.type === "status") {
-            setAgentStatus(event.message);
+            setSendStatus(event.message);
+            return;
+          }
+          if (event.type === "session") {
+            // Persist the provider's native session/thread id so the next
+            // send (or app restart) resumes the conversation without
+            // replaying the whole transcript.
+            void persistForSend(
+              applyToConversation((current) =>
+                current.nativeSessionId === event.sessionId
+                  ? current
+                  : { ...current, nativeSessionId: event.sessionId },
+              ),
+            );
+            return;
+          }
+          if (event.type === "thought") {
+            appendThought(event.content);
             return;
           }
           if (event.type === "text") {
-            setAgentStatus("Recebendo resposta…");
+            setSendStatus("Recebendo resposta…");
+            // A resposta substitui o raciocínio na tela (se o modelo voltar a
+            // pensar depois de uma ferramenta, o bloco reaparece).
+            clearThought();
             appendAssistantText(event.content);
             return;
           }
@@ -1942,7 +2179,7 @@ export default function App() {
             );
             return;
           }
-          if (event.type === "error") setAgentError(event.message);
+          if (event.type === "error") setSendError(event.message);
         },
       );
 
@@ -1953,7 +2190,7 @@ export default function App() {
         "done",
         "O agente encerrou a resposta sem conteúdo textual.",
       );
-      setAgentStatus(
+      setSendStatus(
         wasCancelled ? "Execução interrompida." : "Resposta concluída.",
       );
     } catch (error) {
@@ -1961,21 +2198,28 @@ export default function App() {
       flushAssistantText();
       const messageText = String(error);
       await finalizeAssistant("error", messageText);
-      setAgentError(messageText);
-      setAgentStatus(null);
+      setSendError(messageText);
+      setSendStatus(null);
     } finally {
       // agentBusy is global UI state — always release it, even after a workspace
       // switch, or the new workspace would stay stuck "busy".
       if (textFlushTimer !== null) clearTimeout(textFlushTimer);
+      clearThought();
       setAgentBusy(false);
+      streamingConversationIdRef.current = null;
     }
   }
 
   /** Stops the current turn and preserves the response received so far. */
   function handleStopAgent() {
     if (!agentBusy) return;
-    setAgentStatus("Parando o agente…");
-    void acpCancel().catch((error) => setAgentError(String(error)));
+    // O status pertence à conversa cujo turno está rodando (pode não ser a
+    // que está visível — o processo em andamento é único e global).
+    const conversationId = streamingConversationIdRef.current;
+    setAgentStatus({ conversationId, message: "Parando o agente…" });
+    void acpCancel().catch((error) =>
+      setAgentError({ conversationId, message: String(error) }),
+    );
   }
 
   /**
@@ -1999,7 +2243,10 @@ export default function App() {
     try {
       await gitSnapshotRestore(rootPath, target.revert);
     } catch (error) {
-      setAgentError(`Não foi possível reverter: ${String(error)}`);
+      setAgentError({
+        conversationId,
+        message: `Não foi possível reverter: ${String(error)}`,
+      });
       return;
     }
 
@@ -2013,7 +2260,10 @@ export default function App() {
     }));
     void persistAgentStore(next);
     await refreshExplorerRoot();
-    setAgentStatus("Alterações revertidas para antes deste pedido.");
+    setAgentStatus({
+      conversationId,
+      message: "Alterações revertidas para antes deste pedido.",
+    });
   }
 
   /**
@@ -3981,22 +4231,6 @@ export default function App() {
             }
           />
         );
-      case "agents":
-        return (
-          <AgentsPanel
-            rootPath={rootPath}
-            store={agentStore}
-            selection={agentSelection}
-            onCreate={handleCreateAgent}
-            onSelectAgent={handleSelectAgent}
-            onEdit={handleEditAgent}
-            onDelete={handleDeleteAgent}
-            onNewConversation={handleNewAgentConversation}
-            onOpenConversation={handleOpenAgentConversation}
-            onRenameConversation={handleRenameConversation}
-            onDeleteConversation={handleDeleteConversation}
-          />
-        );
       case "account":
         return <PlaceholderPanel title="Contas" />;
       case "settings":
@@ -4034,6 +4268,57 @@ export default function App() {
       onOpenFolder={handleOpenFolder}
       onConnectRemote={() => void openSshFlow()}
       onOpenRecent={handleOpenRecent}
+    />
+  );
+
+  // Avisos são exibidos apenas na conversa dona (ou em todas, quando globais).
+  const activeAgentConversationId =
+    agentSelection?.kind === "chat" ? agentSelection.conversationId : null;
+  const visibleAgentStatus =
+    agentStatus &&
+    (agentStatus.conversationId === null ||
+      agentStatus.conversationId === activeAgentConversationId)
+      ? agentStatus.message
+      : null;
+  const visibleAgentError =
+    agentError &&
+    (agentError.conversationId === null ||
+      agentError.conversationId === activeAgentConversationId)
+      ? agentError.message
+      : null;
+  const visibleAgentThought =
+    agentThought && agentThought.conversationId === activeAgentConversationId
+      ? agentThought.text
+      : null;
+
+  // The AI agents chat as a self-contained secondary side bar node.
+  const agentsSidebarNode = (
+    <AgentSidebar
+      rootPath={rootPath}
+      store={agentStore}
+      selection={agentSelection}
+      busy={agentBusy}
+      status={visibleAgentStatus}
+      thought={visibleAgentThought}
+      error={visibleAgentError}
+      mode={agentMode}
+      onModeChange={setAgentMode}
+      onModelChange={handleAgentModelChange}
+      readEditorContext={readEditorContext}
+      onCreate={handleCreateAgent}
+      onSaveAgent={handleSaveAgent}
+      onCancelConfig={() => setAgentSelection(null)}
+      onSelectAgent={handleSelectAgent}
+      onEditAgent={handleEditAgent}
+      onDeleteAgent={handleDeleteAgent}
+      onNewConversation={handleNewAgentConversation}
+      onOpenConversation={handleOpenAgentConversation}
+      onRenameConversation={handleRenameConversation}
+      onDeleteConversation={handleDeleteConversation}
+      onSendMessage={handleSendAgentMessage}
+      onStop={handleStopAgent}
+      onRevert={handleRevertMessage}
+      onOpenFile={(path, line) => void handleOpenAgentFile(path, line)}
     />
   );
 
@@ -4126,6 +4411,8 @@ export default function App() {
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
         panelOpen={panelOpen}
         onTogglePanel={() => setPanelOpen((v) => !v)}
+        agentsOpen={agentsSidebarOpen}
+        onToggleAgents={() => setAgentsSidebarOpen((v) => !v)}
         menus={menus}
       />
 
@@ -4147,7 +4434,11 @@ export default function App() {
                   // The graph is an editor tab, not a sidebar panel: its icon
                   // opens (or focuses) the graph tab and leaves the sidebar as is.
                   if (v === "graph") handleShowGraph();
-                  else setActiveView(v);
+                  else {
+                    setActiveView(v);
+                    // Picking a view always reveals the primary sidebar.
+                    setSidebarOpen(true);
+                  }
                 }}
                 side={sidebarSide}
                 orientation={activityBarPos === "top" ? "horizontal" : "vertical"}
@@ -4211,15 +4502,6 @@ export default function App() {
           // detached group stays active while you pick its next file.
           onMouseDownCapture={() => void clearActiveEditor()}
         >
-          {activeView === "agents" && (
-            <div className="agent-center-bar">
-              <Codicon name="agents" size={15} />
-              <span>Agentes</span>
-              <span className="agent-center-workspace">
-                {rootPath ?? "Nenhum workspace aberto"}
-              </span>
-            </div>
-          )}
           {/* Editor + bottom panel. The panel can dock bottom (column) or to a
               side (row); the dock class flips the axis and the handle/orientation. */}
           <div
@@ -4228,30 +4510,11 @@ export default function App() {
             }${armingPanel ? " arming-panel" : ""}`}
           >
             <div className="editor-host">
-              {activeView === "agents" ? (
-                <AgentWorkspace
-                  rootPath={rootPath}
-                  store={agentStore}
-                  selection={agentSelection}
-                  busy={agentBusy}
-                  status={agentStatus}
-                  error={agentError}
-                  mode={agentMode}
-                  onModeChange={setAgentMode}
-                  onCreate={handleCreateAgent}
-                  onSaveAgent={handleSaveAgent}
-                  onCancelConfig={() => setAgentSelection(null)}
-                  onSendMessage={handleSendAgentMessage}
-                  onStop={handleStopAgent}
-                  onRevert={handleRevertMessage}
-                />
-              ) : (
-                <EditorGrid
-                  node={layout.root}
-                  renderGroup={renderGroup}
-                  onResize={resizeGroupBranch}
-                />
-              )}
+              <EditorGrid
+                node={layout.root}
+                renderGroup={renderGroup}
+                onResize={resizeGroupBranch}
+              />
             </div>
             {panelOpen && (
               <div
@@ -4307,6 +4570,47 @@ export default function App() {
             />
           </div>
         </main>
+
+        {/* Secondary side bar (AI agents chat), docked on the edge OPPOSITE the
+            primary sidebar. Flex `order` (see .agents-dock rules) puts it and
+            its resize handle on the correct side. */}
+        {agentsSidebarOpen && (
+          <div
+            className={`agents-resize-handle agents-resize-${agentsSide}`}
+            title="Arraste para redimensionar o chat"
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture(e.pointerId);
+              const startX = e.clientX;
+              const startW = Math.max(agentsSidebarWidth, AGENTS_SIDEBAR_MIN);
+              const onMove = (me: PointerEvent) => {
+                const delta = me.clientX - startX;
+                // Docked left, dragging right widens; docked right, dragging
+                // left widens.
+                const signed = agentsSide === "left" ? delta : -delta;
+                setAgentsSidebarWidth(
+                  Math.max(
+                    AGENTS_SIDEBAR_MIN,
+                    Math.min(startW + signed, window.innerWidth * 0.7),
+                  ),
+                );
+              };
+              const onUp = () => {
+                window.removeEventListener("pointermove", onMove);
+                window.removeEventListener("pointerup", onUp);
+              };
+              window.addEventListener("pointermove", onMove);
+              window.addEventListener("pointerup", onUp);
+            }}
+          />
+        )}
+        {agentsSidebarOpen && (
+          <aside
+            className={`agents-dock agents-dock-${agentsSide}`}
+            style={{ width: Math.max(agentsSidebarWidth, AGENTS_SIDEBAR_MIN) }}
+          >
+            {agentsSidebarNode}
+          </aside>
+        )}
       </div>
 
       {/* A tab from another window is hovering over this one. Over a tab strip →

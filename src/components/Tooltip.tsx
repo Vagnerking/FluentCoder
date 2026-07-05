@@ -8,6 +8,7 @@ import {
   type KeyboardEvent,
   type ReactElement,
 } from "react";
+import { createPortal } from "react-dom";
 
 /** A `disabled` element doesn't emit hover/focus, so the wrapper carries them. */
 function isDisabled(el: ReactElement): boolean {
@@ -24,7 +25,7 @@ interface TooltipProps {
   /** The interactive trigger (an icon-only button) the tooltip describes. */
   children: ReactElement;
   /** Where the bubble sits relative to the trigger. Defaults to "top". */
-  placement?: "top" | "bottom";
+  placement?: "top" | "bottom" | "left" | "right";
 }
 
 /** Hover delay (ms). Focus shows the tooltip immediately, like VS Code. */
@@ -37,8 +38,11 @@ const HOVER_DELAY = 400;
  * hides on mouseleave / blur / Esc.
  *
  * The bubble is positioned with `position: fixed`, measured from the trigger's
- * bounding rect, so it escapes any `overflow: hidden` ancestor (sidebars,
- * activity bar). The trigger keeps its `aria-label`; we add `aria-describedby`
+ * bounding rect, and rendered through a portal into `<body>` so it escapes any
+ * `overflow: hidden` ancestor AND any ancestor with `backdrop-filter`/`transform`
+ * (which would otherwise become the containing block for `position: fixed`, e.g.
+ * the activity bar — trapping the bubble to its 48px width and wrapping the text
+ * letter-by-letter). The trigger keeps its `aria-label`; we add `aria-describedby`
  * pointing at the bubble so screen readers can read the same hint.
  */
 export function Tooltip({ label, children, placement = "top" }: TooltipProps) {
@@ -66,10 +70,20 @@ export function Tooltip({ label, children, placement = "top" }: TooltipProps) {
     const el = (wrapper?.firstElementChild as HTMLElement | null) ?? wrapper;
     if (!el) return;
     const rect = el.getBoundingClientRect();
-    setCoords({
-      left: rect.left + rect.width / 2,
-      top: placement === "top" ? rect.top : rect.bottom,
-    });
+    switch (placement) {
+      case "right":
+        // Anchor to the trigger's right edge, vertically centred.
+        setCoords({ left: rect.right, top: rect.top + rect.height / 2 });
+        break;
+      case "left":
+        setCoords({ left: rect.left, top: rect.top + rect.height / 2 });
+        break;
+      case "bottom":
+        setCoords({ left: rect.left + rect.width / 2, top: rect.bottom });
+        break;
+      default: // "top"
+        setCoords({ left: rect.left + rect.width / 2, top: rect.top });
+    }
   }, [placement]);
 
   const show = useCallback(
@@ -142,16 +156,19 @@ export function Tooltip({ label, children, placement = "top" }: TooltipProps) {
       >
         {child}
       </span>
-      {open && coords && (
-        <span
-          role="tooltip"
-          id={id}
-          className={`tooltip tooltip-${placement}`}
-          style={{ left: coords.left, top: coords.top }}
-        >
-          {label}
-        </span>
-      )}
+      {open &&
+        coords &&
+        createPortal(
+          <span
+            role="tooltip"
+            id={id}
+            className={`tooltip tooltip-${placement}`}
+            style={{ left: coords.left, top: coords.top }}
+          >
+            {label}
+          </span>,
+          document.body,
+        )}
     </>
   );
 }

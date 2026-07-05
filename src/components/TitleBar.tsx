@@ -14,6 +14,9 @@ interface TitleBarProps {
   /** Bottom panel (terminal/problems) open state + toggle. */
   panelOpen: boolean;
   onTogglePanel: () => void;
+  /** Secondary side bar (AI agents chat) open state + toggle. */
+  agentsOpen: boolean;
+  onToggleAgents: () => void;
   /** Menu definitions (File, Edit, …) rendered in the left-hand MenuBar. */
   menus: MenuDef[];
 }
@@ -30,6 +33,8 @@ export function TitleBar({
   onToggleSidebar,
   panelOpen,
   onTogglePanel,
+  agentsOpen,
+  onToggleAgents,
   menus,
 }: TitleBarProps) {
   const appWindow = getCurrentWindow();
@@ -78,6 +83,19 @@ export function TitleBar({
       <div className="titlebar-right" data-tauri-drag-region>
       {/* VS Code-style layout controls, just left of the window buttons. */}
       <div className="titlebar-layout" data-tauri-drag-region>
+        <Tooltip
+          label={agentsOpen ? "Ocultar chat de agentes" : "Mostrar chat de agentes"}
+          placement="bottom"
+        >
+          <button
+            className={`titlebar-layout-btn${agentsOpen ? " active" : ""}`}
+            onClick={onToggleAgents}
+            aria-label="Alternar chat de agentes"
+            aria-pressed={agentsOpen}
+          >
+            <ChatIcon />
+          </button>
+        </Tooltip>
         <Tooltip
           label={sidebarOpen ? "Ocultar barra lateral" : "Mostrar barra lateral"}
           placement="bottom"
@@ -162,6 +180,20 @@ function SidebarIcon({ open }: { open: boolean }) {
       {open && <rect x="2" y="3" width="4" height="10" fill="currentColor" opacity="0.45" />}
       <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" fill="none" />
       <line x1="6" y1="2.5" x2="6" y2="13.5" stroke="currentColor" />
+    </svg>
+  );
+}
+
+/** Chat bubble glyph for the AI agents secondary side bar toggle. */
+function ChatIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16">
+      <path
+        d="M2 3.5 A1.5 1.5 0 0 1 3.5 2 h9 A1.5 1.5 0 0 1 14 3.5 v6 A1.5 1.5 0 0 1 12.5 11 H6.5 L3.5 13.5 V11 H3.5 A1.5 1.5 0 0 1 2 9.5 Z"
+        stroke="currentColor"
+        fill="none"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }

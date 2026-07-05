@@ -6,6 +6,12 @@ export interface AgentDefinition {
   color: string;
   initialPrompt: string;
   provider: AgentProviderId;
+  /**
+   * Modelo escolhido para o provedor (id do catálogo em `acp/providers`).
+   * Opcional para compatibilidade com stores antigos — `undefined` cai no
+   * modelo padrão do provedor via `acpResolveModel`.
+   */
+  model?: string;
   workspacePath: string;
   createdAt: string;
   updatedAt: string;
@@ -14,15 +20,41 @@ export interface AgentDefinition {
 export type AgentMessageRole = "user" | "assistant";
 
 /**
- * Operating mode for a send, enforced client-side so it doesn't depend on each
- * provider's native modes:
- * - `ask`:  read-only. The agent may only answer; no file writes.
- * - `plan`: read-only for code, but may write `.md` plan files.
- * - `dev`:  read/write inside the workspace; native provider sandbox stays on.
+ * Modo de permissão de um envio, espelhando os modos nativos do Claude Code e
+ * mapeado para o equivalente de cada provedor (Claude: `--permission-mode`;
+ * Codex: sandbox + approvalPolicy):
+ * - `ask`:    somente leitura — o agente apenas responde.
+ * - `plan`:   somente leitura — explora e apresenta um plano antes de editar.
+ * - `edit`:   edita arquivos do workspace automaticamente.
+ * - `auto`:   o agente escolhe o nível; escalações arriscadas são negadas.
+ * - `bypass`: acesso total, sem confirmações.
+ *
+ * `dev` é o nome legado de `bypass` (persistido em stores antigos) e é
+ * migrado na normalização.
  */
-export type AgentMode = "ask" | "plan" | "dev";
+export type AgentMode = "ask" | "plan" | "edit" | "auto" | "bypass";
 
-export const AGENT_MODES: AgentMode[] = ["ask", "plan", "dev"];
+export const AGENT_MODES: AgentMode[] = [
+  "ask",
+  "plan",
+  "edit",
+  "auto",
+  "bypass",
+];
+
+/** Modos que nunca alteram arquivos (sem snapshot de reversão no envio). */
+export const READ_ONLY_MODES: ReadonlySet<AgentMode> = new Set([
+  "ask",
+  "plan",
+]);
+
+/** Converte um modo persistido (possivelmente legado) para o vocabulário atual. */
+export function normalizeAgentMode(value: unknown): AgentMode | undefined {
+  if (value === "dev") return "bypass";
+  return AGENT_MODES.includes(value as AgentMode)
+    ? (value as AgentMode)
+    : undefined;
+}
 
 export interface AgentMessage {
   id: string;
@@ -57,6 +89,12 @@ export interface AgentConversation {
   messages: AgentMessage[];
   createdAt: string;
   updatedAt: string;
+  /**
+   * Session/thread id da conversa no provedor (session do Claude Code, thread
+   * do Codex). Permite retomar a conversa nativamente — sem reenviar o
+   * histórico inteiro a cada reinício do app/processo.
+   */
+  nativeSessionId?: string;
 }
 
 export interface AgentStore {
@@ -76,10 +114,33 @@ export interface AgentDraft {
   color: string;
   initialPrompt: string;
   provider: AgentProviderId;
+  /** Modelo selecionado para o provedor (vazio ⇒ padrão do provedor). */
+  model?: string;
+}
+
+/**
+ * Trecho do editor anexado ao envio: o arquivo ativo e, opcionalmente, a
+ * seleção atual. Espelha o comportamento do Claude Code (referencia o arquivo
+ * aberto / a seleção junto do prompt).
+ */
+export interface AgentEditorContext {
+  /** Caminho absoluto do arquivo ativo. */
+  path: string;
+  /** Nome do arquivo (para exibição na chip). */
+  name: string;
+  /** Texto selecionado, quando há uma seleção não vazia. */
+  selectionText?: string;
+  /** Primeira linha da seleção (1-based), quando há seleção. */
+  startLine?: number;
+  /** Última linha da seleção (1-based), quando há seleção. */
+  endLine?: number;
 }
 
 export type AcpEvent =
   | { type: "text"; content: string }
+  /** Delta do raciocínio do modelo — exibido ao vivo, nunca persistido. */
+  | { type: "thought"; content: string }
   | { type: "status"; message: string }
+  | { type: "session"; sessionId: string }
   | { type: "done"; stopReason: string }
   | { type: "error"; message: string };
