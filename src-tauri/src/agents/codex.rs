@@ -4,7 +4,7 @@
 //! `thread/resume` em vez de reenviar o histórico — e o histórico sobrevive a
 //! reinícios do app.
 
-use super::{mode_directive, prompt_for_session, AcpEvent, AgentMode, PromptJob};
+use super::{prompt_for_session, AcpEvent, AgentMode, PromptJob};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -114,7 +114,7 @@ impl CodexAppServer {
                     .flatten()
                     .map(|status| format!(" ({status})"))
                     .unwrap_or_default();
-                format!("O processo do Codex encerrou inesperadamente{status}.")
+                format!("O Codex encerrou inesperadamente{status}.")
             })?;
         serde_json::from_str(&line)
             .map_err(|error| format!("O Codex enviou uma mensagem inválida: {error}"))
@@ -154,17 +154,21 @@ impl CodexAppServer {
 
     /// Inicia uma thread NOVA e persistente (o Codex grava o rollout em disco,
     /// o que alimenta o histórico e permite `thread/resume` depois).
-    async fn start_thread(&mut self, root: &Path, mode: AgentMode) -> Result<String, String> {
-        let response = self
-            .request(
-                "thread/start",
-                json!({
-                    "cwd": root,
-                    "approvalPolicy": "never",
-                    "sandbox": codex_sandbox_mode(mode)
-                }),
-            )
-            .await?;
+    async fn start_thread(
+        &mut self,
+        root: &Path,
+        mode: AgentMode,
+        model: &str,
+    ) -> Result<String, String> {
+        let mut params = json!({
+            "cwd": root,
+            "approvalPolicy": codex_approval_policy(mode),
+            "sandbox": codex_sandbox_mode(mode)
+        });
+        if !model.trim().is_empty() {
+            params["model"] = json!(model);
+        }
+        let response = self.request("thread/start", params).await?;
         let result = ensure_rpc_success(&response, "criar uma conversa no Codex")?;
         result
             .pointer("/thread/id")
@@ -185,7 +189,7 @@ impl CodexAppServer {
                 "thread/resume",
                 json!({
                     "threadId": thread_id,
-                    "approvalPolicy": "never",
+                    "approvalPolicy": codex_approval_policy(mode),
                     "sandbox": codex_sandbox_mode(mode)
                 }),
             )
@@ -214,25 +218,30 @@ impl CodexAppServer {
         thread_id: &str,
         root: &Path,
         mode: AgentMode,
+        model: &str,
         prompt: String,
         on_event: &tauri::ipc::Channel<AcpEvent>,
         cancel: &Notify,
     ) -> Result<String, String> {
         let id = self.next_request_id;
         self.next_request_id += 1;
+        let mut params = json!({
+            "threadId": thread_id,
+            "cwd": root,
+            "approvalPolicy": codex_approval_policy(mode),
+            "sandboxPolicy": codex_sandbox_policy(mode, root),
+            "input": [{
+                "type": "text",
+                "text": prompt
+            }]
+        });
+        if !model.trim().is_empty() {
+            params["model"] = json!(model);
+        }
         self.send(json!({
             "id": id,
             "method": "turn/start",
-            "params": {
-                "threadId": thread_id,
-                "cwd": root,
-                "approvalPolicy": "never",
-                "sandboxPolicy": codex_sandbox_policy(mode, root),
-                "input": [{
-                    "type": "text",
-                    "text": prompt
-                }]
-            }
+            "params": params
         }))
         .await?;
 
@@ -281,6 +290,37 @@ impl CodexAppServer {
                 ensure_rpc_success(&message, "interromper a resposta do Codex")?;
             } else if let Some(method) = message.get("method").and_then(Value::as_str) {
                 match method {
+                    // Resumo do raciocínio em streaming (e o raciocínio bruto,
+                    // quando a conta o expõe) — o frontend mostra o texto ao
+                    // vivo enquanto o modelo pensa, em vez de tela parada.
+                    "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta" => {
+                        if message.pointer("/params/threadId").and_then(Value::as_str)
+                            == Some(thread_id)
+                        {
+                            if let Some(delta) =
+                                message.pointer("/params/delta").and_then(Value::as_str)
+                            {
+                                let _ = on_event.send(AcpEvent::Thought {
+                                    content: delta.to_owned(),
+                                });
+                            }
+                        }
+                    }
+                    // Nova seção do resumo: vira quebra de parágrafo no texto
+                    // pensado (a primeira seção não precisa de separador).
+                    "item/reasoning/summaryPartAdded" => {
+                        if message.pointer("/params/threadId").and_then(Value::as_str)
+                            == Some(thread_id)
+                            && message
+                                .pointer("/params/summaryIndex")
+                                .and_then(Value::as_u64)
+                                .is_some_and(|index| index > 0)
+                        {
+                            let _ = on_event.send(AcpEvent::Thought {
+                                content: "\n\n".into(),
+                            });
+                        }
+                    }
                     "item/agentMessage/delta" => {
                         if message.pointer("/params/threadId").and_then(Value::as_str)
                             == Some(thread_id)
@@ -367,10 +407,24 @@ fn ensure_rpc_success<'a>(message: &'a Value, action: &str) -> Result<&'a Value,
         .ok_or_else(|| format!("O Codex não confirmou que conseguiu {action}."))
 }
 
+/// Sandbox nativo por modo (variantes validadas no app-server 0.136.0:
+/// read-only, workspace-write, danger-full-access).
 fn codex_sandbox_mode(mode: AgentMode) -> &'static str {
     match mode {
         AgentMode::Ask | AgentMode::Plan => "read-only",
-        AgentMode::Dev => "workspace-write",
+        AgentMode::Edit | AgentMode::Auto => "workspace-write",
+        AgentMode::Bypass => "danger-full-access",
+    }
+}
+
+/// approvalPolicy por modo (variantes validadas: untrusted, on-failure,
+/// on-request, granular, never). No Auto usamos `on-request`: o Codex pede
+/// escalações fora do sandbox e este cliente headless as nega automaticamente
+/// (`reject_server_request`) — igual ao Auto do Claude sem aprovador.
+fn codex_approval_policy(mode: AgentMode) -> &'static str {
+    match mode {
+        AgentMode::Auto => "on-request",
+        _ => "never",
     }
 }
 
@@ -380,12 +434,15 @@ fn codex_sandbox_policy(mode: AgentMode, root: &Path) -> Value {
             "type": "readOnly",
             "networkAccess": false
         }),
-        AgentMode::Dev => json!({
+        AgentMode::Edit | AgentMode::Auto => json!({
             "type": "workspaceWrite",
             "writableRoots": [root],
             "networkAccess": false,
             "excludeSlashTmp": false,
             "excludeTmpdirEnvVar": false
+        }),
+        AgentMode::Bypass => json!({
+            "type": "dangerFullAccess"
         }),
     }
 }
@@ -444,15 +501,16 @@ pub(crate) async fn run_worker(
             });
 
             // O contexto completo só é reenviado quando a thread é nova (a
-            // retomada nativa já devolve o histórico ao modelo).
+            // retomada nativa já devolve o histórico ao modelo). A mensagem vai
+            // sem scaffolding: permissões são sandbox+approval nativos.
             let prompt = prompt_for_session(is_new_thread, &job.context_prompt, &job.prompt);
-            let directed_prompt = format!("{}\n\n{}", mode_directive(job.mode), prompt);
             let stop_reason = server
                 .run_turn(
                     &thread_id,
                     &root,
                     job.mode,
-                    directed_prompt,
+                    &job.model,
+                    prompt.to_owned(),
                     &job.on_event,
                     &job.cancel,
                 )
@@ -474,7 +532,7 @@ pub(crate) async fn run_worker(
             .map_err(|error| format!("Falha ao consultar o processo do Codex: {error}"))?
         {
             return Err(format!(
-                "O processo do Codex encerrou inesperadamente ({status})."
+                "O Codex encerrou inesperadamente ({status})."
             ));
         }
     }
@@ -511,7 +569,7 @@ async fn resolve_thread(
         }
     }
 
-    let thread_id = server.start_thread(root, job.mode).await?;
+    let thread_id = server.start_thread(root, job.mode, &job.model).await?;
     sessions.insert(job.conversation_id.clone(), thread_id.clone());
     Ok((thread_id, true))
 }
@@ -524,7 +582,20 @@ mod tests {
     fn codex_modes_use_native_workspace_sandboxes() {
         assert_eq!(codex_sandbox_mode(AgentMode::Ask), "read-only");
         assert_eq!(codex_sandbox_mode(AgentMode::Plan), "read-only");
-        assert_eq!(codex_sandbox_mode(AgentMode::Dev), "workspace-write");
+        assert_eq!(codex_sandbox_mode(AgentMode::Edit), "workspace-write");
+        assert_eq!(codex_sandbox_mode(AgentMode::Auto), "workspace-write");
+        assert_eq!(codex_sandbox_mode(AgentMode::Bypass), "danger-full-access");
+    }
+
+    /// Só o Auto pede escalações (`on-request` — negadas automaticamente por
+    /// este cliente headless); os demais nunca pedem aprovação.
+    #[test]
+    fn codex_approval_policy_matches_the_mode() {
+        assert_eq!(codex_approval_policy(AgentMode::Ask), "never");
+        assert_eq!(codex_approval_policy(AgentMode::Plan), "never");
+        assert_eq!(codex_approval_policy(AgentMode::Edit), "never");
+        assert_eq!(codex_approval_policy(AgentMode::Auto), "on-request");
+        assert_eq!(codex_approval_policy(AgentMode::Bypass), "never");
     }
 
     #[test]
@@ -549,10 +620,16 @@ mod tests {
     }
 
     #[test]
-    fn dev_sandbox_policy_limits_writes_to_the_workspace() {
-        let policy = codex_sandbox_policy(AgentMode::Dev, Path::new("C:\\repo"));
+    fn edit_sandbox_policy_limits_writes_to_the_workspace() {
+        let policy = codex_sandbox_policy(AgentMode::Edit, Path::new("C:\\repo"));
         assert_eq!(policy["type"], "workspaceWrite");
         assert_eq!(policy["networkAccess"], false);
         assert_eq!(policy["writableRoots"][0], "C:\\repo");
+    }
+
+    #[test]
+    fn bypass_sandbox_policy_grants_full_access() {
+        let policy = codex_sandbox_policy(AgentMode::Bypass, Path::new("C:\\repo"));
+        assert_eq!(policy["type"], "dangerFullAccess");
     }
 }

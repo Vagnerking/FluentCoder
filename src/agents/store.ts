@@ -1,9 +1,13 @@
-import type {
-  AgentConversation,
-  AgentDefinition,
-  AgentMessage,
-  AgentStore,
-} from "./types";
+// Extensão explícita: este import carrega valor em runtime e os testes rodam
+// no Node com strip-types, que não resolve import sem extensão.
+import {
+  normalizeAgentMode,
+  type AgentConversation,
+  type AgentDefinition,
+  type AgentEditorContext,
+  type AgentMessage,
+  type AgentStore,
+} from "./types.ts";
 
 export const EMPTY_AGENT_STORE: AgentStore = {
   version: 1,
@@ -32,20 +36,82 @@ export function normalizeAgentStore(value: unknown): AgentStore {
   };
 }
 
-/** Drops malformed messages so a single corrupt entry can't break the conversation. */
+/**
+ * Drops malformed messages so a single corrupt entry can't break the
+ * conversation, e migra o modo legado `dev` → `bypass` nas mensagens salvas.
+ */
 function normalizeConversation(
   conversation: AgentConversation,
 ): AgentConversation {
-  const messages = conversation.messages.filter(isMessage);
-  return messages.length === conversation.messages.length
-    ? conversation
-    : { ...conversation, messages };
+  const messages = conversation.messages.filter(isMessage).map((message) => {
+    const mode = normalizeAgentMode(message.mode);
+    if (mode === message.mode) return message;
+    if (mode === undefined) {
+      const { mode: _dropped, ...rest } = message;
+      return rest;
+    }
+    return { ...message, mode };
+  });
+  const untouched =
+    messages.length === conversation.messages.length &&
+    messages.every((message, index) => message === conversation.messages[index]);
+  return untouched ? conversation : { ...conversation, messages };
+}
+
+/** Caminho do arquivo relativo ao workspace (com separador POSIX), p/ referências. */
+function relativeToWorkspace(workspacePath: string, filePath: string): string {
+  const normalize = (value: string) => value.replace(/\\/g, "/");
+  const root = normalize(workspacePath).replace(/\/+$/, "");
+  const target = normalize(filePath);
+  if (root && target.toLowerCase().startsWith(`${root.toLowerCase()}/`)) {
+    return target.slice(root.length + 1);
+  }
+  return target;
+}
+
+/**
+ * Bloco de referência do editor anexado ao envio: o arquivo ativo e, quando há
+ * seleção, o intervalo de linhas + o trecho selecionado num code fence. Espelha
+ * o Claude Code, que injeta o arquivo/seleção aberto junto do prompt. Retorna
+ * `""` quando não há contexto.
+ */
+export function formatEditorContextReference(
+  workspacePath: string,
+  context: AgentEditorContext | null | undefined,
+): string {
+  if (!context) return "";
+  const rel = relativeToWorkspace(workspacePath, context.path);
+  const hasSelection =
+    context.selectionText != null &&
+    context.startLine != null &&
+    context.endLine != null;
+  if (hasSelection) {
+    const range =
+      context.startLine === context.endLine
+        ? `${context.startLine}`
+        : `${context.startLine}-${context.endLine}`;
+    return [
+      "CONTEXTO DO EDITOR",
+      `Arquivo em foco: \`${rel}\` (linhas ${range})`,
+      "Trecho selecionado:",
+      "```",
+      context.selectionText,
+      "```",
+    ].join("\n");
+  }
+  return ["CONTEXTO DO EDITOR", `Arquivo em foco: \`${rel}\``].join("\n");
 }
 
 /**
  * Fallback de contexto completo, usado apenas quando a conversa ainda não tem
  * uma sessão nativa retomável no provedor (primeira mensagem, ou sessão nativa
  * perdida). Com sessão nativa, só a nova mensagem é enviada.
+ *
+ * Nenhum prompt de aplicativo é injetado antes do chat: os únicos prefixos
+ * possíveis são o prompt inicial que o usuário definiu ao criar o agente e o
+ * histórico da UI (reenviado só quando a sessão nativa se perdeu). Sem eles, a
+ * mensagem vai crua ao provedor — permissões são responsabilidade das flags
+ * nativas do CLI, não de texto no prompt.
  */
 export function buildAgentPrompt(
   agent: AgentDefinition,
@@ -60,16 +126,15 @@ export function buildAgentPrompt(
     .join("\n\n");
 
   const initialPrompt = agent.initialPrompt.trim();
+  const message = userMessage.trim();
+  if (!initialPrompt && !transcript) return message;
   return [
-    initialPrompt ? `CONTEXTO INICIAL DO AGENTE\n${initialPrompt}\n` : "",
-    "RESTRIÇÃO OBRIGATÓRIA DE WORKSPACE",
-    `Trabalhe somente dentro deste workspace: ${agent.workspacePath}`,
-    "Não solicite, leia ou infira conteúdo de paths externos ao workspace.",
-    transcript ? `\nHISTÓRICO DA CONVERSA\n${transcript}` : "",
-    `\nNOVA MENSAGEM DO USUÁRIO\n${userMessage.trim()}`,
+    initialPrompt ? `CONTEXTO INICIAL DO AGENTE\n${initialPrompt}` : "",
+    transcript ? `HISTÓRICO DA CONVERSA\n${transcript}` : "",
+    `NOVA MENSAGEM DO USUÁRIO\n${message}`,
   ]
     .filter(Boolean)
-    .join("\n");
+    .join("\n\n");
 }
 
 export function replaceConversation(

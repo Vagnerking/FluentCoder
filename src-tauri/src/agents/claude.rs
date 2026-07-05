@@ -5,7 +5,7 @@
 //! adaptador ACP e sem reenvio do histórico: o CLI grava a sessão em disco e
 //! `--resume <sessionId>` a retoma após reinícios do app ou troca de conversa.
 
-use super::{mode_directive, prompt_for_session, AcpEvent, AgentMode, PromptJob, KNOWLEDGE_HINT};
+use super::{prompt_for_session, AcpEvent, AgentMode, PromptJob};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -27,6 +27,9 @@ struct ClaudeSession {
     stdout: Lines<AsyncBufReader<ChildStdout>>,
     conversation_id: String,
     mode: AgentMode,
+    /// Modelo passado ao CLI via `--model` (as flags são por-processo, então
+    /// trocar de modelo derruba e recria o processo, como o modo).
+    model: String,
     /// Session id nativo, capturado do evento `init`/`result` do CLI.
     session_id: Option<String>,
     /// True quando o processo nasceu com `--resume` (para o fallback de
@@ -48,8 +51,8 @@ enum ClaudeEvent {
     Text(String),
     /// O agente começou a usar uma ferramenta.
     ToolUse(String),
-    /// Delta de raciocínio (extended thinking).
-    Thinking,
+    /// Delta de raciocínio (extended thinking), com o texto pensado.
+    Thinking(String),
     /// Fim do turno: `Ok` no sucesso, `Err(mensagem)` quando `is_error`.
     Result(Result<(), String>),
     Ignored,
@@ -86,7 +89,13 @@ fn interpret_line(value: &Value) -> Vec<ClaudeEvent> {
                                 events.push(ClaudeEvent::Text(text.to_owned()));
                             }
                         }
-                        Some("thinking_delta") => events.push(ClaudeEvent::Thinking),
+                        Some("thinking_delta") => {
+                            if let Some(thinking) =
+                                event.pointer("/delta/thinking").and_then(Value::as_str)
+                            {
+                                events.push(ClaudeEvent::Thinking(thinking.to_owned()));
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -193,23 +202,32 @@ fn knowledge_mcp_config(root: &Path) -> Option<PathBuf> {
     Some(path)
 }
 
-/// Flags de permissão por modo — o mapeamento nativo da política do chat:
-/// - Ask: nega explicitamente todas as ferramentas de escrita e o Bash;
-/// - Plan: só libera escrita/edição de Markdown (arquivos de plano);
-/// - Dev: sem prompts (equivalente ao aprovar-tudo do modo Dev anterior).
+/// Flags de permissão por modo — os permission modes NATIVOS do Claude Code
+/// (validados no CLI 2.1.162: default, acceptEdits, plan, auto,
+/// bypassPermissions, dontAsk):
+/// - Ask: leitura pura — nega explicitamente escrita e Bash (mais limpo que o
+///   `default` headless, cujos pedidos de permissão seriam negados um a um);
+/// - Plan: `--permission-mode plan` nativo (explora e apresenta o plano);
+/// - Edit: `acceptEdits` auto-aprova edições de arquivos; Bash continua
+///   negado (headless não tem quem aprovar comandos);
+/// - Auto: `--permission-mode auto` — o CLI escolhe; sem aprovador, pedidos
+///   de escalação são negados automaticamente;
+/// - Bypass: `bypassPermissions`, sem confirmações.
 fn mode_args(mode: AgentMode) -> Vec<&'static str> {
     match mode {
         AgentMode::Ask => vec![
             "--disallowedTools",
             "Write,Edit,MultiEdit,NotebookEdit,Bash",
         ],
-        AgentMode::Plan => vec![
-            "--allowedTools",
-            "Write(**/*.md),Edit(**/*.md)",
+        AgentMode::Plan => vec!["--permission-mode", "plan"],
+        AgentMode::Edit => vec![
+            "--permission-mode",
+            "acceptEdits",
             "--disallowedTools",
             "Bash",
         ],
-        AgentMode::Dev => vec!["--permission-mode", "bypassPermissions"],
+        AgentMode::Auto => vec!["--permission-mode", "auto"],
+        AgentMode::Bypass => vec!["--permission-mode", "bypassPermissions"],
     }
 }
 
@@ -217,6 +235,7 @@ async fn spawn_session(
     root: &Path,
     conversation_id: &str,
     mode: AgentMode,
+    model: &str,
     resume: Option<&str>,
 ) -> Result<ClaudeSession, String> {
     let (program, prefix) = resolve_claude_command()?;
@@ -232,6 +251,9 @@ async fn spawn_session(
         "--include-partial-messages",
     ]);
     command.args(mode_args(mode));
+    if !model.trim().is_empty() {
+        command.args(["--model", model]);
+    }
     if let Some(session_id) = resume {
         command.args(["--resume", session_id]);
     }
@@ -284,6 +306,7 @@ async fn spawn_session(
         stdout: AsyncBufReader::new(stdout).lines(),
         conversation_id: conversation_id.to_owned(),
         mode,
+        model: model.to_owned(),
         session_id: resume.map(str::to_owned),
         resumed: resume.is_some(),
         turned: false,
@@ -324,9 +347,9 @@ impl ClaudeSession {
             .map(|lines| lines.join(" | "))
             .unwrap_or_default();
         if tail.trim().is_empty() {
-            format!("O processo do Claude encerrou inesperadamente{status}.")
+            format!("O Claude encerrou inesperadamente{status}.")
         } else {
-            format!("O processo do Claude encerrou inesperadamente{status}: {tail}")
+            format!("O Claude encerrou inesperadamente{status}: {tail}")
         }
     }
 }
@@ -406,7 +429,7 @@ async fn stream_turn(
                         message: format!("Claude executando {name}…"),
                     });
                 }
-                ClaudeEvent::Thinking => {
+                ClaudeEvent::Thinking(thinking) => {
                     got_output = true;
                     if !announced_thinking {
                         announced_thinking = true;
@@ -414,6 +437,7 @@ async fn stream_turn(
                             message: "Claude pensando…".into(),
                         });
                     }
+                    let _ = job.on_event.send(AcpEvent::Thought { content: thinking });
                 }
                 ClaudeEvent::Result(result) => {
                     session.turned = true;
@@ -441,7 +465,9 @@ pub(crate) async fn run_worker(
         // O processo atende exatamente uma conversa+modo; qualquer troca
         // derruba o processo e retoma a sessão alvo com --resume.
         let stale = current.as_ref().is_some_and(|session| {
-            session.conversation_id != job.conversation_id || session.mode != job.mode
+            session.conversation_id != job.conversation_id
+                || session.mode != job.mode
+                || session.model != job.model
         });
         let dead = current
             .as_mut()
@@ -494,8 +520,16 @@ async fn run_job(
                 "Claude conectado. Preparando a conversa…".into()
             },
         });
-        *current =
-            Some(spawn_session(root, &job.conversation_id, job.mode, resume.as_deref()).await?);
+        *current = Some(
+            spawn_session(
+                root,
+                &job.conversation_id,
+                job.mode,
+                &job.model,
+                resume.as_deref(),
+            )
+            .await?,
+        );
     } else {
         let _ = job.on_event.send(AcpEvent::Status {
             message: "Sessão Claude ativa. Processando a mensagem…".into(),
@@ -535,7 +569,9 @@ async fn run_job(
                 message: "Não foi possível retomar a sessão anterior; recriando a conversa…"
                     .into(),
             });
-            *current = Some(spawn_session(root, &job.conversation_id, job.mode, None).await?);
+            *current = Some(
+                spawn_session(root, &job.conversation_id, job.mode, &job.model, None).await?,
+            );
             match drive_turn_fresh(current, job).await {
                 Ok(TurnEnd::Completed) => {
                     if let Some(session) = current.as_ref() {
@@ -573,13 +609,12 @@ async fn drive_turn(
         .as_mut()
         .expect("a sessão Claude deve existir após o spawn");
     // Contexto completo apenas quando não há sessão nativa para retomar e este
-    // é o primeiro turno do processo (conversa genuinamente nova).
+    // é o primeiro turno do processo (conversa genuinamente nova). A mensagem
+    // vai sem scaffolding: permissões são as flags nativas do CLI.
     let is_new_session = !resumed_now && !session.turned && !session.resumed;
     let prompt = prompt_for_session(is_new_session, &job.context_prompt, &job.prompt);
-    let hint = if is_new_session { KNOWLEDGE_HINT } else { "" };
-    let directed = format!("{}{}\n\n{}", mode_directive(job.mode), hint, prompt);
     session
-        .send_user_message(&directed)
+        .send_user_message(prompt)
         .await
         .map_err(TurnFailure::Fatal)?;
     stream_turn(session, job).await
@@ -593,14 +628,8 @@ async fn drive_turn_fresh(
     let session = current
         .as_mut()
         .expect("a sessão Claude deve existir após o spawn");
-    let directed = format!(
-        "{}{}\n\n{}",
-        mode_directive(job.mode),
-        KNOWLEDGE_HINT,
-        job.context_prompt
-    );
     session
-        .send_user_message(&directed)
+        .send_user_message(&job.context_prompt)
         .await
         .map_err(TurnFailure::Fatal)?;
     stream_turn(session, job).await
@@ -637,6 +666,21 @@ mod tests {
             }
         }));
         assert_eq!(events, vec![ClaudeEvent::Text("Olá".into())]);
+    }
+
+    #[test]
+    fn streams_thinking_deltas_with_their_text() {
+        let events = interpret_line(&json!({
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "delta": { "type": "thinking_delta", "thinking": "Analisando o código…" }
+            }
+        }));
+        assert_eq!(
+            events,
+            vec![ClaudeEvent::Thinking("Analisando o código…".into())]
+        );
     }
 
     #[test]
@@ -704,15 +748,27 @@ mod tests {
     }
 
     #[test]
-    fn plan_mode_allows_only_markdown_writes() {
+    fn plan_mode_uses_the_native_permission_mode() {
         let args = mode_args(AgentMode::Plan).join(" ");
-        assert!(args.contains("Write(**/*.md)"));
+        assert_eq!(args, "--permission-mode plan");
+    }
+
+    #[test]
+    fn edit_mode_accepts_edits_but_denies_bash() {
+        let args = mode_args(AgentMode::Edit).join(" ");
+        assert!(args.contains("--permission-mode acceptEdits"));
         assert!(args.contains("--disallowedTools Bash"));
     }
 
     #[test]
-    fn dev_mode_bypasses_permission_prompts() {
-        let args = mode_args(AgentMode::Dev).join(" ");
+    fn auto_mode_delegates_to_the_cli() {
+        let args = mode_args(AgentMode::Auto).join(" ");
+        assert_eq!(args, "--permission-mode auto");
+    }
+
+    #[test]
+    fn bypass_mode_bypasses_permission_prompts() {
+        let args = mode_args(AgentMode::Bypass).join(" ");
         assert_eq!(args, "--permission-mode bypassPermissions");
     }
 }

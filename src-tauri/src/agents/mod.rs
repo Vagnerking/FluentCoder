@@ -27,6 +27,12 @@ pub enum AcpEvent {
     Text {
         content: String,
     },
+    /// Delta do raciocínio do modelo (extended thinking do Claude, resumo de
+    /// reasoning do Codex). Exibido ao vivo pelo frontend enquanto o modelo
+    /// pensa; não entra no transcript persistido.
+    Thought {
+        content: String,
+    },
     Status {
         message: String,
     },
@@ -128,6 +134,9 @@ pub(crate) struct PromptJob {
     context_prompt: String,
     prompt: String,
     mode: AgentMode,
+    /// Modelo escolhido no frontend (id do catálogo do provedor). Vazio ⇒ o CLI
+    /// usa o modelo padrão configurado do provedor.
+    model: String,
     /// Id nativo salvo pelo frontend (sessão Claude / thread Codex), presente
     /// quando a conversa já falou com o provedor antes (inclusive em execuções
     /// anteriores do app).
@@ -137,17 +146,22 @@ pub(crate) struct PromptJob {
     done: oneshot::Sender<Result<(), String>>,
 }
 
-/// What the agent is allowed to do for a given send. Each provider maps the
-/// mode to its native permission system (Codex: sandbox; Claude: permission
-/// mode + tool rules).
+/// What the agent is allowed to do for a given send, espelhando os modos de
+/// permissão do Claude Code. Each provider maps the mode to its native
+/// permission system (Claude: `--permission-mode`/tool rules; Codex:
+/// sandbox + approvalPolicy).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AgentMode {
     /// Read-only: the agent may answer, never write files.
     Ask,
-    /// Read-only for code, but may write Markdown (`.md`) plan files.
+    /// Read-only: explora e apresenta um plano antes de qualquer edição.
     Plan,
-    /// Read/write inside the workspace. Native provider sandboxes remain active.
-    Dev,
+    /// Edita arquivos do workspace automaticamente.
+    Edit,
+    /// O agente escolhe o nível; escalações arriscadas são negadas.
+    Auto,
+    /// Acesso total, sem confirmações.
+    Bypass,
 }
 
 impl AgentMode {
@@ -155,7 +169,10 @@ impl AgentMode {
         match value {
             "ask" => Ok(Self::Ask),
             "plan" => Ok(Self::Plan),
-            "dev" => Ok(Self::Dev),
+            "edit" => Ok(Self::Edit),
+            "auto" => Ok(Self::Auto),
+            // `dev` é o nome legado do modo de acesso total.
+            "bypass" | "dev" => Ok(Self::Bypass),
             other => Err(format!("Modo de agente desconhecido: {other}")),
         }
     }
@@ -207,6 +224,7 @@ pub async fn acp_prompt(
     context_prompt: String,
     prompt: String,
     mode: String,
+    model: String,
     native_session_id: Option<String>,
     on_event: Channel<AcpEvent>,
     state: State<'_, AcpState>,
@@ -230,12 +248,14 @@ pub async fn acp_prompt(
         provider: provider.clone(),
         root,
     };
+    // As mensagens de status não expõem detalhes de implementação (CLI,
+    // processos) — o usuário vê apenas o agente preparando a resposta.
     let (worker, reused) = state.worker_for(key.clone())?;
     let _ = on_event.send(AcpEvent::Status {
         message: if reused {
-            format!("Reutilizando o processo {label}…")
+            format!("Preparando o {label}…")
         } else {
-            format!("Iniciando a conexão direta com o {label} CLI…")
+            format!("Iniciando o {label}…")
         },
     });
 
@@ -245,6 +265,7 @@ pub async fn acp_prompt(
         context_prompt,
         prompt,
         mode,
+        model,
         native_session_id,
         on_event: on_event.clone(),
         cancel: Arc::clone(&state.cancel),
@@ -254,18 +275,18 @@ pub async fn acp_prompt(
         state.discard_worker(&key)?;
         let (replacement, _) = state.worker_for(key)?;
         let _ = on_event.send(AcpEvent::Status {
-            message: format!("Reiniciando o processo {label} após uma desconexão…"),
+            message: format!("Reconectando ao {label}…"),
         });
         replacement
             .send(error.0)
-            .map_err(|_| format!("Não foi possível reiniciar o processo {label}."))?;
+            .map_err(|_| format!("Não foi possível reconectar ao {label}."))?;
     }
 
     match completed.await {
         Ok(result) => result,
         Err(_) => {
             let message = format!(
-                "O processo {label} encerrou durante a resposta. Envie novamente para reiniciá-lo."
+                "O {label} foi desconectado durante a resposta. Envie novamente para reconectar."
             );
             let _ = on_event.send(AcpEvent::Error {
                 message: message.clone(),
@@ -273,6 +294,26 @@ pub async fn acp_prompt(
             Err(message)
         }
     }
+}
+
+/// Pré-aquece o worker do provedor para o workspace: garante que o processo
+/// (e, no Codex, o app-server + `initialize`) já esteja de pé antes do
+/// primeiro envio, tirando o boot do caminho da primeira resposta. Idempotente
+/// — reutiliza o worker existente.
+#[tauri::command]
+pub fn acp_warm(
+    provider: String,
+    workspace_root: String,
+    state: State<'_, AcpState>,
+) -> Result<(), String> {
+    provider_label(&provider)?;
+    let root = fs::canonicalize(&workspace_root)
+        .map_err(|error| format!("Não foi possível validar o workspace: {error}"))?;
+    if !root.is_dir() {
+        return Err("O workspace informado não é uma pasta.".into());
+    }
+    state.worker_for(WorkerKey { provider, root })?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -315,13 +356,6 @@ pub(crate) fn provider_label(provider: &str) -> Result<&'static str, String> {
     }
 }
 
-/// A one-line nudge (new sessions only) so the agent knows the knowledge tools
-/// exist and reaches for them before answering.
-pub(crate) const KNOWLEDGE_HINT: &str = "\n\nVocê tem ferramentas MCP \"fluent-knowledge\" \
-    (search_knowledge, get_backlinks, get_related_files, get_outline, \
-    get_context_bundle) para consultar o grafo de contexto do projeto — use-as \
-    para se orientar antes de responder.";
-
 /// Escolhe entre o contexto completo (agente + histórico) e apenas a nova
 /// mensagem. O contexto só é reenviado quando o provedor NÃO consegue retomar a
 /// conversa nativamente (conversa nova ou sessão nativa perdida).
@@ -334,26 +368,6 @@ pub(crate) fn prompt_for_session<'a>(
         context_prompt
     } else {
         prompt
-    }
-}
-
-/// System directive prepended to the prompt so the agent's behavior matches the
-/// enforced policy (and the agent doesn't waste a turn attempting writes the
-/// provider will reject).
-pub(crate) fn mode_directive(mode: AgentMode) -> &'static str {
-    match mode {
-        AgentMode::Ask => {
-            "MODO ASK (somente leitura): responda e explique. Você NÃO pode criar, \
-             editar ou apagar arquivos; qualquer tentativa de escrita será rejeitada."
-        }
-        AgentMode::Plan => {
-            "MODO PLAN: investigue e produza um plano. Você só pode escrever arquivos \
-             Markdown (.md) contendo o plano; qualquer outra escrita será rejeitada."
-        }
-        AgentMode::Dev => {
-            "MODO DEV: você pode ler, criar, editar e apagar arquivos do workspace \
-             para implementar o que for pedido."
-        }
     }
 }
 
@@ -430,7 +444,11 @@ mod tests {
     fn parses_known_modes() {
         assert_eq!(AgentMode::parse("ask").unwrap(), AgentMode::Ask);
         assert_eq!(AgentMode::parse("plan").unwrap(), AgentMode::Plan);
-        assert_eq!(AgentMode::parse("dev").unwrap(), AgentMode::Dev);
+        assert_eq!(AgentMode::parse("edit").unwrap(), AgentMode::Edit);
+        assert_eq!(AgentMode::parse("auto").unwrap(), AgentMode::Auto);
+        assert_eq!(AgentMode::parse("bypass").unwrap(), AgentMode::Bypass);
+        // Nome legado persistido em conversas antigas.
+        assert_eq!(AgentMode::parse("dev").unwrap(), AgentMode::Bypass);
         assert!(AgentMode::parse("outro").is_err());
     }
 }

@@ -527,6 +527,18 @@ export function EditorPane({
         editorInstance.trigger(source, handlerId, payload);
       },
       focus: () => editorInstance.focus(),
+      getSelection: () => {
+        const model = editorInstance.getModel();
+        const sel = editorInstance.getSelection();
+        if (!model || !sel || sel.isEmpty()) return null;
+        const text = model.getValueInRange(sel);
+        if (!text.trim()) return null;
+        return {
+          text,
+          startLine: sel.startLineNumber,
+          endLine: sel.endLineNumber,
+        };
+      },
     };
     internalApi.current = api;
     if (actionsRef) actionsRef.current = api;

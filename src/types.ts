@@ -447,4 +447,14 @@ export interface EditorActionsApi {
   trigger: (source: string, handlerId: string, payload?: unknown) => void;
   /** Focuses the editor. */
   focus: () => void;
+  /**
+   * Snapshot da seleção atual do editor (texto + linhas 1-based), ou `null`
+   * quando não há seleção não vazia. Usado pelo chat de agentes para referenciar
+   * o trecho selecionado junto do prompt (como o Claude Code faz).
+   */
+  getSelection: () => {
+    text: string;
+    startLine: number;
+    endLine: number;
+  } | null;
 }

@@ -62,6 +62,7 @@ import {
   acpCancel,
   acpPrompt,
   acpStopWorkspace,
+  acpWarm,
   agentsLoad,
   agentsSave,
   buildSearchIndex,
@@ -76,6 +77,7 @@ import {
   gitSnapshotRestore,
   gitStatus,
   isFreshWindow,
+  listProjectFiles,
   buildContextBundle,
   mcpConfig,
   mcpWriteProjectConfig,
@@ -181,17 +183,21 @@ import {
   buildAgentPrompt,
   createLocalId,
   EMPTY_AGENT_STORE,
+  formatEditorContextReference,
   normalizeAgentStore,
   replaceConversation,
 } from "./agents/store";
-import type {
-  AgentConversation,
-  AgentDraft,
-  AgentMessage,
-  AgentMode,
-  AgentSelection,
-  AgentStore,
+import {
+  READ_ONLY_MODES,
+  type AgentConversation,
+  type AgentDraft,
+  type AgentEditorContext,
+  type AgentMessage,
+  type AgentMode,
+  type AgentSelection,
+  type AgentStore,
 } from "./agents/types";
+import { acpResolveModel } from "./acp/providers";
 
 /** Returns the last path segment, handling both Windows and POSIX separators. */
 function baseName(path: string): string {
@@ -593,8 +599,26 @@ export default function App() {
   }));
   const [agentSelection, setAgentSelection] = useState<AgentSelection>(null);
   const [agentBusy, setAgentBusy] = useState(false);
-  const [agentStatus, setAgentStatus] = useState<string | null>(null);
-  const [agentError, setAgentError] = useState<string | null>(null);
+  // Status/erro do chat amarrados à conversa que os produziu (`conversationId:
+  // null` = aviso global, ex.: falha ao carregar/persistir o store). A UI só
+  // exibe o aviso na conversa dona — abrir outro chat não mostra o erro alheio.
+  const [agentStatus, setAgentStatus] = useState<{
+    conversationId: string | null;
+    message: string;
+  } | null>(null);
+  const [agentError, setAgentError] = useState<{
+    conversationId: string | null;
+    message: string;
+  } | null>(null);
+  // Raciocínio em streaming do turno atual (thinking do Claude / resumo de
+  // reasoning do Codex). Efêmero: exibido ao vivo na conversa dona enquanto o
+  // modelo pensa e descartado quando a resposta começa — nunca persistido.
+  const [agentThought, setAgentThought] = useState<{
+    conversationId: string;
+    text: string;
+  } | null>(null);
+  // Conversa com turno em andamento (para o Stop reportar status no chat certo).
+  const streamingConversationIdRef = useRef<string | null>(null);
   // Operating mode for the chat composer. Lifted here (not local to AgentChat)
   // so the choice survives switching conversations, views, or sidebar panels.
   const [agentMode, setAgentMode] = useState<AgentMode>("ask");
@@ -1580,7 +1604,7 @@ export default function App() {
       .catch((error) => {
         if (!cancelled) {
           setAgentStore({ ...EMPTY_AGENT_STORE });
-          setAgentError(String(error));
+          setAgentError({ conversationId: null, message: String(error) });
         }
       });
 
@@ -1596,9 +1620,11 @@ export default function App() {
       if (!rootPath) return;
       try {
         await agentsSave(rootPath, next);
-        setAgentError(null);
+        // Limpa apenas erros globais de persistência — não engole o erro de
+        // turno de uma conversa por causa de um save de outra origem.
+        setAgentError((prev) => (prev?.conversationId === null ? null : prev));
       } catch (error) {
-        setAgentError(String(error));
+        setAgentError({ conversationId: null, message: String(error) });
       }
     },
     [rootPath],
@@ -1642,6 +1668,7 @@ export default function App() {
       color: draft.color,
       initialPrompt: draft.initialPrompt,
       provider: draft.provider,
+      model: acpResolveModel(draft.provider, draft.model),
       workspacePath: rootPath,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -1665,6 +1692,95 @@ export default function App() {
       agentId,
       conversationId: conversation.id,
     });
+  }
+
+  /** Persiste o modelo escolhido no composer para o agente (fica lembrado). */
+  function handleAgentModelChange(agentId: string, model: string) {
+    const now = new Date().toISOString();
+    const agents = agentStore.agents.map((agent) =>
+      agent.id === agentId ? { ...agent, model, updatedAt: now } : agent,
+    );
+    void persistAgentStore({ ...agentStore, agents });
+  }
+
+  // Pré-aquece o provedor assim que um chat é selecionado: o boot do processo
+  // (e o initialize do app-server, no Codex) sai do caminho do primeiro envio.
+  // Idempotente no backend — reabrir o mesmo chat reutiliza o worker vivo.
+  useEffect(() => {
+    if (!rootPath || agentSelection?.kind !== "chat") return;
+    const agent = agentStore.agents.find(
+      (candidate) => candidate.id === agentSelection.agentId,
+    );
+    if (agent) void acpWarm(agent.provider, rootPath).catch(() => {});
+  }, [rootPath, agentSelection, agentStore.agents]);
+
+  /**
+   * Abre um arquivo citado pelo agente no chat. Agentes às vezes citam só o
+   * nome (`Controller.cs`) ou um caminho relativo inexato; quando o caminho
+   * resolvido não existe no workspace, procura pelo melhor candidato no mesmo
+   * índice do Quick Open (sufixo do caminho > nome do arquivo; empate = o
+   * menos aninhado) em vez de falhar com "arquivo não encontrado".
+   */
+  async function handleOpenAgentFile(path: string, line?: number) {
+    const open = (target: string) =>
+      handleOpenFile(
+        { name: baseName(target), path: target, isDir: false },
+        line,
+      );
+    if (!rootPath) {
+      open(path);
+      return;
+    }
+    let files: Awaited<ReturnType<typeof listProjectFiles>>;
+    try {
+      files = await listProjectFiles(rootPath);
+    } catch {
+      open(path);
+      return;
+    }
+    const norm = (value: string) => value.replace(/\\/g, "/").toLowerCase();
+    const wanted = norm(path);
+    // O caminho citado existe de fato — abre direto.
+    if (files.some((file) => norm(file.path) === wanted)) {
+      open(path);
+      return;
+    }
+    // Melhor candidato: caminho relativo citado como sufixo real; senão, só o
+    // nome do arquivo. Empates ficam com o caminho menos aninhado.
+    const root = norm(rootPath).replace(/\/+$/, "");
+    const rel = wanted.startsWith(`${root}/`)
+      ? wanted.slice(root.length + 1)
+      : wanted;
+    const name = rel.split("/").pop() ?? rel;
+    const byDepth = (a: { rel: string }, b: { rel: string }) =>
+      a.rel.length - b.rel.length;
+    const match =
+      files
+        .filter((file) => norm(file.rel) === rel || norm(file.rel).endsWith(`/${rel}`))
+        .sort(byDepth)[0] ??
+      files.filter((file) => norm(file.name) === name).sort(byDepth)[0];
+    // Sem candidato, abre o caminho original — o diálogo de erro padrão avisa.
+    open(match?.path ?? path);
+  }
+
+  /**
+   * Lê o arquivo ativo e a seleção atual do editor, para anexar ao envio do
+   * chat (como o Claude Code faz). `null` quando não há arquivo aberto.
+   */
+  function readEditorContext(): AgentEditorContext | null {
+    if (!activePath || isGraphTab(activePath)) return null;
+    const selection = editorActionsRef.current?.getSelection() ?? null;
+    return {
+      path: activePath,
+      name: baseName(activePath),
+      ...(selection
+        ? {
+            selectionText: selection.text,
+            startLine: selection.startLine,
+            endLine: selection.endLine,
+          }
+        : {}),
+    };
   }
 
   function handleSelectAgent(agentId: string) {
@@ -1759,7 +1875,11 @@ export default function App() {
     }
   }
 
-  async function handleSendAgentMessage(message: string, mode: AgentMode) {
+  async function handleSendAgentMessage(
+    message: string,
+    mode: AgentMode,
+    editorContext: AgentEditorContext | null,
+  ) {
     if (!rootPath || agentSelection?.kind !== "chat" || agentBusy) return;
     const agent = agentStore.agents.find(
       (candidate) => candidate.id === agentSelection.agentId,
@@ -1776,22 +1896,46 @@ export default function App() {
     const sendRoot = rootPath;
     const isStaleWorkspace = () => rootPathRef.current !== sendRoot;
 
+    // Status/erro deste envio pertencem a ESTA conversa: a UI só os exibe
+    // quando ela está selecionada, então trocar de chat não vaza avisos.
+    const sendConversationId = conversation.id;
+    const setSendStatus = (message: string | null) =>
+      setAgentStatus(
+        message === null
+          ? null
+          : { conversationId: sendConversationId, message },
+      );
+    const setSendError = (message: string) =>
+      setAgentError({ conversationId: sendConversationId, message });
+
     // In write-capable modes, snapshot the working tree first so this request is
     // individually revertible (no-op/null when the folder isn't a git repo).
     setAgentBusy(true);
-    setAgentError(null);
-    setAgentStatus(
-      mode === "ask"
+    streamingConversationIdRef.current = sendConversationId;
+    // Limpa apenas avisos desta conversa (ou globais) — erros de outras
+    // conversas continuam guardados para quando o usuário voltar a elas.
+    setAgentError((prev) =>
+      prev &&
+      prev.conversationId !== null &&
+      prev.conversationId !== sendConversationId
+        ? prev
+        : null,
+    );
+    // Modos somente leitura (ask/plan) não alteram arquivos — sem snapshot.
+    const readOnlyMode = READ_ONLY_MODES.has(mode);
+    setSendStatus(
+      readOnlyMode
         ? "Preparando a conversa…"
         : "Criando ponto de restauração…",
     );
     let revert: AgentMessage["revert"] | null;
     try {
-      revert = mode === "ask" ? null : await gitSnapshotCreate(sendRoot);
+      revert = readOnlyMode ? null : await gitSnapshotCreate(sendRoot);
     } catch (error) {
-      setAgentError(String(error));
-      setAgentStatus(null);
+      setSendError(String(error));
+      setSendStatus(null);
       setAgentBusy(false);
+      streamingConversationIdRef.current = null;
       return;
     }
 
@@ -1812,10 +1956,18 @@ export default function App() {
       createdAt: now,
       status: "streaming",
     };
+    // Referência do editor (arquivo/seleção) anexada ao prompt enviado ao
+    // provedor — não à `content` exibida, que continua sendo só o que o usuário
+    // digitou. Vai tanto no envio incremental (sessão retomada) quanto no
+    // contexto completo (sessão nova).
+    const reference = formatEditorContextReference(rootPath, editorContext);
+    const promptWithContext = reference
+      ? `${reference}\n\nMENSAGEM DO USUÁRIO\n${message}`
+      : message;
     const contextPrompt = buildAgentPrompt(
       agent,
       conversation.messages,
-      message,
+      promptWithContext,
     );
 
     // Apply an update by reconciling over the *current* store (functional
@@ -1843,15 +1995,24 @@ export default function App() {
     const persistForSend = (store: AgentStore | null): Promise<void> => {
       if (!store || isStaleWorkspace()) return saveQueue;
       saveQueue = saveQueue
-        .then(() => agentsSave(sendRoot, store))
-        .then(() => setAgentError(null))
+        .then(() =>
+          agentsSave(sendRoot, store).then(() =>
+            setAgentError((prev) =>
+              prev &&
+              prev.conversationId !== null &&
+              prev.conversationId !== sendConversationId
+                ? prev
+                : null,
+            ),
+          ),
+        )
         .catch((error) => {
-          setAgentError(String(error));
+          setSendError(String(error));
         });
       return saveQueue;
     };
 
-    setAgentStatus("Conectando ao agente…");
+    setSendStatus("Conectando ao agente…");
     void persistForSend(
       applyToConversation((current) => ({
         ...current,
@@ -1898,6 +2059,44 @@ export default function App() {
       }
     };
 
+    // O raciocínio chega no mesmo ritmo de tokens do texto; o mesmo coalescing
+    // por frame evita um re-render por delta. O estado é efêmero (fora do
+    // store) — some quando a resposta começa e nunca é persistido.
+    let pendingThoughtText = "";
+    let thoughtFlushTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushThought = () => {
+      if (thoughtFlushTimer !== null) {
+        clearTimeout(thoughtFlushTimer);
+        thoughtFlushTimer = null;
+      }
+      if (!pendingThoughtText || isStaleWorkspace()) return;
+      const chunk = pendingThoughtText;
+      pendingThoughtText = "";
+      setAgentThought((prev) => ({
+        conversationId: sendConversationId,
+        text:
+          prev && prev.conversationId === sendConversationId
+            ? prev.text + chunk
+            : chunk,
+      }));
+    };
+    const appendThought = (content: string) => {
+      pendingThoughtText += content;
+      if (thoughtFlushTimer === null) {
+        thoughtFlushTimer = setTimeout(flushThought, 24);
+      }
+    };
+    const clearThought = () => {
+      pendingThoughtText = "";
+      if (thoughtFlushTimer !== null) {
+        clearTimeout(thoughtFlushTimer);
+        thoughtFlushTimer = null;
+      }
+      setAgentThought((prev) =>
+        prev && prev.conversationId === sendConversationId ? null : prev,
+      );
+    };
+
     // Finalization is event-driven so Stop immediately preserves the partial
     // response. Text deltas remain batched in memory and are flushed once here,
     // avoiding one disk write and Markdown render per token.
@@ -1934,14 +2133,15 @@ export default function App() {
         sendRoot,
         conversation.id,
         contextPrompt,
-        message,
+        promptWithContext,
         mode,
+        acpResolveModel(agent.provider, agent.model),
         conversation.nativeSessionId ?? null,
         (event) => {
           // Discard events that arrived after a workspace switch.
           if (isStaleWorkspace()) return;
           if (event.type === "status") {
-            setAgentStatus(event.message);
+            setSendStatus(event.message);
             return;
           }
           if (event.type === "session") {
@@ -1957,8 +2157,15 @@ export default function App() {
             );
             return;
           }
+          if (event.type === "thought") {
+            appendThought(event.content);
+            return;
+          }
           if (event.type === "text") {
-            setAgentStatus("Recebendo resposta…");
+            setSendStatus("Recebendo resposta…");
+            // A resposta substitui o raciocínio na tela (se o modelo voltar a
+            // pensar depois de uma ferramenta, o bloco reaparece).
+            clearThought();
             appendAssistantText(event.content);
             return;
           }
@@ -1972,7 +2179,7 @@ export default function App() {
             );
             return;
           }
-          if (event.type === "error") setAgentError(event.message);
+          if (event.type === "error") setSendError(event.message);
         },
       );
 
@@ -1983,7 +2190,7 @@ export default function App() {
         "done",
         "O agente encerrou a resposta sem conteúdo textual.",
       );
-      setAgentStatus(
+      setSendStatus(
         wasCancelled ? "Execução interrompida." : "Resposta concluída.",
       );
     } catch (error) {
@@ -1991,21 +2198,28 @@ export default function App() {
       flushAssistantText();
       const messageText = String(error);
       await finalizeAssistant("error", messageText);
-      setAgentError(messageText);
-      setAgentStatus(null);
+      setSendError(messageText);
+      setSendStatus(null);
     } finally {
       // agentBusy is global UI state — always release it, even after a workspace
       // switch, or the new workspace would stay stuck "busy".
       if (textFlushTimer !== null) clearTimeout(textFlushTimer);
+      clearThought();
       setAgentBusy(false);
+      streamingConversationIdRef.current = null;
     }
   }
 
   /** Stops the current turn and preserves the response received so far. */
   function handleStopAgent() {
     if (!agentBusy) return;
-    setAgentStatus("Parando o agente…");
-    void acpCancel().catch((error) => setAgentError(String(error)));
+    // O status pertence à conversa cujo turno está rodando (pode não ser a
+    // que está visível — o processo em andamento é único e global).
+    const conversationId = streamingConversationIdRef.current;
+    setAgentStatus({ conversationId, message: "Parando o agente…" });
+    void acpCancel().catch((error) =>
+      setAgentError({ conversationId, message: String(error) }),
+    );
   }
 
   /**
@@ -2029,7 +2243,10 @@ export default function App() {
     try {
       await gitSnapshotRestore(rootPath, target.revert);
     } catch (error) {
-      setAgentError(`Não foi possível reverter: ${String(error)}`);
+      setAgentError({
+        conversationId,
+        message: `Não foi possível reverter: ${String(error)}`,
+      });
       return;
     }
 
@@ -2043,7 +2260,10 @@ export default function App() {
     }));
     void persistAgentStore(next);
     await refreshExplorerRoot();
-    setAgentStatus("Alterações revertidas para antes deste pedido.");
+    setAgentStatus({
+      conversationId,
+      message: "Alterações revertidas para antes deste pedido.",
+    });
   }
 
   /**
@@ -4051,6 +4271,26 @@ export default function App() {
     />
   );
 
+  // Avisos são exibidos apenas na conversa dona (ou em todas, quando globais).
+  const activeAgentConversationId =
+    agentSelection?.kind === "chat" ? agentSelection.conversationId : null;
+  const visibleAgentStatus =
+    agentStatus &&
+    (agentStatus.conversationId === null ||
+      agentStatus.conversationId === activeAgentConversationId)
+      ? agentStatus.message
+      : null;
+  const visibleAgentError =
+    agentError &&
+    (agentError.conversationId === null ||
+      agentError.conversationId === activeAgentConversationId)
+      ? agentError.message
+      : null;
+  const visibleAgentThought =
+    agentThought && agentThought.conversationId === activeAgentConversationId
+      ? agentThought.text
+      : null;
+
   // The AI agents chat as a self-contained secondary side bar node.
   const agentsSidebarNode = (
     <AgentSidebar
@@ -4058,10 +4298,13 @@ export default function App() {
       store={agentStore}
       selection={agentSelection}
       busy={agentBusy}
-      status={agentStatus}
-      error={agentError}
+      status={visibleAgentStatus}
+      thought={visibleAgentThought}
+      error={visibleAgentError}
       mode={agentMode}
       onModeChange={setAgentMode}
+      onModelChange={handleAgentModelChange}
+      readEditorContext={readEditorContext}
       onCreate={handleCreateAgent}
       onSaveAgent={handleSaveAgent}
       onCancelConfig={() => setAgentSelection(null)}
@@ -4075,9 +4318,7 @@ export default function App() {
       onSendMessage={handleSendAgentMessage}
       onStop={handleStopAgent}
       onRevert={handleRevertMessage}
-      onOpenFile={(path, line) =>
-        handleOpenFile({ name: baseName(path), path, isDir: false }, line)
-      }
+      onOpenFile={(path, line) => void handleOpenAgentFile(path, line)}
     />
   );
 

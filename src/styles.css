@@ -2606,14 +2606,24 @@ select:focus-visible,
   border: 1px solid var(--acrylic-border);
 }
 
-.agent-message-mode.mode-dev {
-  color: #ffd29a;
-  border-color: rgba(255, 178, 102, 0.35);
-}
-
 .agent-message-mode.mode-plan {
   color: #9adcff;
   border-color: rgba(96, 205, 255, 0.35);
+}
+
+.agent-message-mode.mode-edit {
+  color: #b8e6b8;
+  border-color: rgba(134, 198, 145, 0.35);
+}
+
+.agent-message-mode.mode-auto {
+  color: #e2c7f0;
+  border-color: rgba(197, 134, 192, 0.35);
+}
+
+.agent-message-mode.mode-bypass {
+  color: #ffd29a;
+  border-color: rgba(255, 178, 102, 0.35);
 }
 
 /* "Reverter" action, mirroring the Claude "rewind code" affordance. */
@@ -2730,10 +2740,41 @@ select:focus-visible,
   font-size: 12.5px;
   padding: 1px 5px;
   border-radius: var(--radius-control);
-  /* Código inline em contraste maior — o cinza-sobre-cinza anterior sumia. */
-  color: #9cdcfe;
+  /* Base neutra (pontuação/operadores); os identificadores recebem cor por
+     token via `.tok-*` (tokenizeInline) — tudo-azul deixava os chips iguais. */
+  color: #d4d4d4;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+/* Cores por token dos chips inline — a mesma paleta Dark+ do editor e dos
+   blocos realçados pelo Shiki, para o chat inteiro falar uma língua só. */
+.agent-message-markdown code .tok-control {
+  color: #c586c0;
+}
+
+.agent-message-markdown code .tok-keyword {
+  color: #569cd6;
+}
+
+.agent-message-markdown code .tok-type {
+  color: #4ec9b0;
+}
+
+.agent-message-markdown code .tok-fn {
+  color: #dcdcaa;
+}
+
+.agent-message-markdown code .tok-var {
+  color: #9cdcfe;
+}
+
+.agent-message-markdown code .tok-num {
+  color: #b5cea8;
+}
+
+.agent-message-markdown code .tok-str {
+  color: #ce9178;
 }
 
 /* Referência de arquivo clicável: aparência de link, mas abre no editor. */
@@ -2786,6 +2827,37 @@ select:focus-visible,
   line-height: 18px;
 }
 
+/* Bloco cercado com realce (Shiki/Dark+) — mesma moldura acrílica do bloco
+   plano; o fundo/tema do Shiki é neutralizado para a superfície do app (os
+   estilos do tema vêm inline, daí os !important). */
+.agent-code-block {
+  margin: 0 0 10px;
+  border-radius: var(--radius-control);
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  overflow: hidden;
+}
+
+.agent-code-block pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  background: transparent !important;
+  border: 0;
+}
+
+.agent-code-block code {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-family: var(--font-mono, monospace);
+  font-size: 12.5px;
+  line-height: 18px;
+  white-space: pre;
+}
+
 .agent-message-markdown blockquote {
   margin: 0 0 10px;
   padding-left: 12px;
@@ -2793,22 +2865,69 @@ select:focus-visible,
   color: var(--text-muted);
 }
 
-.agent-message-markdown table {
+/* Tabelas: o wrapper rola horizontalmente quando a tabela não cabe na
+   sidebar, em vez de espremer as colunas até quebrar palavras no meio. */
+.agent-table-wrap {
   margin: 0 0 10px;
+  overflow-x: auto;
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-control);
+}
+
+.agent-message-markdown table {
+  margin: 0;
+  width: 100%;
   border-collapse: collapse;
   font-size: 13px;
 }
 
 .agent-message-markdown th,
 .agent-message-markdown td {
-  padding: 5px 9px;
+  padding: 6px 10px;
   border: 1px solid var(--acrylic-border);
   text-align: left;
+  vertical-align: top;
+  /* Anula o `overflow-wrap: anywhere` herdado do chat: dentro de células o
+     texto quebra apenas em espaços ("Método" nunca vira "Méto do"); se a
+     coluna não couber, o wrapper rola. */
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+/* Bordas externas ficam por conta do wrapper arredondado. */
+.agent-message-markdown th:first-child,
+.agent-message-markdown td:first-child {
+  border-left: 0;
+}
+
+.agent-message-markdown th:last-child,
+.agent-message-markdown td:last-child {
+  border-right: 0;
+}
+
+.agent-message-markdown thead th {
+  border-top: 0;
+}
+
+.agent-message-markdown tbody tr:last-child td {
+  border-bottom: 0;
 }
 
 .agent-message-markdown th {
   background: var(--acrylic-control);
   font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Chips de código (`LogIn`, `AddDays(-1)`…) nunca partem no meio da célula. */
+.agent-message-markdown th code,
+.agent-message-markdown td code {
+  white-space: nowrap;
+}
+
+/* Zebra sutil para leitura de linhas longas. */
+.agent-message-markdown tbody tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.025);
 }
 
 .agent-message-markdown hr {
@@ -2824,6 +2943,42 @@ select:focus-visible,
   padding: 2px 2px 6px;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+/* Raciocínio em streaming (thinking do Claude / resumo do Codex): bloco
+   discreto que mostra a cauda do pensamento enquanto o modelo trabalha. */
+.agent-chat-thought {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.agent-chat-thought-label {
+  margin-bottom: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+/* column-reverse ancora o único filho no fundo do clipe: quando o texto passa
+   da altura máxima, o excesso transborda por CIMA e é cortado — a cauda (o
+   trecho mais recente do raciocínio) permanece visível sem JS de scroll. */
+.agent-chat-thought-clip {
+  display: flex;
+  flex-direction: column-reverse;
+  max-height: 108px;
+  overflow: hidden;
+}
+
+.agent-chat-thought-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-style: italic;
+  line-height: 1.5;
 }
 
 .agent-chat-error {
@@ -2871,21 +3026,31 @@ select:focus-visible,
   padding: 4px 6px 6px;
 }
 
-/* Mode picker (Ask / Plan / Dev) inside the composer box. */
-.agent-mode-bar {
+.agent-composer-toolbar-start,
+.agent-composer-toolbar-end {
   display: flex;
   align-items: center;
   gap: 4px;
   min-width: 0;
 }
 
-.agent-mode-option {
+.agent-composer-toolbar-start {
+  flex: 1 1 auto;
+}
+
+.agent-composer-toolbar-end {
+  flex: 0 0 auto;
+}
+
+/* Botão de anexar o arquivo/seleção ativos como contexto do envio. */
+.agent-attach-button {
+  appearance: none;
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  font-size: 11.5px;
-  font-weight: 600;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
   color: var(--text-muted);
   background: transparent;
   border: 1px solid transparent;
@@ -2893,21 +3058,214 @@ select:focus-visible,
   cursor: pointer;
 }
 
-.agent-mode-option:hover:not(:disabled) {
+.agent-attach-button:hover {
   color: var(--text-secondary);
   background: var(--fill-subtle-hover);
 }
 
-.agent-mode-option.active {
-  color: var(--accent);
-  border-color: var(--accent);
+/* Chip do contexto anexado, acima do textarea. */
+.agent-context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: calc(100% - 16px);
+  margin: 8px 8px 0;
+  padding: 1px 2px 1px 0;
+  color: var(--text-secondary);
   background: var(--fill-selected);
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-control);
 }
 
-.agent-mode-option:disabled {
+.agent-context-chip-main {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 2px 4px 2px 7px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  font-size: 11.5px;
+  line-height: 16px;
+}
+
+.agent-context-chip-main:hover {
+  color: var(--text);
+}
+
+.agent-context-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.agent-context-chip-kind {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.agent-context-chip-remove {
+  appearance: none;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+
+.agent-context-chip-remove:hover {
+  color: var(--text);
+  background: var(--acrylic-control-hover);
+}
+
+/* Popover de seleção do composer (modo de permissão, modelo) — padrão do
+   seletor de modos do Claude Code: botão compacto + menu com ícone, título,
+   descrição e check no item selecionado. */
+.agent-picker {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.agent-picker-trigger {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 148px;
+  padding: 3px 6px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.agent-picker-trigger:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--fill-subtle-hover);
+}
+
+.agent-picker-trigger:disabled {
   cursor: not-allowed;
   opacity: 0.6;
 }
+
+.agent-picker-trigger-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-picker-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 240px;
+  max-width: 300px;
+  padding: 4px;
+  background: var(--color-surface-overlay);
+  border: 1px solid var(--color-surface-overlay-border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-flyout);
+}
+
+/* Ancoragem: o menu nasce na borda do botão que aponta para dentro da
+   sidebar, para nunca vazar da lateral. */
+.agent-picker-menu.align-start {
+  left: 0;
+}
+
+.agent-picker-menu.align-end {
+  right: 0;
+}
+
+.agent-picker-item {
+  appearance: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  text-align: left;
+}
+
+.agent-picker-item:hover {
+  background: var(--fill-subtle-hover);
+}
+
+.agent-picker-item.active {
+  background: var(--fill-selected);
+}
+
+.agent-picker-item-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 18px;
+  color: var(--text-secondary);
+}
+
+.agent-picker-item.active .agent-picker-item-icon {
+  color: var(--accent);
+}
+
+.agent-picker-item-check {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 18px;
+  margin-left: auto;
+  color: var(--accent);
+}
+
+.agent-picker-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.agent-picker-item-label {
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.agent-picker-item-hint {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 15px;
+}
+
+/* (o antigo radio bar de modos foi substituído pelo popover .agent-picker) */
 
 .agent-send-button {
   appearance: none;
