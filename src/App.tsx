@@ -237,17 +237,73 @@ function isUntitled(path: string): boolean {
 /** Editor tab size — kept in one place so the StatusBar and Monaco agree. */
 const TAB_SIZE = 2;
 
-/** Encodings offered in the "Reopen with Encoding" picker. `id` is the label
- *  understood by the Rust backend (encoding_rs `for_label`). */
-const COMMON_ENCODINGS: { id: string; label: string }[] = [
-  { id: "UTF-8", label: "UTF-8" },
-  { id: "UTF-16LE", label: "UTF-16 LE" },
-  { id: "UTF-16BE", label: "UTF-16 BE" },
-  { id: "windows-1252", label: "Windows 1252 (Latin-1)" },
-  { id: "ISO-8859-1", label: "ISO 8859-1" },
-  { id: "windows-1251", label: "Windows 1251 (Cyrillic)" },
-  { id: "Shift_JIS", label: "Shift JIS" },
-  { id: "GBK", label: "GBK (Simplified Chinese)" },
+/** Encodings offered in the encoding pickers (reopen / save-with).
+ *
+ *  `id` is the label passed to the Rust backend (encoding_rs `for_label`) and
+ *  MUST equal that encoding's canonical `name()` — otherwise the "(atual)"
+ *  marker (which compares against `file.encoding`, set from `name()` on decode)
+ *  never matches. Every `id` here is asserted valid + canonical by the
+ *  `encoding_labels_are_valid_and_canonical` test in text_io.rs.
+ *
+ *  Aliases that encoding_rs folds into another codepage are deliberately
+ *  omitted (e.g. ISO-8859-1 → windows-1252, ISO-8859-9 → windows-1254,
+ *  ISO-8859-11 → windows-874); only the canonical target is listed.
+ *
+ *  `bom` forces the file's BOM flag on reopen/save (used to split UTF-8 into
+ *  "com BOM" / "sem BOM"); when omitted, the BOM is left as detected. */
+const COMMON_ENCODINGS: { id: string; label: string; bom?: boolean }[] = [
+  { id: "UTF-8", label: "UTF-8", bom: false },
+  { id: "UTF-8", label: "UTF-8 com BOM", bom: true },
+  // UTF-16 is always written WITH a BOM: a BOM-less UTF-16 file is not
+  // recoverable by our detector (it decodes as UTF-8-with-nulls), so saving one
+  // would corrupt the round-trip. Matches VS Code, which always BOMs UTF-16.
+  { id: "UTF-16LE", label: "UTF-16 LE", bom: true },
+  { id: "UTF-16BE", label: "UTF-16 BE", bom: true },
+  // Europa Ocidental / Latin. `encoding_rs` folds ISO-8859-1/Latin-1 into
+  // windows-1252 (per the WHATWG Encoding Standard), so both entries share the
+  // canonical id "windows-1252" — same codepage, two familiar labels.
+  { id: "windows-1252", label: "Windows 1252 (Europa Ocidental)" },
+  { id: "windows-1252", label: "ISO 8859-1 (Latin-1)" },
+  { id: "ISO-8859-15", label: "ISO 8859-15 (Latin-9)" },
+  { id: "macintosh", label: "Macintosh (Roman)" },
+  // Europa Central
+  { id: "windows-1250", label: "Windows 1250 (Europa Central)" },
+  { id: "ISO-8859-2", label: "ISO 8859-2 (Latin-2)" },
+  // Cirílico
+  { id: "windows-1251", label: "Windows 1251 (Cirílico)" },
+  { id: "ISO-8859-5", label: "ISO 8859-5 (Cirílico)" },
+  { id: "KOI8-R", label: "KOI8-R (Russo)" },
+  { id: "KOI8-U", label: "KOI8-U (Ucraniano)" },
+  { id: "IBM866", label: "IBM866 (Cirílico DOS)" },
+  { id: "x-mac-cyrillic", label: "Macintosh (Cirílico)" },
+  // Grego / Turco / Báltico
+  { id: "windows-1253", label: "Windows 1253 (Grego)" },
+  { id: "ISO-8859-7", label: "ISO 8859-7 (Grego)" },
+  { id: "windows-1254", label: "Windows 1254 (Turco)" },
+  { id: "windows-1257", label: "Windows 1257 (Báltico)" },
+  { id: "ISO-8859-4", label: "ISO 8859-4 (Báltico)" },
+  { id: "ISO-8859-13", label: "ISO 8859-13 (Báltico)" },
+  // Hebraico / Árabe / Vietnamita / Tailandês
+  { id: "windows-1255", label: "Windows 1255 (Hebraico)" },
+  { id: "ISO-8859-8", label: "ISO 8859-8 (Hebraico)" },
+  { id: "ISO-8859-8-I", label: "ISO 8859-8-I (Hebraico lógico)" },
+  { id: "windows-1256", label: "Windows 1256 (Árabe)" },
+  { id: "ISO-8859-6", label: "ISO 8859-6 (Árabe)" },
+  { id: "windows-1258", label: "Windows 1258 (Vietnamita)" },
+  { id: "windows-874", label: "Windows 874 (Tailandês)" },
+  // Outras ISO 8859
+  { id: "ISO-8859-3", label: "ISO 8859-3 (Latin-3)" },
+  { id: "ISO-8859-10", label: "ISO 8859-10 (Latin-6/Nórdico)" },
+  { id: "ISO-8859-14", label: "ISO 8859-14 (Latin-8/Céltico)" },
+  { id: "ISO-8859-16", label: "ISO 8859-16 (Latin-10)" },
+  // Ásia Oriental
+  { id: "Shift_JIS", label: "Shift JIS (Japonês)" },
+  { id: "EUC-JP", label: "EUC-JP (Japonês)" },
+  { id: "ISO-2022-JP", label: "ISO-2022-JP (Japonês)" },
+  { id: "GBK", label: "GBK (Chinês Simplificado)" },
+  { id: "gb18030", label: "GB18030 (Chinês Simplificado)" },
+  { id: "Big5", label: "Big5 (Chinês Tradicional)" },
+  { id: "EUC-KR", label: "EUC-KR (Coreano)" },
 ];
 
 /** Reads a persisted layout number from localStorage, falling back on error. */
@@ -3669,25 +3725,48 @@ export default function App() {
   }, [activeFile]);
 
   /**
+   * Builds the encoding quick-pick items. The picked item's id is the list
+   * index (not the encoding id) because several entries share a canonical id —
+   * UTF-8 com/sem BOM, and windows-1252 exposed also as "ISO 8859-1" — so the
+   * index keeps them distinct and carries the BOM variant.
+   *
+   * The "(atual)" marker matches on encoding id AND — for the UTF-8 split — the
+   * BOM flag, and is applied to only the FIRST matching entry so an aliased
+   * codepage (windows-1252 / ISO 8859-1) isn't flagged current twice.
+   */
+  const buildEncodingItems = useCallback((file: OpenFile): QuickPickItem[] => {
+    let flagged = false;
+    return COMMON_ENCODINGS.map((enc, i) => {
+      const matches =
+        file.encoding === enc.id &&
+        (enc.bom === undefined || enc.bom === file.bom);
+      const current = matches && !flagged;
+      if (current) flagged = true;
+      return {
+        id: String(i),
+        label: enc.label + (current ? "  (atual)" : ""),
+        icon: "file",
+        keywords: `${enc.id} ${enc.label}`,
+      };
+    });
+  }, []);
+
+  /**
    * "Reopen with Encoding" (VS Code): re-decode the file on disk forcing the
    * chosen encoding and replace the buffer. Only for saved local files — a
    * dirty buffer would lose edits (we warn), and remote/untitled have no path
    * to re-read.
    */
-  const handleSelectEncoding = useCallback(() => {
+  const handleReopenWithEncoding = useCallback(() => {
     if (!activeFile || isUntitled(activeFile.path)) return;
     const file = activeFile;
-    const items: QuickPickItem[] = COMMON_ENCODINGS.map((enc) => ({
-      id: enc.id,
-      label: enc.label + (file.encoding === enc.id ? "  (atual)" : ""),
-      icon: "file",
-      keywords: enc.id,
-    }));
     setQuickPick({
       title: "Reabrir com Codificação",
       placeholder: `Codificação para ${file.name}…`,
-      items,
+      items: buildEncodingItems(file),
       onPick: async (it) => {
+        const enc = COMMON_ENCODINGS[Number(it.id)];
+        if (!enc) return;
         if (file.dirty) {
           const ok = window.confirm(
             "Reabrir com outra codificação descarta as alterações não salvas deste arquivo. Continuar?"
@@ -3695,22 +3774,105 @@ export default function App() {
           if (!ok) return;
         }
         try {
-          const decoded = await readFileWithEncoding(file.path, it.id);
+          const decoded = await readFileWithEncoding(file.path, enc.id);
           setLayout((l) =>
             patchFileEverywhere(l, file.path, {
               content: decoded.content,
               encoding: decoded.encoding,
+              // Reopen only re-decodes; it never writes. BOM presence is a
+              // save-time concern, so reflect what's actually on disk rather
+              // than the entry's BOM variant (which takes effect via Save With).
               bom: decoded.bom,
               eol: decoded.eol,
               dirty: false,
             })
           );
         } catch (err) {
-          alert(`Não foi possível reabrir com ${it.id}:\n${err}`);
+          alert(`Não foi possível reabrir com ${enc.label}:\n${err}`);
         }
       },
     });
-  }, [activeFile]);
+  }, [activeFile, buildEncodingItems]);
+
+  /**
+   * "Save with Encoding" (VS Code): re-encode the current buffer to the chosen
+   * encoding on disk. Unlike reopen, this keeps the in-memory (LF) text; it
+   * only changes how bytes are written. Local saved files only — the remote
+   * SFTP write path ignores encoding (writes UTF-8/LF as-is).
+   *
+   * We save with an explicit file snapshot (not via `handleSave`, whose
+   * `openFiles` closure is stale right after `setLayout`) and persist the new
+   * encoding/bom so the status bar and later saves reflect the choice. On an
+   * unmappable-char failure `saveFile` alerts and throws, so the persisted
+   * encoding is rolled back to what was actually on disk.
+   */
+  const handleSaveWithEncoding = useCallback(() => {
+    if (!activeFile || isUntitled(activeFile.path)) return;
+    const file = activeFile;
+    setQuickPick({
+      title: "Salvar com Codificação",
+      placeholder: `Salvar ${file.name} como…`,
+      items: buildEncodingItems(file),
+      onPick: async (it) => {
+        const enc = COMMON_ENCODINGS[Number(it.id)];
+        if (!enc) return;
+        const bom = enc.bom ?? file.bom;
+        const prevDirty = file.dirty;
+        // Persist the choice first so the status bar updates immediately, then
+        // write with an explicit snapshot so we don't depend on stale closures.
+        setLayout((l) =>
+          patchFileEverywhere(l, file.path, { encoding: enc.id, bom, dirty: true })
+        );
+        try {
+          await saveFile({ ...file, encoding: enc.id, bom, dirty: true });
+        } catch {
+          // saveFile already alerted. Roll the displayed encoding/BOM back to
+          // what's really on disk — and restore the prior dirty flag, so a file
+          // that was clean before doesn't linger as unsaved though it matches disk.
+          setLayout((l) =>
+            patchFileEverywhere(l, file.path, {
+              encoding: file.encoding,
+              bom: file.bom,
+              dirty: prevDirty,
+            })
+          );
+        }
+      },
+    });
+  }, [activeFile, buildEncodingItems, saveFile]);
+
+  /**
+   * Status-bar encoding click (VS Code): offer "Reopen with" vs "Save with"
+   * before the encoding list. Reopen re-reads disk; save re-writes the buffer.
+   */
+  const handleSelectEncoding = useCallback(() => {
+    if (!activeFile || isUntitled(activeFile.path)) return;
+    setQuickPick({
+      title: "Selecionar Ação de Codificação",
+      placeholder: "Reabrir ou salvar com codificação…",
+      items: [
+        {
+          id: "reopen",
+          label: "Reabrir com Codificação",
+          description: "Relê o arquivo do disco na codificação escolhida",
+          icon: "file",
+          keywords: "reopen reabrir",
+        },
+        {
+          id: "save",
+          label: "Salvar com Codificação",
+          description: "Grava o conteúdo atual na codificação escolhida",
+          icon: "save",
+          keywords: "save salvar",
+        },
+      ],
+      onPick: (it) => {
+        // Defer so this quick-pick fully closes before the next one opens.
+        if (it.id === "reopen") setTimeout(handleReopenWithEncoding, 0);
+        else if (it.id === "save") setTimeout(handleSaveWithEncoding, 0);
+      },
+    });
+  }, [activeFile, handleReopenWithEncoding, handleSaveWithEncoding]);
 
   /**
    * Changes the active file's line ending (LF/CRLF). The buffer stays LF in
@@ -4663,8 +4825,9 @@ export default function App() {
         encoding={activeFile?.encoding ?? null}
         eol={activeFile?.eol ? (activeFile.eol === "Lf" ? "LF" : "CRLF") : null}
         onSelectEncoding={
-          // Reopen-with-encoding re-reads from the local FS, so it's offered
-          // only for saved local files (not untitled, not remote SSH).
+          // Reopen re-reads the local FS and save-with re-writes it with a real
+          // encoder; both are offered only for saved local files (not untitled,
+          // not remote SSH, whose SFTP write path ignores encoding).
           activeFile && !isUntitled(activeFile.path) && !remoteSession
             ? handleSelectEncoding
             : undefined

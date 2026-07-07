@@ -304,4 +304,109 @@ mod tests {
         let err = encode_for_save("hi 😀", "windows-1252", Eol::Lf, false);
         assert!(err.is_err());
     }
+
+    /// Every `id` offered in the frontend encoding picker
+    /// (`COMMON_ENCODINGS` in App.tsx). Kept in sync by hand; the test below
+    /// guards it. `decode_with`/`encode_for_save` are called with these labels,
+    /// and `file.encoding` is set from `enc.name()`, so each id MUST resolve AND
+    /// equal its own canonical name — otherwise the picker's "(atual)" marker
+    /// (which compares `file.encoding === id`) silently never matches.
+    const PICKER_ENCODING_IDS: &[&str] = &[
+        "UTF-8",
+        "UTF-16LE",
+        "UTF-16BE",
+        "windows-1252",
+        "windows-1252", // exposed also as "ISO 8859-1 (Latin-1)" in the UI
+        "ISO-8859-15",
+        "macintosh",
+        "windows-1250",
+        "ISO-8859-2",
+        "windows-1251",
+        "ISO-8859-5",
+        "KOI8-R",
+        "KOI8-U",
+        "IBM866",
+        "x-mac-cyrillic",
+        "windows-1253",
+        "ISO-8859-7",
+        "windows-1254",
+        "windows-1257",
+        "ISO-8859-4",
+        "ISO-8859-13",
+        "windows-1255",
+        "ISO-8859-8",
+        "ISO-8859-8-I",
+        "windows-1256",
+        "ISO-8859-6",
+        "windows-1258",
+        "windows-874",
+        "ISO-8859-3",
+        "ISO-8859-10",
+        "ISO-8859-14",
+        "ISO-8859-16",
+        "Shift_JIS",
+        "EUC-JP",
+        "ISO-2022-JP",
+        "GBK",
+        "gb18030",
+        "Big5",
+        "EUC-KR",
+    ];
+
+    #[test]
+    fn encoding_labels_are_valid_and_canonical() {
+        for &id in PICKER_ENCODING_IDS {
+            let enc = Encoding::for_label(id.as_bytes())
+                .unwrap_or_else(|| panic!("encoding label {id:?} não resolve em encoding_rs"));
+            assert_eq!(
+                enc.name(),
+                id,
+                "label {id:?} não é canônico — encoding_rs o resolve como {:?}; \
+                 use o nome canônico como id para o marcador \"(atual)\" funcionar",
+                enc.name()
+            );
+        }
+    }
+
+    /// The BOM flag the frontend picker uses when saving with each id. UTF-16
+    /// and UTF-8-com-BOM are always written WITH a BOM; the rest without. Mirror
+    /// of the `bom` field in `COMMON_ENCODINGS` (App.tsx) for the save path.
+    fn picker_save_bom(id: &str) -> bool {
+        matches!(id, "UTF-16LE" | "UTF-16BE")
+    }
+
+    #[test]
+    fn every_picker_encoding_round_trips_ascii() {
+        // Save-with then reopen must recover the content for every offered
+        // encoding, using the BOM the picker would actually write. This is the
+        // real guarantee: encoding without a matching decode is worthless.
+        // ("abc\n" is representable in every codepage here.)
+        for &id in PICKER_ENCODING_IDS {
+            let bom = picker_save_bom(id);
+            let bytes = encode_for_save("abc\n", id, Eol::Lf, bom)
+                .unwrap_or_else(|e| panic!("encode_for_save falhou para {id:?}: {e}"));
+            assert!(!bytes.is_empty(), "{id:?} produziu bytes vazios");
+            let d = decode(&bytes);
+            assert_eq!(
+                d.content, "abc\n",
+                "round-trip de {id:?} (bom={bom}) corrompeu o conteúdo: {:?}",
+                d.content
+            );
+        }
+    }
+
+    #[test]
+    fn utf16_saved_by_picker_round_trips_non_ascii() {
+        // Regression for the BOM-less-UTF-16 corruption trap: BOM-less UTF-16
+        // ASCII decodes as UTF-8-with-nulls, so the picker must write UTF-16
+        // WITH a BOM. Verify a non-ASCII string survives the round-trip.
+        for id in ["UTF-16LE", "UTF-16BE"] {
+            let bom = picker_save_bom(id);
+            assert!(bom, "{id} deve ser salvo com BOM pelo picker");
+            let bytes = encode_for_save("café ção\n", id, Eol::Lf, bom).unwrap();
+            let d = decode(&bytes);
+            assert_eq!(d.content, "café ção\n", "{id} não fez round-trip");
+            assert_eq!(d.encoding, id);
+        }
+    }
 }
