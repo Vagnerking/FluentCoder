@@ -51,4 +51,23 @@ export const whenMonacoReady: Promise<void> = ensureVscodeServices().then(() => 
   // Point @monaco-editor/react at the @codingame instance instead of its CDN
   // default — AFTER initialize() so no editor can mount before services exist.
   loader.config({ monaco });
+
+  // The @codingame build ships VS Code's default keybindings, so a focused
+  // editor grabs Ctrl+Shift+P / Ctrl+P (and F1) itself and opens VS Code's
+  // built-in quick-input widget — swallowing the keydown before it bubbles to
+  // the app's window handler (App.tsx). No command/file quick-access provider
+  // is wired to that widget here, so the user gets a dead, empty box instead
+  // of the app's Command Palette / Quick Open. `command: null` unbinds the
+  // default rule, letting the key bubble to the app handler again.
+  monaco.editor.addKeybindingRules([
+    {
+      keybinding: monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyP,
+      command: null,
+    },
+    {
+      keybinding: monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyP,
+      command: null,
+    },
+    { keybinding: monaco.KeyCode.F1, command: null },
+  ]);
 });
