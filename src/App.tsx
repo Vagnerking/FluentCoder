@@ -156,6 +156,7 @@ import * as monaco from "monaco-editor";
 import { languageForFile, languageLabel, setLanguageOverride } from "./language";
 import { toFileUri } from "./lsp/uri";
 import { samePath } from "./paths";
+import { UI_SCALE_DEFAULT, clampUiScale, stepUiScale } from "./uiScale";
 import { buildDecorations, decoKey } from "./icon-theme/decorations";
 import { useLspManager } from "./lsp/useLspManager";
 import { serverIdForLanguage } from "./lsp/servers";
@@ -388,6 +389,11 @@ export default function App() {
   );
   const [sidebarSide, setSidebarSide] = useState<"left" | "right">(() =>
     readStoredSide("ui.sidebarSide", "left")
+  );
+  // Whole-UI zoom (VSCode-style), persisted so the workbench reopens at the same
+  // scale. Ctrl+= zooms in, Ctrl+- zooms out, Ctrl+0 resets to 100%.
+  const [uiScale, setUiScale] = useState(() =>
+    clampUiScale(readStoredNumber("ui.scale", UI_SCALE_DEFAULT))
   );
   // Activity bar placement (independent of the sidebar) — lateral, top, or hidden.
   const [activityBarPos, setActivityBarPos] = useState<ActivityBarPos>(() =>
@@ -911,6 +917,17 @@ export default function App() {
       /* storage unavailable — ignore */
     }
   }, [sidebarSide]);
+  // Apply the UI zoom to the whole document and persist it. The non-standard
+  // `zoom` property (supported by the Chromium-based WebView) reflows the
+  // px-based chrome, unlike `transform: scale`. Value 1 clears the override.
+  useEffect(() => {
+    document.documentElement.style.zoom = uiScale === 1 ? "" : String(uiScale);
+    try {
+      localStorage.setItem("ui.scale", String(uiScale));
+    } catch {
+      /* storage unavailable — ignore */
+    }
+  }, [uiScale]);
   useEffect(() => {
     try {
       localStorage.setItem("ui.activityBarPos", activityBarPos);
@@ -3481,6 +3498,27 @@ export default function App() {
       if (!mod) return;
 
       const key = e.key.toLowerCase();
+
+      // Ctrl+= or Ctrl++ → zoom the interface in (VSCode-style whole-UI scale).
+      // "=" is the unshifted key, "+" is what it reports with Shift or on the
+      // numpad — accept both so any layout can zoom in.
+      if (key === "=" || key === "+") {
+        e.preventDefault();
+        setUiScale((s) => stepUiScale(s, 1));
+        return;
+      }
+      // Ctrl+- → zoom the interface out.
+      if (key === "-") {
+        e.preventDefault();
+        setUiScale((s) => stepUiScale(s, -1));
+        return;
+      }
+      // Ctrl+0 → reset the interface zoom to the default (100%).
+      if (key === "0") {
+        e.preventDefault();
+        setUiScale(UI_SCALE_DEFAULT);
+        return;
+      }
 
       // Ctrl+Shift+S → Save As (check before plain Ctrl+S).
       if (e.shiftKey && key === "s") {
