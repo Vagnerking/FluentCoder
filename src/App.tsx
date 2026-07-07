@@ -306,6 +306,19 @@ const COMMON_ENCODINGS: { id: string; label: string; bom?: boolean }[] = [
   { id: "EUC-KR", label: "EUC-KR (Coreano)" },
 ];
 
+/** UI zoom (whole-workbench scale), VSCode-style. Applied via the WebView's
+ * `zoom` property so the px-based chrome reflows instead of merely transforming.
+ * Steps are 10% per keystroke, clamped to a sane range. */
+const UI_SCALE_MIN = 0.5;
+const UI_SCALE_MAX = 3;
+const UI_SCALE_STEP = 0.1;
+const UI_SCALE_DEFAULT = 1;
+/** Clamps a scale to [MIN, MAX] and rounds to 2 decimals to avoid FP drift. */
+function clampUiScale(value: number): number {
+  const clamped = Math.min(UI_SCALE_MAX, Math.max(UI_SCALE_MIN, value));
+  return Math.round(clamped * 100) / 100;
+}
+
 /** Reads a persisted layout number from localStorage, falling back on error. */
 function readStoredNumber(key: string, fallback: number): number {
   try {
@@ -388,6 +401,11 @@ export default function App() {
   );
   const [sidebarSide, setSidebarSide] = useState<"left" | "right">(() =>
     readStoredSide("ui.sidebarSide", "left")
+  );
+  // Whole-UI zoom (VSCode-style), persisted so the workbench reopens at the same
+  // scale. Ctrl+= zooms in, Ctrl+- zooms out, Ctrl+0 resets to 100%.
+  const [uiScale, setUiScale] = useState(() =>
+    clampUiScale(readStoredNumber("ui.scale", UI_SCALE_DEFAULT))
   );
   // Activity bar placement (independent of the sidebar) — lateral, top, or hidden.
   const [activityBarPos, setActivityBarPos] = useState<ActivityBarPos>(() =>
@@ -911,6 +929,17 @@ export default function App() {
       /* storage unavailable — ignore */
     }
   }, [sidebarSide]);
+  // Apply the UI zoom to the whole document and persist it. The non-standard
+  // `zoom` property (supported by the Chromium-based WebView) reflows the
+  // px-based chrome, unlike `transform: scale`. Value 1 clears the override.
+  useEffect(() => {
+    document.documentElement.style.zoom = uiScale === 1 ? "" : String(uiScale);
+    try {
+      localStorage.setItem("ui.scale", String(uiScale));
+    } catch {
+      /* storage unavailable — ignore */
+    }
+  }, [uiScale]);
   useEffect(() => {
     try {
       localStorage.setItem("ui.activityBarPos", activityBarPos);
@@ -3481,6 +3510,27 @@ export default function App() {
       if (!mod) return;
 
       const key = e.key.toLowerCase();
+
+      // Ctrl+= or Ctrl++ → zoom the interface in (VSCode-style whole-UI scale).
+      // "=" is the unshifted key, "+" is what it reports with Shift or on the
+      // numpad — accept both so any layout can zoom in.
+      if (key === "=" || key === "+") {
+        e.preventDefault();
+        setUiScale((s) => clampUiScale(s + UI_SCALE_STEP));
+        return;
+      }
+      // Ctrl+- → zoom the interface out.
+      if (key === "-") {
+        e.preventDefault();
+        setUiScale((s) => clampUiScale(s - UI_SCALE_STEP));
+        return;
+      }
+      // Ctrl+0 → reset the interface zoom to the default (100%).
+      if (key === "0") {
+        e.preventDefault();
+        setUiScale(UI_SCALE_DEFAULT);
+        return;
+      }
 
       // Ctrl+Shift+S → Save As (check before plain Ctrl+S).
       if (e.shiftKey && key === "s") {
