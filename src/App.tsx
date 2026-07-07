@@ -156,6 +156,7 @@ import * as monaco from "monaco-editor";
 import { languageForFile, languageLabel, setLanguageOverride } from "./language";
 import { toFileUri } from "./lsp/uri";
 import { samePath } from "./paths";
+import { UI_SCALE_DEFAULT, clampUiScale, stepUiScale } from "./uiScale";
 import { buildDecorations, decoKey } from "./icon-theme/decorations";
 import { useLspManager } from "./lsp/useLspManager";
 import { serverIdForLanguage } from "./lsp/servers";
@@ -305,19 +306,6 @@ const COMMON_ENCODINGS: { id: string; label: string; bom?: boolean }[] = [
   { id: "Big5", label: "Big5 (Chinês Tradicional)" },
   { id: "EUC-KR", label: "EUC-KR (Coreano)" },
 ];
-
-/** UI zoom (whole-workbench scale), VSCode-style. Applied via the WebView's
- * `zoom` property so the px-based chrome reflows instead of merely transforming.
- * Steps are 10% per keystroke, clamped to a sane range. */
-const UI_SCALE_MIN = 0.5;
-const UI_SCALE_MAX = 3;
-const UI_SCALE_STEP = 0.1;
-const UI_SCALE_DEFAULT = 1;
-/** Clamps a scale to [MIN, MAX] and rounds to 2 decimals to avoid FP drift. */
-function clampUiScale(value: number): number {
-  const clamped = Math.min(UI_SCALE_MAX, Math.max(UI_SCALE_MIN, value));
-  return Math.round(clamped * 100) / 100;
-}
 
 /** Reads a persisted layout number from localStorage, falling back on error. */
 function readStoredNumber(key: string, fallback: number): number {
@@ -3516,13 +3504,13 @@ export default function App() {
       // numpad — accept both so any layout can zoom in.
       if (key === "=" || key === "+") {
         e.preventDefault();
-        setUiScale((s) => clampUiScale(s + UI_SCALE_STEP));
+        setUiScale((s) => stepUiScale(s, 1));
         return;
       }
       // Ctrl+- → zoom the interface out.
       if (key === "-") {
         e.preventDefault();
-        setUiScale((s) => clampUiScale(s - UI_SCALE_STEP));
+        setUiScale((s) => stepUiScale(s, -1));
         return;
       }
       // Ctrl+0 → reset the interface zoom to the default (100%).
