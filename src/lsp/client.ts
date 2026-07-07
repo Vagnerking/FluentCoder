@@ -169,6 +169,35 @@ export async function createLanguageClient(
           return { action: CloseAction.DoNotRestart };
         },
       },
+      middleware: {
+        // DIAG (Ctrl+. / quick fix): loga o textDocument/codeAction ANTES do
+        // funil extHost→Monaco, para separar "o Roslyn não devolveu a action"
+        // de "uma camada do editor descartou". A linha contém o serverId
+        // (ex.: "csharp"), então o espelho para razor-diag.log (PIPELINE_RE em
+        // debug.ts) captura mesmo em build empacotada.
+        provideCodeActions: async (document, range, context, token, next) => {
+          const startedAt = performance.now();
+          lspLog("codeAction request", config.serverId, {
+            uri: document.uri.toString().slice(-48),
+            range: `${range.start.line}:${range.start.character}-${range.end.line}:${range.end.character}`,
+            only: context.only?.value ?? null,
+            trigger: context.triggerKind,
+            ctxDiags: context.diagnostics.length,
+          });
+          const result = await next(document, range, context, token);
+          try {
+            const items = Array.isArray(result) ? result : [];
+            lspLog("codeAction result", config.serverId, {
+              ms: Math.round(performance.now() - startedAt),
+              cancelled: token.isCancellationRequested,
+              titles: items.map((a) => a.title),
+            });
+          } catch {
+            /* diagnóstico é best-effort; nunca quebrar o quick fix por log */
+          }
+          return result;
+        },
+      },
     },
     // ─── THE KEY v10 CHANGE ───
     // v1.x: connectionProvider: { get: () => Promise.resolve({ reader, writer }) }
