@@ -649,6 +649,9 @@ export function EditorPane({
         fontSize: 14,
         minimap: { enabled: false },
         scrollBeyondLastLine: false,
+        // Sticky scroll vem LIGADO por default no Monaco. Deixamos DESLIGADO por
+        // padrão; o usuário pode reativar pelo menu de contexto/configurações.
+        stickyScroll: { enabled: false },
         automaticLayout: true,
         tabSize: 2,
         // Debugger gutter: explicit so breakpoint glyphs always have a lane.
