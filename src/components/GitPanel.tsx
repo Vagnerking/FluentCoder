@@ -173,12 +173,6 @@ const GIT_FLUENT_COLLAPSED_GROUPS_STORAGE_KEY = "fluentCoder.gitFluent.collapsed
 const GIT_FLUENT_BRANCH_LAYOUT_STORAGE_KEY = "fluentCoder.gitFluent.branchLayout";
 const GIT_FLUENT_REMOTE_BRANCH_LAYOUT_STORAGE_KEY = "fluentCoder.gitFluent.remoteBranchLayout";
 const GIT_FLUENT_TOOLBAR_DENSITY_STORAGE_KEY = "fluentCoder.gitFluent.toolbarDensity";
-const SOURCE_CONTROL_ACTIVE_VIEW_STORAGE_KEY = "fluentCoder.sourceControl.activeView";
-const SOURCE_CONTROL_VIEW_ORDER_STORAGE_KEY = "fluentCoder.sourceControl.viewOrder";
-
-type SourceControlView = "commit" | "staged" | "changes" | "conflicts";
-
-const SOURCE_CONTROL_VIEW_ORDER: SourceControlView[] = ["commit", "staged", "changes", "conflicts"];
 
 function readStringSet(key: string): Set<string> {
   try {
@@ -250,39 +244,6 @@ function readGitFluentActiveTab(): GitFluentTab {
 
 function readGitFluentRefLayout(key: string): GitFluentRefLayout {
   return readStringPreference(key, ["tree", "list"], "tree");
-}
-
-function readSourceControlActiveView(): SourceControlView {
-  return readStringPreference(
-    SOURCE_CONTROL_ACTIVE_VIEW_STORAGE_KEY,
-    SOURCE_CONTROL_VIEW_ORDER,
-    "changes"
-  );
-}
-
-function readSourceControlViewOrder(): SourceControlView[] {
-  try {
-    if (typeof window === "undefined") return SOURCE_CONTROL_VIEW_ORDER;
-    const raw = window.localStorage.getItem(SOURCE_CONTROL_VIEW_ORDER_STORAGE_KEY);
-    if (!raw) return SOURCE_CONTROL_VIEW_ORDER;
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return SOURCE_CONTROL_VIEW_ORDER;
-    const known = new Set<SourceControlView>(SOURCE_CONTROL_VIEW_ORDER);
-    const saved = parsed.filter((value): value is SourceControlView => known.has(value));
-    const missing = SOURCE_CONTROL_VIEW_ORDER.filter((view) => !saved.includes(view));
-    return [...saved, ...missing];
-  } catch {
-    return SOURCE_CONTROL_VIEW_ORDER;
-  }
-}
-
-function writeSourceControlViewOrder(order: SourceControlView[]) {
-  try {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(SOURCE_CONTROL_VIEW_ORDER_STORAGE_KEY, JSON.stringify(order));
-  } catch {
-    // Local storage is only a view preference; ignore quota/privacy failures.
-  }
 }
 
 function readGitFluentToolbarDensity(): GitFluentToolbarDensity {
@@ -844,17 +805,10 @@ function GitRepositoryPanel({
   const [assistSource, setAssistSource] = useState<"agent" | "heuristic" | null>(null);
   const [commits, setCommits] = useState<GitCommit[]>([]);
   const [localShowRepositoryBody, setLocalShowRepositoryBody] = useState(true);
-  const [showCommitControls, setShowCommitControls] = useState(true);
+  const [showSourceControlRoot, setShowSourceControlRoot] = useState(true);
   const [showConflicts, setShowConflicts] = useState(true);
   const [showStaged, setShowStaged] = useState(true);
   const [showChanges, setShowChanges] = useState(true);
-  const [activeSourceControlView, setActiveSourceControlView] = useState<SourceControlView>(
-    readSourceControlActiveView
-  );
-  const [sourceControlViewOrder, setSourceControlViewOrder] = useState<SourceControlView[]>(
-    readSourceControlViewOrder
-  );
-  const [draggingSourceControlView, setDraggingSourceControlView] = useState<SourceControlView | null>(null);
   const [showGitFluentOverview, setShowGitFluentOverview] = useState(() =>
     !readBooleanPreference(GIT_FLUENT_COLLAPSED_STORAGE_KEY, false)
   );
@@ -908,14 +862,6 @@ function GitRepositoryPanel({
   useEffect(() => {
     writeStringPreference(GIT_FLUENT_ACTIVE_TAB_STORAGE_KEY, activeGitFluentTab);
   }, [activeGitFluentTab]);
-
-  useEffect(() => {
-    writeStringPreference(SOURCE_CONTROL_ACTIVE_VIEW_STORAGE_KEY, activeSourceControlView);
-  }, [activeSourceControlView]);
-
-  useEffect(() => {
-    writeSourceControlViewOrder(sourceControlViewOrder);
-  }, [sourceControlViewOrder]);
 
   useEffect(() => {
     writeStringPreference(GIT_FLUENT_BRANCH_LAYOUT_STORAGE_KEY, gitFluentBranchLayout);
@@ -2475,250 +2421,216 @@ function GitRepositoryPanel({
     />
   );
 
-  const sourceControlViewMeta: Record<
-    SourceControlView,
-    { label: string; icon: IconAction; count: number | undefined }
-  > = {
-    commit: { label: "Commit", icon: "gitCommit", count: staged.length || undefined },
-    staged: { label: "Preparadas", icon: "success", count: staged.length || undefined },
-    changes: { label: "Alterações", icon: "openChanges", count: changes.length || undefined },
-    conflicts: { label: "Conflitos", icon: "warning", count: conflicts.length || undefined },
-  };
+  const sourceControlCount = totalChanges || undefined;
 
-  function selectSourceControlView(view: SourceControlView) {
-    setActiveSourceControlView(view);
-    if (view === "commit") setShowCommitControls(true);
-    if (view === "staged") setShowStaged(true);
-    if (view === "changes") setShowChanges(true);
-    if (view === "conflicts") setShowConflicts(true);
-  }
-
-  function moveSourceControlView(from: SourceControlView, to: SourceControlView) {
-    if (from === to) return;
-    setSourceControlViewOrder((current) => {
-      const next = current.filter((view) => view !== from);
-      const targetIndex = next.indexOf(to);
-      next.splice(targetIndex === -1 ? next.length : targetIndex, 0, from);
-      return next;
-    });
-  }
-
-  function sourceControlViewExpanded(view: SourceControlView): boolean {
-    if (view === "commit") return showCommitControls;
-    if (view === "staged") return showStaged;
-    if (view === "changes") return showChanges;
-    return showConflicts;
-  }
-
-  function toggleSourceControlView(view: SourceControlView) {
-    if (view === "commit") setShowCommitControls((value) => !value);
-    else if (view === "staged") setShowStaged((value) => !value);
-    else if (view === "changes") setShowChanges((value) => !value);
-    else setShowConflicts((value) => !value);
-  }
-
-  function renderSourceControlViewActions(view: SourceControlView) {
-    if (view === "staged" && staged.length > 0) {
-      return (
-        <>
-          <Tooltip label="Visualizar primeiro arquivo preparado">
-            <button
-              className="git-link-btn"
-              disabled={busy || staged.length === 0}
-              aria-label="Visualizar primeiro arquivo preparado"
-              onClick={openFirstStagedChange}
-            >
-              <Codicon name="openChanges" />
-            </button>
-          </Tooltip>
-          <Tooltip label="Remover tudo do stage">
-            <button
-              className="git-link-btn"
-              disabled={busy}
-              aria-label="Remover tudo do stage"
-              onClick={() => act(() => gitUnstageAll(repoRootPath, connId))}
-            >
-              <Codicon name="remove" />
-            </button>
-          </Tooltip>
-        </>
-      );
-    }
-
-    if (view === "changes" && changes.length > 0) {
-      return (
-        <>
-          <Tooltip label="Descartar todas as alterações">
-            <button
-              className="git-link-btn"
-              disabled={busy}
-              aria-label="Descartar todas as alterações"
-              onClick={() =>
-                act(async () => {
-                  if (
-                    !window.confirm(
-                      "Descartar TODAS as alterações do diretório de trabalho? Esta ação não pode ser desfeita."
-                    )
-                  )
-                    return;
-                  await gitDiscardAll(repoRootPath, connId);
-                })
+  function renderCommitBox() {
+    return (
+      <div className="git-commit-box git-commit-box-inline">
+        <div className="git-message-wrap">
+          <textarea
+            className="git-message"
+            placeholder={`Mensagem (Ctrl+Enter para fazer commit em "${status?.branch || "branch"}")`}
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            rows={1}
+            onKeyDown={(event) => {
+              if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+                event.preventDefault();
+                if (message.trim() && staged.length > 0 && !busy) {
+                  void act(async () => {
+                    await gitCommit(repoRootPath, message, connId);
+                    setMessage("");
+                  });
+                }
               }
-            >
-              <Codicon name="discard" />
-            </button>
-          </Tooltip>
-          <Tooltip label="Preparar tudo">
+            }}
+          />
+          <Tooltip label={assistLabel}>
             <button
-              className="git-link-btn"
-              disabled={busy}
-              aria-label="Preparar tudo"
-              onClick={() => act(() => gitStageAll(repoRootPath, connId))}
+              type="button"
+              className="git-message-assist-btn"
+              disabled={busy || totalChanges === 0}
+              aria-label="Gerar mensagem de commit"
+              onClick={() => void generateCommitMessage()}
             >
-              <Codicon name="add" />
+              <Codicon name="model" size={13} />
             </button>
           </Tooltip>
-        </>
-      );
-    }
-
-    return null;
+        </div>
+        <div className="git-commit-actions-row">
+          <button
+            className="git-commit-btn"
+            disabled={busy || !message.trim() || staged.length === 0}
+            title={
+              staged.length === 0
+                ? "Prepare (stage) arquivos antes de commitar"
+                : "Commit dos arquivos preparados"
+            }
+            onClick={() =>
+              act(async () => {
+                await gitCommit(repoRootPath, message, connId);
+                setMessage("");
+              })
+            }
+          >
+            <Codicon name="success" /> Confirmação
+            {staged.length ? ` (${staged.length})` : ""}
+          </button>
+        </div>
+      </div>
+    );
   }
 
-  function renderSourceControlViewContent(view: SourceControlView) {
-    if (!sourceControlViewExpanded(view)) {
-      return <div className="panel-empty git-panel-empty-compact">View recolhida.</div>;
+  function renderConflictRows() {
+    if (conflicts.length === 0) {
+      return <div className="panel-empty git-panel-empty-compact">Nenhum conflito de merge.</div>;
     }
+    return conflicts.map((f) => (
+      <GitFileRow
+        key={`x-${f.path}`}
+        file={f}
+        actionIcon="success"
+        actionTitle="Marcar como resolvido (stage)"
+        onAction={() => act(() => gitStage(repoRootPath, f.path, connId))}
+        onOpen={() => openSourceControlItem(f, "working")}
+        onContextMenu={(e) => openFileMenu(e, fileMenu(f, "conflict"))}
+        disabled={busy}
+      />
+    ));
+  }
 
-    if (view === "commit") {
+  function renderChangeRows() {
+    if (changes.length === 0) {
       return (
-        <div className="git-commit-box">
-          <div className="git-message-wrap">
-            <textarea
-              className="git-message"
-              placeholder={`Mensagem (commit em ${status?.branch || "branch"})`}
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              rows={2}
-            />
-            <Tooltip label={assistLabel}>
-              <button
-                type="button"
-                className="git-message-assist-btn"
-                disabled={busy || totalChanges === 0}
-                aria-label="Gerar mensagem de commit"
-                onClick={() => void generateCommitMessage()}
-              >
-                <Codicon name="model" size={13} />
-              </button>
-            </Tooltip>
-          </div>
-          <div className="git-commit-actions-row">
-            <button
-              className="git-commit-btn"
-              disabled={busy || !message.trim() || staged.length === 0}
-              title={
-                staged.length === 0
-                  ? "Prepare (stage) arquivos antes de commitar"
-                  : "Commit dos arquivos preparados"
-              }
-              onClick={() =>
-                act(async () => {
-                  await gitCommit(repoRootPath, message, connId);
-                  setMessage("");
-                })
-              }
-            >
-              <Codicon name="gitCommit" /> Commit
-              {staged.length ? ` (${staged.length})` : ""}
-            </button>
-          </div>
+        <div className="panel-empty git-panel-empty-compact">
+          {totalChanges === 0 ? "Nenhuma alteração." : "Nenhuma alteração pendente."}
         </div>
       );
     }
+    return changes.map((f) => (
+      <GitFileRow
+        key={`c-${f.path}`}
+        file={f}
+        actionIcon="add"
+        actionTitle="Preparar (stage)"
+        onAction={() => act(() => gitStage(repoRootPath, f.path, connId))}
+        onDiscard={() => discardFile(f)}
+        onOpen={() => openSourceControlItem(f, "working")}
+        onContextMenu={(e) => openFileMenu(e, fileMenu(f, "changes"))}
+        disabled={busy}
+      />
+    ));
+  }
 
-    if (view === "conflicts") {
-      return conflicts.length === 0 ? (
-        <div className="panel-empty git-panel-empty-compact">Nenhum conflito de merge.</div>
-      ) : (
-        conflicts.map((f) => (
+  function renderStagedRows() {
+    if (staged.length === 0) {
+      return <div className="panel-empty git-panel-empty-compact">Nenhum arquivo preparado.</div>;
+    }
+    return (
+      <>
+        <div className="git-staged-preview-bar">
+          <div>
+            <span>Index preparado</span>
+            <small>{stagedSummaryText || `${staged.length} arquivo${staged.length === 1 ? "" : "s"}`}</small>
+          </div>
+          <button
+            type="button"
+            disabled={busy || staged.length === 0}
+            onClick={openFirstStagedChange}
+            title="Abrir diff staged do primeiro arquivo"
+          >
+            <Codicon name="openChanges" size={12} />
+            Preview
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => act(() => gitUnstageAll(repoRootPath, connId))}
+            title="Remover todos os arquivos do stage"
+          >
+            <Codicon name="remove" size={12} />
+            Unstage
+          </button>
+        </div>
+        {staged.map((f) => (
           <GitFileRow
-            key={`x-${f.path}`}
+            key={`s-${f.path}`}
             file={f}
-            actionIcon="success"
-            actionTitle="Marcar como resolvido (stage)"
-            onAction={() => act(() => gitStage(repoRootPath, f.path, connId))}
-            onOpen={() => openSourceControlItem(f, "working")}
-            onContextMenu={(e) => openFileMenu(e, fileMenu(f, "conflict"))}
+            actionIcon="remove"
+            actionTitle="Remover do stage"
+            onAction={() => act(() => gitUnstage(repoRootPath, f.path, connId))}
+            onOpen={() => openSourceControlItem(f, "staged")}
+            onContextMenu={(e) => openFileMenu(e, fileMenu(f, "staged"))}
             disabled={busy}
           />
-        ))
-      );
-    }
+        ))}
+      </>
+    );
+  }
 
-    if (view === "staged") {
-      return staged.length === 0 ? (
-        <div className="panel-empty git-panel-empty-compact">Nenhum arquivo preparado.</div>
-      ) : (
-        <>
-          <div className="git-staged-preview-bar">
-            <div>
-              <span>Index preparado</span>
-              <small>{stagedSummaryText || `${staged.length} arquivo${staged.length === 1 ? "" : "s"}`}</small>
-            </div>
-            <button
-              type="button"
-              disabled={busy || staged.length === 0}
-              onClick={openFirstStagedChange}
-              title="Abrir diff staged do primeiro arquivo"
-            >
-              <Codicon name="openChanges" size={12} />
-              Preview
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => act(() => gitUnstageAll(repoRootPath, connId))}
-              title="Remover todos os arquivos do stage"
-            >
-              <Codicon name="remove" size={12} />
-              Unstage
-            </button>
-          </div>
-          {staged.map((f) => (
-            <GitFileRow
-              key={`s-${f.path}`}
-              file={f}
-              actionIcon="remove"
-              actionTitle="Remover do stage"
-              onAction={() => act(() => gitUnstage(repoRootPath, f.path, connId))}
-              onOpen={() => openSourceControlItem(f, "staged")}
-              onContextMenu={(e) => openFileMenu(e, fileMenu(f, "staged"))}
-              disabled={busy}
-            />
-          ))}
-        </>
-      );
-    }
+  function renderChangesActions() {
+    if (changes.length === 0) return null;
+    return (
+      <>
+        <Tooltip label="Descartar todas as alterações">
+          <button
+            className="git-link-btn"
+            disabled={busy}
+            aria-label="Descartar todas as alterações"
+            onClick={() =>
+              act(async () => {
+                if (
+                  !window.confirm(
+                    "Descartar TODAS as alterações do diretório de trabalho? Esta ação não pode ser desfeita."
+                  )
+                )
+                  return;
+                await gitDiscardAll(repoRootPath, connId);
+              })
+            }
+          >
+            <Codicon name="discard" />
+          </button>
+        </Tooltip>
+        <Tooltip label="Preparar tudo">
+          <button
+            className="git-link-btn"
+            disabled={busy}
+            aria-label="Preparar tudo"
+            onClick={() => act(() => gitStageAll(repoRootPath, connId))}
+          >
+            <Codicon name="add" />
+          </button>
+        </Tooltip>
+      </>
+    );
+  }
 
-    return changes.length === 0 && staged.length === 0 && conflicts.length === 0 ? (
-      <div className="panel-empty git-panel-empty-compact">Nenhuma alteração.</div>
-    ) : changes.length === 0 ? (
-      <div className="panel-empty git-panel-empty-compact">Nenhuma alteração pendente.</div>
-    ) : (
-      changes.map((f) => (
-        <GitFileRow
-          key={`c-${f.path}`}
-          file={f}
-          actionIcon="add"
-          actionTitle="Preparar (stage)"
-          onAction={() => act(() => gitStage(repoRootPath, f.path, connId))}
-          onDiscard={() => discardFile(f)}
-          onOpen={() => openSourceControlItem(f, "working")}
-          onContextMenu={(e) => openFileMenu(e, fileMenu(f, "changes"))}
-          disabled={busy}
-        />
-      ))
+  function renderStagedActions() {
+    if (staged.length === 0) return null;
+    return (
+      <>
+        <Tooltip label="Visualizar primeiro arquivo preparado">
+          <button
+            className="git-link-btn"
+            disabled={busy || staged.length === 0}
+            aria-label="Visualizar primeiro arquivo preparado"
+            onClick={openFirstStagedChange}
+          >
+            <Codicon name="openChanges" />
+          </button>
+        </Tooltip>
+        <Tooltip label="Remover tudo do stage">
+          <button
+            className="git-link-btn"
+            disabled={busy}
+            aria-label="Remover tudo do stage"
+            onClick={() => act(() => gitUnstageAll(repoRootPath, connId))}
+          >
+            <Codicon name="remove" />
+          </button>
+        </Tooltip>
+      </>
     );
   }
 
@@ -2941,64 +2853,58 @@ function GitRepositoryPanel({
       {error && <div className="git-error">{error}</div>}
 
       <div className="git-source-views">
-        <div className="git-source-tabs" role="tablist" aria-label="Views do controle de código-fonte">
-          {sourceControlViewOrder.map((view) => {
-            const meta = sourceControlViewMeta[view];
-            const active = activeSourceControlView === view;
-            const expanded = sourceControlViewExpanded(view);
-            return (
-              <button
-                key={view}
-                type="button"
-                role="tab"
-                className={`git-source-tab${active ? " active" : ""}${expanded ? "" : " collapsed"}${draggingSourceControlView === view ? " dragging" : ""}`}
-                aria-selected={active}
-                draggable
-                onClick={() => selectSourceControlView(view)}
-                onDoubleClick={() => toggleSourceControlView(view)}
-                onDragStart={(event) => {
-                  event.dataTransfer.effectAllowed = "move";
-                  event.dataTransfer.setData("text/plain", view);
-                  setDraggingSourceControlView(view);
-                }}
-                onDragOver={(event) => {
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = "move";
-                }}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  const dragged = event.dataTransfer.getData("text/plain") as SourceControlView;
-                  if (SOURCE_CONTROL_VIEW_ORDER.includes(dragged)) moveSourceControlView(dragged, view);
-                  setDraggingSourceControlView(null);
-                }}
-                onDragEnd={() => setDraggingSourceControlView(null)}
-                title={`${meta.label}${meta.count ? ` (${meta.count})` : ""}. Arraste para reorganizar; duplo clique recolhe.`}
-              >
-                <Codicon name={meta.icon} size={13} />
-                <span>{meta.label}</span>
-                {meta.count ? <small>{meta.count > 99 ? "99+" : meta.count}</small> : null}
-              </button>
-            );
-          })}
-        </div>
-        <div className="git-source-view-head">
-          <button
-            type="button"
-            className="git-source-view-title"
-            aria-expanded={sourceControlViewExpanded(activeSourceControlView)}
-            onClick={() => toggleSourceControlView(activeSourceControlView)}
-          >
-            <Codicon name={sourceControlViewExpanded(activeSourceControlView) ? "chevronDown" : "chevronRight"} size={12} />
-            <Codicon name={sourceControlViewMeta[activeSourceControlView].icon} size={13} />
-            <span>{sourceControlViewMeta[activeSourceControlView].label}</span>
-          </button>
-          <div className="git-source-view-actions">
-            {renderSourceControlViewActions(activeSourceControlView)}
+        <GitSectionHeader
+          title="Alterações"
+          icon="openChanges"
+          expanded={showSourceControlRoot}
+          onToggle={() => setShowSourceControlRoot((value) => !value)}
+          count={sourceControlCount}
+        />
+        {showSourceControlRoot && (
+          <div className="git-source-view-body">
+            {renderCommitBox()}
+
+            {conflicts.length > 0 && (
+              <section className="git-source-subsection">
+                <GitSectionHeader
+                  title="Conflitos"
+                  icon="warning"
+                  expanded={showConflicts}
+                  onToggle={() => setShowConflicts((value) => !value)}
+                  count={conflicts.length}
+                  danger
+                />
+                {showConflicts && <div className="git-source-subsection-body">{renderConflictRows()}</div>}
+              </section>
+            )}
+
+            <section className="git-source-subsection">
+              <GitSectionHeader
+                title="Alterações"
+                icon="openChanges"
+                expanded={showChanges}
+                onToggle={() => setShowChanges((value) => !value)}
+                count={changes.length || undefined}
+                actions={renderChangesActions()}
+              />
+              {showChanges && <div className="git-source-subsection-body">{renderChangeRows()}</div>}
+            </section>
+
+            {staged.length > 0 && (
+              <section className="git-source-subsection">
+                <GitSectionHeader
+                  title="Preparadas"
+                  icon="success"
+                  expanded={showStaged}
+                  onToggle={() => setShowStaged((value) => !value)}
+                  count={staged.length}
+                  actions={renderStagedActions()}
+                />
+                {showStaged && <div className="git-source-subsection-body">{renderStagedRows()}</div>}
+              </section>
+            )}
           </div>
-        </div>
-        <div className="git-source-view-body">
-          {renderSourceControlViewContent(activeSourceControlView)}
-        </div>
+        )}
       </div>
       </div>
       )}

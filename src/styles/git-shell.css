@@ -99,137 +99,37 @@
   margin-top: 2px;
   border-top: 1px solid rgba(210, 228, 242, 0.055);
 }
-.git-source-tabs {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  min-width: 0;
-  padding: 4px 6px 3px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-}
-.git-source-tabs::-webkit-scrollbar {
-  display: none;
-}
-.git-source-tab {
-  position: relative;
-  display: inline-grid;
-  grid-template-columns: 16px minmax(0, 1fr) minmax(14px, auto);
-  align-items: center;
-  gap: 4px;
-  flex: 1 0 104px;
-  min-width: 86px;
-  max-width: 148px;
-  height: 25px;
-  padding: 0 7px 0 6px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-control);
-  color: var(--text-muted);
-  background: transparent;
-  font: inherit;
-  cursor: pointer;
-}
-.git-source-tab:hover {
-  color: var(--text-secondary);
-  background: var(--fill-subtle-hover);
-}
-.git-source-tab:focus-visible {
-  outline: 1px solid rgba(96, 205, 255, 0.72);
-  outline-offset: -1px;
-}
-.git-source-tab.active {
-  color: var(--text);
-  background: rgba(96, 205, 255, 0.06);
-  box-shadow: inset 0 -1px 0 rgba(96, 205, 255, 0.78);
-}
-.git-source-tab.dragging {
-  opacity: 0.58;
-}
-.git-source-tab.collapsed {
-  opacity: 0.72;
-}
-.git-source-tab > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  font-weight: 650;
-}
-.git-source-tab > small {
-  justify-self: end;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 4px;
-  border-radius: 999px;
-  color: var(--text-secondary);
-  background: rgba(210, 228, 242, 0.07);
-  font-size: 9px;
-  font-weight: 750;
-  line-height: 14px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-.git-source-tab.active > small {
-  color: #06121d;
-  background: var(--accent);
-}
-.git-source-view-head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  min-height: 26px;
-  margin: 0 4px;
-  border-radius: var(--radius-control);
-}
-.git-source-view-head:hover {
-  background: rgba(255, 255, 255, 0.025);
-}
-.git-source-view-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  height: 26px;
-  padding: 0 6px;
-  border: 0;
-  color: var(--text-muted);
-  background: transparent;
-  font: inherit;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.32px;
-  text-align: left;
-  text-transform: uppercase;
-  cursor: pointer;
-}
-.git-source-view-title span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.git-source-view-title:focus-visible {
-  outline: 1px solid rgba(96, 205, 255, 0.72);
-  outline-offset: -1px;
-  color: var(--text);
-  background: rgba(96, 205, 255, 0.075);
-}
-.git-source-view-actions {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 4px;
-  min-width: 0;
-  padding-right: 5px;
-}
 .git-source-view-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding-bottom: 12px;
+  padding: 0 0 12px;
   scrollbar-gutter: stable;
+}
+.git-commit-box-inline {
+  padding: 4px 10px 5px;
+  gap: 5px;
+}
+.git-commit-box-inline .git-message {
+  min-height: 26px;
+  height: 26px;
+  resize: none;
+  padding-block: 4px;
+}
+.git-commit-box-inline .git-message-assist-btn {
+  top: 3px;
+  right: 5px;
+  width: 20px;
+  height: 20px;
+}
+.git-source-subsection {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+.git-source-subsection-body {
+  min-width: 0;
+  animation: git-panel-section-in 90ms ease-out;
 }
 .git-panel-embedded .git-source-views {
   flex: 0 0 auto;
@@ -238,35 +138,6 @@
   flex: none;
   overflow: visible;
   padding-bottom: 8px;
-}
-@container (max-width: 360px) {
-  .git-source-tab {
-    flex-basis: 42px;
-    min-width: 42px;
-    grid-template-columns: 16px;
-    justify-content: center;
-  }
-
-  .git-source-tab > span {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-  }
-
-  .git-source-tab > small {
-    position: absolute;
-    top: 2px;
-    right: 2px;
-    min-width: 5px;
-    width: 5px;
-    height: 5px;
-    padding: 0;
-    color: transparent;
-    font-size: 0;
-    line-height: 0;
-  }
 }
 
 .git-lists { order: 30; flex: 1; overflow-y: auto; padding-bottom: 12px; scrollbar-gutter: stable; }
