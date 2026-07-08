@@ -94,6 +94,34 @@ fn roslyn_cache_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(base.join("lsp").join("roslyn").join(ROSLYN_VERSION))
 }
 
+/// Ensures `path` has the owner-execute bit set on Unix.
+///
+/// The Roslyn/C#-extension binaries ship inside a ZIP (`.nupkg`/`.vsix`). ZIP
+/// entries don't carry Unix permission modes reliably, and our `zip` crate build
+/// doesn't apply them anyway, so files land at the default `0o644` — i.e. NOT
+/// executable. Launching such a file fails with `Permission denied (os error 13)`.
+/// Extracting from ZIP therefore requires a post-extraction `chmod +x` on macOS
+/// and Linux. (No-op on Windows, where executability is by extension.)
+fn ensure_executable(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(path)
+            .map_err(|e| format!("failed to stat server executable: {e}"))?
+            .permissions();
+        // Add read+execute for user/group/other, preserving write bits.
+        let mode = perms.mode() | 0o755;
+        perms.set_mode(mode);
+        std::fs::set_permissions(path, perms)
+            .map_err(|e| format!("failed to chmod +x server executable: {e}"))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
 /// Recursively searches `dir` for the server executable.
 fn find_executable(dir: &Path) -> Option<PathBuf> {
     let target = server_executable_name();
@@ -127,6 +155,7 @@ pub async fn ensure_roslyn_server(app: &AppHandle) -> Result<PathBuf, String> {
     // Cache hit: executable already extracted.
     if cache_dir.exists() {
         if let Some(exe) = find_executable(&cache_dir) {
+            ensure_executable(&exe)?;
             return Ok(exe);
         }
     }
@@ -172,6 +201,10 @@ pub async fn ensure_roslyn_server(app: &AppHandle) -> Result<PathBuf, String> {
         let msg = "Executável do servidor C# não encontrado após a extração.".to_string();
         emit_progress(app, "error", &msg);
         msg
+    })?;
+    ensure_executable(&exe).map_err(|e| {
+        emit_progress(app, "error", &e);
+        e
     })?;
 
     emit_progress(app, "ready", "Servidor C# pronto.");
@@ -377,6 +410,12 @@ async fn download_and_extract_csharp_ext(app: &AppHandle, cache: &Path) -> Resul
 pub async fn cohosting_launch_command(app: &AppHandle) -> Result<(String, Vec<String>), String> {
     let roslyn_dir = ensure_csharp_ext(app).await?;
     let exe = roslyn_dir.join(roslyn_apphost_name());
+    // The VSIX ships the apphost without the execute bit on Unix — set it or the
+    // spawn fails with `Permission denied (os error 13)`.
+    ensure_executable(&exe).map_err(|e| {
+        emit_progress(app, "error", &e);
+        e
+    })?;
     let razor_extension = roslyn_dir.join("Microsoft.VisualStudioCode.RazorExtension.dll");
     if !razor_extension.is_file() {
         return Err("RazorExtension.dll ausente no pacote da extensão C#.".to_string());
@@ -446,4 +485,30 @@ pub async fn roslyn_launch_command(
     _project_root: &Path,
 ) -> Result<(String, Vec<String>), String> {
     standalone_launch_command(app).await
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A file extracted from a ZIP lands non-executable (`0o644`); after
+    /// `ensure_executable` it must be launchable, or the LSP spawn fails with
+    /// `Permission denied (os error 13)`.
+    #[test]
+    fn ensure_executable_sets_execute_bit() {
+        let path = std::env::temp_dir().join(format!(
+            "fluentcoder-ensure-exec-{}",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"#!/bin/sh\n").unwrap();
+        // Simulate the post-ZIP-extraction state: read/write, no execute.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        ensure_executable(&path).expect("chmod +x");
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_ne!(mode & 0o100, 0, "owner execute bit must be set");
+        let _ = std::fs::remove_file(&path);
+    }
 }
