@@ -7,9 +7,14 @@
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding-bottom: 6px;
 }
 .git-panel-embedded .git-panel-flow {
   flex: 0 0 auto;
+  overflow: visible;
+  padding-bottom: 4px;
 }
 .git-header { gap: 4px; }
 .git-header-embedded { display: flex; justify-content: flex-end; min-height: 26px; padding: 0 8px 4px; }
@@ -89,22 +94,30 @@
 .git-group-commit { order: 20; }
 .git-error { order: 25; margin: 0 12px 8px; padding: 6px 8px; font-size: 11px; color: #ffb4ab; background: rgba(196,43,28,0.18); border: 1px solid rgba(196,43,28,0.4); border-radius: var(--radius-control); white-space: pre-wrap; overflow-wrap: break-word; }
 
-.git-source-views {
-  order: 30;
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
+.git-view-section {
+  flex: 0 0 auto;
   min-width: 0;
-  min-height: 0;
-  margin-top: 2px;
+  margin-top: 0;
   border-top: 1px solid rgba(210, 228, 242, 0.055);
 }
-.git-source-view-body {
-  flex: 1 1 auto;
+.git-view-section:first-child {
+  border-top: 0;
+}
+.git-view-section.is-dragging {
+  opacity: 0.58;
+}
+.git-source-views {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  min-width: 0;
   min-height: 0;
-  overflow-y: auto;
+}
+.git-source-view-body {
+  flex: 0 0 auto;
+  min-height: 0;
+  overflow: visible;
   padding: 0 0 12px;
-  scrollbar-gutter: stable;
 }
 .git-commit-box-inline {
   padding: 4px 10px 5px;

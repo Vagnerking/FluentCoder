@@ -53,6 +53,16 @@
 .git-section-header:hover {
   background: rgba(255, 255, 255, 0.025);
 }
+.git-section-header.is-draggable {
+  cursor: grab;
+}
+.git-section-header.is-draggable:active {
+  cursor: grabbing;
+}
+.git-section-header.is-dragging {
+  background: rgba(96, 205, 255, 0.055);
+  box-shadow: inset 0 0 0 1px rgba(96, 205, 255, 0.22);
+}
 .git-section-toggle {
   display: flex;
   align-items: center;

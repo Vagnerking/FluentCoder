@@ -1,13 +1,11 @@
 /* ---- Git Fluent views ---- */
 .git-group-fluent {
-  order: 40;
-  margin-top: 1px;
+  margin-top: 0;
   padding: 0;
-  border-top: 1px solid rgba(210, 228, 242, 0.055);
   container-type: inline-size;
 }
 .git-group-fluent .git-section-header {
-  grid-template-columns: minmax(72px, 1fr) minmax(0, auto);
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto);
   overflow: visible;
 }
 .git-group-fluent .git-section-actions {
