@@ -11,8 +11,12 @@ import { FileIcon } from "../icon-theme/material/FileIcon";
 
 interface BacklinksPanelProps {
   rootPath: string | null;
+  /** SSH connection id when the active root is remote. */
+  connId?: string | null;
   /** The file whose connections are shown; null ⇒ "open a file" hint. */
   activePath: string | null;
+  /** Lets heavier workspace analysis yield to the first paint of the active view. */
+  deferLoadMs?: number;
   onOpenFile: (path: string) => void;
 }
 
@@ -72,7 +76,13 @@ function MentionSection({
  * it (backlinks) and the files it links to (outgoing) — each with the source
  * line + a context snippet. Derived from the shared knowledge index.
  */
-export function BacklinksPanel({ rootPath, activePath, onOpenFile }: BacklinksPanelProps) {
+export function BacklinksPanel({
+  rootPath,
+  connId = null,
+  activePath,
+  deferLoadMs = 0,
+  onOpenFile,
+}: BacklinksPanelProps) {
   const [mentions, setMentions] = useState<Mentions | null>(null);
   const [loading, setLoading] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -82,27 +92,35 @@ export function BacklinksPanel({ rootPath, activePath, onOpenFile }: BacklinksPa
       setMentions(null);
       return;
     }
-    const cached = getCachedIndex(rootPath);
+    const cached = getCachedIndex(rootPath, connId);
     if (cached) {
+      setLoading(false);
       setMentions(mentionsFor(cached, activePath));
       return;
     }
     let cancelled = false;
-    setLoading(true);
-    loadIndex(rootPath)
-      .then((idx) => {
-        if (!cancelled) setMentions(mentionsFor(idx, activePath));
-      })
-      .catch(() => {
-        if (!cancelled) setMentions(null);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    setMentions(null);
+    const start = () => {
+      if (cancelled) return;
+      setLoading(true);
+      loadIndex(rootPath, connId)
+        .then((idx) => {
+          if (!cancelled) setMentions(mentionsFor(idx, activePath));
+        })
+        .catch(() => {
+          if (!cancelled) setMentions(null);
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    };
+    const timer = deferLoadMs > 0 ? window.setTimeout(start, deferLoadMs) : null;
+    if (timer === null) start();
     return () => {
       cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
     };
-  }, [rootPath, activePath, reloadKey]);
+  }, [rootPath, connId, activePath, deferLoadMs, reloadKey]);
 
   return (
     <div className="backlinks-panel">

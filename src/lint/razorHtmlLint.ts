@@ -1,4 +1,7 @@
 import type * as MonacoNs from "monaco-editor";
+// `.ts` extension required: this file is loaded by `node --experimental-strip-types`
+// (the unit-test harness), which resolves relative imports literally.
+import { buildVirtualHtml } from "../lsp/servers/cshtmlHtmlProjection.ts";
 
 /**
  * Live HTML/Razor linter for `.cshtml`/`.razor` (issue #11).
@@ -6,10 +9,17 @@ import type * as MonacoNs from "monaco-editor";
  * `dotnet build` reports C#/Razor *compile* errors, but Razor passes raw HTML
  * through — so a typo'd tag like `</dabbr>` is never a build error. This is the
  * piece that marks markup mistakes **on the sheet, as you type**: it scans the
- * markup (skipping Razor `@…` regions) and flags closing tags with no matching
- * open tag. Deliberately conservative (only clearly-stray closes) to avoid the
- * false positives a strict tag-balance check would hit on HTML's optional-close
- * elements (`<li>`, `<p>`, `<td>`, …).
+ * markup and flags closing tags with no matching open tag. Deliberately
+ * conservative (only clearly-stray closes) to avoid the false positives a strict
+ * tag-balance check would hit on HTML's optional-close elements (`<li>`, `<p>`,
+ * `<td>`, …).
+ *
+ * Razor-region handling is DELEGATED to `buildVirtualHtml` (the virtual-HTML
+ * projection): the scan runs over the blanked text, where every `@…` construct,
+ * directive line and `@if/@foreach` C# body is already whitespace — offsets are
+ * identical by construction. The previous local scanner had drifted from the
+ * projection (no keyword blocks, no quote-awareness: a `}` inside a C# string
+ * desynced it; `List<string>` in an `@if` body read as an open `<string>` tag).
  */
 
 const OWNER = "razor-html";
@@ -51,6 +61,12 @@ export function scanIncompleteRazorExpressions(text: string): RawMarker[] {
       i++;
       continue;
     }
+    const next = text[i + 1];
+    // `@@` escape is ALWAYS a literal `@` (checked BEFORE the email/literal
+    // heuristic below): in `a@@b.` the text is literally `a@b.`, so the trailing
+    // `.` is not a dangling Razor member. Skipping both `@` here also prevents the
+    // second `@` from being read as a transition into `b.`.
+    if (next === "@") { i += 2; continue; }
     // Razor's email/literal exception: `@` is a transition only when it ISN'T
     // preceded by a non-whitespace text char. `suporte@example.com.` is literal
     // text (the `@` follows `e`), not an expression — don't flag its trailing dot.
@@ -59,9 +75,7 @@ export function scanIncompleteRazorExpressions(text: string): RawMarker[] {
       i++;
       continue;
     }
-    const next = text[i + 1];
     // Skip the constructs that aren't implicit expressions.
-    if (next === "@") { i += 2; continue; } // `@@` escape
     if (next === "*") { const e = text.indexOf("*@", i + 2); i = e < 0 ? n : e + 2; continue; }
     if (next === ":") {
       // `@:` turns the REST OF THE LINE into literal markup — a later `@expr.`
@@ -112,58 +126,36 @@ export function scanIncompleteRazorExpressions(text: string): RawMarker[] {
 
 /** Scans `text` and returns stray-close-tag findings as char-offset ranges. */
 export function scanRazorMarkup(text: string): RawMarker[] {
+  // Single Razor-region oracle: every `@…`/C#-body char is already a space in
+  // the virtual HTML, at IDENTICAL offsets — so ranges computed here line up
+  // with the original text with no remapping.
+  const html = buildVirtualHtml(text).html;
   const markers: RawMarker[] = [];
   const stack: string[] = [];
-  const n = text.length;
+  const n = html.length;
   let i = 0;
 
   while (i < n) {
-    const c = text[i];
-
-    // --- Razor regions: skip so `@expr`/`@{ }` aren't parsed as markup ---
-    if (c === "@") {
-      const next = text[i + 1];
-      if (next === "*") {
-        const end = text.indexOf("*@", i + 2);
-        i = end < 0 ? n : end + 2;
-        continue;
-      }
-      if (next === "{" || next === "(") {
-        const open = next;
-        const close = open === "{" ? "}" : ")";
-        i += 2;
-        let depth = 1;
-        while (i < n && depth > 0) {
-          if (text[i] === open) depth++;
-          else if (text[i] === close) depth--;
-          i++;
-        }
-        continue;
-      }
-      // `@Model.Foo`, `@ViewData["x"]`, `@: …` — skip the expression run.
-      i++;
-      while (i < n && !/[\s<]/.test(text[i])) i++;
-      continue;
-    }
+    const c = html[i];
 
     if (c === "<") {
       // Comments / doctype / declarations.
-      if (text[i + 1] === "!") {
-        if (text.startsWith("<!--", i)) {
-          const end = text.indexOf("-->", i + 4);
+      if (html[i + 1] === "!") {
+        if (html.startsWith("<!--", i)) {
+          const end = html.indexOf("-->", i + 4);
           i = end < 0 ? n : end + 3;
         } else {
-          const end = text.indexOf(">", i);
+          const end = html.indexOf(">", i);
           i = end < 0 ? n : end + 1;
         }
         continue;
       }
 
-      const closing = text[i + 1] === "/";
+      const closing = html[i + 1] === "/";
       let j = i + (closing ? 2 : 1);
       const nameStart = j;
-      while (j < n && isNameChar(text[j])) j++;
-      const name = text.slice(nameStart, j).toLowerCase();
+      while (j < n && isNameChar(html[j])) j++;
+      const name = html.slice(nameStart, j).toLowerCase();
       if (!name) {
         // A literal `<` in text/expression — not a tag.
         i++;
@@ -175,14 +167,14 @@ export function scanRazorMarkup(text: string): RawMarker[] {
       let selfClose = false;
       let quote = "";
       while (k < n) {
-        const ch = text[k];
+        const ch = html[k];
         if (quote) {
           if (ch === quote) quote = "";
         } else if (ch === '"' || ch === "'") {
           quote = ch;
         } else if (ch === ">") {
           break;
-        } else if (ch === "/" && text[k + 1] === ">") {
+        } else if (ch === "/" && html[k + 1] === ">") {
           selfClose = true;
         }
         k++;

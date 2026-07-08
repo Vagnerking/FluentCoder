@@ -10,6 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "Fluent Coder",
@@ -45,7 +46,19 @@
     "resources": {
       "../tools/razor-sidecar/RazorSidecar.csproj": "tools/razor-sidecar/RazorSidecar.csproj",
       "../tools/razor-sidecar/Program.cs": "tools/razor-sidecar/Program.cs"
-    }
+    },
+    "fileAssociations": [
+      {
+        "ext": ["fluent-workspace"],
+        "name": "Fluent Workspace",
+        "description": "Fluent Code workspace",
+        "mimeType": "application/vnd.fluentcoder.workspace+json",
+        "exportedType": {
+          "identifier": "com.fluentcoder.workspace",
+          "conformsTo": ["public.json"]
+        }
+      }
+    ]
   },
   "plugins": {}
 }

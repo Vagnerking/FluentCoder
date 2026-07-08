@@ -22,9 +22,17 @@ dist-ssr
 
 # Rust / Tauri
 src-tauri/target
+# Config local de Cargo (opt-in do linker lld rápido) — NÃO versionado: forçar um
+# linker custom quebra CI/clones limpos, onde o binário lld ainda não existe
+# quando as build-deps compilam. Gerado por scripts/setup-fast-linker (ver
+# src-tauri/.cargo/config.toml.example).
+src-tauri/.cargo/config.toml
 
 # Planejamento interno (EPICs / issues) — não versionado
 milestones/
 
 # Estado interno de ferramentas de IA (Claude Code)
 .claude/
+
+# Artefatos locais da CLI de Playwright usada em inspeções pontuais
+.playwright-cli/

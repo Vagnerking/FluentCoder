@@ -1,0 +1,106 @@
+.git-worktree-list {
+  display: grid;
+  gap: 1px;
+}
+.git-worktree-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto minmax(0, auto);
+  align-items: center;
+  gap: 5px;
+  min-height: 21px;
+  margin: 0;
+  padding: 0 3px;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+}
+.git-worktree-row:hover,
+.git-worktree-row:focus-within {
+  background: var(--fill-subtle-hover);
+}
+.git-worktree-row:focus-visible {
+  outline: 1px solid rgba(96, 205, 255, 0.7);
+  outline-offset: -1px;
+  background: rgba(96, 205, 255, 0.07);
+}
+.git-worktree-actions {
+  position: absolute;
+  right: 3px;
+  top: 1px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1px;
+  padding-left: 4px;
+  background: linear-gradient(90deg, transparent, var(--panel-bg) 18%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 90ms ease;
+}
+.git-worktree-actions .git-file-action {
+  opacity: 1;
+}
+.git-worktree-row:hover .git-worktree-actions,
+.git-worktree-row:focus-within .git-worktree-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.git-worktree-row > .codicon {
+  color: var(--text-muted);
+}
+.git-worktree-row.current > .codicon,
+.git-worktree-row.current .git-worktree-branch {
+  color: var(--accent);
+}
+.git-worktree-row.detached > .codicon {
+  color: var(--color-status-warning-strong);
+}
+.git-worktree-main {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+.git-worktree-branch,
+.git-worktree-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-worktree-branch {
+  font-size: 12px;
+  font-weight: 650;
+}
+.git-worktree-path {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.git-worktree-head {
+  color: var(--text-muted);
+  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-size: 10px;
+}
+.git-worktree-flags {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  min-width: 0;
+  overflow: hidden;
+}
+.git-worktree-flag {
+  flex: 0 0 auto;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: rgba(210, 228, 242, 0.06);
+  font-size: 9px;
+  font-weight: 750;
+  line-height: 16px;
+  text-transform: uppercase;
+}
+.git-worktree-flag.current {
+  color: #06223a;
+  background: var(--accent);
+}

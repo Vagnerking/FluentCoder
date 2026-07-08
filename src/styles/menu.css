@@ -1,0 +1,210 @@
+/* ---- Menu bar (File, Edit, …) ---- */
+.menubar {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  /* Fill the flexible space between the left icon and the window controls, so
+     its clientWidth = the room available for menus (drives the overflow). */
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+}
+/* Off-screen copy used only to measure each menu's natural width. */
+.menubar-measure {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  visibility: hidden;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  height: 22px;
+}
+/* Draggable filler taking the menubar's leftover width (moves the window). */
+.menubar-filler {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: 0;
+}
+.menubar-overflow-btn {
+  flex-shrink: 0;
+  min-width: 30px;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+.menubar-overflow { min-width: 190px; }
+/* Cascade arrow on an overflow row + the flyout submenu offset. */
+.menubar-overflow-row .menubar-item-accel { font-size: 13px; opacity: 0.7; }
+.menubar-submenu { margin-top: -5px; }
+
+.menubar-menu {
+  height: 22px;
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-control, 6px);
+  color: var(--text, #fff);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.menubar-menu:hover,
+.menubar-menu.active {
+  background: var(--fill-subtle-hover, rgba(255, 255, 255, 0.07));
+}
+
+.menubar-dropdown {
+  position: fixed;
+  z-index: 9999;
+  min-width: 200px;
+  background: var(--acrylic-tint-strong, #1e2430);
+  border: 1px solid var(--acrylic-border, rgba(255, 255, 255, 0.13));
+  border-radius: var(--radius-control, 6px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  padding: 4px;
+  backdrop-filter: blur(20px) saturate(120%);
+  -webkit-backdrop-filter: blur(20px) saturate(120%);
+}
+
+.menubar-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 6px 14px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text, #fff);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menubar-item:hover:not(.disabled) {
+  background: var(--fill-selected, rgba(96, 205, 255, 0.16));
+}
+
+.menubar-item.disabled {
+  color: var(--text-muted, rgba(255, 255, 255, 0.54));
+  cursor: default;
+}
+
+.menubar-item-accel {
+  margin-left: auto;
+  padding-left: 24px;
+  color: var(--text-muted, rgba(255, 255, 255, 0.54));
+  font-size: 11px;
+}
+
+.menubar-separator {
+  height: 1px;
+  background: var(--acrylic-border, rgba(255, 255, 255, 0.13));
+  margin: 4px 0;
+}
+
+/* Keyboard focus states (ISSUE-48). Subtle accent ring, Fluent-coherent. */
+.menubar-menu:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.menubar-item:focus-visible,
+.menubar-item.focused:not(.disabled) {
+  background: var(--fill-selected, rgba(96, 205, 255, 0.16));
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* ---- Explorer tree context menu (issues 56/65) ---- */
+.tree-context-menu {
+  position: fixed;
+  z-index: 9999;
+  min-width: 220px;
+  padding: 4px;
+  background:
+    linear-gradient(145deg, var(--acrylic-luminosity), transparent 42%),
+    var(--acrylic-tint-strong);
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-control, 6px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(28px) saturate(125%);
+  -webkit-backdrop-filter: blur(28px) saturate(125%);
+  outline: none;
+}
+
+.tree-context-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: 4px;
+  color: var(--text, #d6e2f0);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tree-context-item:hover:not(.disabled),
+.tree-context-item.active:not(.disabled) {
+  background: var(--fill-subtle-hover, rgba(255, 255, 255, 0.07));
+}
+
+.tree-context-item:active:not(.disabled) {
+  background: var(--acrylic-control-pressed);
+}
+
+.tree-context-item.disabled {
+  color: var(--text-muted, #6b7280);
+  cursor: default;
+}
+
+.tree-context-icon {
+  display: inline-flex;
+  justify-content: center;
+  width: 16px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.tree-context-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-context-accel {
+  margin-left: 16px;
+  color: var(--text-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.tree-context-chevron {
+  margin-left: 8px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.tree-context-submenu {
+  position: absolute;
+  left: 100%;
+  top: -5px;
+  min-width: 200px;
+  margin-left: 2px;
+  padding: 4px;
+  background:
+    linear-gradient(145deg, var(--acrylic-luminosity), transparent 42%),
+    var(--acrylic-tint-strong);
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-control, 6px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(28px) saturate(125%);
+  -webkit-backdrop-filter: blur(28px) saturate(125%);
+}

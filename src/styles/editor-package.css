@@ -1,0 +1,128 @@
+/* ---- package.json dependency intelligence ---- */
+.package-editor-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: var(--editor-bg);
+}
+.package-editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 10px;
+  border-bottom: 1px solid rgba(210, 228, 242, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.012)),
+    var(--editor-bg);
+  color: var(--text-secondary);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.package-editor-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  max-width: min(42vw, 420px);
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(147, 161, 181, 0.18);
+  background: rgba(147, 161, 181, 0.08);
+  color: #aeb9c8;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.package-editor-status.status-ready {
+  color: #9adf9a;
+  border-color: rgba(115, 201, 145, 0.25);
+  background: rgba(115, 201, 145, 0.1);
+}
+.package-editor-status.status-outdated {
+  color: #ffb3c3;
+  border-color: rgba(255, 107, 138, 0.3);
+  background: rgba(255, 107, 138, 0.1);
+}
+.package-editor-status.status-error,
+.package-editor-status.status-unsupported {
+  color: #e2c08d;
+  border-color: rgba(226, 192, 141, 0.25);
+  background: rgba(226, 192, 141, 0.09);
+}
+.package-editor-status.status-checking {
+  color: #8bdcff;
+  border-color: rgba(91, 192, 235, 0.28);
+  background: rgba(91, 192, 235, 0.1);
+}
+.package-editor-action {
+  height: 24px;
+  padding: 0 9px;
+  border-radius: var(--radius-control);
+  border: 1px solid rgba(210, 228, 242, 0.12);
+  background: rgba(255,255,255,0.035);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.package-editor-action:hover:not(:disabled) {
+  background: var(--fill-subtle-hover);
+  color: var(--text);
+}
+.package-editor-action.primary {
+  color: #bdefff;
+  border-color: rgba(91, 192, 235, 0.28);
+  background: rgba(91, 192, 235, 0.12);
+}
+.package-editor-action.danger {
+  color: #ffb3c3;
+  border-color: rgba(255, 107, 138, 0.26);
+  background: rgba(255, 107, 138, 0.1);
+}
+.package-editor-action.audit-risk-ok {
+  color: #9adf9a;
+  border-color: rgba(115, 201, 145, 0.24);
+  background: rgba(115, 201, 145, 0.08);
+}
+.package-editor-action.audit-risk-medium,
+.package-editor-action.audit-error {
+  color: #e2c08d;
+  border-color: rgba(226, 192, 141, 0.24);
+  background: rgba(226, 192, 141, 0.08);
+}
+.package-editor-action.audit-risk-high {
+  color: #ffb3c3;
+  border-color: rgba(255, 107, 138, 0.28);
+  background: rgba(255, 107, 138, 0.1);
+}
+.package-editor-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.package-editor-manager {
+  height: 24px;
+  padding: 0 24px 0 8px;
+  border-radius: var(--radius-control);
+  border: 1px solid rgba(210, 228, 242, 0.12);
+  background: rgba(255,255,255,0.035);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+  outline: none;
+}
+.package-editor-manager:hover:not(:disabled) {
+  background: var(--fill-subtle-hover);
+  color: var(--text);
+}
+.package-editor-manager:disabled {
+  opacity: 0.5;
+}
+.package-editor-monaco {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}

@@ -1,0 +1,176 @@
+/* ---- Editor Git annotations toolbar ---- */
+.editor-pane-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.editor-readonly-banner {
+  position: absolute;
+  z-index: 7;
+  top: 8px;
+  left: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(78vw, 860px);
+  min-height: 28px;
+  padding: 2px 4px 2px 9px;
+  border: 1px solid rgba(210, 228, 242, 0.12);
+  border-radius: 7px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.025)),
+    rgba(31, 38, 49, 0.92);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
+  color: var(--text-muted);
+  font-size: 12px;
+  backdrop-filter: blur(14px);
+  pointer-events: auto;
+}
+
+.editor-readonly-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.editor-readonly-main span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-readonly-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: 8px;
+  border-left: 1px solid rgba(210, 228, 242, 0.12);
+}
+
+.editor-readonly-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.editor-readonly-actions button:hover:not(:disabled) {
+  background: rgba(96, 205, 255, 0.1);
+  color: var(--accent);
+}
+
+.editor-readonly-actions button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.git-file-annotations-toolbar {
+  position: absolute;
+  z-index: 8;
+  top: 9px;
+  right: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 3px 4px 3px 7px;
+  border: 1px solid rgba(210, 228, 242, 0.14);
+  border-radius: 7px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.052), rgba(255, 255, 255, 0.018)),
+    rgba(29, 36, 47, 0.96);
+  box-shadow:
+    0 8px 22px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  color: var(--text-muted);
+  opacity: 1;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  transition: border-color 0.12s ease, background 0.12s ease, transform 0.12s ease;
+}
+
+.editor-pane-shell:hover .git-file-annotations-toolbar,
+.git-file-annotations-toolbar:focus-within {
+  border-color: rgba(210, 228, 242, 0.2);
+}
+
+.git-file-annotations-label {
+  padding: 0 3px 0 0;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #9aa7b8;
+  line-height: 20px;
+}
+
+.git-file-annotations-segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  height: 22px;
+  padding: 2px;
+  border: 1px solid rgba(210, 228, 242, 0.11);
+  border-radius: 6px;
+  background: rgba(14, 18, 24, 0.24);
+}
+
+.git-file-annotation-button {
+  height: 18px;
+  min-width: 31px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #7f8998;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 750;
+  line-height: 16px;
+  cursor: pointer;
+  outline: none;
+}
+
+.git-file-annotation-button:hover:not(:disabled) {
+  color: #c9d4e4;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.git-file-annotation-button.active {
+  color: #d8f4ff;
+  border-color: rgba(96, 205, 255, 0.42);
+  background:
+    linear-gradient(180deg, rgba(96, 205, 255, 0.28), rgba(96, 205, 255, 0.16)),
+    rgba(96, 205, 255, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 0 1px rgba(96, 205, 255, 0.08);
+}
+
+.git-file-annotation-button:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(96, 205, 255, 0.36);
+}
+
+.git-file-annotation-button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.git-file-annotations-toolbar.is-unavailable {
+  border-color: rgba(226, 192, 141, 0.18);
+}

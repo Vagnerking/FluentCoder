@@ -19,6 +19,7 @@ export type IconAction =
   | "refresh"
   | "reload"
   | "collapseAll"
+  | "expandAll"
   | "expand"
   | "collapse"
   | "folder"
@@ -61,6 +62,12 @@ export type IconAction =
   | "gitPush"
   | "sync"
   | "gitMerge"
+  | "gitRepo"
+  | "gitGraph"
+  | "gitRemote"
+  | "gitStash"
+  | "gitWorktree"
+  | "gitContributor"
   | "cloudUpload"
   | "add"
   | "remove"
@@ -85,15 +92,21 @@ export type IconAction =
   | "extensions"
   | "account"
   | "settings"
+  | "packages"
   | "commandPalette"
   | "menu"
   | "agents"
   | "graph"
   | "backlinks"
+  | "solution"
   | "send"
   | "modeAsk"
   | "modePlan"
-  | "modeDev"
+  | "modeEdit"
+  | "modeAuto"
+  | "modeBypass"
+  | "model"
+  | "attachContext"
   | "chevronRight"
   | "chevronDown"
   | "close"
@@ -115,8 +128,10 @@ export type IconAction =
   | "arrowUp"
   | "arrowLeft"
   // Misc
+  | "tag"
   | "bookmark"
-  | "key";
+  | "key"
+  | "lock";
 
 /** action → codicon name (without the `codicon-` prefix). */
 export const CODICON_MAP: Record<IconAction, string> = {
@@ -130,6 +145,7 @@ export const CODICON_MAP: Record<IconAction, string> = {
   refresh: "refresh",
   reload: "sync",
   collapseAll: "collapse-all",
+  expandAll: "expand-all",
   expand: "chevron-down",
   collapse: "chevron-right",
   folder: "folder",
@@ -177,6 +193,12 @@ export const CODICON_MAP: Record<IconAction, string> = {
   gitPush: "arrow-up",
   sync: "sync",
   gitMerge: "git-merge",
+  gitRepo: "repo",
+  gitGraph: "git-commit",
+  gitRemote: "cloud",
+  gitStash: "archive",
+  gitWorktree: "folder-library",
+  gitContributor: "organization",
   cloudUpload: "cloud-upload",
   add: "add",
   remove: "remove",
@@ -204,15 +226,21 @@ export const CODICON_MAP: Record<IconAction, string> = {
   extensions: "extensions",
   account: "account",
   settings: "settings-gear",
+  packages: "package",
   commandPalette: "symbol-color",
   menu: "menu",
   agents: "hubot",
   graph: "type-hierarchy",
   backlinks: "references",
+  solution: "layers",
   send: "send",
   modeAsk: "comment",
   modePlan: "checklist",
-  modeDev: "tools",
+  modeEdit: "code",
+  modeAuto: "zap",
+  modeBypass: "shield",
+  model: "sparkle",
+  attachContext: "mention",
   chevronRight: "chevron-right",
   chevronDown: "chevron-down",
   close: "close",
@@ -239,8 +267,10 @@ export const CODICON_MAP: Record<IconAction, string> = {
   arrowLeft: "arrow-left",
 
   // Misc
+  tag: "tag",
   bookmark: "bookmark",
   key: "key",
+  lock: "lock",
 };
 
 /** Codicon names that should spin (loading/sync feedback). */

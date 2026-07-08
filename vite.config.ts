@@ -6,17 +6,14 @@ import { fileURLToPath } from "node:url";
 // @tauri-apps/cli sets these; we honor them so dev works on any host.
 const host = process.env.TAURI_DEV_HOST;
 
-// `vscode-languageclient` (pulled in by monaco-languageclient) does
-// `require("vscode")`, a module that only exists inside a real VS Code
-// extension host. monaco-languageclient@1.x ships a browser shim for it at
-// lib/vscode-compatibility.js; in Node it installs that via a require hook, but
-// Vite/esbuild can't see that hook — so we alias "vscode" to the shim here.
-const vscodeShim = fileURLToPath(
-  new URL(
-    "./node_modules/monaco-languageclient/lib/vscode-compatibility.js",
-    import.meta.url,
-  ),
-);
+// monaco-languageclient v10 runs on `@codingame/monaco-vscode-api`, which
+// REGISTERS the bare `vscode` module itself (its package.json maps the `vscode`
+// import to the real VS Code API surface). So unlike the v1.x line we must NOT
+// alias `vscode` to a hand-written shim — doing so would shadow the package and
+// give `vscode-languageclient` a different singleton than the editor services,
+// breaking the whole stack. The alias is gone on purpose. `monaco-editor` is
+// already redirected to `@codingame/monaco-vscode-editor-api` via package.json,
+// so editor + LSP share one Monaco instance (the single-instance contract).
 
 // Worktrees may share dependencies through a junction/symlink. Vite resolves
 // font URLs to that physical directory, so explicitly allow it in development.
@@ -24,21 +21,90 @@ const dependenciesRoot = realpathSync(
   fileURLToPath(new URL("./node_modules", import.meta.url)),
 );
 
+function vendorChunk(id: string): string | undefined {
+  const moduleId = id.replace(/\\/g, "/");
+  if (!moduleId.includes("node_modules")) return undefined;
+  if (moduleId.includes("/react/") || moduleId.includes("/react-dom/") || moduleId.includes("/scheduler/")) {
+    return "vendor-react";
+  }
+  if (moduleId.includes("/@codingame/") || moduleId.includes("/monaco-editor/")) {
+    return "vendor-monaco-vscode";
+  }
+  if (
+    moduleId.includes("/monaco-languageclient/") ||
+    moduleId.includes("/vscode-languageclient/") ||
+    moduleId.includes("/vscode-jsonrpc/") ||
+    moduleId.includes("/vscode-languageserver-protocol/") ||
+    moduleId.includes("/vscode-ws-jsonrpc/")
+  ) {
+    return "vendor-languageclient";
+  }
+  if (
+    moduleId.includes("/@shikijs/langs/") ||
+    moduleId.includes("/@shikijs/themes/")
+  ) {
+    return undefined;
+  }
+  if (
+    moduleId.includes("/shiki/") ||
+    moduleId.includes("/@shikijs/") ||
+    moduleId.includes("/vscode-html-languageservice/")
+  ) {
+    return "vendor-language-tools";
+  }
+  if (moduleId.includes("/react-markdown/") || moduleId.includes("/remark-gfm/") || moduleId.includes("/micromark")) {
+    return "vendor-markdown";
+  }
+  if (moduleId.includes("/@xterm/")) {
+    return "vendor-terminal";
+  }
+  if (moduleId.includes("/@tauri-apps/")) {
+    return "vendor-tauri";
+  }
+  return "vendor";
+}
+
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
   plugins: [react()],
 
-  resolve: {
-    alias: {
-      // Both copies of vscode-languageclient (top-level and the one nested under
-      // monaco-languageclient) resolve "vscode" to the same compatibility shim.
-      vscode: vscodeShim,
-    },
+  // The `@codingame/monaco-vscode-api` stack ships hundreds of ESM modules that
+  // import each other deeply and rely on `new URL(..., import.meta.url)` worker
+  // resolution. esbuild's dep pre-bundling rewrites those URLs and routinely
+  // chokes on the cyclic graph, so we EXCLUDE the whole `@codingame` stack and
+  // let Vite serve its source ESM directly (the official guidance for it).
+  //
+  // BUT `monaco-languageclient` itself must be INCLUDED (pre-bundled): it does
+  // `import { BaseLanguageClient } from "vscode-languageclient/browser.js"`, and
+  // `vscode-languageclient` (+ `vscode-jsonrpc`, the protocol pkg) are CommonJS.
+  // Served raw, Vite's cjs→esm interop can't surface that named export and the
+  // app dies at load with "does not provide an export named 'BaseLanguageClient'"
+  // (blank screen). Pre-bundling lets esbuild resolve the CJS interop and expose
+  // the named exports. We list the CJS deps explicitly so esbuild folds them in.
+  optimizeDeps: {
+    include: [
+      "monaco-languageclient",
+      "vscode-languageclient",
+      "vscode-languageclient/browser.js",
+      "vscode-jsonrpc",
+      "vscode-languageserver-protocol",
+      "vscode-ws-jsonrpc",
+    ],
+    exclude: [
+      "@codingame/monaco-vscode-api",
+      "@codingame/monaco-vscode-editor-api",
+      "vscode",
+    ],
   },
 
-  // Pre-bundle the shim so esbuild's dep optimizer resolves "vscode" too.
-  optimizeDeps: {
-    include: ["vscode-languageclient", "monaco-languageclient"],
+  // The v10 worker factory loads its workers as ES modules
+  // (`new Worker(url, { type: "module" })` — editor/textmate/extension-host
+  // workers). Rollup's default worker output format is `iife`, which cannot be
+  // code-split, and those workers DO split (they import shared @codingame
+  // chunks) — hence the build error "UMD and IIFE output formats are not
+  // supported for code-splitting builds". Emit ES-module workers instead.
+  worker: {
+    format: "es",
   },
 
   build: {
@@ -48,6 +114,14 @@ export default defineConfig(async () => ({
     // icons actually shown, and cache them. Other small assets still inline.
     assetsInlineLimit: (file) =>
       file.includes("material-icon-theme/icons/") ? false : undefined,
+    rollupOptions: {
+      output: {
+        // Keep the application shell out of the huge Monaco/LSP dependency graph.
+        // This does not lazy-load the editor yet, but it gives Vite/Tauri smaller
+        // cacheable vendor chunks and makes regressions in app code easier to see.
+        manualChunks: vendorChunk,
+      },
+    },
   },
 
   // Vite options tailored for Tauri development.

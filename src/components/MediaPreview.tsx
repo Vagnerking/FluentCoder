@@ -10,7 +10,7 @@
  * a streaming protocol is a future optimization.
  */
 import { useEffect, useState } from "react";
-import { readFileBase64 } from "../api";
+import { readFileBase64, readSshFileBase64 } from "../api";
 
 interface MediaPreviewProps {
   /** Absolute path (local) or POSIX path (remote) of the media file. */
@@ -19,9 +19,11 @@ interface MediaPreviewProps {
   name: string;
   /** Which element to render. */
   kind: "video" | "audio";
+  /** Optional explicit SSH connection for multi-root workspace files. */
+  connId?: string;
 }
 
-export function MediaPreview({ path, name, kind }: MediaPreviewProps) {
+export function MediaPreview({ path, name, kind, connId }: MediaPreviewProps) {
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,7 +31,8 @@ export function MediaPreview({ path, name, kind }: MediaPreviewProps) {
     let cancelled = false;
     setSrc(null);
     setError(null);
-    readFileBase64(path)
+    const read = connId ? readSshFileBase64(connId, path) : readFileBase64(path);
+    read
       .then((url) => {
         if (!cancelled) setSrc(url);
       })
@@ -39,7 +42,7 @@ export function MediaPreview({ path, name, kind }: MediaPreviewProps) {
     return () => {
       cancelled = true;
     };
-  }, [path]);
+  }, [connId, path]);
 
   const label = kind === "video" ? "o vídeo" : "o áudio";
 

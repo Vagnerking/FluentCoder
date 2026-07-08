@@ -7,27 +7,37 @@
 import { buildContextGraph } from "../api";
 import type { GraphData } from "../types";
 
-let cache: { root: string; data: GraphData } | null = null;
-let inflight: { root: string; promise: Promise<GraphData> } | null = null;
+let cache: { key: string; data: GraphData } | null = null;
+let inflight: { key: string; promise: Promise<GraphData> } | null = null;
+
+function cacheKey(root: string, connId?: string | null): string {
+  return `${connId ?? "local"}:${root}`;
+}
 
 /** The cached graph for `root`, or null if not yet loaded. */
-export function getCachedGraph(root: string): GraphData | null {
-  return cache && cache.root === root ? cache.data : null;
+export function getCachedGraph(root: string, connId?: string | null): GraphData | null {
+  const key = cacheKey(root, connId);
+  return cache && cache.key === key ? cache.data : null;
 }
 
 /** Loads (and caches) the graph for `root`, deduping concurrent calls. */
-export function loadGraph(root: string, force = false): Promise<GraphData> {
-  if (!force && cache && cache.root === root) return Promise.resolve(cache.data);
-  if (!force && inflight && inflight.root === root) return inflight.promise;
-  const promise = buildContextGraph(root)
+export function loadGraph(
+  root: string,
+  connId?: string | null,
+  force = false
+): Promise<GraphData> {
+  const key = cacheKey(root, connId);
+  if (!force && cache && cache.key === key) return Promise.resolve(cache.data);
+  if (!force && inflight && inflight.key === key) return inflight.promise;
+  const promise = buildContextGraph(root, connId ?? undefined)
     .then((data) => {
-      cache = { root, data };
+      cache = { key, data };
       return data;
     })
     .finally(() => {
-      if (inflight?.root === root) inflight = null;
+      if (inflight?.key === key) inflight = null;
     });
-  inflight = { root, promise };
+  inflight = { key, promise };
   return promise;
 }
 

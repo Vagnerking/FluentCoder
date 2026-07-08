@@ -1,0 +1,130 @@
+/* ---- Terminal Panel ---- */
+.terminal-panel { flex-shrink: 0; display: flex; flex-direction: column; background: var(--editor-bg); overflow: hidden; }
+.terminal-panel.panel-right,
+.terminal-panel.panel-left { height: 100%; }
+.terminal-header { height: 36px; min-height: 36px; display: flex; align-items: center; border-top: 1px solid var(--acrylic-border); background: rgba(34,42,53,0.82); padding: 0 8px; backdrop-filter: blur(20px) saturate(120%); -webkit-backdrop-filter: blur(20px) saturate(120%); cursor: grab; }
+.terminal-tabs, .terminal-actions { cursor: default; }
+.terminal-tabs { display: flex; align-items: center; gap: 2px; flex: 1; }
+.terminal-tab {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 0 12px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+}
+.terminal-tab:hover { background: var(--fill-subtle-hover); color: var(--text-secondary); }
+.terminal-tab:active { background: var(--fill-subtle-active); }
+.terminal-tab.active { color: var(--text); background: var(--acrylic-control); border-color: var(--acrylic-border); }
+/* Drop delimiter while reordering: an accent line on the target's leading (left)
+   or trailing (right) edge, depending on which half the pointer is over. */
+.terminal-tab.drop-before { box-shadow: inset 2px 0 0 var(--accent); }
+.terminal-tab.drop-after { box-shadow: inset -2px 0 0 var(--accent); }
+.terminal-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding: 4px; }
+/* Whichever tab content shows fills the panel height (responsive to resizing).
+   The hidden terminal pane (display:none) drops out of the flex flow. */
+.terminal-body > * { flex: 1 1 0; min-height: 0; min-width: 0; }
+.terminal-close {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  border-radius: var(--radius-control);
+}
+.terminal-close:hover { background: var(--fill-subtle-hover); color: var(--text); }
+
+/* Header actions (new terminal / kill terminal) sit left of the panel close. */
+.terminal-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.terminal-action {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  border-radius: var(--radius-control);
+}
+.terminal-action:hover:not(:disabled) { background: var(--fill-subtle-hover); color: var(--text); }
+.terminal-action:disabled { opacity: 0.4; cursor: default; }
+
+/* ---- Multiple terminals: views area + right-rail list ---- */
+/* The terminal pane stays mounted (display toggled) while other tabs show, so
+   switching tabs never tears down a running shell. Flex chain (not height:100%)
+   so the views + terminal list always fill the panel as it's resized. */
+.terminal-pane { display: flex; flex-direction: column; }
+.terminal-split { flex: 1; min-height: 0; display: flex; gap: 6px; }
+.terminal-views { position: relative; flex: 1; min-width: 0; min-height: 0; }
+/* All views are stacked; only the active one is visible (kept mounted so the
+   shell keeps running). visibility (not display:none) preserves its size so
+   xterm's fit addon measures correctly. */
+.terminal-view-host { position: absolute; inset: 0; }
+.terminal-view-host.inactive { visibility: hidden; pointer-events: none; }
+
+.terminal-list {
+  flex: 0 0 150px;
+  overflow-y: auto;
+  padding: 2px;
+  border-left: 1px solid var(--acrylic-border);
+}
+.terminal-list-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 4px 0 8px;
+  margin: 1px 0;
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+.terminal-list-item:hover { background: var(--fill-subtle-hover); color: var(--text-secondary); }
+.terminal-list-item.active { background: var(--fill-selected); color: var(--text); }
+/* Drag-to-reorder delimiter: an accent line on the top (before) or bottom (after)
+   edge of the drop target, depending on which half the pointer is over. */
+.terminal-list-item.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+.terminal-list-item.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
+.terminal-list-icon { flex-shrink: 0; }
+.terminal-list-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-list-close {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0;
+}
+.terminal-list-item:hover .terminal-list-close,
+.terminal-list-item.active .terminal-list-close { opacity: 0.7; }
+.terminal-list-close:hover { background: var(--fill-subtle-active); opacity: 1; }
+
+.xterm-container { width: 100%; height: 100%; }
+.xterm-container .xterm { height: 100%; }

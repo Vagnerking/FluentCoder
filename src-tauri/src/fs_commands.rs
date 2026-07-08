@@ -307,10 +307,27 @@ pub fn read_dir(
     Ok(entries)
 }
 
-/// Reads a text file and returns its contents.
+/// Reads a text file, detecting its encoding and line ending like VS Code.
+///
+/// Returns the LF-normalised content plus the detected encoding/BOM/EOL so the
+/// editor can show them in the status bar and round-trip them on save. This is
+/// why a UTF-16 or BOM-prefixed file (e.g. Roslyn's decompiled metadata) opens
+/// as clean text instead of showing a stray `◇`/`?` at the start.
 #[tauri::command]
-pub fn read_file(path: String) -> Result<String, String> {
-    fs::read_to_string(&path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))
+pub fn read_file(path: String) -> Result<crate::text_io::DecodedFile, String> {
+    let bytes = fs::read(&path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+    Ok(crate::text_io::decode(&bytes))
+}
+
+/// Re-reads a file forcing a specific encoding ("Reopen with Encoding"). The EOL
+/// is still auto-detected from the freshly decoded text.
+#[tauri::command]
+pub fn read_file_with_encoding(
+    path: String,
+    encoding: String,
+) -> Result<crate::text_io::DecodedFile, String> {
+    let bytes = fs::read(&path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+    crate::text_io::decode_with(&bytes, &encoding)
 }
 
 /// Reads a file's raw bytes and returns them as a base64 `data:` URL.
@@ -408,12 +425,31 @@ fn base64_encode(input: &[u8]) -> String {
 }
 
 /// Writes `contents` to `path`, creating parent directories if needed.
+///
+/// `contents` is the editor's LF buffer. When `encoding`/`eol` are supplied
+/// (the normal save path), the file is re-encoded to its original encoding,
+/// BOM and line ending so an edit never silently rewrites those — matching
+/// VS Code's "preserve" default. Omitting them falls back to UTF-8 + LF.
 #[tauri::command]
-pub fn write_file(path: String, contents: String) -> Result<(), String> {
+pub fn write_file(
+    path: String,
+    contents: String,
+    encoding: Option<String>,
+    eol: Option<crate::text_io::Eol>,
+    bom: Option<bool>,
+) -> Result<(), String> {
     if let Some(parent) = Path::new(&path).parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    fs::write(&path, contents).map_err(|e| format!("Falha ao salvar '{path}': {e}"))
+    let bytes = match encoding {
+        Some(enc) => {
+            let eol = eol.unwrap_or(crate::text_io::Eol::Lf);
+            crate::text_io::encode_for_save(&contents, &enc, eol, bom.unwrap_or(false))?
+        }
+        // Legacy/new-file path: plain UTF-8, no BOM, content as-is.
+        None => contents.into_bytes(),
+    };
+    fs::write(&path, bytes).map_err(|e| format!("Falha ao salvar '{path}': {e}"))
 }
 
 /// Creates an empty file without ever overwriting an existing path.
@@ -590,7 +626,10 @@ mod tests {
         // for directories so the dir itself is hidden too.
         let m = build_exclude_matcher(&["**/obj/**".to_string()]).expect("matcher");
         assert!(!m.is_match("obj"), "bare name doesn't match a subtree glob");
-        assert!(m.is_match("obj/"), "but `name/` does (how read_dir tests dirs)");
+        assert!(
+            m.is_match("obj/"),
+            "but `name/` does (how read_dir tests dirs)"
+        );
         assert!(m.is_match("obj/Debug"));
     }
 
@@ -605,7 +644,11 @@ mod tests {
 
     #[test]
     fn workspace_relative_computes_forward_slashed_relative_path() {
-        let root = if cfg!(windows) { r"C:\src\App" } else { "/src/App" };
+        let root = if cfg!(windows) {
+            r"C:\src\App"
+        } else {
+            "/src/App"
+        };
         let entry = if cfg!(windows) {
             r"C:\src\App\src\generated"
         } else {
@@ -620,10 +663,18 @@ mod tests {
         // The root itself is not "relative to itself".
         assert_eq!(workspace_relative(Path::new(root), Some(root)), None);
         // An entry outside the root → None.
-        let outside = if cfg!(windows) { r"C:\other\x" } else { "/other/x" };
+        let outside = if cfg!(windows) {
+            r"C:\other\x"
+        } else {
+            "/other/x"
+        };
         assert_eq!(workspace_relative(Path::new(outside), Some(root)), None);
         // A SIBLING sharing the root's prefix is NOT under it (directory boundary).
-        let sibling = if cfg!(windows) { r"C:\src\AppOther\x" } else { "/src/AppOther/x" };
+        let sibling = if cfg!(windows) {
+            r"C:\src\AppOther\x"
+        } else {
+            "/src/AppOther/x"
+        };
         assert_eq!(
             workspace_relative(Path::new(sibling), Some(root)),
             None,

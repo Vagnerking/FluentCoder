@@ -1,23 +1,23 @@
 import * as monaco from "monaco-editor";
-import {
-  MonacoLanguageClient,
-  MonacoServices,
-} from "monaco-languageclient";
+import { MonacoLanguageClient } from "monaco-languageclient";
 import {
   CloseAction,
   ErrorAction,
   type DocumentSelector,
-  type MessageTransports,
+  type LanguageClientOptions,
 } from "vscode-languageclient";
-// Resolves (via the Vite "vscode" alias) to the exact same monaco-languageclient
-// VS Code compatibility shim that vscode-languageclient itself `require("vscode")`s
-// — i.e. the live singleton — so patching it here affects the language client too.
-import * as vscodeShim from "vscode";
+import { canonicalizeDriveInFileUri } from "./uri";
 import { lspBridgeInfo } from "../api";
 import { createTransport, type LspTransport } from "./transport";
 import { installReferencesBridge } from "./references";
 import { installDiagnosticsBridge } from "./diagnostics";
+import { ensureVscodeServices } from "./vscodeServices";
+import { disableNativeClientFeature } from "./nativeFeatures";
 import type { DiagnosticMode } from "./diagnosticMode";
+import {
+  applySemanticTokenDecorations,
+  clearSemanticTokenDecorations,
+} from "./semanticColorizer";
 import { lspLog } from "./debug";
 
 /** Configuration for a single LSP client. Server-agnostic. */
@@ -65,7 +65,6 @@ export interface LspClientConfig {
  */
 export type RunningClient = MonacoLanguageClient;
 
-let servicesInstalled = false;
 type ClientContributions = {
   disposables: monaco.IDisposable[];
   refreshSemanticTokens?: () => void;
@@ -82,111 +81,36 @@ const clientContributions = new WeakMap<
 >();
 
 /**
- * Installs the `monaco-languageclient` services exactly once. v1.x bridges the
- * vanilla `monaco-editor` distribution to the language-client runtime via
- * `MonacoServices.install` — no `@codingame/monaco-vscode-api` needed (see
- * `COMPAT.md`).
+ * Clientes vivos por serverId, para consultas CROSS-servidor: a projeção
+ * Razor (workspace shadow, que só enxerga DLLs dos projetos irmãos) resolve
+ * alvos de definition que caíram em MetadataAsSource perguntando ao cliente
+ * `csharp` principal (que tem a solution inteira) via `workspace/symbol`.
  */
-export function ensureMonacoServices(): void {
-  if (servicesInstalled) return;
-  MonacoServices.install(monaco);
-  defuseUnsupportedProviderRegistrations();
-  servicesInstalled = true;
-}
+const runningClientsById = new Map<string, MonacoLanguageClient>();
+const serverIdByClient = new WeakMap<MonacoLanguageClient, string>();
 
-/**
- * Makes the monaco-languageclient 1.x VS Code shim degrade gracefully instead of
- * crashing `client.start()`.
- *
- * The shim implements most `languages.register*Provider` methods as a safe no-op
- * (return an empty disposable when the underlying Monaco service is absent), but a
- * handful are hard-coded as `() => { throw new Error('unsupported') }`. When a
- * server advertises one of those capabilities *statically* in its `initialize`
- * result, the matching `vscode-languageclient` feature self-registers during
- * `start()` and the throw bubbles up — `doInitialize` then tears the server down
- * and `start()` rejects with "unsupported". The TypeScript server triggers this
- * via `linkedEditingRangeProvider`; other servers/capabilities could hit the
- * siblings below. None of these providers are features we rely on, so we replace
- * them with the same empty-disposable no-op the shim already uses elsewhere.
- *
- * (The pull-diagnostics crash is handled separately — see
- * {@link neutralizeBuiltinDiagnosticFeature} — because there we must avoid
- * competing with our own diagnostics bridge, not merely avoid a throw.)
- */
-function defuseUnsupportedProviderRegistrations(): void {
-  try {
-    const languages = (vscodeShim as unknown as {
-      languages?: Record<string, unknown>;
-    }).languages;
-    if (!languages) return;
-    const noop = (): monaco.IDisposable => ({ dispose() {} });
-    for (const method of [
-      "registerLinkedEditingRangeProvider",
-      "registerTypeHierarchyProvider",
-      "registerEvaluatableExpressionProvider",
-      "registerInlineValuesProvider",
-    ]) {
-      if (typeof languages[method] === "function") {
-        languages[method] = noop;
-      }
-    }
-  } catch (err) {
-    lspLog("could not defuse unsupported provider registrations", String(err));
-  }
-}
-
-/**
- * Defuses the built-in pull-diagnostics feature **before** `start()`.
- *
- * `vscode-languageclient`'s `DiagnosticFeature` builds a `Tabs` helper the moment
- * a server advertises pull diagnostics (`diagnosticProvider`) *statically* in its
- * `initialize` result — which `typescript-language-server` and the JSON server
- * both do. That `Tabs` constructor reads `vscode.window.tabGroups`, and the
- * monaco-languageclient 1.x VS Code shim implements `tabGroups` (and
- * `activeTextEditor`, `onDidChangeActiveTextEditor`, …) as `() => throw
- * Error('unsupported')`. The throw happens *inside* `client.start()`, so
- * `doInitialize` stops the connection and `start()` rejects with "unsupported" —
- * the server never comes up. (Roslyn dodges this only because it registers
- * diagnostics *dynamically*, after start, where the same throw is swallowed as a
- * request-error response instead of failing startup.)
- *
- * We run our own diagnostics bridge — push + manual pull, see
- * {@link installDiagnosticsBridge} — and that bridge already disposes this same
- * built-in feature once the client is running. So the feature is pure dead weight
- * that only crashes startup. Here we no-op its `initialize` (the static
- * self-registration path) while leaving `fillClientCapabilities` untouched, so the
- * client still advertises pull support, the server still offers pull diagnostics,
- * and our bridge drives them directly.
- */
-function neutralizeBuiltinDiagnosticFeature(
-  client: MonacoLanguageClient,
+/** O cliente vivo de `serverId`, ou `undefined` se não está de pé. */
+export function getRunningClient(
   serverId: string
-): void {
-  try {
-    const feature = client.getFeature("textDocument/diagnostic") as
-      | { initialize?: (...args: unknown[]) => void }
-      | undefined;
-    if (feature && typeof feature.initialize === "function") {
-      feature.initialize = () => {};
-      lspLog("built-in pull-diagnostics feature neutralized for", serverId);
-    }
-  } catch (err) {
-    // Never let this guard itself break startup.
-    lspLog("could not neutralize diagnostics feature for", serverId, String(err));
-  }
+): MonacoLanguageClient | undefined {
+  return runningClientsById.get(serverId);
 }
 
 /**
  * Builds and starts a {@link MonacoLanguageClient} for the given config.
  *
- * Flow: resolve bridge `{ port, token }` from the backend (ISSUE-22) →
- * open the WS transport (ISSUE-21/23) → wire it as the client's connection
- * provider → `start()`.
+ * Flow: boot the shared `@codingame/monaco-vscode-api` services (idempotent) →
+ * resolve bridge `{ port, token }` from the backend (ISSUE-22) → open the WS
+ * transport (ISSUE-21/23) → hand the reader/writer to the client through the
+ * v10 `messageTransports` option → `start()`.
  */
 export async function createLanguageClient(
   config: LspClientConfig
 ): Promise<MonacoLanguageClient> {
-  ensureMonacoServices();
+  // v10 replacement for v1.x's `MonacoServices.install(monaco)`: the VS Code
+  // services must be running before any client is built. Idempotent + shared
+  // with monaco-loader.ts, so the editor and the LSP layer boot ONE instance.
+  await ensureVscodeServices();
 
   lspLog("createLanguageClient: requesting bridge info for", config.serverId);
   const { port, token } = await lspBridgeInfo(config.serverId);
@@ -215,6 +139,25 @@ export async function createLanguageClient(
         index: 0,
       },
       initializationOptions: config.initializationOptions,
+      // ONE canonical wire form for file uris (raw drive colon, `file:///c:/…`).
+      // The native document-sync features serialize through the extHost `Uri`
+      // class, which percent-encodes the drive colon (`c%3A`) — a form our
+      // `installWindowsFileUriSerialization` patch deliberately avoids (Roslyn
+      // pushes `c%3A` docs into "Miscellaneous Files") and that MISMATCHES every
+      // hand-rolled sender (rebind, pulls, projection), all of which produce the
+      // raw form. Roslyn tracks docs by exact uri string: on ativus the native
+      // didOpen (`c%3A`) + our rebind didClose (`c:`) triggered a fatal
+      // InvalidOperationException ("Error processing queue, shutting down").
+      // This converter is the single choke point every native feature uses.
+      uriConverters: {
+        code2Protocol: (uri) => canonicalizeDriveInFileUri(uri.toString()),
+        protocol2Code: (value) =>
+          monaco.Uri.parse(value) as unknown as ReturnType<
+            NonNullable<
+              NonNullable<LanguageClientOptions["uriConverters"]>["protocol2Code"]
+            >
+          >,
+      },
       errorHandler: {
         error: (err, msg, count) => {
           lspLog("client ERROR", config.serverId, String(err), msg?.jsonrpc ?? "", count ?? "");
@@ -227,16 +170,35 @@ export async function createLanguageClient(
         },
       },
     },
-    connectionProvider: {
-      get: (): Promise<MessageTransports> =>
-        Promise.resolve({
-          reader: transport.reader,
-          writer: transport.writer,
-        }),
+    // ─── THE KEY v10 CHANGE ───
+    // v1.x: connectionProvider: { get: () => Promise.resolve({ reader, writer }) }
+    // v10 : messageTransports: { reader, writer }
+    // The WS bridge transport (src/lsp/transport.ts) is reused AS-IS; only the
+    // way the reader/writer pair reaches the client changed.
+    messageTransports: {
+      reader: transport.reader,
+      writer: transport.writer,
     },
   });
 
-  neutralizeBuiltinDiagnosticFeature(client, config.serverId);
+  // RECONCILIATION (#76): on the v10 stack the built-in client features now
+  // auto-register real Monaco providers from the server capabilities. We keep
+  // our hand-written bridges (which encode the C# token stabilization, owner
+  // marker dedup and the references CodeLens override) and DISABLE the native
+  // features so there is exactly one provider per feature/language. Must run
+  // before start(). Projection clients (suppressGenericBridges) install no
+  // bridges of their own and want transport-only behavior, so their native
+  // features must be neutralized too: although their selector never matches a
+  // real Monaco model, Roslyn still advertises semanticTokens/diagnostic/
+  // references in `initialize`, and the native features attach per-client during
+  // start() regardless of selector — leaving them live would register stray
+  // providers that compete with the real C# client's bridges. `disableNative-
+  // ClientFeature` patches only THIS client's feature instances, so neutralizing
+  // here cannot disturb the real C# client. See nativeFeatures.ts and
+  // servers/razorProjection.ts.
+  disableNativeClientFeature(client, config.serverId, "textDocument/semanticTokens");
+  disableNativeClientFeature(client, config.serverId, "textDocument/diagnostic");
+  disableNativeClientFeature(client, config.serverId, "textDocument/references");
 
   lspLog("calling client.start() for", config.serverId);
   try {
@@ -254,6 +216,9 @@ export async function createLanguageClient(
     throw err;
   }
   lspLog("client.start() RESOLVED for", config.serverId, "state=", client.state);
+
+  runningClientsById.set(config.serverId, client);
+  serverIdByClient.set(client, config.serverId);
 
   // Projection clients (ADR 0002) want only the transport: their `.g.cs` is not
   // a Monaco model and their results are remapped to the `.cshtml` manually, so
@@ -320,6 +285,10 @@ export async function createLanguageClient(
 export function disposeLanguageClientContributions(
   client: MonacoLanguageClient
 ): void {
+  const serverId = serverIdByClient.get(client);
+  if (serverId && runningClientsById.get(serverId) === client) {
+    runningClientsById.delete(serverId);
+  }
   const contributions = clientContributions.get(client);
   clientContributions.delete(client);
   contributions?.disposables.forEach((contribution) => contribution.dispose());
@@ -331,7 +300,7 @@ export function disposeLanguageClientContributions(
  * tokens, references, …) each contribute disposables without clobbering one
  * another, so {@link disposeLanguageClientContributions} tears them all down.
  */
-function addClientContributions(
+export function addClientContributions(
   client: MonacoLanguageClient,
   disposables: monaco.IDisposable[]
 ): void {
@@ -512,14 +481,13 @@ function installSemanticTokensBridge(
     return;
   }
 
-  // Remove the compatibility-shim registration created by SemanticTokensFeature
-  // so there is exactly one semantic provider for this client/language.
-  const builtInFeature = client.getFeature("textDocument/semanticTokens");
-  builtInFeature?.dispose();
+  // The native SemanticTokensFeature was already neutralized before start()
+  // (see createLanguageClient → disableNativeClientFeature), so registering our
+  // provider below leaves exactly ONE semantic-tokens provider for this
+  // client/language — the prerequisite for the C# provisional→definitive
+  // stabilization to work without a competing native provider repainting tokens.
 
   const legend = capability.legend as SemanticTokensLegend;
-  const languageSelector =
-    selector as unknown as monaco.languages.LanguageSelector;
   const contributions: monaco.IDisposable[] = [];
   const refresh = createVoidEvent();
   let semanticTokensEnabled = !deferSemanticTokens;
@@ -632,103 +600,94 @@ function installSemanticTokensBridge(
       if (!e.newModelUrl || !semanticTokensEnabled) return;
       const model = monaco.editor.getModel(e.newModelUrl);
       if (model && servedLanguages.has(model.getLanguageId())) {
-        refresh.fire();
+        void pullAndPaint(model);
       }
     });
 
-  if (capability.full) {
-    contributions.push(
-      monaco.languages.registerDocumentSemanticTokensProvider(languageSelector, {
-        getLegend: () => legend,
-        onDidChange: refresh.event,
-        provideDocumentSemanticTokens: async (model, _lastResultId, token) => {
-          logProviderCall(model, "full");
-          if (!semanticTokensEnabled) return null;
-          const request = beginRequest(model);
-          const result = await client.sendRequest<SemanticTokensResult | null>(
-            "textDocument/semanticTokens/full",
-            { textDocument: { uri: model.uri.toString() } },
-            token
-          );
-          if (token.isCancellationRequested || !isLatestRequest(model, request)) {
-            return null;
-          }
-          if (result) {
-            lastTokenHashByModel.set(model.uri.toString(), hashTokens(result.data));
-            logSemanticTokenSamples(serverId, model, result, legend);
-          }
-          return result
-            ? {
-                data: Uint32Array.from(result.data),
-                resultId: result.resultId,
-              }
-            : null;
-        },
-        releaseDocumentSemanticTokens: () => {},
-      })
-    );
-  } else if (capability.range) {
-    contributions.push(
-      // Monaco's range-provider API has no onDidChange event. Expose Roslyn's
-      // range-only capability as a full-document provider so workspace refresh
-      // notifications can invalidate cached tokens after project loading.
-      monaco.languages.registerDocumentSemanticTokensProvider(languageSelector, {
-        getLegend: () => legend,
-        onDidChange: refresh.event,
-        provideDocumentSemanticTokens: async (model, _lastResultId, token) => {
-          logProviderCall(model, "range");
-          if (!semanticTokensEnabled) return null;
-          const request = beginRequest(model);
-          const lastLine = model.getLineCount();
-          const result = await client.sendRequest<SemanticTokensResult | null>(
-            "textDocument/semanticTokens/range",
-            {
-              textDocument: { uri: model.uri.toString() },
-              range: {
-                start: { line: 0, character: 0 },
-                end: {
-                  line: lastLine - 1,
-                  character: model.getLineMaxColumn(lastLine) - 1,
-                },
+  // Pull de tokens + pintura por DECORATIONS (semanticColorizer). O engine
+  // nativo de semantic highlighting fica DESLIGADO no v10 (as cores dele vêm
+  // do serviço de tema do VS Code, que este app não instala — ver EditorPane);
+  // com isso um DocumentSemanticTokensProvider registrado jamais seria
+  // invocado. Este pump substitui o provider: mesmos requests LSP, mas o
+  // resultado vira decorations com a paleta própria, por cima do Monarch.
+  const pullAndPaint = async (
+    model: monaco.editor.ITextModel
+  ): Promise<void> => {
+    if (!semanticTokensEnabled || model.isDisposed()) return;
+    logProviderCall(model, capability.full ? "full" : "range");
+    const request = beginRequest(model);
+    let result: SemanticTokensResult | null = null;
+    try {
+      if (capability.full) {
+        result = await client.sendRequest<SemanticTokensResult | null>(
+          "textDocument/semanticTokens/full",
+          { textDocument: { uri: client.code2ProtocolConverter.asUri(model.uri as never) } }
+        );
+      } else {
+        const lastLine = model.getLineCount();
+        result = await client.sendRequest<SemanticTokensResult | null>(
+          "textDocument/semanticTokens/range",
+          {
+            textDocument: { uri: client.code2ProtocolConverter.asUri(model.uri as never) },
+            range: {
+              start: { line: 0, character: 0 },
+              end: {
+                line: lastLine - 1,
+                character: model.getLineMaxColumn(lastLine) - 1,
               },
             },
-            token
-          );
-          if (token.isCancellationRequested || !isLatestRequest(model, request)) {
-            return null;
           }
-          if (result) {
-            lastTokenHashByModel.set(model.uri.toString(), hashTokens(result.data));
-            logSemanticTokenSamples(serverId, model, result, legend);
-          }
-          // DIAG: probe semanticTokens/full for the SAME model and log its
-          // classification, to compare against the range result above. If full
-          // returns enum/struct/class where range returns variable, the fix is
-          // to use the full request, not to keep refreshing.
-          void client
-            .sendRequest<SemanticTokensResult | null>(
-              "textDocument/semanticTokens/full",
-              { textDocument: { uri: model.uri.toString() } }
-            )
-            .then((full) => {
-              if (full) {
-                lspLog("DIAG full-probe result for", model.uri.toString().slice(-40));
-                logSemanticTokenSamples(serverId + "(full-probe)", model, full, legend);
-              } else {
-                lspLog("DIAG full-probe returned null for", model.uri.toString().slice(-40));
-              }
-            })
-            .catch((err) => lspLog("DIAG full-probe FAILED", String(err)));
-          return result
-            ? {
-                data: Uint32Array.from(result.data),
-                resultId: result.resultId,
-              }
-            : null;
-        },
-        releaseDocumentSemanticTokens: () => {},
-      })
-    );
+        );
+      }
+    } catch (err) {
+      lspLog("semantic tokens pull failed", serverId, String(err));
+      return;
+    }
+    // Um pull mais novo já partiu para este model — descarta o resultado
+    // velho em vez de pintar classificação obsoleta por cima da nova.
+    if (!isLatestRequest(model, request) || model.isDisposed()) return;
+    if (result) {
+      lastTokenHashByModel.set(model.uri.toString(), hashTokens(result.data));
+      logSemanticTokenSamples(serverId, model, result, legend);
+      applySemanticTokenDecorations(model, result.data, legend);
+    }
+  };
+
+  const pullAllServedModels = (): void => {
+    for (const model of monaco.editor.getModels()) {
+      if (servedLanguages.has(model.getLanguageId())) void pullAndPaint(model);
+    }
+  };
+
+  if (capability.full || capability.range) {
+    // O refresh event (server refresh, enable, stabilize) agora alimenta o
+    // pump diretamente.
+    contributions.push(refresh.event(pullAllServedModels));
+
+    // Re-pull em edição: o engine nativo fazia isso sozinho; o pump precisa
+    // do próprio debounce por model.
+    const changeDebounce = new Map<string, number>();
+    const watchModelEdits = (model: monaco.editor.ITextModel): void => {
+      if (!servedLanguages.has(model.getLanguageId())) return;
+      const key = model.uri.toString();
+      const sub = model.onDidChangeContent(() => {
+        window.clearTimeout(changeDebounce.get(key));
+        changeDebounce.set(
+          key,
+          window.setTimeout(() => void pullAndPaint(model), 300)
+        );
+      });
+      const disposal = model.onWillDispose(() => {
+        window.clearTimeout(changeDebounce.get(key));
+        changeDebounce.delete(key);
+        clearSemanticTokenDecorations(model);
+        sub.dispose();
+        disposal.dispose();
+      });
+      contributions.push(sub, disposal);
+    };
+    monaco.editor.getModels().forEach(watchModelEdits);
+    contributions.push(monaco.editor.onDidCreateModel(watchModelEdits));
   }
 
   if (contributions.length > 0) {
@@ -746,43 +705,26 @@ function installSemanticTokensBridge(
 
     // Roslyn initially returns frozen/partial semantic classifications while
     // projects are loading. It later asks the client to invalidate semantic
-    // tokens through this request. The compatibility feature's provider was
-    // disposed above, so route the refresh to our direct Monaco provider.
+    // tokens through this request. The native SemanticTokensFeature was
+    // neutralized before start() (see disableNativeClientFeature), so route the
+    // refresh to our direct Monaco provider — we are the only provider now.
     client.onRequest("workspace/semanticTokens/refresh", () => {
       lspLog("semantic tokens refresh requested by", serverId);
       fireRefreshNowAndDeferred();
       return null;
     });
 
-    // DIAG: Roslyn doesn't send semanticTokens/refresh when cross-file types
-    // upgrade from `variable` to their real classification — but it DOES drive
-    // diagnostics via pull (workspace/diagnostic/refresh) once background/full-
-    // solution compilation completes, which is the same "refs resolved" moment.
-    // Observe the DiagnosticFeature's change event (non-destructive — does NOT
-    // override the feature's own refresh handler) to confirm it fires after
-    // projectInitializationComplete, so we can hang a token re-pull off it.
+    // DIAG: which token-refresh paths the server announced. On v10 the native
+    // DiagnosticFeature is neutralized (the manual diagnostics bridge owns pull),
+    // so we no longer observe its change emitter — the manual bridge's
+    // `workspace/diagnostic/refresh` handler is the live signal for "refs likely
+    // resolved", and `stabilizeSemanticTokens` already re-pulls tokens on a
+    // backoff until classification settles.
     lspLog(
       "DIAG diagnosticProvider capability",
       serverId,
       client.initializeResult?.capabilities.diagnosticProvider
     );
-    try {
-      const diagFeature = client.getFeature("textDocument/diagnostic") as
-        | { onDidChangeDiagnosticsEmitter?: { event: monaco.IEvent<void> } }
-        | undefined;
-      const emitter = diagFeature?.onDidChangeDiagnosticsEmitter;
-      if (emitter) {
-        contributions.push(
-          emitter.event(() =>
-            lspLog("DIAG diagnostics changed (refs likely resolved)", serverId)
-          )
-        );
-      } else {
-        lspLog("DIAG diagnostic feature has no onDidChangeDiagnosticsEmitter", serverId);
-      }
-    } catch (err) {
-      lspLog("DIAG diagnostic-feature observe FAILED", String(err));
-    }
 
     contributions.push({ dispose: refresh.dispose });
     clientContributions.set(client, {

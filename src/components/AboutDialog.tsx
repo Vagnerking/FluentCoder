@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import pkg from "../../package.json";
 import { useModalDismiss } from "./useModalDismiss";
+import { useModalFocus } from "./useModalFocus";
 
 interface AboutDialogProps {
   /** "about" shows app name/version/link; "shortcuts" lists the keybindings. */
@@ -31,18 +32,10 @@ const REPO_URL = "https://github.com/Vagnerking/FluentCoder";
 export function AboutDialog({ mode, onClose }: AboutDialogProps) {
   const surfaceRef = useRef<HTMLDivElement>(null);
 
-  // Esc closes; focus the surface so the key handler is reachable immediately.
-  useEffect(() => {
-    surfaceRef.current?.focus();
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  // Shared modal contract: Esc closes, focus is trapped inside and restored to
+  // the opener on close (F2-AUD-007). No explicit initial-focus target, so it
+  // lands on the first focusable (the close button).
+  useModalFocus(surfaceRef, { onEscape: onClose });
 
   const title = mode === "about" ? "Sobre" : "Atalhos de Teclado";
 

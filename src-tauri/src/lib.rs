@@ -1,10 +1,13 @@
 mod agents;
+mod child_process;
+mod dap;
 mod file_index;
 mod fs_commands;
 mod git;
 mod graph;
 mod lsp;
 mod mcp;
+mod package_intel;
 mod razor;
 mod runner;
 mod search;
@@ -12,8 +15,11 @@ mod session;
 mod snap;
 mod ssh;
 mod terminal;
+mod testrunner;
+mod text_io;
 mod walk;
 mod window;
+mod workspace_open;
 
 use tauri::Manager;
 
@@ -30,6 +36,8 @@ pub fn run() {
         mcp::run_mcp_server(root);
         return;
     }
+
+    let initial_workspace_files = workspace_open::workspace_files_from_args(&args);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -48,10 +56,16 @@ pub fn run() {
                 }
             }
             window::restore_main_window(app.handle());
+            // Point the Razor/C# pipeline diagnostic log at the app data dir so a
+            // failing projection run leaves an inspectable trace (razor-diag.log).
+            if let Ok(dir) = app.path().app_data_dir() {
+                razor::diag::init(dir);
+            }
             Ok(())
         })
         .manage(terminal::TerminalState::new())
         .manage(lsp::LspState::new())
+        .manage(dap::DapState::new())
         .manage(search::SearchState::new())
         .manage(agents::AcpState::new())
         .manage(razor::commands::RazorState::new())
@@ -59,14 +73,19 @@ pub fn run() {
         .manage(window::WindowPlacementState::new())
         .manage(window::WindowHandoffState::new())
         .manage(window::ActiveEditorState::new())
+        .manage(workspace_open::WorkspaceOpenState::new(
+            initial_workspace_files,
+        ))
         .invoke_handler(tauri::generate_handler![
             agents::agents_load,
             agents::agents_save,
             agents::acp_prompt,
+            agents::acp_warm,
             agents::acp_cancel,
             agents::acp_stop_workspace,
             fs_commands::read_dir,
             fs_commands::read_file,
+            fs_commands::read_file_with_encoding,
             fs_commands::read_file_base64,
             fs_commands::write_file,
             fs_commands::create_file,
@@ -84,32 +103,65 @@ pub fn run() {
             graph::build_context_graph,
             graph::build_knowledge_index,
             graph::build_context_bundle,
+            graph::build_graph_agent_digest,
+            package_intel::package_intel_audit,
+            package_intel::package_intel_outdated,
+            package_intel::package_intel_scan,
+            package_intel::package_intel_versions,
             mcp::mcp_config,
             mcp::mcp_write_project_config,
             snap::snap_set_max_button_rect,
             git::git_branch,
             git::git_branches,
+            git::git_remote_branches,
+            git::git_remotes,
+            git::git_remote_add,
+            git::git_remote_remove,
+            git::git_remote_rename,
+            git::git_remote_set_url,
             git::git_checkout,
             git::git_create_branch,
+            git::git_rename_branch,
+            git::git_delete_branch,
+            git::git_delete_remote_branch,
+            git::git_checkout_remote_branch,
             git::git_status,
+            git::git_worktrees,
+            git::git_worktree_add,
+            git::git_worktree_remove,
+            git::git_worktree_prune,
             git::git_stage,
             git::git_unstage,
+            git::git_unstage_all,
             git::git_stage_all,
             git::git_commit,
             git::git_fetch,
+            git::git_fetch_remote,
             git::git_pull,
             git::git_push,
             git::git_publish,
             git::git_log,
+            git::git_graph,
+            git::git_compare_upstream,
             git::git_log_file,
+            git::git_log_line,
+            git::git_show_file_at_commit,
+            git::git_show_file_staged,
+            git::git_diff_file_revision,
+            git::git_diff_file,
+            git::git_diff_file_staged,
+            git::git_commit_files,
             git::git_blame,
             git::git_discard_file,
             git::git_discard_all,
             git::git_stash_push,
             git::git_stash_list,
+            git::git_stash_files,
             git::git_stash_apply,
             git::git_stash_pop,
             git::git_stash_drop,
+            git::git_revert_commit,
+            git::git_undo_last_commit,
             git::git_snapshot_create,
             git::git_snapshot_restore,
             runner::run_configs_load,
@@ -118,6 +170,7 @@ pub fn run() {
             session::session_load,
             session::session_set_last_folder,
             session::session_set_open_files,
+            session::session_set_workspace,
             window::open_new_window,
             window::is_fresh_window,
             window::window_ready,
@@ -130,6 +183,7 @@ pub fn run() {
             window::set_active_editor,
             window::clear_active_editor,
             window::get_active_editor,
+            workspace_open::opened_workspace_files,
             terminal::term_create,
             terminal::term_write,
             terminal::term_resize,
@@ -144,6 +198,13 @@ pub fn run() {
             lsp::lsp_ensure_npm_server,
             lsp::lsp_ensure_system_server,
             lsp::lsp_ensure_razor_server,
+            dap::dap_ensure_netcoredbg,
+            dap::dap_start_session,
+            dap::dap_stop_session,
+            dap::dap_list_dotnet_processes,
+            dap::dap_resolve_dotnet_target,
+            testrunner::dotnet_test_list,
+            testrunner::dotnet_test_run,
             razor::commands::razor_prepare,
             razor::commands::razor_emit_live,
             razor::commands::razor_commit_live_map,
@@ -151,7 +212,10 @@ pub fn run() {
             razor::commands::razor_ensure_sidecar,
             razor::commands::razor_remap_to_generated,
             razor::commands::razor_remap_to_source,
+            razor::commands::razor_remap_ranges_to_source,
+            razor::commands::razor_remap_ranges_to_source_strict,
             razor::commands::razor_forget,
+            razor::commands::razor_diag_log,
             ssh::ssh_connect,
             ssh::ssh_list_dir,
             ssh::ssh_read_file,
@@ -174,32 +238,63 @@ pub fn run() {
             ssh::ssh_build_context_graph,
             ssh::ssh_build_knowledge_index,
             ssh::ssh_build_context_bundle,
+            ssh::ssh_build_graph_agent_digest,
             ssh::ssh_list_project_files,
+            ssh::ssh_package_intel_audit,
+            ssh::ssh_package_intel_outdated,
+            ssh::ssh_package_intel_versions,
             ssh::ssh_run_configs_detect,
             ssh::ssh_run_configs_load,
             ssh::ssh_run_configs_save,
             ssh::ssh_agents_load,
             ssh::ssh_agents_save,
             ssh::ssh_git_status,
+            ssh::ssh_git_worktrees,
+            ssh::ssh_git_worktree_add,
+            ssh::ssh_git_worktree_remove,
+            ssh::ssh_git_worktree_prune,
             ssh::ssh_git_branch,
             ssh::ssh_git_branches,
+            ssh::ssh_git_remote_branches,
+            ssh::ssh_git_remotes,
+            ssh::ssh_git_remote_add,
+            ssh::ssh_git_remote_remove,
+            ssh::ssh_git_remote_rename,
+            ssh::ssh_git_remote_set_url,
             ssh::ssh_git_checkout,
             ssh::ssh_git_create_branch,
+            ssh::ssh_git_rename_branch,
+            ssh::ssh_git_delete_branch,
+            ssh::ssh_git_delete_remote_branch,
+            ssh::ssh_git_checkout_remote_branch,
             ssh::ssh_git_stage,
             ssh::ssh_git_unstage,
+            ssh::ssh_git_unstage_all,
             ssh::ssh_git_stage_all,
             ssh::ssh_git_commit,
             ssh::ssh_git_fetch,
+            ssh::ssh_git_fetch_remote,
             ssh::ssh_git_pull,
             ssh::ssh_git_push,
             ssh::ssh_git_log,
+            ssh::ssh_git_graph,
+            ssh::ssh_git_compare_upstream,
             ssh::ssh_git_log_file,
+            ssh::ssh_git_show_file_at_commit,
+            ssh::ssh_git_show_file_staged,
+            ssh::ssh_git_diff_file_revision,
+            ssh::ssh_git_diff_file,
+            ssh::ssh_git_diff_file_staged,
+            ssh::ssh_git_commit_files,
             ssh::ssh_git_blame,
             ssh::ssh_git_stash_list,
+            ssh::ssh_git_stash_files,
             ssh::ssh_git_stash_push,
             ssh::ssh_git_stash_apply,
             ssh::ssh_git_stash_pop,
             ssh::ssh_git_stash_drop,
+            ssh::ssh_git_revert_commit,
+            ssh::ssh_git_undo_last_commit,
             ssh::ssh_git_discard_file,
             ssh::ssh_git_discard_all,
             ssh::ssh_lsp_start,
@@ -233,7 +328,9 @@ pub fn run() {
                     app.state::<terminal::TerminalState>().shutdown_all();
                     app.state::<agents::AcpState>().shutdown_all();
                     app.state::<lsp::LspState>().shutdown_all();
-                    app.state::<razor::commands::RazorState>().shutdown_sidecar();
+                    app.state::<dap::DapState>().shutdown_all();
+                    app.state::<razor::commands::RazorState>()
+                        .shutdown_sidecar();
                     app.state::<ssh::SshState>().shutdown_all();
                     eprintln!("[exit] teardown done — forcing process exit");
                     std::process::exit(0);
@@ -244,7 +341,9 @@ pub fn run() {
                     app.state::<terminal::TerminalState>().shutdown_all();
                     app.state::<agents::AcpState>().shutdown_all();
                     app.state::<lsp::LspState>().shutdown_all();
-                    app.state::<razor::commands::RazorState>().shutdown_sidecar();
+                    app.state::<dap::DapState>().shutdown_all();
+                    app.state::<razor::commands::RazorState>()
+                        .shutdown_sidecar();
                     app.state::<ssh::SshState>().shutdown_all();
                     eprintln!("[exit] teardown done — forcing process exit");
                     std::process::exit(0);

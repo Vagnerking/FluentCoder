@@ -1,0 +1,68 @@
+/* ---- Material file/folder icons (the <FileIcon> wrapper) ---- */
+.file-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.file-icon img {
+  display: block;
+  pointer-events: none;
+}
+
+/* ---- Codicons: align the web-font glyphs with adjacent text ---- */
+.codicon {
+  vertical-align: middle;
+  line-height: 1;
+}
+
+button .codicon {
+  pointer-events: none;
+}
+
+/* Diagnostic / status codicon colors (shared by status bar + problems). */
+.status-left .codicon-error,
+.problem-error .problem-icon .codicon {
+  color: var(--color-status-error);
+}
+
+.status-left .codicon-warning,
+.problem-warning .problem-icon .codicon {
+  color: var(--color-status-warning);
+}
+
+.problem-info .problem-icon .codicon {
+  color: var(--color-status-info);
+}
+
+/* ---- File-state decorations (label color + badge) ---- */
+.deco-modified {
+  color: var(--color-git-modified);
+}
+
+.deco-added,
+.deco-untracked {
+  color: var(--color-git-added);
+}
+
+.deco-deleted {
+  color: var(--color-git-deleted-strong);
+}
+
+.deco-conflict {
+  color: var(--color-git-conflict);
+}
+
+.deco-error {
+  color: var(--color-status-error);
+}
+
+.deco-warning {
+  color: var(--color-status-warning);
+}
+
+.tree-row.active .tree-label[class*="deco-"]:not(.deco-error):not(.deco-warning) {
+  color: var(--text);
+}

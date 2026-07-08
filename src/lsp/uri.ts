@@ -33,6 +33,21 @@ function canonicalizeWindowsFileUri(uri: Monaco.Uri): Monaco.Uri {
 }
 
 /**
+ * String-level form of the drive-colon canonicalization above: turns
+ * `file:///c%3A/foo` into `file:///c:/foo`, leaving every other escape (`%20`
+ * etc.) intact. Every uri our code puts ON THE WIRE must pass through this —
+ * Roslyn tracks documents by exact uri string, and the v10 native document
+ * sync serializes through the extHost `Uri` class, which this module's
+ * `installWindowsFileUriSerialization` patch does NOT reach (it only patches
+ * the `monaco.Uri` factory). Without one canonical form, the native didOpen
+ * (`c%3A`) and our hand-rolled requests (`c:`) address "different" documents
+ * and Roslyn shuts its queue down on the first mismatched didClose.
+ */
+export function canonicalizeDriveInFileUri(uri: string): string {
+  return uri.replace(WINDOWS_DRIVE_IN_FILE_URI, "$1$2:");
+}
+
+/**
  * Monaco percent-encodes the colon in a Windows drive when serializing a URI:
  * `file:///c%3A/foo`. That URI is valid in isolation, but Roslyn 5's
  * DocumentUri-to-path conversion turns it into `/c:/foo`, so the open document
@@ -110,6 +125,11 @@ export function canonicalFileUriKey(uri: string): string {
 export function fromFileUri(uri: string): string {
   let p = uri.replace(/^file:\/\//, "");
   p = decodeURI(p);
+  // `decodeURI` skips reserved characters, so a percent-encoded drive colon
+  // (`/c%3A/…` — Roslyn serializes MetadataAsSource uris this way) survives it
+  // and breaks the drive-letter handling below. Colon is invalid elsewhere in
+  // a Windows path and a legal literal on POSIX, so decoding it is always safe.
+  p = p.replace(/%3A/gi, ":");
   // Strip the leading slash before a Windows drive letter (`/c:/…` → `c:/…`).
   if (/^\/[a-zA-Z]:\//.test(p)) p = p.slice(1);
   // On Windows, normalize to backslashes for a drive-rooted path.

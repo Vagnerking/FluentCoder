@@ -1,0 +1,489 @@
+/* ---- Explorer ---- */
+.explorer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.explorer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px 8px;
+  font-size: 11px;
+}
+
+.explorer-title {
+  font-weight: 600;
+  color: var(--text-muted);
+  /* Real sidebar section headers (Explorer, Git, Search…) stay uppercase by VS
+     Code convention; the heavy tracking is softened to a subtle 0.3px so the
+     label reads as a label, not spaced-out. The PlaceholderPanel reuses this
+     class but its title is panel *content* (e.g. "Contas"), so it opts out of
+     the uppercase below (F2-AUD-009). */
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Allow the title to shrink and ellipsize inside the flex header instead of
+     forcing the row wider than the sidebar. */
+  min-width: 0;
+  flex: 1;
+}
+
+.explorer-title-stack {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.explorer-title-stack .explorer-title {
+  flex: 0 1 auto;
+}
+
+.explorer-subtitle {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.explorer-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.explorer-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.explorer-action:hover:not(:disabled) {
+  background: var(--fill-subtle-hover);
+  color: var(--text);
+}
+
+.explorer-action:active:not(:disabled) {
+  background: var(--fill-subtle-active);
+}
+
+.explorer-action:disabled {
+  color: var(--text-disabled);
+  cursor: default;
+  opacity: 0.55;
+}
+
+.explorer-status {
+  min-height: 0;
+  max-height: 32px;
+  padding: 0 12px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.explorer-status:empty {
+  display: none;
+}
+
+.explorer-tree {
+  flex: 1;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  padding: 2px 6px 12px;
+  contain: layout paint;
+  overscroll-behavior: contain;
+}
+
+.explorer-tree::-webkit-scrollbar {
+  width: 10px;
+}
+
+.explorer-tree::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.explorer-tree::-webkit-scrollbar-thumb {
+  background: transparent;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+.explorer-tree:hover::-webkit-scrollbar-thumb,
+.explorer-tree:focus-within::-webkit-scrollbar-thumb {
+  background-color: rgba(210, 228, 242, 0.18);
+}
+
+.explorer-empty {
+  padding: 16px 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.9;
+}
+
+/* Active state for header toggles (e.g. "only changed files", issue #19). */
+.explorer-action.active {
+  background: var(--fill-selected);
+  color: var(--accent);
+}
+.explorer-action.active:hover:not(:disabled) {
+  background: var(--fill-selected-hover);
+  color: var(--accent);
+}
+
+/* Flat "only changed files" list (issue #19) — a focused, hierarchy-free view. */
+.explorer-flat-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.explorer-flat-row:hover {
+  background: var(--fill-subtle-hover);
+}
+.explorer-flat-row.active {
+  background: var(--fill-selected);
+  color: var(--text);
+}
+.explorer-flat-icon {
+  flex-shrink: 0;
+}
+.explorer-flat-name {
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.explorer-flat-dir {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ---- Tree rows ---- */
+.tree-node-wrap.workspace-root-block + .tree-node-wrap.workspace-root-block {
+  margin-top: 2px;
+  padding-top: 2px;
+  border-top: 1px solid rgba(210, 228, 242, 0.055);
+}
+
+.tree-node-wrap {
+  contain: layout paint style;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding-right: 8px;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  color: var(--text-secondary);
+  /* Align to the primary typography stack (same as `body`) — no "Inter". */
+  font-family: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI",
+    system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: 450;
+  line-height: 20px;
+  contain: layout paint style;
+}
+
+.tree-row:hover {
+  background: var(--fill-subtle-hover);
+}
+
+.tree-row.active {
+  background: var(--fill-selected);
+  color: var(--text);
+}
+
+.tree-row.active:hover {
+  background: var(--fill-selected-hover);
+}
+
+.tree-row.directory-selected:not(.active) {
+  background: var(--fill-subtle-active);
+  color: var(--text);
+}
+
+.tree-row.workspace-root-row {
+  height: 28px;
+  margin-top: 2px;
+  background: transparent;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.tree-row.workspace-root-row:hover {
+  background: var(--fill-subtle-hover);
+}
+
+.tree-row.workspace-root-row.directory-selected:not(.active) {
+  background: transparent;
+  color: var(--text);
+}
+
+.tree-row.workspace-root-row.focused {
+  outline: none;
+  background: transparent;
+}
+
+.tree-row.workspace-root-row.focused:hover {
+  background: var(--fill-subtle-hover);
+}
+
+.tree-row.workspace-root-ssh .tree-icon,
+.tree-row.workspace-root-ssh .tree-chevron {
+  color: var(--accent);
+}
+
+.tree-row-disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.tree-row-disabled:hover {
+  background: transparent;
+}
+
+.tree-row.workspace-root-row.tree-row-disabled {
+  color: var(--text-disabled);
+}
+
+.tree-row.workspace-root-row.tree-row-disabled .tree-icon,
+.tree-row.workspace-root-row.tree-row-disabled .tree-label {
+  opacity: 0.58;
+}
+
+.tree-row.workspace-root-row.tree-row-disabled:hover {
+  background: transparent;
+}
+
+.tree-badge-muted {
+  color: var(--text-muted);
+  border-color: rgba(210, 228, 242, 0.12);
+  background: rgba(210, 228, 242, 0.05);
+}
+
+.tree-root-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 2px;
+  opacity: 0.38;
+  transition: opacity 70ms ease;
+  will-change: opacity;
+}
+
+.tree-row.workspace-root-row:hover .tree-root-actions {
+  opacity: 1;
+}
+
+.tree-root-action {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.tree-root-action:hover:not(:disabled) {
+  background: var(--fill-subtle-hover);
+  color: var(--text);
+}
+
+.tree-root-action:disabled {
+  color: var(--text-disabled);
+  cursor: default;
+}
+
+.tree-root-subtitle {
+  display: none;
+}
+
+.explorer-inline-row {
+  cursor: text;
+}
+
+.explorer-inline-input {
+  min-width: 0;
+  width: 100%;
+  height: 24px;
+  padding: 1px 5px;
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  outline: none;
+  background: var(--editor-bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.explorer-inline-input:disabled {
+  color: var(--text-disabled);
+}
+
+.explorer-inline-confirm {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.explorer-inline-confirm:hover:not(:disabled) {
+  background: var(--fill-subtle-hover);
+}
+
+.explorer-inline-confirm:disabled {
+  color: var(--text-disabled);
+  cursor: default;
+}
+
+.explorer-inline-error {
+  padding-top: 2px;
+  padding-right: 8px;
+  padding-bottom: 4px;
+  color: var(--error);
+  font-size: 11px;
+  line-height: 15px;
+  white-space: normal;
+}
+
+.tree-chevron {
+  width: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.tree-chevron.folder {
+  transform-origin: center;
+  transition: transform var(--duration-tree) var(--ease-decelerate);
+  will-change: transform;
+}
+
+.tree-chevron.folder.expanded {
+  transform: rotate(90deg);
+}
+
+.tree-children {
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  contain: layout paint style;
+  transition:
+    max-height var(--duration-tree) var(--ease-decelerate),
+    opacity 70ms ease;
+}
+
+.tree-children.expanded {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.tree-children-inner {
+  min-height: 0;
+  transform: translate3d(0, -1px, 0);
+  transition: transform var(--duration-tree) var(--ease-decelerate);
+}
+
+.tree-children.expanded .tree-children-inner {
+  transform: translate3d(0, 0, 0);
+}
+
+.tree-icon {
+  margin-right: 4px;
+}
+
+/* Trailing git/diagnostic letter badge in an explorer row. */
+.tree-badge {
+  margin-left: auto;
+  padding-left: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.tree-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0.01em;
+}
+
+.tree-label-stack {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.tree-root-subtitle {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-muted {
+  color: var(--text-disabled);
+  font-style: italic;
+  cursor: default;
+}

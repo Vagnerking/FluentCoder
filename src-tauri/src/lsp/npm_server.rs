@@ -169,11 +169,7 @@ pub async fn ensure_npm_server(
                     cmd.arg(package);
                 }
                 cmd.args(["--no-audit", "--no-fund", "--loglevel", "error"]);
-                #[cfg(windows)]
-                {
-                    use std::os::windows::process::CommandExt;
-                    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-                }
+                crate::child_process::hide_console_window(&mut cmd);
                 cmd.output()
             })
             .await

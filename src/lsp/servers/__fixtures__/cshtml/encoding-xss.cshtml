@@ -1,0 +1,22 @@
+@model MyApp.Models.Comentario
+@*
+    Encoding e segurança: @Model.Texto sai HTML-encoded por padrão (proteção XSS);
+    @Html.Raw sai bruto (uso deliberado). Ambos são EXPRESSÕES C# na projeção —
+    o dado do usuário nunca é interpretado como markup no editor.
+*@
+<div class="comentario">
+    <p class="autor">@Model.Autor escreveu:</p>
+
+    <blockquote>@Model.Texto</blockquote>
+
+    <div class="html-confiavel">
+        @Html.Raw(Model.HtmlSanitizado)
+    </div>
+
+    <script>
+        var comentarioId = @Model.Id;
+        var autor = "@Model.Autor";
+    </script>
+
+    <a href="@Url.Action("Denunciar", "Comentarios", new { id = Model.Id })">Denunciar</a>
+</div>

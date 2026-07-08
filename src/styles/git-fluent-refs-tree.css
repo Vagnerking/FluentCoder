@@ -1,0 +1,323 @@
+.git-ref-list,
+.git-remote-list {
+  display: grid;
+  gap: 2px;
+}
+.git-ref-section-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+  margin: 2px 1px 0;
+  padding: 0 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+.git-ref-section-header span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-ref-section-header .codicon {
+  color: var(--accent);
+}
+.git-ref-section-header small {
+  min-width: 15px;
+  height: 14px;
+  padding: 0 4px;
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: rgba(210, 228, 242, 0.065);
+  font-size: 9px;
+  font-weight: 750;
+  line-height: 14px;
+  text-align: center;
+}
+.git-remote-tree-group {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  padding-block: 1px 2px;
+}
+.git-remote-tree-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+  margin: 0;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+}
+.git-remote-tree-header:hover,
+.git-remote-tree-header:focus-within {
+  color: var(--text);
+  background: var(--fill-subtle-hover);
+}
+.git-remote-tree-header.muted {
+  color: var(--text-muted);
+}
+.git-remote-tree-toggle {
+  display: grid;
+  grid-template-columns: 14px 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 22px;
+  padding: 0 3px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+.git-remote-tree-toggle > .codicon:first-child {
+  color: var(--accent);
+}
+.git-remote-tree-toggle > .codicon:nth-child(2) {
+  color: #73c991;
+}
+.git-remote-tree-toggle span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-remote-tree-name {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.git-remote-tree-name > span,
+.git-remote-tree-name > em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-remote-tree-name > span {
+  flex: 0 0 auto;
+}
+.git-remote-tree-name > em {
+  color: var(--text-muted);
+  font-style: normal;
+  font-weight: 500;
+}
+.git-remote-tree-toggle small {
+  min-width: 16px;
+  height: 14px;
+  padding: 0 4px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: rgba(210, 228, 242, 0.06);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+}
+.git-remote-tree-actions {
+  display: inline-flex;
+  justify-content: flex-end;
+  gap: 1px;
+  padding-right: 1px;
+}
+.git-remote-tree-actions .git-file-action {
+  opacity: 0;
+}
+.git-remote-tree-header:hover .git-file-action,
+.git-remote-tree-header:focus-within .git-file-action {
+  opacity: 1;
+}
+.git-remote-branch-group {
+  display: grid;
+  gap: 1px;
+}
+.git-remote-branch-namespace {
+  margin-left: 18px;
+  color: var(--text-secondary);
+}
+.git-fluent-empty.nested {
+  margin-left: 35px;
+  padding-block: 2px;
+}
+.git-ref-row,
+.git-remote-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) minmax(0, auto);
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  margin: 0;
+  padding: 0 4px;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: 22px;
+}
+.git-fluent-ref-button {
+  width: calc(100% - 12px);
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.git-ref-row:hover,
+.git-ref-row:focus-within,
+.git-remote-row:hover,
+.git-remote-row:focus-within {
+  background: var(--fill-subtle-hover);
+}
+.git-ref-row:focus-visible,
+.git-remote-row:focus-visible {
+  outline: 1px solid rgba(96, 205, 255, 0.7);
+  outline-offset: -1px;
+  background: rgba(96, 205, 255, 0.07);
+}
+.git-ref-row > .codicon,
+.git-remote-row > .codicon {
+  color: var(--text-muted);
+}
+.git-ref-row.current > .codicon,
+.git-ref-row.current .git-ref-name {
+  color: var(--accent);
+}
+.git-ref-row.remote > .codicon {
+  color: #73c991;
+}
+.git-ref-row.namespace-child {
+  margin-left: 18px;
+}
+.git-ref-row.tag > .codicon {
+  color: #f7c948;
+}
+.git-ref-main {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+.git-ref-avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  color: #06121d;
+  background: linear-gradient(135deg, #60cdff, #73c991);
+  font-size: 8px;
+  font-weight: 800;
+  overflow: hidden;
+}
+.git-ref-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.git-ref-name,
+.git-ref-meta,
+.git-ref-subject {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-ref-name {
+  font-size: 11.5px;
+  font-weight: 650;
+}
+.git-ref-meta {
+  color: var(--text-muted);
+  font-size: 9.5px;
+}
+.git-ref-subject {
+  max-width: 150px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+.git-ref-row.tag .git-ref-subject,
+.git-ref-row.contributor .git-ref-subject {
+  justify-self: end;
+}
+.git-ref-sync {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.git-ref-actions {
+  position: absolute;
+  right: 3px;
+  top: 1px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1px;
+  min-width: 0;
+  padding-left: 4px;
+  background: linear-gradient(90deg, transparent, var(--panel-bg) 18%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 90ms ease;
+}
+.git-ref-subtitle {
+  margin: 5px 5px 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.32px;
+  text-transform: uppercase;
+}
+.git-ref-row .git-file-action,
+.git-remote-row .git-file-action {
+  opacity: 0;
+}
+.git-ref-row:hover .git-file-action,
+.git-ref-row:focus-within .git-file-action,
+.git-remote-row:hover .git-file-action,
+.git-remote-row:focus-within .git-file-action {
+  opacity: 1;
+}
+.git-ref-row:hover .git-ref-actions,
+.git-ref-row:focus-within .git-ref-actions,
+.git-remote-row:hover .git-ref-actions,
+.git-remote-row:focus-within .git-ref-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.git-fluent-board .git-ref-row,
+.git-fluent-board .git-remote-row {
+  min-height: 22px;
+  padding: 0 4px;
+}
+.git-fluent-board .git-ref-tree-group {
+  gap: 1px;
+  padding-block: 1px;
+}
+.git-fluent-board .git-ref-tree-header {
+  min-height: 21px;
+  padding: 0 4px;
+}
+.git-fluent-board .git-ref-tree-header > .codicon:nth-child(2) {
+  color: var(--text-muted);
+}
+.git-fluent-board .git-ref-tree-group.remote .git-ref-tree-header > .codicon:nth-child(2),
+.git-fluent-board .git-remote-branch-namespace > .codicon:nth-child(2) {
+  color: #73c991;
+}

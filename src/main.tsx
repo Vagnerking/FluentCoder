@@ -8,7 +8,24 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import App from "./App";
 import { DetachedEditor } from "./components/DetachedEditor";
 import { readDetachToken } from "./detach/editorWindow";
+import "./styles/tokens.css";
+import "./styles/base.css";
+import "./styles/controls.css";
 import "./styles.css";
+import "./styles/icons.css";
+import "./styles/shell.css";
+import "./styles/explorer.css";
+import "./styles/tabs.css";
+import "./styles/editor.css";
+import "./styles/git.css";
+import "./styles/git-fluent.css";
+import "./styles/agents.css";
+import "./styles/panels.css";
+import "./styles/status.css";
+import "./styles/overlays.css";
+import "./styles/graph.css";
+import "./styles/menu.css";
+import "./styles/tooltip.css";
 
 // Kill the WebView's native right-click menu (Inspecionar / Recarregar / Salvar
 // como…). The app provides its own context menus everywhere; this suppresses the

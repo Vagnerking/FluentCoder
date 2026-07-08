@@ -1485,6 +1485,25 @@ pub async fn ssh_build_context_bundle(
     crate::graph::context_bundle_from_files(&root, files, &path, depth, 60_000)
 }
 
+/// Remote twin of `build_graph_agent_digest`: streams the graphable files and
+/// returns a compact topology summary for agents.
+#[tauri::command]
+pub async fn ssh_build_graph_agent_digest(
+    conn_id: String,
+    root: String,
+    path: Option<String>,
+    state: State<'_, SshState>,
+) -> Result<String, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    let output = exec_capture(&conn, &build_graph_dump_command(&root)).await?;
+    let files = parse_graph_dump(&output.stdout);
+    let index = crate::graph::build_knowledge_index_from_files(&root, files);
+    Ok(crate::graph::graph_agent_digest_from_index(
+        &index,
+        path.as_deref(),
+    ))
+}
+
 /// Remote twin of `list_project_files` (Quick Open / Ctrl+P): one `find` lists
 /// every file host-side (no contents read), capped like the local walk.
 #[tauri::command]
@@ -1515,6 +1534,185 @@ pub async fn ssh_list_project_files(
         ));
     }
     Ok(out)
+}
+
+// ---- Remote package intelligence (JS/TS manifests + CLI reports over SSH) ----
+
+fn normalize_remote_package_project_path(project_path: &str) -> Result<String, String> {
+    let normalized = project_path.replace('\\', "/");
+    if normalized.starts_with('/') {
+        return Err("O package.json remoto precisa estar dentro da root do workspace.".to_string());
+    }
+    let mut parts = Vec::new();
+    for part in normalized.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                return Err(
+                    "O package.json remoto precisa estar dentro da root do workspace.".to_string(),
+                );
+            }
+            value => parts.push(value),
+        }
+    }
+    if parts.last().copied() != Some("package.json") {
+        return Err("O caminho precisa apontar para um package.json.".to_string());
+    }
+    Ok(parts.join("/"))
+}
+
+fn normalized_remote_root(root: &str) -> String {
+    let trimmed = root.trim_end_matches('/');
+    if trimmed.is_empty() {
+        "/".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn remote_package_json_path(root: &str, project_path: &str) -> Result<String, String> {
+    Ok(join_posix(
+        &normalized_remote_root(root),
+        &normalize_remote_package_project_path(project_path)?,
+    ))
+}
+
+fn remote_package_dir(root: &str, project_path: &str) -> Result<String, String> {
+    let normalized = normalize_remote_package_project_path(project_path)?;
+    let root = normalized_remote_root(root);
+    let Some((dir, _name)) = normalized.rsplit_once('/') else {
+        return Ok(root);
+    };
+    Ok(join_posix(&root, dir))
+}
+
+fn build_remote_package_command<I, S>(dir: &str, program: &str, args: I) -> String
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut command = format!("cd {} && {}", shell_quote(dir), shell_quote(program));
+    for arg in args {
+        command.push(' ');
+        command.push_str(&shell_quote(arg.as_ref()));
+    }
+    command
+}
+
+async fn run_remote_package_command<I, S>(
+    conn: &Connection,
+    dir: &str,
+    manager: crate::package_intel::PackageManager,
+    args: I,
+) -> Result<crate::package_intel::PackageCommandResult, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let command = build_remote_package_command(dir, manager.command(), args);
+    let output = exec_capture(conn, &command).await?;
+    Ok(crate::package_intel::PackageCommandResult {
+        project_path: dir.to_string(),
+        manager,
+        command,
+        exit_code: Some(output.code),
+        stdout: output.stdout,
+        stderr: output.stderr,
+    })
+}
+
+#[tauri::command]
+pub async fn ssh_package_intel_outdated(
+    conn_id: String,
+    root: String,
+    project_path: String,
+    manager: crate::package_intel::PackageManager,
+    state: State<'_, SshState>,
+) -> Result<crate::package_intel::PackageOutdatedReport, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    let package_json = remote_package_json_path(&root, &project_path)?;
+    let raw = conn
+        .sftp
+        .read(&package_json)
+        .await
+        .map_err(|e| format!("package.json remoto não encontrado: {e}"))?;
+    let raw = String::from_utf8(raw).map_err(|_| "package.json remoto não é UTF-8.".to_string())?;
+    let declared = crate::package_intel::read_declared_dependency_versions_from_str(&raw)?;
+    let dir = remote_package_dir(&root, &project_path)?;
+    let command = run_remote_package_command(
+        &conn,
+        &dir,
+        manager,
+        crate::package_intel::package_command_args(
+            manager,
+            crate::package_intel::PackageCommandKind::Outdated,
+        ),
+    )
+    .await?;
+    Ok(crate::package_intel::outdated_report_from_command(
+        command, &declared,
+    ))
+}
+
+#[tauri::command]
+pub async fn ssh_package_intel_audit(
+    conn_id: String,
+    root: String,
+    project_path: String,
+    manager: crate::package_intel::PackageManager,
+    state: State<'_, SshState>,
+) -> Result<crate::package_intel::PackageAuditReport, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    let package_json = remote_package_json_path(&root, &project_path)?;
+    conn.sftp
+        .metadata(package_json.clone())
+        .await
+        .map_err(|e| format!("package.json remoto não encontrado: {e}"))?;
+    let dir = remote_package_dir(&root, &project_path)?;
+    let command = run_remote_package_command(
+        &conn,
+        &dir,
+        manager,
+        crate::package_intel::package_command_args(
+            manager,
+            crate::package_intel::PackageCommandKind::Audit,
+        ),
+    )
+    .await?;
+    Ok(crate::package_intel::audit_report_from_command(command))
+}
+
+#[tauri::command]
+pub async fn ssh_package_intel_versions(
+    conn_id: String,
+    root: String,
+    project_path: String,
+    manager: crate::package_intel::PackageManager,
+    package_name: String,
+    state: State<'_, SshState>,
+) -> Result<crate::package_intel::PackageVersionsReport, String> {
+    let package_name = package_name.trim().to_string();
+    if package_name.is_empty() {
+        return Err("Nome do pacote vazio.".to_string());
+    }
+    let conn = get_conn(&state, &conn_id).await?;
+    let package_json = remote_package_json_path(&root, &project_path)?;
+    conn.sftp
+        .metadata(package_json.clone())
+        .await
+        .map_err(|e| format!("package.json remoto não encontrado: {e}"))?;
+    let dir = remote_package_dir(&root, &project_path)?;
+    let command = run_remote_package_command(
+        &conn,
+        &dir,
+        manager,
+        crate::package_intel::package_versions_args(manager, &package_name),
+    )
+    .await?;
+    Ok(crate::package_intel::versions_report_from_command(
+        command,
+        package_name,
+    ))
 }
 
 // ---- Phase 5: remote git (drives the host's `git` CLI over an exec channel) ----
@@ -1548,7 +1746,95 @@ async fn exec_git(conn: &Connection, root: &str, args: &[&str]) -> Result<String
 
 /// Record format shared by the repo-wide and per-file remote logs (matches
 /// `git.rs`): unit-separated fields, record-separated rows.
-const REMOTE_LOG_FORMAT: &str = "--pretty=format:%H\x1f%h\x1f%an\x1f%ar\x1f%s\x1e";
+const REMOTE_LOG_FORMAT: &str = "--pretty=format:%H\x1f%h\x1f%an\x1f%ae\x1f%ar\x1f%s\x1e";
+const REMOTE_GRAPH_FORMAT: &str =
+    "--pretty=format:%H\x1f%h\x1f%P\x1f%D\x1f%an\x1f%ae\x1f%ar\x1f%s\x1e";
+
+#[tauri::command]
+pub async fn ssh_git_worktrees(
+    conn_id: String,
+    root: String,
+    state: State<'_, SshState>,
+) -> Result<Vec<crate::git::GitWorktreeInfo>, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .is_err()
+    {
+        return Ok(Vec::new());
+    }
+    let current_root = exec_git(&conn, &root, &["rev-parse", "--show-toplevel"])
+        .await
+        .unwrap_or_default();
+    let out = exec_git(&conn, &root, &["worktree", "list", "--porcelain"]).await?;
+    Ok(crate::git::parse_worktrees(&out, current_root.trim()))
+}
+
+#[tauri::command]
+pub async fn ssh_git_worktree_add(
+    conn_id: String,
+    root: String,
+    target: String,
+    branch_or_ref: Option<String>,
+    create_branch: bool,
+    state: State<'_, SshState>,
+) -> Result<(), String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    let branch_or_ref = branch_or_ref.unwrap_or_default();
+    let branch_or_ref = branch_or_ref.trim();
+    if target.trim().is_empty() {
+        return Err("Informe a pasta da worktree.".into());
+    }
+    match (create_branch, branch_or_ref.is_empty()) {
+        (true, true) => Err("Informe o nome da nova branch.".into()),
+        (true, false) => exec_git(
+            &conn,
+            &root,
+            &["worktree", "add", "-b", branch_or_ref, &target, "HEAD"],
+        )
+        .await
+        .map(|_| ()),
+        (false, true) => exec_git(&conn, &root, &["worktree", "add", &target])
+            .await
+            .map(|_| ()),
+        (false, false) => exec_git(&conn, &root, &["worktree", "add", &target, branch_or_ref])
+            .await
+            .map(|_| ()),
+    }
+}
+
+#[tauri::command]
+pub async fn ssh_git_worktree_remove(
+    conn_id: String,
+    root: String,
+    worktree_path: String,
+    force: bool,
+    state: State<'_, SshState>,
+) -> Result<(), String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    if worktree_path.trim().is_empty() {
+        return Err("Informe a worktree para remover.".into());
+    }
+    if force {
+        exec_git(&conn, &root, &["worktree", "remove", "--force", &worktree_path])
+            .await
+            .map(|_| ())
+    } else {
+        exec_git(&conn, &root, &["worktree", "remove", &worktree_path])
+            .await
+            .map(|_| ())
+    }
+}
+
+#[tauri::command]
+pub async fn ssh_git_worktree_prune(
+    conn_id: String,
+    root: String,
+    state: State<'_, SshState>,
+) -> Result<(), String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    exec_git(&conn, &root, &["worktree", "prune"]).await.map(|_| ())
+}
 
 #[tauri::command]
 pub async fn ssh_git_log(
@@ -1566,7 +1852,101 @@ pub async fn ssh_git_log(
     }
     let n = format!("-{limit}");
     let out = exec_git(&conn, &root, &["log", &n, "--no-color", REMOTE_LOG_FORMAT]).await?;
-    crate::git::parse_log_records(&out)
+    let mut commits = crate::git::parse_log_records(&out)?;
+    enrich_remote_log_commits(&conn, &root, &mut commits, None).await;
+    Ok(commits)
+}
+
+#[tauri::command]
+pub async fn ssh_git_graph(
+    conn_id: String,
+    root: String,
+    limit: u32,
+    state: State<'_, SshState>,
+) -> Result<Vec<crate::git::GitGraphCommit>, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .is_err()
+    {
+        return Ok(Vec::new());
+    }
+    let n = format!("-{limit}");
+    let out = exec_git(
+        &conn,
+        &root,
+        &[
+            "log",
+            "--all",
+            "--topo-order",
+            "--decorate=short",
+            &n,
+            "--no-color",
+            REMOTE_GRAPH_FORMAT,
+        ],
+    )
+    .await?;
+    let mut commits = crate::git::parse_graph_records(&out)?;
+    enrich_remote_graph_commits(&conn, &root, &mut commits).await;
+    Ok(commits)
+}
+
+#[tauri::command]
+pub async fn ssh_git_compare_upstream(
+    conn_id: String,
+    root: String,
+    limit: u32,
+    state: State<'_, SshState>,
+) -> Result<crate::git::GitUpstreamComparison, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .is_err()
+    {
+        return Ok(crate::git::GitUpstreamComparison {
+            upstream: String::new(),
+            ahead: Vec::new(),
+            behind: Vec::new(),
+        });
+    }
+    let upstream = match exec_git(
+        &conn,
+        &root,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+    )
+    .await
+    {
+        Ok(value) => value.trim().to_string(),
+        Err(_) => {
+            return Ok(crate::git::GitUpstreamComparison {
+                upstream: String::new(),
+                ahead: Vec::new(),
+                behind: Vec::new(),
+            })
+        }
+    };
+    let n = format!("-{limit}");
+    let ahead_raw = exec_git(
+        &conn,
+        &root,
+        &["log", &n, "--no-color", REMOTE_LOG_FORMAT, "@{upstream}..HEAD"],
+    )
+    .await?;
+    let behind_raw = exec_git(
+        &conn,
+        &root,
+        &["log", &n, "--no-color", REMOTE_LOG_FORMAT, "HEAD..@{upstream}"],
+    )
+    .await?;
+    let mut ahead = crate::git::parse_log_records(&ahead_raw)?;
+    let mut behind = crate::git::parse_log_records(&behind_raw)?;
+    enrich_remote_log_commits(&conn, &root, &mut ahead, None).await;
+    enrich_remote_log_commits(&conn, &root, &mut behind, None).await;
+    Ok(crate::git::GitUpstreamComparison {
+        upstream,
+        ahead,
+        behind,
+    })
 }
 
 #[tauri::command]
@@ -1599,7 +1979,303 @@ pub async fn ssh_git_log_file(
         ],
     )
     .await?;
-    crate::git::parse_log_records(&out)
+    let mut commits = crate::git::parse_log_records(&out)?;
+    enrich_remote_log_commits(&conn, &root, &mut commits, Some(&file)).await;
+    Ok(commits)
+}
+
+#[tauri::command]
+pub async fn ssh_git_show_file_at_commit(
+    conn_id: String,
+    root: String,
+    file: String,
+    commit: String,
+    state: State<'_, SshState>,
+) -> Result<String, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .is_err()
+    {
+        return Err("Esta pasta não é um repositório Git.".into());
+    }
+    let rel = remote_repo_relative_path(&root, &file);
+    let spec = format!("{commit}:{rel}");
+    exec_git(&conn, &root, &["show", "--no-ext-diff", &spec]).await
+}
+
+#[tauri::command]
+pub async fn ssh_git_diff_file_revision(
+    conn_id: String,
+    root: String,
+    file: String,
+    commit: String,
+    compare_to: String,
+    state: State<'_, SshState>,
+) -> Result<String, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .is_err()
+    {
+        return Err("Esta pasta não é um repositório Git.".into());
+    }
+    let rel = remote_repo_relative_path(&root, &file);
+    match compare_to.as_str() {
+        "previous" => {
+            exec_git(
+                &conn,
+                &root,
+                &[
+                    "show",
+                    "--format=",
+                    "--no-ext-diff",
+                    "--find-renames",
+                    "--patch",
+                    &commit,
+                    "--",
+                    &rel,
+                ],
+            )
+            .await
+        }
+        "working" => {
+            exec_git(
+                &conn,
+                &root,
+                &[
+                    "diff",
+                    "--no-ext-diff",
+                    "--find-renames",
+                    &commit,
+                    "--",
+                    &rel,
+                ],
+            )
+            .await
+        }
+        _ => Err("Comparação Git desconhecida.".into()),
+    }
+}
+
+#[tauri::command]
+pub async fn ssh_git_diff_file(
+    conn_id: String,
+    root: String,
+    file: String,
+    state: State<'_, SshState>,
+) -> Result<String, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .is_err()
+    {
+        return Err("Esta pasta não é um repositório Git.".into());
+    }
+    let rel = remote_repo_relative_path(&root, &file);
+    exec_git(
+        &conn,
+        &root,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--find-renames",
+            "HEAD",
+            "--",
+            &rel,
+        ],
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn ssh_git_show_file_staged(
+    conn_id: String,
+    root: String,
+    file: String,
+    state: State<'_, SshState>,
+) -> Result<String, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .is_err()
+    {
+        return Err("Esta pasta não é um repositório Git.".into());
+    }
+    let rel = remote_repo_relative_path(&root, &file);
+    let spec = format!(":{rel}");
+    exec_git(&conn, &root, &["show", "--no-ext-diff", &spec]).await
+}
+
+#[tauri::command]
+pub async fn ssh_git_diff_file_staged(
+    conn_id: String,
+    root: String,
+    file: String,
+    state: State<'_, SshState>,
+) -> Result<String, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .is_err()
+    {
+        return Err("Esta pasta não é um repositório Git.".into());
+    }
+    let rel = remote_repo_relative_path(&root, &file);
+    exec_git(
+        &conn,
+        &root,
+        &[
+            "diff",
+            "--cached",
+            "--no-ext-diff",
+            "--find-renames",
+            "--",
+            &rel,
+        ],
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn ssh_git_commit_files(
+    conn_id: String,
+    root: String,
+    commit: String,
+    state: State<'_, SshState>,
+) -> Result<Vec<crate::git::GitCommitFile>, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .is_err()
+    {
+        return Err("Esta pasta não é um repositório Git.".into());
+    }
+    let status = exec_git(
+        &conn,
+        &root,
+        &[
+            "show",
+            "--format=",
+            "--name-status",
+            "--find-renames",
+            "--no-ext-diff",
+            &commit,
+        ],
+    )
+    .await?;
+    let numstat = exec_git(
+        &conn,
+        &root,
+        &[
+            "show",
+            "--format=",
+            "--numstat",
+            "--find-renames",
+            "--no-ext-diff",
+            &commit,
+        ],
+    )
+    .await
+    .unwrap_or_default();
+    Ok(crate::git::parse_commit_file_records(&status, &numstat))
+}
+
+fn remote_repo_relative_path(root: &str, file: &str) -> String {
+    let root = root.trim_end_matches('/');
+    let rel = file
+        .strip_prefix(root)
+        .unwrap_or(file)
+        .trim_start_matches('/');
+    rel.replace('\\', "/")
+}
+
+async fn enrich_remote_log_commits(
+    conn: &Connection,
+    root: &str,
+    commits: &mut [crate::git::GitCommit],
+    file: Option<&str>,
+) {
+    let name = exec_git(conn, root, &["config", "--get", "user.name"])
+        .await
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let email = exec_git(conn, root, &["config", "--get", "user.email"])
+        .await
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let identity = if name.is_empty() && email.is_empty() {
+        None
+    } else {
+        Some((name, crate::git::normalize_git_email(&email)))
+    };
+    crate::git::apply_log_identity(commits, identity.as_ref());
+
+    let remote = match exec_git(conn, root, &["remote", "get-url", "origin"]).await {
+        Ok(value) => value,
+        Err(_) => exec_git(conn, root, &["remote", "get-url", "upstream"])
+            .await
+            .unwrap_or_default(),
+    };
+    let remote = remote.trim().to_string();
+    let mut details = std::collections::HashMap::new();
+
+    for commit in commits.iter() {
+        let raw = if let Some(file) = file {
+            exec_git(
+                conn,
+                root,
+                &["show", "--numstat", "--format=%P", &commit.hash, "--", file],
+            )
+            .await
+        } else {
+            exec_git(
+                conn,
+                root,
+                &["show", "--numstat", "--format=%P", &commit.hash],
+            )
+            .await
+        }
+        .unwrap_or_default();
+        let mut detail = crate::git::parse_commit_numstat(&raw);
+        detail.remote_url = crate::git::commit_url_from_remote(&remote, &commit.hash);
+        details.insert(commit.hash.clone(), detail);
+    }
+
+    crate::git::apply_log_commit_details(commits, &details);
+}
+
+async fn enrich_remote_graph_commits(
+    conn: &Connection,
+    root: &str,
+    commits: &mut [crate::git::GitGraphCommit],
+) {
+    let name = exec_git(conn, root, &["config", "--get", "user.name"])
+        .await
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let email = exec_git(conn, root, &["config", "--get", "user.email"])
+        .await
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let identity = if name.is_empty() && email.is_empty() {
+        None
+    } else {
+        Some((name, crate::git::normalize_git_email(&email)))
+    };
+    crate::git::apply_graph_identity(commits, identity.as_ref());
+
+    let remote = match exec_git(conn, root, &["remote", "get-url", "origin"]).await {
+        Ok(value) => value,
+        Err(_) => exec_git(conn, root, &["remote", "get-url", "upstream"])
+            .await
+            .unwrap_or_default(),
+    };
+    crate::git::apply_graph_remote_urls(commits, remote.trim());
 }
 
 #[tauri::command]
@@ -1617,7 +2293,50 @@ pub async fn ssh_git_blame(
         return Ok(Vec::new());
     }
     let out = exec_git(&conn, &root, &["blame", "--porcelain", "-M", "--", &file]).await?;
-    Ok(crate::git::parse_blame(&out))
+    let mut hunks = crate::git::parse_blame(&out);
+    let name = exec_git(&conn, &root, &["config", "--get", "user.name"])
+        .await
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let email = exec_git(&conn, &root, &["config", "--get", "user.email"])
+        .await
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let identity = if name.is_empty() && email.is_empty() {
+        None
+    } else {
+        Some((name, crate::git::normalize_git_email(&email)))
+    };
+    crate::git::apply_blame_identity(&mut hunks, identity.as_ref());
+    let remote = match exec_git(&conn, &root, &["remote", "get-url", "origin"]).await {
+        Ok(value) => value,
+        Err(_) => exec_git(&conn, &root, &["remote", "get-url", "upstream"])
+            .await
+            .unwrap_or_default(),
+    };
+    let remote = remote.trim().to_string();
+    let mut details = std::collections::HashMap::new();
+    let hashes: std::collections::HashSet<String> = hunks
+        .iter()
+        .filter(|h| !h.hash.is_empty())
+        .map(|h| h.hash.clone())
+        .collect();
+    for hash in hashes {
+        let raw = exec_git(
+            &conn,
+            &root,
+            &["show", "--numstat", "--format=%P", &hash, "--", &file],
+        )
+        .await
+        .unwrap_or_default();
+        let mut detail = crate::git::parse_commit_numstat(&raw);
+        detail.remote_url = crate::git::commit_url_from_remote(&remote, &hash);
+        details.insert(hash, detail);
+    }
+    crate::git::apply_blame_commit_details(&mut hunks, &details);
+    Ok(hunks)
 }
 
 #[tauri::command]
@@ -1635,6 +2354,30 @@ pub async fn ssh_git_stash_list(
     }
     let out = exec_git(&conn, &root, &["stash", "list", "--format=%gd\x1f%s"]).await?;
     Ok(crate::git::parse_stash_list(&out))
+}
+
+#[tauri::command]
+pub async fn ssh_git_stash_files(
+    conn_id: String,
+    root: String,
+    index: u32,
+    state: State<'_, SshState>,
+) -> Result<Vec<crate::git::GitStashFile>, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    let out = exec_git(
+        &conn,
+        &root,
+        &[
+            "stash",
+            "show",
+            "--include-untracked",
+            "--name-status",
+            "--find-renames",
+            &format!("stash@{{{index}}}"),
+        ],
+    )
+    .await?;
+    Ok(crate::git::parse_stash_files(&out))
 }
 
 #[tauri::command]
@@ -1965,6 +2708,130 @@ pub async fn ssh_git_branches(
 }
 
 #[tauri::command]
+pub async fn ssh_git_remote_branches(
+    conn_id: String,
+    root: String,
+    state: State<'_, SshState>,
+) -> Result<Vec<crate::git::GitBranchInfo>, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .is_err()
+    {
+        return Ok(Vec::new());
+    }
+    let raw = exec_git(
+        &conn,
+        &root,
+        &[
+            "for-each-ref",
+            "--sort=-committerdate",
+            "refs/remotes",
+            "--format=%(HEAD)\x1f%(refname:short)\x1f%(objectname:short)\x1f%(committerdate:relative)\x1f%(authorname)\x1f%(contents:subject)\x1f",
+        ],
+    )
+    .await?;
+    Ok(crate::git::parse_remote_branches(&raw))
+}
+
+#[tauri::command]
+pub async fn ssh_git_remotes(
+    conn_id: String,
+    root: String,
+    state: State<'_, SshState>,
+) -> Result<Vec<crate::git::GitRemoteInfo>, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
+        .await
+        .is_err()
+    {
+        return Ok(Vec::new());
+    }
+    let raw = exec_git(&conn, &root, &["remote", "-v"]).await?;
+    Ok(crate::git::parse_remotes(&raw))
+}
+
+#[tauri::command]
+pub async fn ssh_git_remote_add(
+    conn_id: String,
+    root: String,
+    name: String,
+    url: String,
+    state: State<'_, SshState>,
+) -> Result<(), String> {
+    let name = name.trim();
+    let url = url.trim();
+    if name.is_empty() {
+        return Err("Nome do remoto vazio.".into());
+    }
+    if url.is_empty() {
+        return Err("URL do remoto vazia.".into());
+    }
+    let conn = get_conn(&state, &conn_id).await?;
+    exec_git(&conn, &root, &["remote", "add", name, url])
+        .await
+        .map(|_| ())
+}
+
+#[tauri::command]
+pub async fn ssh_git_remote_remove(
+    conn_id: String,
+    root: String,
+    name: String,
+    state: State<'_, SshState>,
+) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Nome do remoto vazio.".into());
+    }
+    let conn = get_conn(&state, &conn_id).await?;
+    exec_git(&conn, &root, &["remote", "remove", name])
+        .await
+        .map(|_| ())
+}
+
+#[tauri::command]
+pub async fn ssh_git_remote_rename(
+    conn_id: String,
+    root: String,
+    old_name: String,
+    new_name: String,
+    state: State<'_, SshState>,
+) -> Result<(), String> {
+    let old_name = old_name.trim();
+    let new_name = new_name.trim();
+    if old_name.is_empty() || new_name.is_empty() {
+        return Err("Nome do remoto vazio.".into());
+    }
+    let conn = get_conn(&state, &conn_id).await?;
+    exec_git(&conn, &root, &["remote", "rename", old_name, new_name])
+        .await
+        .map(|_| ())
+}
+
+#[tauri::command]
+pub async fn ssh_git_remote_set_url(
+    conn_id: String,
+    root: String,
+    name: String,
+    url: String,
+    state: State<'_, SshState>,
+) -> Result<(), String> {
+    let name = name.trim();
+    let url = url.trim();
+    if name.is_empty() {
+        return Err("Nome do remoto vazio.".into());
+    }
+    if url.is_empty() {
+        return Err("URL do remoto vazia.".into());
+    }
+    let conn = get_conn(&state, &conn_id).await?;
+    exec_git(&conn, &root, &["remote", "set-url", name, url])
+        .await
+        .map(|_| ())
+}
+
+#[tauri::command]
 pub async fn ssh_git_checkout(
     conn_id: String,
     root: String,
@@ -1991,6 +2858,90 @@ pub async fn ssh_git_create_branch(
 }
 
 #[tauri::command]
+pub async fn ssh_git_rename_branch(
+    conn_id: String,
+    root: String,
+    old_name: String,
+    new_name: String,
+    state: State<'_, SshState>,
+) -> Result<(), String> {
+    let old_name = old_name.trim();
+    let new_name = new_name.trim();
+    if old_name.is_empty() || new_name.is_empty() {
+        return Err("Nome de branch vazio.".into());
+    }
+    let conn = get_conn(&state, &conn_id).await?;
+    exec_git(&conn, &root, &["branch", "-m", old_name, new_name])
+        .await
+        .map(|_| ())
+}
+
+#[tauri::command]
+pub async fn ssh_git_delete_branch(
+    conn_id: String,
+    root: String,
+    name: String,
+    force: bool,
+    state: State<'_, SshState>,
+) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Nome de branch vazio.".into());
+    }
+    let flag = if force { "-D" } else { "-d" };
+    let conn = get_conn(&state, &conn_id).await?;
+    exec_git(&conn, &root, &["branch", flag, name])
+        .await
+        .map(|_| ())
+}
+
+#[tauri::command]
+pub async fn ssh_git_delete_remote_branch(
+    conn_id: String,
+    root: String,
+    remote: String,
+    branch: String,
+    state: State<'_, SshState>,
+) -> Result<String, String> {
+    let remote = remote.trim();
+    let branch = branch.trim();
+    if remote.is_empty() {
+        return Err("Nome do remoto vazio.".into());
+    }
+    if branch.is_empty() {
+        return Err("Nome de branch vazio.".into());
+    }
+    let conn = get_conn(&state, &conn_id).await?;
+    exec_git(&conn, &root, &["push", remote, "--delete", branch]).await
+}
+
+#[tauri::command]
+pub async fn ssh_git_checkout_remote_branch(
+    conn_id: String,
+    root: String,
+    remote_branch: String,
+    local_name: String,
+    state: State<'_, SshState>,
+) -> Result<(), String> {
+    let remote_branch = remote_branch.trim();
+    let local_name = local_name.trim();
+    if remote_branch.is_empty() {
+        return Err("Branch remota vazia.".into());
+    }
+    if local_name.is_empty() {
+        return Err("Nome de branch local vazio.".into());
+    }
+    let conn = get_conn(&state, &conn_id).await?;
+    exec_git(
+        &conn,
+        &root,
+        &["checkout", "-b", local_name, "--track", remote_branch],
+    )
+    .await
+    .map(|_| ())
+}
+
+#[tauri::command]
 pub async fn ssh_git_stage(
     conn_id: String,
     root: String,
@@ -2014,6 +2965,16 @@ pub async fn ssh_git_unstage(
     exec_git(&conn, &root, &["reset", "--", &file])
         .await
         .map(|_| ())
+}
+
+#[tauri::command]
+pub async fn ssh_git_unstage_all(
+    conn_id: String,
+    root: String,
+    state: State<'_, SshState>,
+) -> Result<(), String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    exec_git(&conn, &root, &["reset"]).await.map(|_| ())
 }
 
 #[tauri::command]
@@ -2053,6 +3014,21 @@ pub async fn ssh_git_fetch(
 }
 
 #[tauri::command]
+pub async fn ssh_git_fetch_remote(
+    conn_id: String,
+    root: String,
+    remote: String,
+    state: State<'_, SshState>,
+) -> Result<String, String> {
+    let remote = remote.trim();
+    if remote.is_empty() {
+        return Err("Nome do remoto vazio.".into());
+    }
+    let conn = get_conn(&state, &conn_id).await?;
+    exec_git(&conn, &root, &["fetch", remote]).await
+}
+
+#[tauri::command]
 pub async fn ssh_git_pull(
     conn_id: String,
     root: String,
@@ -2070,6 +3046,31 @@ pub async fn ssh_git_push(
 ) -> Result<String, String> {
     let conn = get_conn(&state, &conn_id).await?;
     exec_git(&conn, &root, &["push"]).await
+}
+
+#[tauri::command]
+pub async fn ssh_git_revert_commit(
+    conn_id: String,
+    root: String,
+    commit: String,
+    state: State<'_, SshState>,
+) -> Result<String, String> {
+    let commit = commit.trim();
+    if commit.is_empty() {
+        return Err("Commit vazio para revert.".to_string());
+    }
+    let conn = get_conn(&state, &conn_id).await?;
+    exec_git(&conn, &root, &["revert", "--no-edit", commit]).await
+}
+
+#[tauri::command]
+pub async fn ssh_git_undo_last_commit(
+    conn_id: String,
+    root: String,
+    state: State<'_, SshState>,
+) -> Result<String, String> {
+    let conn = get_conn(&state, &conn_id).await?;
+    exec_git(&conn, &root, &["reset", "--soft", "HEAD~1"]).await
 }
 
 // ---- Phase 6: remote LSP (run the server on the host, tunnel its stdio over an

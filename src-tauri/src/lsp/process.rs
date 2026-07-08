@@ -40,13 +40,7 @@ impl LspProcess {
             cmd.env(k, v);
         }
 
-        // On Windows, avoid flashing a console window for the child.
-        // `creation_flags` is an inherent method on tokio's Command on Windows.
-        #[cfg(windows)]
-        {
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
+        crate::child_process::hide_tokio_console_window(&mut cmd);
 
         let mut child = cmd.spawn()?;
 

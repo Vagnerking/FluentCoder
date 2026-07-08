@@ -1,0 +1,38 @@
+/* ---- Shared panel empty/placeholder text ---- */
+.panel-empty { padding: 8px 12px; color: var(--text-muted); font-size: 12px; }
+/* ---- Placeholder panel ---- */
+.placeholder-panel { display: flex; flex-direction: column; height: 100%; }
+/* Placeholder titles are content, not chrome section headers — keep their
+   natural casing (sentence case) instead of the shared uppercase (F2-AUD-009). */
+.placeholder-panel .explorer-title { text-transform: none; letter-spacing: normal; }
+.placeholder-body { padding: 16px 12px; color: var(--text-muted); font-size: 12px; }
+
+/* ---- Problems panel ---- */
+.problems-list { height: 100%; overflow-y: auto; padding: 4px 0; }
+.problem-row { display: flex; align-items: baseline; gap: 8px; margin: 1px 6px; padding: 5px 8px; cursor: pointer; font-size: 12px; color: var(--text-secondary); border-radius: var(--radius-control); }
+.problem-row:hover { background: var(--fill-subtle-hover); }
+.problem-icon { flex-shrink: 0; }
+.problem-error .problem-icon { color: #f14c4c; }
+.problem-warning .problem-icon { color: #cca700; }
+.problem-info .problem-icon { color: var(--accent); }
+.problem-message { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.problem-location { margin-left: auto; flex-shrink: 0; color: var(--text-disabled); font-size: 11px; }
+
+/* ---- Output panel ("Saída"): channel selector + log lines ---- */
+.output-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.output-toolbar { display: flex; align-items: center; gap: 8px; padding: 4px 8px; flex-shrink: 0; border-bottom: 1px solid var(--acrylic-border); }
+.output-channel-label { font-size: 11px; color: var(--text-muted); }
+.output-channel-select {
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-control);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.output-lines { flex: 1; min-height: 0; overflow: auto; padding: 4px 8px; font-family: var(--font-mono, ui-monospace, "Cascadia Code", "Consolas", monospace); font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
+.output-line { white-space: pre-wrap; overflow-wrap: break-word; }

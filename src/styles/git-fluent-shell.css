@@ -1,0 +1,370 @@
+/* ---- Git Fluent views ---- */
+.git-group-fluent {
+  order: 40;
+  margin-top: 1px;
+  padding: 0;
+  border-top: 1px solid rgba(210, 228, 242, 0.055);
+  container-type: inline-size;
+}
+.git-group-fluent .git-section-header {
+  grid-template-columns: minmax(72px, 1fr) minmax(0, auto);
+  overflow: visible;
+}
+.git-group-fluent .git-section-actions {
+  min-width: 0;
+  overflow: visible;
+}
+.git-group-nested {
+  margin-top: 1px;
+}
+.git-fluent-board {
+  display: grid;
+  gap: 0;
+  margin: -1px 0 3px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  animation: git-panel-section-in 110ms var(--ease-standard, ease-out);
+}
+.git-fluent-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: 0;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 25px;
+  padding: 2px 0 1px 1px;
+  overflow: visible;
+  scrollbar-width: none;
+}
+.git-fluent-toolbar::-webkit-scrollbar {
+  display: none;
+}
+.git-fluent-tablist,
+.git-fluent-toolbar-actions,
+.git-fluent-view-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0;
+  min-width: 0;
+}
+.git-fluent-tablist {
+  flex: 0 1 auto;
+  padding: 2px 5px 2px 0;
+  overflow: visible;
+}
+.git-fluent-toolbar-actions {
+  flex: 0 0 auto;
+}
+.git-fluent-toolbar > .git-fluent-view-actions {
+  flex: 0 0 auto;
+}
+.git-fluent-divider {
+  width: 1px;
+  height: 14px;
+  margin: 0 2px;
+  background: rgba(210, 228, 242, 0.09);
+}
+.git-fluent-tab-separator {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 13px;
+  margin: 0 2px;
+  border-radius: 999px;
+  background: rgba(210, 228, 242, 0.1);
+}
+.git-fluent-tab-btn {
+  position: relative;
+  border: 1px solid transparent;
+  overflow: visible;
+}
+.git-link-btn.git-fluent-tab-btn {
+  width: 23px;
+  height: 21px;
+  margin-inline: 0;
+}
+.git-link-btn.git-fluent-tab-btn.has-count {
+  width: 23px;
+}
+.git-fluent-tab-btn.active {
+  color: var(--text);
+  border-color: transparent;
+  background: rgba(96, 205, 255, 0.052);
+  box-shadow: inset 0 -1px 0 rgba(96, 205, 255, 0.78);
+}
+.git-fluent-tab-btn.has-count:not(.active)::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  top: 3px;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--accent);
+  opacity: 0.78;
+  box-shadow: 0 0 0 1px rgba(17, 24, 33, 0.95);
+  pointer-events: none;
+}
+.git-fluent-tab-count {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 5px;
+  height: 5px;
+  min-width: 0;
+  max-width: none;
+  padding: 0;
+  border-radius: 999px;
+  color: transparent;
+  background: var(--accent);
+  font-size: 0;
+  line-height: 0;
+  text-align: center;
+  box-shadow: 0 0 0 1px rgba(17, 24, 33, 0.95);
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 2;
+}
+.git-fluent-toolbar-comfortable {
+  min-height: 30px;
+  padding-top: 5px;
+}
+.git-fluent-toolbar-comfortable .git-fluent-tablist,
+.git-fluent-toolbar-comfortable .git-fluent-view-actions,
+.git-fluent-toolbar-comfortable .git-fluent-toolbar-actions {
+  gap: 1px;
+}
+.git-fluent-toolbar-comfortable .git-link-btn.git-fluent-tab-btn {
+  width: 27px;
+  height: 24px;
+}
+.git-fluent-toolbar-comfortable .git-fluent-tab-count {
+  top: 4px;
+  right: 4px;
+  width: 5px;
+  height: 5px;
+}
+.git-fluent-view-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1px;
+  min-width: 0;
+}
+.git-fluent-pane-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+  min-height: 19px;
+  padding: 0 1px 1px;
+}
+.git-fluent-board .git-fluent-pane-actions {
+  display: none;
+}
+.git-fluent-list {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  padding: 0 0 2px;
+}
+.git-fluent-pane-title {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+  padding: 0 2px 2px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+.git-fluent-pane-title span,
+.git-fluent-pane-title small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-fluent-pane-title small {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.git-fluent-row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) minmax(42px, auto);
+  align-items: center;
+  gap: 4px;
+  min-height: 21px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: 21px;
+}
+.git-fluent-row:hover {
+  color: var(--text);
+  background: var(--fill-subtle-hover);
+}
+.git-fluent-row.active {
+  color: var(--text);
+  background: rgba(96, 205, 255, 0.075);
+}
+.git-fluent-row span,
+.git-fluent-row small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-fluent-row span {
+  font-weight: 550;
+}
+.git-fluent-row small {
+  color: var(--text-muted);
+  font-size: 10px;
+  text-align: right;
+}
+.git-fluent-row > .codicon {
+  color: var(--text-muted);
+}
+.git-fluent-row:hover > .codicon {
+  color: var(--accent);
+}
+.git-fluent-row.muted {
+  color: var(--text-muted);
+}
+.git-fluent-empty {
+  padding: 4px 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.git-fluent-board .git-ref-row,
+.git-fluent-board .git-remote-row,
+.git-fluent-board .git-worktree-row {
+  min-height: 21px;
+  margin: 0;
+  padding: 0 3px;
+}
+.git-fluent-board .git-stash-row {
+  min-height: 21px;
+  padding: 0 3px;
+}
+.git-fluent-board .git-stash-files {
+  margin: 0 0 3px 18px;
+}
+.git-fluent-board .git-ref-subtitle {
+  margin: 5px 4px 1px;
+}
+.git-ref-tree-group {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+.git-ref-tree-header {
+  display: grid;
+  grid-template-columns: 14px 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  min-height: 19px;
+  padding: 0 3px;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+.git-ref-tree-header:hover {
+  color: var(--text);
+  background: var(--fill-subtle-hover);
+}
+.git-ref-tree-header > .codicon:first-child {
+  color: var(--accent);
+}
+.git-ref-tree-header > .codicon:nth-child(2) {
+  color: var(--text-muted);
+}
+.git-ref-tree-header span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-ref-tree-header small {
+  min-width: 16px;
+  height: 14px;
+  padding: 0 4px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: rgba(210, 228, 242, 0.06);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+}
+.git-fluent-board .git-ref-row.nested {
+  position: relative;
+  padding-left: 22px;
+}
+.git-fluent-board .git-ref-tree-group.remote .git-ref-row.nested {
+  padding-left: 22px;
+}
+.git-fluent-board .git-ref-row.nested::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(210, 228, 242, 0.075);
+}
+.git-fluent-board .git-ref-row.nested > .codicon:first-child {
+  z-index: 1;
+}
+@container (max-width: 390px) {
+  .git-fluent-toolbar {
+    justify-content: flex-start;
+  }
+
+  .git-fluent-tablist {
+    flex: 1 1 auto;
+  }
+
+  .git-fluent-view-divider,
+  .git-fluent-view-actions {
+    display: none;
+  }
+}
+
+@container (max-width: 330px) {
+  .git-fluent-tab-separator,
+  .git-fluent-command-divider {
+    display: none;
+  }
+
+  .git-fluent-toolbar-actions {
+    margin-left: auto;
+  }
+}

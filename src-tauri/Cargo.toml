@@ -22,7 +22,11 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # `image-png` lets us decode the bundled PNG at runtime to set a crisp,
 # high-resolution window/taskbar icon (see the `setup` hook in lib.rs).
-tauri = { version = "2", features = ["image-png"] }
+# `macos-private-api` habilita janelas transparentes/com efeitos no macOS
+# (o método `.transparent()` do WebviewWindowBuilder só existe com ela no target
+# macOS — sem isso a build do macOS falha com E0599). No Windows/Linux é no-op.
+# Atenção: apps com esta feature não podem ser publicados na Mac App Store.
+tauri = { version = "2", features = ["image-png", "macos-private-api"] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -42,6 +46,13 @@ grep-searcher = "0.1"
 # `Matcher` trait — used to locate match column ranges within a line for highlight.
 grep-matcher = "0.1"
 regex = "1"
+# Text encoding detection + transcoding so we open/save files like VS Code:
+# `encoding_rs` is the WHATWG-standard codec set (UTF-8/16, Windows-1252,
+# Latin-1, …); `chardetng` is Firefox's charset detector for legacy 8-bit files
+# with no BOM. Together they handle BOM stripping, UTF-16, and the
+# Latin-1/Windows-1252 heuristic the decompiled-metadata files trip on.
+encoding_rs = "0.8"
+chardetng = "0.1"
 
 # --- LSP module (src/lsp) ---
 # Async runtime + WS bridge between the frontend monaco-languageclient and the
@@ -59,11 +70,10 @@ uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
 # Locate node / typescript-language-server / npm on PATH.
 which = "6"
-# Official Agent Client Protocol SDK. The editor acts as the ACP client and
-# spawns the registered Codex/Claude adapters over JSON-RPC stdio.
-agent-client-protocol = "0.15"
 # SSH/SFTP remote workspaces (issue #8). Pure-Rust crypto via `ring` instead of
 # the default `aws-lc-rs`, which pulls aws-lc-sys and needs NASM to build on
 # Windows — matching the project's openssl-free (rustls) stance.
@@ -86,3 +96,28 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
+
+# Build de DEV / validação local rápida — NÃO é o release de produção.
+#
+# O `profile.release` acima é otimizado para o BINÁRIO (LTO + codegen-units=1 +
+# opt-level="s"): ótimo pro CI/instalador, mas é justamente o que faz a build
+# levar minutos (LTO com 1 unidade serializa toda a compilação e o link). Para o
+# CICLO DE DEV — editar Rust → `cargo build`/`tauri dev` → rodar — usamos o
+# `profile.dev` abaixo, o mais rápido:
+#   - opt-level = 1  → app fluido em runtime (dev puro = 0 fica lento) mantendo a
+#                      compilação rápida; junto com o incremental, a rebuild do
+#                      nosso crate cai para ~segundos-a-um-minuto (só o link pesa).
+#   - incremental    → reaproveita artefatos entre builds.
+#   - o passe caro (LTO/codegen-units=1/strip) fica SÓ no release de produção.
+#
+# (O E2E via tauri-driver usa o binário RELEASE, não este: o binário dev não
+# pinta o WebView2 a tempo sob o driver. Ver tests/e2e/wdio.conf.ts.)
+[profile.dev]
+opt-level = 1
+incremental = true
+
+# Dependências de terceiros mudam raramente: compilá-las otimizadas uma vez torna
+# o app fluido em runtime sem custar tempo nas rebuilds do NOSSO código (que
+# continua em opt-level baixo). Só o nosso crate recompila no ciclo de dev.
+[profile.dev.package."*"]
+opt-level = 2

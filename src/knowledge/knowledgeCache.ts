@@ -6,25 +6,35 @@
 import { buildKnowledgeIndex } from "../api";
 import type { KnowledgeIndex } from "../types";
 
-let cache: { root: string; index: KnowledgeIndex } | null = null;
-let inflight: { root: string; promise: Promise<KnowledgeIndex> } | null = null;
+let cache: { key: string; index: KnowledgeIndex } | null = null;
+let inflight: { key: string; promise: Promise<KnowledgeIndex> } | null = null;
 
-export function getCachedIndex(root: string): KnowledgeIndex | null {
-  return cache && cache.root === root ? cache.index : null;
+function cacheKey(root: string, connId?: string | null): string {
+  return `${connId ?? "local"}:${root}`;
 }
 
-export function loadIndex(root: string, force = false): Promise<KnowledgeIndex> {
-  if (!force && cache && cache.root === root) return Promise.resolve(cache.index);
-  if (!force && inflight && inflight.root === root) return inflight.promise;
-  const promise = buildKnowledgeIndex(root)
+export function getCachedIndex(root: string, connId?: string | null): KnowledgeIndex | null {
+  const key = cacheKey(root, connId);
+  return cache && cache.key === key ? cache.index : null;
+}
+
+export function loadIndex(
+  root: string,
+  connId?: string | null,
+  force = false
+): Promise<KnowledgeIndex> {
+  const key = cacheKey(root, connId);
+  if (!force && cache && cache.key === key) return Promise.resolve(cache.index);
+  if (!force && inflight && inflight.key === key) return inflight.promise;
+  const promise = buildKnowledgeIndex(root, connId ?? undefined)
     .then((index) => {
-      cache = { root, index };
+      cache = { key, index };
       return index;
     })
     .finally(() => {
-      if (inflight?.root === root) inflight = null;
+      if (inflight?.key === key) inflight = null;
     });
-  inflight = { root, promise };
+  inflight = { key, promise };
   return promise;
 }
 

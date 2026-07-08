@@ -1,0 +1,92 @@
+/* ---- Detached editor window (tear-off tab) ---- */
+.detached-window {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  background: var(--editor-bg);
+}
+
+.detached-titlebar {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  min-height: 36px;
+  padding-left: 12px;
+  background: var(--titlebar-bg);
+  border-bottom: 1px solid var(--border-subtle);
+  backdrop-filter: blur(30px) saturate(125%);
+  -webkit-backdrop-filter: blur(30px) saturate(125%);
+}
+
+.detached-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detached-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.detached-controls {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+.detached-redock {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  margin-right: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-control);
+  color: var(--text);
+  background: var(--acrylic-control);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.detached-redock:hover {
+  background: var(--fill-selected);
+  border-color: var(--accent);
+}
+
+.detached-redock .codicon {
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.detached-pin.active {
+  color: var(--accent);
+}
+
+.detached-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.detached-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  font-size: 13px;
+}

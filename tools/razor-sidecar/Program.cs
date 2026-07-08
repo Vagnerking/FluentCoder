@@ -37,7 +37,10 @@ sealed class Sidecar
     public async Task<int> RunAsync()
     {
         // Force UTF-8 on stdio so generated text round-trips regardless of console.
-        Console.InputEncoding = Encoding.UTF8;
+        // The setter can throw when the process has no console (spawned with
+        // redirected pipes + CREATE_NO_WINDOW) — the explicit encodings on the
+        // reader/writer below cover us, so a failure here must not kill the boot.
+        try { Console.InputEncoding = Encoding.UTF8; } catch { /* no console */ }
         var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false)) { AutoFlush = false };
         var stdin = new StreamReader(Console.OpenStandardInput(), Encoding.UTF8);
         Log("razor sidecar ready");
@@ -88,12 +91,32 @@ sealed class Sidecar
     {
         var session = GetOrCreateSession(req);
         string text = session.Emit(req.CshtmlPath!, req.CshtmlText ?? "");
+        if (text.Length == 0)
+        {
+            // Never report an empty projection as success: the host would open
+            // blank C# in Roslyn (or silently keep serving a stale one) with no
+            // clue why. ReadGenerated already logged the specifics to stderr.
+            return new Response
+            {
+                Id = req.Id,
+                Ok = false,
+                Error = $"generator produced no output for '{Path.GetFileName(req.CshtmlPath!)}'",
+            };
+        }
         return new Response { Id = req.Id, Ok = true, GeneratedText = text };
     }
+
+    /// Keep at most this many project sessions: each holds a full Compilation +
+    /// MetadataReferences (hundreds of DLLs in a monorepo). Unbounded growth across
+    /// many opened projects would leak memory for the app's lifetime.
+    private const int MaxSessions = 4;
+    private readonly Dictionary<string, long> _lastUse = new();
+    private long _useTick;
 
     private ProjectSession GetOrCreateSession(Request req)
     {
         string key = req.ProjectDir ?? "";
+        _lastUse[key] = ++_useTick;
         // Rebuild the session if references changed (new refs hash) — TagHelper
         // discovery and the compilation depend on them.
         string refsHash = ProjectSession.HashRefs(req.References ?? new());
@@ -106,6 +129,17 @@ sealed class Sidecar
         }
         var session = ProjectSession.Create(req, refsHash);
         _sessions[key] = session;
+        // Evict the least-recently-used session beyond the cap (never the one we
+        // just created/refreshed).
+        while (_sessions.Count > MaxSessions)
+        {
+            var oldest = _lastUse.Where(kv => kv.Key != key && _sessions.ContainsKey(kv.Key))
+                .OrderBy(kv => kv.Value).Select(kv => kv.Key).FirstOrDefault();
+            if (oldest is null) break;
+            _sessions.Remove(oldest);
+            _lastUse.Remove(oldest);
+            Log($"evicted project session '{oldest}' (cap {MaxSessions})");
+        }
         return session;
     }
 
@@ -175,11 +209,13 @@ sealed class ProjectSession
 
     public static string HashRefs(List<string> refs)
     {
-        // Order-insensitive stable hash of the reference set.
+        // Order- and case-insensitive stable hash of the reference set (paths are
+        // hashed case-folded — sorting case-insensitively but hashing the original
+        // chars made the SAME set hash differently across path-case variations).
         unchecked
         {
             ulong h = 1469598103934665603UL;
-            foreach (var r in refs.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+            foreach (var r in refs.Select(x => x.ToLowerInvariant()).OrderBy(x => x, StringComparer.Ordinal))
                 foreach (char c in r) { h ^= c; h *= 1099511628211UL; }
             return h.ToString("x16");
         }
@@ -188,7 +224,16 @@ sealed class ProjectSession
     public static ProjectSession Create(Request req, string refsHash)
     {
         var generator = LoadRazorGenerator();
-        var refs = (req.References ?? new())
+        var all = req.References ?? new();
+        var missing = all
+            .Where(p => p.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && !File.Exists(p))
+            .ToList();
+        if (missing.Count > 0)
+            // Loud, not silent: without these assemblies TagHelper discovery and
+            // the projected types degrade — the host surfaces the same list to the
+            // editor as missingReferences (honest degraded mode).
+            Sidecar.Log($"session '{req.ProjectDir}': {missing.Count} reference DLL(s) missing on disk — first: {missing[0]}");
+        var refs = all
             .Where(p => p.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && File.Exists(p))
             .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))
             .ToList();
@@ -283,16 +328,25 @@ sealed class ProjectSession
         // the hintName from the AdditionalText's TargetPath (project-relative, e.g.
         // `Views\Home\Index.cshtml`) by replacing separators/dots — so two views
         // that share a stem (`Views/Home/Index.cshtml` vs
-        // `Areas/Admin/Views/Home/Index.cshtml`) get DISTINCT hintNames. Matching by
-        // the full sanitized target path (not just the filename) is what keeps us
-        // from returning another view's `.g.cs`.
-        string? wantPathSuffix = _options.SanitizedTargetSuffix(cshtmlPath);
-        if (wantPathSuffix is not null)
+        // `Areas/Admin/Views/Home/Index.cshtml`) get DISTINCT hintNames. EXACT
+        // sanitized equality first: an unanchored EndsWith would still let
+        // `views_home_index_cshtml_g_cs` match the AREA view's longer hintName.
+        string? wantPath = _options.SanitizedTargetSuffix(cshtmlPath);
+        if (wantPath is not null)
         {
             foreach (var gen in result.Results)
                 foreach (var src in gen.GeneratedSources)
-                    if (Sanitize(src.HintName).EndsWith(wantPathSuffix, StringComparison.OrdinalIgnoreCase))
+                    if (Sanitize(src.HintName).Equals(wantPath, StringComparison.OrdinalIgnoreCase))
                         return src.SourceText.ToString();
+            // Equality can miss if the generator prefixed the hintName (it has
+            // varied across SDK bands) — fall back to a suffix match only when it
+            // is UNAMBIGUOUS across all generated sources.
+            var pathMatches = result.Results
+                .SelectMany(r => r.GeneratedSources)
+                .Where(s => Sanitize(s.HintName).EndsWith(wantPath, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (pathMatches.Count == 1)
+                return pathMatches[0].SourceText.ToString();
         }
 
         // FALLBACK: filename-only suffix. Only safe when exactly ONE generated
@@ -310,7 +364,7 @@ sealed class ProjectSession
         var hints = result.Results.SelectMany(r => r.GeneratedSources).Select(s => s.HintName).ToList();
         var diags = result.Results.SelectMany(r => r.Diagnostics).Select(d => d.ToString()).Take(5).ToList();
         Sidecar.Log($"ReadGenerated EMPTY for '{Path.GetFileName(cshtmlPath)}' " +
-                    $"(want path *{wantPathSuffix ?? "(no TargetPath)"} or unique *{wantFileSuffix}, " +
+                    $"(want path {wantPath ?? "(no TargetPath)"} or unique *{wantFileSuffix}, " +
                     $"got {fileMatches.Count} filename matches); " +
                     $"hints=[{string.Join(", ", hints)}]; refs={_compilation.References.Count()}; " +
                     $"texts=[{string.Join(", ", _texts.Keys.Select(Path.GetFileName))}]; " +
@@ -329,13 +383,26 @@ sealed class ProjectSession
     {
         string dll = ResolveRazorCompilerDll();
         var asm = Assembly.LoadFrom(dll);
+        // Which compiler actually loaded decides the CODEGEN SHAPE (the SDK-10
+        // compiler maps the `@model` type with enhanced #line; the 8.0-band one
+        // doesn't) — log it so a wrong resolution is visible in the stderr trail
+        // instead of silently degrading ctrl+click on the model type.
+        Sidecar.Log($"razor compiler: {dll} (assembly v{asm.GetName().Version})");
         var type = asm.GetType("Microsoft.NET.Sdk.Razor.SourceGenerators.RazorSourceGenerator")
                    ?? throw new Exception($"RazorSourceGenerator type not in {dll}");
         return (IIncrementalGenerator)Activator.CreateInstance(type)!;
     }
 
     /// Locate `Microsoft.CodeAnalysis.Razor.Compiler.dll` in the installed SDKs.
-    /// Prefers the band matching the pinned Roslyn (8.0.x); falls back to newest.
+    /// Prefers the NEWEST SDK by semantic version — the same resolution `dotnet
+    /// build` uses (sans global.json) — so the LIVE emit produces the SAME codegen
+    /// as the prepare/fallback `dotnet build` emit. The old 8.0-band pin made the
+    /// two paths diverge: the 8.0 generator emits SHA-1 checksums and NO `#line`
+    /// mapping for the `@model` type, so any view that went through the live emit
+    /// lost ctrl+click/hover on the model type while untouched views (build emit,
+    /// new generator) kept it. Loading the newest generator requires the host
+    /// Roslyn to be >= its reference (csproj pins CodeAnalysis 5.6.0); OLDER
+    /// generators still load fine because smaller references resolve upward.
     /// Portable across Windows/macOS/Linux and custom .NET installs: honors an
     /// explicit override, then `DOTNET_ROOT`, then the running runtime's own dotnet
     /// root, then the OS default — instead of assuming `%ProgramFiles%\dotnet`.
@@ -352,22 +419,35 @@ sealed class ProjectSession
             tried.Add(sdksRoot);
             if (!Directory.Exists(sdksRoot)) continue;
             var candidates = Directory.GetDirectories(sdksRoot)
-                .Select(d => Path.Combine(d,
+                .Select(d => (dir: d, dll: Path.Combine(d,
                     "Sdks", "Microsoft.NET.Sdk.Razor", "source-generators",
-                    "Microsoft.CodeAnalysis.Razor.Compiler.dll"))
-                .Where(File.Exists)
+                    "Microsoft.CodeAnalysis.Razor.Compiler.dll")))
+                .Where(c => File.Exists(c.dll))
                 .ToList();
             if (candidates.Count == 0) continue;
-            // Prefer 8.0.x (matches the pinned Roslyn 4.9.x); else newest. Match the
-            // `8.0.` band with an OS-agnostic separator so it works on Linux/macOS too.
-            var pinned = candidates.FirstOrDefault(p =>
-                p.Contains($"{Path.DirectorySeparatorChar}8.0.", StringComparison.OrdinalIgnoreCase) ||
-                p.Contains("/8.0.", StringComparison.OrdinalIgnoreCase));
-            return pinned ?? candidates.OrderByDescending(p => p).First();
+            // Newest SDK first, by PARSED version. A plain string sort is wrong
+            // here ("8.0.421" > "10.0.301" lexicographically) and would silently
+            // pick an old generator on any machine with SDK 10+ next to an 8.x.
+            return candidates
+                .OrderByDescending(c => SdkDirVersion(c.dir))
+                .First()
+                .dll;
         }
         throw new Exception(
             $"no Razor.Compiler.dll under any dotnet SDK dir (tried: {string.Join(", ", tried)}). " +
             "Set DOTNET_ROOT or RAZOR_COMPILER_DLL.");
+    }
+
+    /// Parse an SDK directory name ("10.0.301", "9.0.100-preview.3.24081.1") into
+    /// an orderable Version; the prerelease suffix is dropped (SDK dirs of the
+    /// same numeric version don't coexist, so that precision isn't needed).
+    /// Unparsable names sort lowest instead of throwing.
+    private static Version SdkDirVersion(string dir)
+    {
+        var name = Path.GetFileName(dir.TrimEnd(Path.DirectorySeparatorChar, '/'));
+        int dash = name.IndexOf('-');
+        if (dash >= 0) name = name[..dash];
+        return Version.TryParse(name, out var v) ? v : new Version(0, 0);
     }
 
     /// Candidate `dotnet/sdk` directories, most-specific first: DOTNET_ROOT
@@ -431,6 +511,12 @@ sealed class EditorConfigOptions : AnalyzerConfigOptionsProvider
     private Dictionary<string, string> _globals = new();
     private readonly Dictionary<string, Dictionary<string, string>> _perFile = new(StringComparer.OrdinalIgnoreCase);
 
+    /// Key for `_perFile`: separator-normalized so the same file sent with `/` in
+    /// one request and `\` in another (host path forms vary) hits ONE entry —
+    /// a miss here silently loses the file's TargetPath and breaks hintName
+    /// resolution. Case-insensitivity comes from the dictionary's comparer.
+    private static string PathKey(string p) => p.Replace('/', '\\');
+
     /// A stable signature of the GLOBAL options, so the session can detect a
     /// globals-only change (RootNamespace/TFM/...) and rebuild the driver — an
     /// incremental generator keyed on the provider's identity would otherwise reuse
@@ -453,7 +539,7 @@ sealed class EditorConfigOptions : AnalyzerConfigOptionsProvider
         // Merge (don't clear) per-file specs so a previously-seen .cshtml keeps its
         // TargetPath even if a later request only carries a different file's spec.
         foreach (var f in req.Files ?? new())
-            _perFile[f.Path] = new() { ["build_metadata.AdditionalFiles.TargetPath"] = f.TargetPathB64 };
+            _perFile[PathKey(f.Path)] = new() { ["build_metadata.AdditionalFiles.TargetPath"] = f.TargetPathB64 };
     }
 
     private static string TfmToVersion(string tfm)
@@ -469,7 +555,7 @@ sealed class EditorConfigOptions : AnalyzerConfigOptionsProvider
     /// file. Used by ReadGenerated to disambiguate same-stem views in subfolders/Areas.
     public string? SanitizedTargetSuffix(string path)
     {
-        if (!_perFile.TryGetValue(path, out var meta)) return null;
+        if (!_perFile.TryGetValue(PathKey(path), out var meta)) return null;
         if (!meta.TryGetValue("build_metadata.AdditionalFiles.TargetPath", out var b64)) return null;
         string targetPath;
         try
@@ -489,7 +575,7 @@ sealed class EditorConfigOptions : AnalyzerConfigOptionsProvider
     public override AnalyzerConfigOptions GlobalOptions => new Map(_globals);
     public override AnalyzerConfigOptions GetOptions(SyntaxTree tree) => new Map(_globals);
     public override AnalyzerConfigOptions GetOptions(AdditionalText textFile) =>
-        _perFile.TryGetValue(textFile.Path, out var m) ? new Map(Merge(_globals, m)) : new Map(_globals);
+        _perFile.TryGetValue(PathKey(textFile.Path), out var m) ? new Map(Merge(_globals, m)) : new Map(_globals);
 
     private static Dictionary<string, string> Merge(Dictionary<string, string> a, Dictionary<string, string> b)
     {

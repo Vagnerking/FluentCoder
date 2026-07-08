@@ -1,0 +1,22 @@
+@model MyApp.Models.Artigo
+@addTagHelper *, MyApp
+@*
+    Uso de um Tag Helper customizado (<email-link>, targeting a custom
+    EmailLinkTagHelper com atributos `endereco` e `assunto`), além de um
+    tag helper por atributo (bs-alert).
+*@
+<article>
+    <h1>@Model.Titulo</h1>
+
+    <email-link endereco="@Model.AutorEmail" assunto="Sobre: @Model.Titulo">
+        Falar com o autor
+    </email-link>
+
+    <div bs-alert="info" class="mt-3">
+        Publicado em @Model.DataPublicacao.ToString("dd/MM/yyyy")
+    </div>
+
+    <environment include="Development">
+        <small>build: @Model.BuildHash</small>
+    </environment>
+</article>

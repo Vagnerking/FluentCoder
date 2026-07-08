@@ -1,0 +1,131 @@
+name: Release
+
+# Gera uma build/release nova a cada merge na `main`.
+# Um merge de PR vira um `push` na main -> dispara este workflow.
+# Cada execução publica uma GitHub Release com os instaladores das 3 plataformas.
+on:
+  push:
+    branches: [main]
+  # Permite disparar manualmente pela aba Actions, se necessário.
+  workflow_dispatch:
+
+# Evita duas releases concorrentes se dois merges acontecerem em sequência.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # necessário para criar tags e publicar releases
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1) Calcula a versão da release: {version do tauri.conf.json}-build.{run}+{sha}
+  #    Sempre única por execução -> "fica gerando versão nova" a cada merge.
+  # ---------------------------------------------------------------------------
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.calc.outputs.tag }}
+      name: ${{ steps.calc.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Calcular versão
+        id: calc
+        shell: bash
+        run: |
+          BASE=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          SHA_SHORT=$(git rev-parse --short HEAD)
+          TAG="v${BASE}-build.${{ github.run_number }}"
+          NAME="Fluent Coder v${BASE} (build ${{ github.run_number }} · ${SHA_SHORT})"
+          echo "tag=$TAG"   >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "Release: $TAG"
+
+  # ---------------------------------------------------------------------------
+  # 2) Builda em paralelo (Windows / Linux) e anexa os instaladores à release
+  #    como rascunho.
+  #    macOS está temporariamente desabilitado para economizar minutos de CI.
+  #    Para reativar, basta descomentar as duas entradas `macos-latest` abaixo.
+  # ---------------------------------------------------------------------------
+  build:
+    needs: version
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ""
+          # --- macOS desabilitado temporariamente (economia de CI) ---
+          # - platform: macos-latest
+          #   args: "--target aarch64-apple-darwin"
+          #   rust-targets: "aarch64-apple-darwin"
+          # - platform: macos-latest
+          #   args: "--target x86_64-apple-darwin"
+          #   rust-targets: "x86_64-apple-darwin"
+          - platform: ubuntu-22.04
+            args: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependências de sistema (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.platform }}-${{ matrix.args }}
+
+      - name: Instalar dependências do frontend
+        run: npm ci
+
+      - name: Build + publicar release (tauri-action)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ needs.version.outputs.tag }}
+          releaseName: ${{ needs.version.outputs.name }}
+          releaseBody: "Build automática gerada a partir do merge na `main` (${{ github.sha }})."
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+
+  # ---------------------------------------------------------------------------
+  # 3) Publica a release (sai do rascunho) só depois que todas as builds
+  #    anexaram seus instaladores com sucesso.
+  # ---------------------------------------------------------------------------
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publicar release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ needs.version.outputs.tag }}" --draft=false --latest

@@ -7,6 +7,8 @@ import type { GitBranchInfo } from "../types";
 interface BranchPickerProps {
   /** Repo root (workspace folder). Null when no folder is open. */
   rootPath: string | null;
+  /** SSH connection id when the repo lives in a remote workspace root. */
+  connId?: string | null;
   /** Checks out an existing branch by name. */
   onCheckout: (branch: string) => void;
   /** Creates a new branch from HEAD (prompts for the name itself). */
@@ -55,6 +57,7 @@ type Row =
  */
 export function BranchPicker({
   rootPath,
+  connId = null,
   onCheckout,
   onCreateBranch,
   onClose,
@@ -75,7 +78,7 @@ export function BranchPicker({
     }
     let cancelled = false;
     setLoading(true);
-    gitBranches(rootPath)
+    gitBranches(rootPath, connId ?? undefined)
       .then((list) => {
         if (!cancelled) setBranches(list);
       })
@@ -89,7 +92,7 @@ export function BranchPicker({
     return () => {
       cancelled = true;
     };
-  }, [rootPath]);
+  }, [rootPath, connId]);
 
   // Case-insensitive substring filter over actions (by label) and branches (by
   // name). The actions stay pinned above the matching branches.

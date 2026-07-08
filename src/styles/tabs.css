@@ -1,0 +1,201 @@
+/* ---- Tabs ---- */
+/* Wrapper holds the scrollable row plus the edge fades that hint "more tabs". */
+.tab-bar-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+/* Soft gradient at each edge, shown only when tabs are hidden that way — an
+   accessible cue that the row scrolls (the scrollbar itself is hidden). */
+.tab-fade {
+  position: absolute;
+  top: 0;
+  bottom: 1px; /* keep the row's bottom border visible */
+  width: 32px;
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+.tab-fade.show { opacity: 1; }
+.tab-fade.left {
+  left: 0;
+  background: linear-gradient(to right, var(--tabbar-bg), transparent);
+}
+.tab-fade.right {
+  right: 0;
+  background: linear-gradient(to left, var(--tabbar-bg), transparent);
+}
+
+.tab-bar {
+  display: flex;
+  flex-wrap: nowrap;
+  height: 36px;
+  min-height: 36px;
+  background: var(--tabbar-bg);
+  border-bottom: 1px solid var(--acrylic-border);
+  /* Tabs stay on one horizontal row and slide on overflow; the scrollbar is
+     hidden (it used to overlap the tabs) — the wheel scrolls the row instead. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none; /* Firefox */
+  padding: 5px 6px;
+  gap: 4px;
+  backdrop-filter: blur(20px) saturate(120%);
+  -webkit-backdrop-filter: blur(20px) saturate(120%);
+}
+.tab-bar::-webkit-scrollbar { height: 0; width: 0; display: none; }
+
+.tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  height: 26px;
+  /* Keep their width and overflow the row instead of being squeezed thinner. */
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  color: var(--text-muted);
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.tab:hover {
+  background: var(--fill-subtle-hover);
+  border-color: rgba(210, 228, 242, 0.08);
+}
+
+.tab.readonly .codicon-lock {
+  color: var(--text-muted);
+  opacity: 0.82;
+}
+
+.tab.active {
+  background: var(--acrylic-control);
+  border-color: var(--acrylic-border);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  color: var(--text);
+}
+
+/* Drag-to-reorder: dim the tab being dragged and draw a vertical insertion bar
+   in the GAP next to the drop target (left or right edge), like VS Code — not a
+   border inside the tab chip. */
+.tab.dragging { opacity: 0.4; cursor: grabbing; }
+.tab.drag-over-left::before,
+.tab.drag-over-right::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  box-shadow: 0 0 5px var(--accent);
+  pointer-events: none;
+}
+/* Sit in the middle of the 4px gap between tabs. */
+.tab.drag-over-left::before { left: -3px; }
+.tab.drag-over-right::after { right: -3px; }
+
+/* Insertion bar after the last tab (dropping onto the empty strip area). */
+.tab-drop-end {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 2px;
+  margin: 2px 0;
+  border-radius: 1px;
+  background: var(--accent);
+  box-shadow: 0 0 5px var(--accent);
+  pointer-events: none;
+}
+
+.tab-close {
+  font-size: 14px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+}
+
+.tab-close:hover {
+  background: var(--fill-subtle-hover);
+  color: var(--text);
+}
+
+.tab-icon {
+  margin-right: 2px;
+}
+
+.tab-dirty-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.tab-close.dirty {
+  color: var(--text-secondary);
+}
+
+.tab-close.dirty:hover .tab-dirty-dot {
+  display: none;
+}
+
+.tab-close.dirty:hover::before {
+  content: "";
+  font-family: codicon;
+}
+
+/* ---- Tab context menu ---- */
+.tab-context-menu {
+  position: fixed;
+  z-index: 9999;
+  background: var(--acrylic-bg, #1e2430);
+  border: 1px solid var(--acrylic-border, rgba(255,255,255,0.08));
+  border-radius: var(--radius-control, 6px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  padding: 4px;
+  min-width: 180px;
+  backdrop-filter: blur(20px) saturate(120%);
+  -webkit-backdrop-filter: blur(20px) saturate(120%);
+}
+
+.tab-context-item {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text, #d6e2f0);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tab-context-item:hover:not(.disabled) {
+  background: var(--fill-subtle-hover, rgba(255,255,255,0.07));
+}
+
+.tab-context-item.disabled {
+  color: var(--text-muted, #6b7280);
+  cursor: default;
+}
+
+.tab-context-separator {
+  height: 1px;
+  background: var(--acrylic-border, rgba(255,255,255,0.08));
+  margin: 4px 0;
+}

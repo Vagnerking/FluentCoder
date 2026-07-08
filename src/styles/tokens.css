@@ -1,0 +1,104 @@
+:root {
+  /* Windows 11 / Fluent dark palette. Surfaces use alpha so the native
+     Mica backdrop shows through; the editor stays opaque for legibility. */
+  --accent: #60cdff; /* Win11 dark-mode accent */
+  --accent-strong: #0e639c;
+
+  --text: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.82);
+  --text-muted: rgba(255, 255, 255, 0.54);
+  --text-disabled: rgba(255, 255, 255, 0.36);
+  --error: #ff99a4;
+
+  /* Fluent 2 dark surfaces: cool gray-blue tint with acrylic luminosity. */
+  --titlebar-bg: rgba(25, 31, 40, 0.82);
+  --titlebar-height: 32px; /* keep in sync with `.titlebar` height */
+  --acrylic-tint: rgba(31, 38, 48, 0.78);
+  --acrylic-tint-strong: rgba(28, 34, 43, 0.9);
+  --acrylic-control: rgba(211, 229, 243, 0.075);
+  --acrylic-control-hover: rgba(211, 229, 243, 0.12);
+  --acrylic-control-pressed: rgba(211, 229, 243, 0.055);
+  --acrylic-luminosity: rgba(132, 170, 201, 0.08);
+  --acrylic-border: rgba(210, 228, 242, 0.13);
+  --acrylic-border-strong: rgba(210, 228, 242, 0.2);
+  --sidebar-bg: var(--acrylic-tint);
+  --tabbar-bg: rgba(35, 43, 54, 0.76);
+
+  --editor-bg: #1c222b;
+
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --stroke: rgba(255, 255, 255, 0.06);
+
+  /* Fluent control fills (hover/active layering). */
+  --fill-subtle-hover: var(--acrylic-control-hover);
+  --fill-subtle-active: var(--acrylic-control-pressed);
+  --fill-selected: rgba(96, 205, 255, 0.16);
+  --fill-selected-hover: rgba(96, 205, 255, 0.22);
+
+  --radius-control: 6px;
+  --radius-card: 8px;
+
+  /* ---- Semantic status tokens (F2-AUD-001 / F2-AUD-012) ----
+     Single source of truth for error/warning/success/info. Status must never
+     rely on color alone — pair these with an icon or text label at the call
+     site. Tuned for AA contrast over the dark Mica surfaces. */
+  --color-status-error: #f14c4c;
+  --color-status-error-muted: #c74e39;
+  --color-status-warning: #cca700;
+  --color-status-warning-strong: #e0a23b;
+  --color-status-success: #73c991;
+  --color-status-info: var(--accent);
+
+  /* Git decoration tokens — mirror VSCode's gitDecoration.* roles. */
+  --color-git-modified: #e2c08d;
+  --color-git-added: #73c991;
+  --color-git-untracked: #73c991;
+  --color-git-deleted: #f14c4c;
+  --color-git-deleted-strong: #c74e39;
+  --color-git-renamed: var(--accent);
+  --color-git-conflict: #e4676b;
+  --color-git-conflict-strong: #e0a23b;
+
+  /* Overlay surface for flyouts / menus / suggest widgets — opaque enough that
+     editor text never bleeds through. */
+  --color-surface-overlay: #202734;
+  --color-surface-overlay-border: #3a4150;
+
+  /* Graph node roles (F2-AUD-001 / F2-AUD-015) — consumed by GraphView. */
+  --color-graph-markdown: var(--accent);
+  --color-graph-code: #3ec9a7;
+
+  /* ---- Focus (F2-AUD-003) ----
+     One focus contract for every interactive element. Apply via the
+     `:focus-visible` rule in base.css; never `outline: none` without
+     substituting an equivalent ring. */
+  --stroke-focus: var(--accent);
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 1px;
+  --focus-ring: 0 0 0 var(--focus-ring-width) var(--stroke-focus);
+
+  /* ---- Elevation / shadow (F2-AUD-010) ----
+     Permanent surfaces stay flat (rest); strong shadows are reserved for
+     transient overlays (flyout/dialog). */
+  --shadow-rest: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-flyout:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 8px 24px rgba(0, 0, 0, 0.24);
+  --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.5);
+
+  /* ---- Motion (F2-AUD-004) ----
+     Durations/easings consumed by transitions and animations. The global
+     `prefers-reduced-motion` block collapses these to near-zero. */
+  --duration-fast: 100ms;
+  --duration-medium: 180ms;
+  --duration-slow: 280ms;
+  --duration-tree: 110ms;
+  --ease-standard: cubic-bezier(0.33, 0, 0.1, 1);
+  --ease-decelerate: cubic-bezier(0.1, 0.9, 0.2, 1);
+
+  /* Only dark theme exists today; declare it so native form controls,
+     scrollbars and the canvas match (F2-AUD-002). */
+  color-scheme: dark;
+
+  font-synthesis: none;
+}

@@ -233,9 +233,9 @@ fn patterns() -> &'static Patterns {
     })
 }
 
-/// Builds the context graph for `root`.
-#[tauri::command]
-pub fn build_context_graph(root: String) -> Result<GraphData, String> {
+/// Blocking graph builder. Kept separate so the Tauri command can schedule all
+/// directory walking, file reads and regex parsing away from the app event loop.
+fn build_context_graph_sync(root: String) -> Result<GraphData, String> {
     let root_path = Path::new(&root);
     if !root_path.is_dir() {
         return Err(format!("não é um diretório: {root}"));
@@ -352,6 +352,14 @@ pub fn build_context_graph(root: String) -> Result<GraphData, String> {
         .collect();
 
     Ok(GraphData { nodes, edges })
+}
+
+/// Builds the context graph without blocking Tauri's window/event thread.
+#[tauri::command]
+pub async fn build_context_graph(root: String) -> Result<GraphData, String> {
+    tauri::async_runtime::spawn_blocking(move || build_context_graph_sync(root))
+        .await
+        .map_err(|error| format!("falha ao aguardar a análise do grafo: {error}"))?
 }
 
 // ---- Remote (SSH) graphs: the same engine over a streamed set of POSIX files ----
@@ -1061,6 +1069,167 @@ pub(crate) fn context_bundle_from(
     Ok(out)
 }
 
+fn folder_from_rel(rel: &str) -> &str {
+    rel.split('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Raiz")
+}
+
+/// Produces a compact graph map for agents: enough topology to pick context
+/// deliberately without pasting every file. The same text backs the UI copy
+/// action and the MCP `get_graph_overview` tool.
+pub fn graph_agent_digest_from_index(index: &KnowledgeIndex, seed_q: Option<&str>) -> String {
+    let by_path: HashMap<&str, &KnowledgeFile> =
+        index.files.iter().map(|f| (f.path.as_str(), f)).collect();
+    let mut incoming: HashMap<&str, usize> = HashMap::new();
+    let mut folder_stats: HashMap<&str, (usize, usize, usize, usize, usize, usize)> =
+        HashMap::new();
+
+    for file in &index.files {
+        let source_folder = folder_from_rel(&file.rel);
+        {
+            let entry = folder_stats.entry(source_folder).or_default();
+            entry.0 += 1;
+            if file.kind == "markdown" {
+                entry.1 += 1;
+            } else {
+                entry.2 += 1;
+            }
+            entry.3 += file.outgoing.len();
+        }
+        for link in &file.outgoing {
+            *incoming.entry(link.target.as_str()).or_default() += 1;
+            if let Some(target) = by_path.get(link.target.as_str()) {
+                let target_folder = folder_from_rel(&target.rel);
+                if source_folder != target_folder {
+                    folder_stats.entry(source_folder).or_default().5 += 1;
+                }
+                folder_stats.entry(target_folder).or_default().4 += 1;
+            }
+        }
+    }
+
+    let edge_count: usize = index.files.iter().map(|f| f.outgoing.len()).sum();
+    let markdown_count = index.files.iter().filter(|f| f.kind == "markdown").count();
+    let code_count = index.files.len().saturating_sub(markdown_count);
+    let mut metrics: Vec<(&KnowledgeFile, usize, usize, usize)> = index
+        .files
+        .iter()
+        .map(|file| {
+            let inc = incoming.get(file.path.as_str()).copied().unwrap_or(0);
+            let out = file.outgoing.len();
+            (file, inc + out, inc, out)
+        })
+        .collect();
+    metrics.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.rel.cmp(&b.0.rel)));
+    let orphan_count = metrics
+        .iter()
+        .filter(|(_, degree, _, _)| *degree == 0)
+        .count();
+
+    let mut out = String::new();
+    out.push_str("# Visão do grafo para agentes\n");
+    out.push_str(&format!(
+        "- Escopo: {} arquivos ({} markdown, {} código), {} conexões resolvidas.\n",
+        index.files.len(),
+        markdown_count,
+        code_count,
+        edge_count
+    ));
+    out.push_str(&format!(
+        "- Arquivos sem conexões: {}. Use-os só quando o nome/caminho for relevante para a tarefa.\n",
+        orphan_count
+    ));
+    out.push_str("- Regra de leitura: comece por hubs e pela vizinhança do arquivo ativo; expanda para pastas com muitas conexões cruzadas.\n\n");
+
+    let mut folders: Vec<(&str, (usize, usize, usize, usize, usize, usize))> =
+        folder_stats.into_iter().collect();
+    folders.sort_by(|a, b| {
+        let (_, a_stats) = a;
+        let (_, b_stats) = b;
+        let a_score = a_stats.0 + a_stats.3 + a_stats.4 + a_stats.5;
+        let b_score = b_stats.0 + b_stats.3 + b_stats.4 + b_stats.5;
+        b_score.cmp(&a_score).then_with(|| a.0.cmp(b.0))
+    });
+    out.push_str("## Células / pastas principais\n");
+    for (folder, (files, md, code, outgoing, incoming_count, cross)) in folders.into_iter().take(12)
+    {
+        out.push_str(&format!(
+            "- {folder}: {files} arquivos ({md} md, {code} código), {outgoing} saídas, {incoming_count} entradas, {cross} conexões cruzadas.\n"
+        ));
+    }
+
+    out.push_str("\n## Hubs de contexto\n");
+    for (file, degree, inc, out_count) in metrics.iter().filter(|(_, d, _, _)| *d > 0).take(12) {
+        out.push_str(&format!(
+            "- {} ({}) · grau {} · entra {} · sai {}\n",
+            file.rel, file.kind, degree, inc, out_count
+        ));
+    }
+
+    if orphan_count > 0 {
+        out.push_str("\n## Isolados úteis por nome\n");
+        for (file, _, _, _) in metrics.iter().filter(|(_, d, _, _)| *d == 0).take(10) {
+            out.push_str(&format!("- {} ({})\n", file.rel, file.kind));
+        }
+    }
+
+    if let Some(seed_q) = seed_q.filter(|s| !s.trim().is_empty()) {
+        out.push_str("\n## Vizinhança do arquivo ativo\n");
+        match find_file(index, seed_q) {
+            Some(seed) => {
+                out.push_str(&format!("- Semente: {} ({})\n", seed.rel, seed.kind));
+                let mut neighbours: Vec<String> = seed
+                    .outgoing
+                    .iter()
+                    .filter_map(|link| {
+                        by_path.get(link.target.as_str()).map(|target| {
+                            format!(
+                                "  - sai para {} [{}] L{} · {}",
+                                target.rel, link.relation, link.line, link.snippet
+                            )
+                        })
+                    })
+                    .collect();
+                for source in &index.files {
+                    if source.path == seed.path {
+                        continue;
+                    }
+                    for link in &source.outgoing {
+                        if link.target == seed.path {
+                            neighbours.push(format!(
+                                "  - entra de {} [{}] L{} · {}",
+                                source.rel, link.relation, link.line, link.snippet
+                            ));
+                        }
+                    }
+                }
+                neighbours.sort();
+                neighbours.dedup();
+                if neighbours.is_empty() {
+                    out.push_str("  - Sem vizinhos resolvidos no grafo.\n");
+                } else {
+                    for line in neighbours.into_iter().take(24) {
+                        out.push_str(&line);
+                        out.push('\n');
+                    }
+                }
+            }
+            None => out.push_str(&format!("- Semente não encontrada no índice: {seed_q}\n")),
+        }
+    }
+
+    out
+}
+
+/// Builds a compact graph overview for agent prompts/MCP tools.
+#[tauri::command]
+pub fn build_graph_agent_digest(root: String, path: Option<String>) -> Result<String, String> {
+    let index = build_knowledge_index(root)?;
+    Ok(graph_agent_digest_from_index(&index, path.as_deref()))
+}
+
 /// Builds a context bundle for `path` (the seed) — the file plus its link/import
 /// neighbours up to `depth` hops — as one markdown blob to feed an agent.
 #[tauri::command]
@@ -1220,5 +1389,56 @@ mod tests {
         assert_eq!(c[1].len(), 3);
         assert_eq!(&c[2], "Título aqui");
         assert!(p.heading.captures("not a heading").is_none());
+    }
+
+    #[test]
+    fn graph_agent_digest_summarizes_hubs_and_seed_neighbourhood() {
+        let index = KnowledgeIndex {
+            files: vec![
+                KnowledgeFile {
+                    path: "/repo/src/app.ts".into(),
+                    name: "app.ts".into(),
+                    rel: "src/app.ts".into(),
+                    kind: "code".into(),
+                    outgoing: vec![IndexLink {
+                        target: "/repo/src/util.ts".into(),
+                        relation: "import".into(),
+                        line: 1,
+                        snippet: "import { util } from './util';".into(),
+                    }],
+                    tags: vec![],
+                    headings: vec![],
+                },
+                KnowledgeFile {
+                    path: "/repo/src/util.ts".into(),
+                    name: "util.ts".into(),
+                    rel: "src/util.ts".into(),
+                    kind: "code".into(),
+                    outgoing: vec![],
+                    tags: vec![],
+                    headings: vec![],
+                },
+                KnowledgeFile {
+                    path: "/repo/docs/guide.md".into(),
+                    name: "guide.md".into(),
+                    rel: "docs/guide.md".into(),
+                    kind: "markdown".into(),
+                    outgoing: vec![IndexLink {
+                        target: "/repo/src/app.ts".into(),
+                        relation: "link".into(),
+                        line: 3,
+                        snippet: "Veja [app](../src/app.ts).".into(),
+                    }],
+                    tags: vec![],
+                    headings: vec![],
+                },
+            ],
+        };
+
+        let digest = graph_agent_digest_from_index(&index, Some("src/app.ts"));
+        assert!(digest.contains("3 arquivos"));
+        assert!(digest.contains("src/app.ts (code)"));
+        assert!(digest.contains("sai para src/util.ts"));
+        assert!(digest.contains("entra de docs/guide.md"));
     }
 }

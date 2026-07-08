@@ -18,9 +18,10 @@ use base64::Engine;
 use serde::Serialize;
 use tauri::State;
 
+use super::exec;
 use super::remap::{self, LspPos};
 use super::runtime;
-use super::sidecar::{FileSpec, ProjectInputs, Sidecar};
+use super::sidecar::{built_fingerprint, FileSpec, ProjectInputs, Sidecar};
 use super::sourcemap::RazorSourceMap;
 
 /// Everything the live sidecar needs to re-emit ONE `.cshtml` from buffer text.
@@ -138,6 +139,11 @@ pub struct RazorPrepareResult {
     pub available: Vec<RazorProjectionInfo>,
     /// `.cshtml` (relative) requested but with no projection (degraded).
     pub missing: Vec<String>,
+    /// Derived reference DLLs that do NOT exist on disk (ProjectReferences the
+    /// user never built). Semantics degrade for types from these assemblies —
+    /// the frontend surfaces this honestly instead of letting Roslyn report
+    /// false "type does not exist" errors with no explanation.
+    pub missing_references: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -146,10 +152,45 @@ pub struct RemapPos {
     pub character: u32,
 }
 
+/// One 0-based LSP range on the wire (batch remap input/output).
+#[derive(Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemapRange {
+    pub start_line: u32,
+    pub start_character: u32,
+    pub end_line: u32,
+    pub end_character: u32,
+}
+
+/// One fully-prepared view, produced off the UI thread and installed into
+/// [`RazorState`] afterwards (locks are held only for the in-memory inserts —
+/// never across filesystem/process I/O).
+struct PreparedView {
+    rel_str: String,
+    abs: PathBuf,
+    map: RazorSourceMap,
+    generated_path: String,
+    context: ProjectionContext,
+}
+
+struct PrepareOutcome {
+    shadow_dir: String,
+    solution_path: String,
+    views: Vec<PreparedView>,
+    missing: Vec<String>,
+    missing_references: Vec<String>,
+}
+
 /// Prepare projection serving for `cshtml_rels` (relative to `user_project_dir`)
-/// and cache their source maps. Runs `dotnet` off the UI thread.
+/// and cache their source maps. Runs everything blocking off the UI thread.
+///
+/// SIDECAR-FIRST: each projection is emitted in-memory by the live sidecar (the
+/// same engine the keystroke path uses) — `dotnet build` of the user project is
+/// only a LAST-RESORT fallback when the sidecar is unavailable. Opening or saving
+/// a `.cshtml` therefore never builds the user's dependency graph.
 #[tauri::command]
 pub async fn razor_prepare(
+    app: tauri::AppHandle,
     state: State<'_, RazorState>,
     // Kept for the binding's shape, but the shadow is materialized in the OS temp
     // dir (see `shadow_workspace_for`) — NEVER inside the opened folder, which
@@ -160,100 +201,280 @@ pub async fn razor_prepare(
     config: String,
     cshtml_rels: Vec<String>,
 ) -> Result<RazorPrepareResult, String> {
+    use tauri::Manager;
     let _ = workspace_dir;
+    let sidecar = state.clone_sidecar_ref();
+    let sidecar_src = resolve_sidecar_source_root(&app);
+    let app_data = app.path().app_data_dir().ok();
+
     let project_dir = user_project_dir.clone();
-    let csproj_for_shadow = user_csproj_path.clone();
-    let prepared = tauri::async_runtime::spawn_blocking(move || {
-        let rels: Vec<PathBuf> = cshtml_rels.iter().map(PathBuf::from).collect();
-        // Key the shadow by the .csproj path, so two projects in the same dir don't
-        // share (and clobber) one shadow.
-        let shadow_ws = shadow_workspace_for(Path::new(&csproj_for_shadow));
-        runtime::prepare(
-            &shadow_ws,
-            Path::new(&project_dir),
-            Path::new(&user_csproj_path),
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        prepare_blocking(
+            sidecar,
+            sidecar_src,
+            app_data,
+            &project_dir,
+            &user_csproj_path,
             &config,
-            &rels,
+            &cshtml_rels,
         )
     })
     .await
     .map_err(|e| format!("razor prepare join error: {e}"))?
     .map_err(|e| e.to_string())?;
 
-    let missing: Vec<String> = prepared
-        .missing
-        .iter()
-        .map(|p| p.to_string_lossy().to_string())
-        .collect();
-
-    let proj_dir_path = Path::new(&user_project_dir);
-    let d = &prepared.derived;
     let mut available = Vec::new();
     {
-        let mut maps = state.maps.lock().map_err(|_| "razor state poisoned".to_string())?;
-        let mut pending = state.pending.lock().map_err(|_| "razor state poisoned".to_string())?;
-        let mut contexts = state.contexts.lock().map_err(|_| "razor state poisoned".to_string())?;
-        for proj in prepared.projections {
-            let abs = Path::new(&user_project_dir).join(&proj.cshtml_rel);
-            let key = canonical_key(&abs);
-            let rel_str = proj.cshtml_rel.to_string_lossy().to_string();
+        let mut maps = state
+            .maps
+            .lock()
+            .map_err(|_| "razor state poisoned".to_string())?;
+        let mut pending = state
+            .pending
+            .lock()
+            .map_err(|_| "razor state poisoned".to_string())?;
+        let mut contexts = state
+            .contexts
+            .lock()
+            .map_err(|_| "razor state poisoned".to_string())?;
+        for view in outcome.views {
+            let key = canonical_key(&view.abs);
             // A fresh prepare (open/save) is authoritative: drop any in-flight
             // pending live map so a late live commit can't clobber it.
             pending.remove(&key);
-
-            // Collect the HIERARCHICAL `_ViewImports`/`_ViewStart` chain for THIS
-            // view (project root → the view's own folder), so subfolder/Area views
-            // get the nearest imports/layout — matching what `dotnet build` globs
-            // (the live `.g.cs` would otherwise diverge from build/on-save).
-            let imports = collect_hierarchical_imports(proj_dir_path, &proj.cshtml_rel);
-
-            // Per-cshtml file list = the import chain (each with its text) + this
-            // file (its own TargetPath; its text travels in cshtmlText at emit).
-            let mut files = imports.specs.clone();
-            files.push(FileSpec {
-                path: abs.to_string_lossy().to_string(),
-                target_path_b64: target_path_b64(&rel_str),
-                text: None,
-            });
-
-            let inputs = ProjectInputs {
-                project_dir: user_project_dir.clone(),
-                references: d.reference_paths.clone(),
-                root_namespace: d.root_namespace.clone(),
-                razor_lang_version: if d.razor_lang_version.is_empty() {
-                    "8.0".to_string()
-                } else {
-                    d.razor_lang_version.clone()
-                },
-                using_microsoft_net_sdk_web: d.using_microsoft_net_sdk_web,
-                tfm: d.tfm.clone(),
-                // Singular fields carry the NEAREST import/viewstart for sidecars on
-                // the old protocol; the full chain rides in `files`.
-                view_imports_path: imports.nearest_imports.as_ref().map(|(p, _)| p.clone()),
-                view_imports_text: imports.nearest_imports.as_ref().map(|(_, t)| t.clone()),
-                view_start_path: imports.nearest_start.as_ref().map(|(p, _)| p.clone()),
-                view_start_text: imports.nearest_start.as_ref().map(|(_, t)| t.clone()),
-                files,
-            };
-            contexts.insert(
-                key.clone(),
-                ProjectionContext { inputs, cshtml_abs: abs.to_string_lossy().to_string() },
-            );
-
-            maps.insert(key, proj.source_map);
+            contexts.insert(key.clone(), view.context);
+            maps.insert(key, view.map);
             available.push(RazorProjectionInfo {
-                cshtml_rel: rel_str,
-                cshtml_path: abs.to_string_lossy().to_string(),
-                generated_path: proj.shadow_gcs.to_string_lossy().to_string(),
+                cshtml_rel: view.rel_str,
+                cshtml_path: view.abs.to_string_lossy().to_string(),
+                generated_path: view.generated_path,
             });
         }
     }
 
     Ok(RazorPrepareResult {
-        shadow_dir: prepared.plan.shadow_dir.to_string_lossy().to_string(),
-        solution_path: prepared.plan.solution_path.to_string_lossy().to_string(),
+        shadow_dir: outcome.shadow_dir,
+        solution_path: outcome.solution_path,
         available,
+        missing: outcome.missing,
+        missing_references: outcome.missing_references,
+    })
+}
+
+/// The blocking body of [`razor_prepare`]: shell (derive/plan/materialize/restore)
+/// → per-view sidecar emit (skipping views whose on-disk projection is current)
+/// → one dotnet-build fallback for whatever the sidecar couldn't produce.
+fn prepare_blocking(
+    sidecar: Arc<Sidecar>,
+    sidecar_src: Option<PathBuf>,
+    app_data: Option<PathBuf>,
+    user_project_dir: &str,
+    user_csproj_path: &str,
+    config: &str,
+    cshtml_rels: &[String],
+) -> std::io::Result<PrepareOutcome> {
+    let rels: Vec<PathBuf> = cshtml_rels.iter().map(PathBuf::from).collect();
+    let proj_dir_path = Path::new(user_project_dir);
+    let csproj_path = Path::new(user_csproj_path);
+    // Key the shadow by the .csproj path, so two projects in the same dir don't
+    // share (and clobber) one shadow.
+    let shadow_ws = shadow_workspace_for(csproj_path);
+
+    let shell = runtime::prepare_shell(
+        &shadow_ws,
+        proj_dir_path,
+        csproj_path,
+        config,
+        &rels,
+        runtime::DEFAULT_DOTNET_TIMEOUT,
+    )?;
+    let d = &shell.derived;
+
+    // Missing reference DLLs (unbuilt ProjectReferences): semantics will degrade
+    // for their types. Surfaced to the frontend; never silently dropped.
+    let missing_references: Vec<String> = d
+        .reference_paths
+        .iter()
+        .filter(|p| !Path::new(p.as_str()).exists())
+        .cloned()
+        .collect();
+    if !missing_references.is_empty() {
+        eprintln!(
+            "[razor:refs] {} referenced DLL(s) missing on disk (project not built?) — first: {}",
+            missing_references.len(),
+            missing_references[0]
+        );
+    }
+
+    // Sidecar availability is best-effort: a build failure keeps us on the
+    // dotnet-build fallback (logged, not fatal). Cheap when the fingerprint
+    // matches (no dotnet spawn).
+    let sidecar_ready = match (&sidecar_src, &app_data) {
+        (Some(root), Some(cache)) => match sidecar.ensure_built(root, cache) {
+            Ok(_) => true,
+            Err(e) => {
+                eprintln!("[razor:sidecar] unavailable, falling back to build: {e}");
+                false
+            }
+        },
+        _ => false,
+    };
+
+    // The freshness skip below (`projection_current`) compares the projection
+    // against its INPUTS (cshtml/csproj/imports mtimes) — it can't see that the
+    // EMITTER changed. A sidecar upgrade changes the CODEGEN SHAPE (ex.: o
+    // compilador Razor do SDK 10 mapeia o tipo do `@model` com `#line`; o da
+    // banda 8.0 não), so a projection pinned by the OLD emitter would keep
+    // ctrl+click/hover no tipo do @model quebrados PARA SEMPRE — the stale
+    // `.g.cs` is always "fresher" than its unchanged `.cshtml`. Record the
+    // emitter fingerprint in the shadow; on mismatch, bypass the freshness skip
+    // once and re-emit every requested view.
+    let emitter_marker = shadow_ws.join(".fluent-emitter-fp");
+    let emitter_fp = if sidecar_ready {
+        app_data.as_ref().and_then(|c| built_fingerprint(c))
+    } else {
+        None
+    };
+    let emitter_stale = match &emitter_fp {
+        Some(fp) => std::fs::read_to_string(&emitter_marker)
+            .map(|recorded| &recorded != fp)
+            .unwrap_or(true),
+        None => false,
+    };
+    if emitter_stale {
+        eprintln!("[razor:sidecar] emitter changed — re-emitting pinned projections");
+    }
+
+    let mut views: Vec<PreparedView> = Vec::new();
+    let mut fallback: Vec<usize> = Vec::new(); // indices into plan.projections
+    let mut contexts_by_idx: Vec<ProjectionContext> = Vec::new();
+
+    for (idx, pf) in shell.plan.projections.iter().enumerate() {
+        let abs = proj_dir_path.join(&pf.cshtml_rel);
+        let rel_str = pf.cshtml_rel.to_string_lossy().to_string();
+
+        // Collect the HIERARCHICAL `_ViewImports`/`_ViewStart` chain for THIS
+        // view (project root → the view's own folder), so subfolder/Area views
+        // get the nearest imports/layout.
+        let imports = collect_hierarchical_imports(proj_dir_path, &pf.cshtml_rel);
+        let mut files = imports.specs.clone();
+        files.push(FileSpec {
+            path: abs.to_string_lossy().to_string(),
+            target_path_b64: target_path_b64(&rel_str),
+            text: None,
+        });
+        let inputs = ProjectInputs {
+            project_dir: user_project_dir.to_string(),
+            references: d.reference_paths.clone(),
+            root_namespace: d.root_namespace.clone(),
+            razor_lang_version: if d.razor_lang_version.is_empty() {
+                "8.0".to_string()
+            } else {
+                d.razor_lang_version.clone()
+            },
+            using_microsoft_net_sdk_web: d.using_microsoft_net_sdk_web,
+            tfm: d.tfm.clone(),
+            // Singular fields carry the NEAREST import/viewstart for sidecars on
+            // the old protocol; the full chain rides in `files`.
+            view_imports_path: imports.nearest_imports.as_ref().map(|(p, _)| p.clone()),
+            view_imports_text: imports.nearest_imports.as_ref().map(|(_, t)| t.clone()),
+            view_start_path: imports.nearest_start.as_ref().map(|(p, _)| p.clone()),
+            view_start_text: imports.nearest_start.as_ref().map(|(_, t)| t.clone()),
+            files,
+        };
+        let context = ProjectionContext {
+            inputs,
+            cshtml_abs: abs.to_string_lossy().to_string(),
+        };
+        contexts_by_idx.push(context.clone());
+
+        // Re-open with no edit: the on-disk projection is still current — parse
+        // it instead of re-emitting (instant). Bypassed when the EMITTER changed
+        // (see `emitter_stale` above): same inputs, different codegen.
+        if !emitter_stale && runtime::projection_current(proj_dir_path, csproj_path, pf) {
+            if let Ok(generated) = std::fs::read_to_string(&pf.shadow_gcs) {
+                views.push(PreparedView {
+                    rel_str,
+                    map: RazorSourceMap::parse(&generated, &abs.to_string_lossy()),
+                    generated_path: pf.shadow_gcs.to_string_lossy().to_string(),
+                    context,
+                    abs,
+                });
+                continue;
+            }
+        }
+
+        // PRIMARY: sidecar in-memory emit (same engine as the keystroke path;
+        // COLD budget — the first emit of a project loads its references).
+        if sidecar_ready {
+            let text = std::fs::read_to_string(&abs).unwrap_or_default();
+            if !text.is_empty() {
+                match sidecar.emit_cold(&context.inputs, &context.cshtml_abs, &text) {
+                    Ok(generated) if !generated.is_empty() => {
+                        if let Some(parent) = pf.shadow_gcs.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        // Content-aware write: Roslyn watches the shadow dir.
+                        let _ = exec::write_if_changed(&pf.shadow_gcs, &generated);
+                        views.push(PreparedView {
+                            rel_str,
+                            map: RazorSourceMap::parse(&generated, &abs.to_string_lossy()),
+                            generated_path: pf.shadow_gcs.to_string_lossy().to_string(),
+                            context,
+                            abs,
+                        });
+                        continue;
+                    }
+                    Ok(_) => eprintln!("[razor:sidecar] cold emit EMPTY for {rel_str}"),
+                    Err(e) => eprintln!("[razor:sidecar] cold emit failed for {rel_str}: {e}"),
+                }
+            }
+        }
+        fallback.push(idx);
+    }
+
+    // LAST RESORT: one scoped `dotnet build` for the views the sidecar couldn't
+    // produce (sidecar unbuilt/crashed, unreadable source, generator failure).
+    let mut missing: Vec<String> = Vec::new();
+    if !fallback.is_empty() {
+        eprintln!(
+            "[razor:timing] emit-fallback for {} view(s) (sidecar path unavailable)",
+            fallback.len()
+        );
+        if let Err(e) =
+            runtime::emit_fallback(&shell.plan, proj_dir_path, runtime::DEFAULT_DOTNET_TIMEOUT)
+        {
+            eprintln!("[razor:error] emit-fallback failed: {e}");
+        }
+        for idx in fallback {
+            let pf = &shell.plan.projections[idx];
+            let abs = proj_dir_path.join(&pf.cshtml_rel);
+            let rel_str = pf.cshtml_rel.to_string_lossy().to_string();
+            match std::fs::read_to_string(&pf.shadow_gcs) {
+                Ok(generated) => views.push(PreparedView {
+                    rel_str,
+                    map: RazorSourceMap::parse(&generated, &abs.to_string_lossy()),
+                    generated_path: pf.shadow_gcs.to_string_lossy().to_string(),
+                    context: contexts_by_idx[idx].clone(),
+                    abs,
+                }),
+                Err(_) => missing.push(rel_str), // no projection at all (degraded)
+            }
+        }
+    }
+
+    // Record which emitter produced this sweep, so the next prepare with the
+    // SAME sidecar build can trust the freshness skip again.
+    if let Some(fp) = &emitter_fp {
+        let _ = std::fs::write(&emitter_marker, fp);
+    }
+
+    Ok(PrepareOutcome {
+        shadow_dir: shell.plan.shadow_dir.to_string_lossy().to_string(),
+        solution_path: shell.plan.solution_path.to_string_lossy().to_string(),
+        views,
         missing,
+        missing_references,
     })
 }
 
@@ -329,7 +550,11 @@ fn collect_hierarchical_imports(project_dir: &Path, cshtml_rel: &Path) -> Hierar
         }
     }
 
-    HierarchicalImports { specs, nearest_imports, nearest_start }
+    HierarchicalImports {
+        specs,
+        nearest_imports,
+        nearest_start,
+    }
 }
 
 /// Result of a live emit: the fresh projected C# + the generation it was applied
@@ -359,7 +584,10 @@ pub async fn razor_emit_live(
 ) -> Result<EmitLiveResult, String> {
     let key = canonical_key(Path::new(&cshtml_path));
     let ctx = {
-        let contexts = state.contexts.lock().map_err(|_| "razor state poisoned".to_string())?;
+        let contexts = state
+            .contexts
+            .lock()
+            .map_err(|_| "razor state poisoned".to_string())?;
         match contexts.get(&key) {
             Some(c) => c.clone(),
             None => {
@@ -380,15 +608,25 @@ pub async fn razor_emit_live(
     // runtime's worker threads (same pattern as `razor_prepare`/`razor_ensure_sidecar`).
     let cshtml_abs = ctx.cshtml_abs.clone();
     let sidecar = state.clone_sidecar_ref();
+    let emit_started = std::time::Instant::now();
     let emitted = tauri::async_runtime::spawn_blocking(move || {
         sidecar.emit(&ctx.inputs, &ctx.cshtml_abs, &text)
     })
     .await
     .map_err(|e| format!("razor emit join error: {e}"))?;
+    let emit_ms = emit_started.elapsed();
+    // The live sidecar is the per-keystroke path; it must stay in the low-ms range
+    // or typing feels laggy. Trace every emit (and flag slow ones) so a degraded
+    // sidecar is visible in razor-diag.log instead of just "the editor feels slow".
+    if emit_ms.as_millis() >= 250 {
+        crate::rdiag!("[razor:live] SLOW emit {:?} for {}", emit_ms, cshtml_abs);
+    } else {
+        crate::rdiag!("[razor:live] emit {:?}", emit_ms);
+    }
     let generated = match emitted {
         Ok(g) => g,
         Err(e) => {
-            eprintln!("[razor:live] emit FAILED: {e}");
+            crate::rdiag!("[razor:live] emit FAILED for {cshtml_abs}: {e}");
             return Ok(EmitLiveResult {
                 generated_text: String::new(),
                 generation: 0,
@@ -402,7 +640,7 @@ pub async fn razor_emit_live(
         // transient invalid buffer). Don't blank Roslyn's view with empty text —
         // return ok:false so the caller KEEPS the last good projection. The next
         // valid edit re-emits a real `.g.cs`.
-        eprintln!("[razor:live] emit produced EMPTY .g.cs for {cshtml_abs}");
+        crate::rdiag!("[razor:live] emit produced EMPTY .g.cs for {cshtml_abs}");
         return Ok(EmitLiveResult {
             generated_text: String::new(),
             generation: 0,
@@ -419,10 +657,18 @@ pub async fn razor_emit_live(
     let map = RazorSourceMap::parse(&generated, &cshtml_path);
     let generation = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
     {
-        let mut pending = state.pending.lock().map_err(|_| "razor state poisoned".to_string())?;
+        let mut pending = state
+            .pending
+            .lock()
+            .map_err(|_| "razor state poisoned".to_string())?;
         pending.insert(key, (generation, map));
     }
-    Ok(EmitLiveResult { generated_text: generated, generation, ok: true, error: None })
+    Ok(EmitLiveResult {
+        generated_text: generated,
+        generation,
+        ok: true,
+        error: None,
+    })
 }
 
 /// Promote the pending live map for `cshtml_path` to ACTIVE — called by the
@@ -436,7 +682,10 @@ pub fn razor_commit_live_map(
 ) -> Result<bool, String> {
     let key = canonical_key(Path::new(&cshtml_path));
     let map = {
-        let mut pending = state.pending.lock().map_err(|_| "razor state poisoned".to_string())?;
+        let mut pending = state
+            .pending
+            .lock()
+            .map_err(|_| "razor state poisoned".to_string())?;
         match pending.get(&key) {
             // Only commit if the pending map is exactly this generation. Take it out
             // so a later stale commit for the same gen can't double-apply.
@@ -446,7 +695,10 @@ pub fn razor_commit_live_map(
     };
     match map {
         Some(m) => {
-            let mut maps = state.maps.lock().map_err(|_| "razor state poisoned".to_string())?;
+            let mut maps = state
+                .maps
+                .lock()
+                .map_err(|_| "razor state poisoned".to_string())?;
             maps.insert(key, m);
             Ok(true)
         }
@@ -460,7 +712,10 @@ pub fn razor_commit_live_map(
 pub async fn razor_warm(state: State<'_, RazorState>, cshtml_path: String) -> Result<(), String> {
     let key = canonical_key(Path::new(&cshtml_path));
     let ctx = {
-        let contexts = state.contexts.lock().map_err(|_| "razor state poisoned".to_string())?;
+        let contexts = state
+            .contexts
+            .lock()
+            .map_err(|_| "razor state poisoned".to_string())?;
         contexts.get(&key).cloned()
     };
     if let Some(ctx) = ctx {
@@ -500,11 +755,10 @@ pub async fn razor_ensure_sidecar(
         Some(root) => {
             let s = state.clone_sidecar_ref();
             // Build off the UI thread (dotnet build can take seconds the first time).
-            let result = tauri::async_runtime::spawn_blocking(move || {
-                s.ensure_built(&root, &cache)
-            })
-            .await
-            .map_err(|e| format!("razor sidecar build join error: {e}"))?;
+            let result =
+                tauri::async_runtime::spawn_blocking(move || s.ensure_built(&root, &cache))
+                    .await
+                    .map_err(|e| format!("razor sidecar build join error: {e}"))?;
             match result {
                 Ok(_) => Ok(true),
                 Err(e) => {
@@ -554,8 +808,10 @@ pub fn razor_remap_to_generated(
 ) -> Option<RemapPos> {
     let maps = state.maps.lock().ok()?;
     let map = maps.get(&canonical_key(Path::new(&cshtml_path)))?;
-    remap::source_pos_to_generated(map, LspPos::new(line, character))
-        .map(|p| RemapPos { line: p.line, character: p.character })
+    remap::source_pos_to_generated(map, LspPos::new(line, character)).map(|p| RemapPos {
+        line: p.line,
+        character: p.character,
+    })
 }
 
 /// Map a projected-C# position (0-based LSP) back to the `.cshtml`. `None` if it
@@ -568,9 +824,115 @@ pub fn razor_remap_to_source(
     character: u32,
 ) -> Option<RemapPos> {
     let maps = state.maps.lock().ok()?;
-    let map = maps.get(&canonical_key(Path::new(&cshtml_path)))?;
-    remap::generated_pos_to_source(map, LspPos::new(line, character))
-        .map(|p| RemapPos { line: p.line, character: p.character })
+    let key = canonical_key(Path::new(&cshtml_path));
+    let Some(map) = maps.get(&key) else {
+        // No cached map for this `.cshtml` → every remap fails (mapped=0). Sample
+        // the failure so a key mismatch / missing map is visible in razor-diag.log.
+        crate::razor::diag::sample_remap_miss(&format!(
+            "[razor:remap] NO MAP for key={key} (cached keys: {})",
+            maps.keys().take(4).cloned().collect::<Vec<_>>().join(" | ")
+        ));
+        return None;
+    };
+    let mapped = remap::generated_pos_to_source(map, LspPos::new(line, character));
+    if mapped.is_none() {
+        // Map present but this generated position fell outside every region.
+        // Sample it (with the map's region count) to tell "map empty" from
+        // "position genuinely synthetic".
+        crate::razor::diag::sample_remap_miss(&format!(
+            "[razor:remap] gen ({line},{character}) UNMAPPED — regions={}",
+            map.region_count()
+        ));
+    }
+    mapped.map(|p| RemapPos {
+        line: p.line,
+        character: p.character,
+    })
+}
+
+/// Append a line from the frontend LSP/projection chain to the shared
+/// `razor-diag.log`. Lets the `.cshtml` projection client (TS side) land its
+/// trace in the SAME ordered file as the backend pipeline steps, so a failing
+/// C#/Razor run reads as one timeline (didOpen → pull → remap alongside
+/// derive/emit/restore). Best-effort; never errors back to the UI.
+#[tauri::command]
+pub fn razor_diag_log(line: String) {
+    crate::razor::diag::log(&line);
+}
+
+/// Remap N generated-C# ranges back to the `.cshtml` in ONE IPC round-trip —
+/// the diagnostics publish path was doing 2 position IPCs per diagnostic per
+/// pull (hundreds of calls per save in a file with many errors). Entry `i` of
+/// the result corresponds to entry `i` of `ranges`; `None` = unmappable
+/// (synthetic C#). Uses the CLAMPED range mapper: for diagnostics, a squiggle
+/// truncated at its region's end beats a silently dropped one.
+#[tauri::command]
+pub fn razor_remap_ranges_to_source(
+    state: State<'_, RazorState>,
+    cshtml_path: String,
+    ranges: Vec<RemapRange>,
+) -> Vec<Option<RemapRange>> {
+    let Ok(maps) = state.maps.lock() else {
+        return ranges.iter().map(|_| None).collect();
+    };
+    let Some(map) = maps.get(&canonical_key(Path::new(&cshtml_path))) else {
+        return ranges.iter().map(|_| None).collect();
+    };
+    ranges
+        .iter()
+        .map(|r| {
+            remap::generated_range_to_source_clamped(
+                map,
+                remap::LspRange {
+                    start: LspPos::new(r.start_line, r.start_character),
+                    end: LspPos::new(r.end_line, r.end_character),
+                },
+            )
+            .map(|out| RemapRange {
+                start_line: out.start.line,
+                start_character: out.start.character,
+                end_line: out.end.line,
+                end_character: out.end.character,
+            })
+        })
+        .collect()
+}
+
+/// [`razor_remap_ranges_to_source`] with the STRICT mapper — for `TextEdit`s
+/// (code actions / quick fixes), where a truncated range would APPLY an edit at
+/// the wrong span and corrupt the document. Any range not fully inside ONE
+/// mapped region comes back `None`; the caller must then DROP the whole action
+/// (contract: results born in synthetic text never become a `TextEdit`).
+#[tauri::command]
+pub fn razor_remap_ranges_to_source_strict(
+    state: State<'_, RazorState>,
+    cshtml_path: String,
+    ranges: Vec<RemapRange>,
+) -> Vec<Option<RemapRange>> {
+    let Ok(maps) = state.maps.lock() else {
+        return ranges.iter().map(|_| None).collect();
+    };
+    let Some(map) = maps.get(&canonical_key(Path::new(&cshtml_path))) else {
+        return ranges.iter().map(|_| None).collect();
+    };
+    ranges
+        .iter()
+        .map(|r| {
+            remap::generated_range_to_source(
+                map,
+                remap::LspRange {
+                    start: LspPos::new(r.start_line, r.start_character),
+                    end: LspPos::new(r.end_line, r.end_character),
+                },
+            )
+            .map(|out| RemapRange {
+                start_line: out.start.line,
+                start_character: out.start.character,
+                end_line: out.end.line,
+                end_character: out.end.character,
+            })
+        })
+        .collect()
 }
 
 /// Drop a document's cached source map + live-emit context (on `.cshtml` close).
@@ -593,8 +955,101 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    /// End-to-end of the SIDECAR-FIRST prepare against the real SampleMvc fixture:
+    /// builds the sidecar, derives design-time, emits the projection in-memory,
+    /// writes the shadow `.g.cs`, parses the `#line` map — then asserts the
+    /// CS1061 range (`Model.NonExistentProperty`, .cshtml line 16) remaps
+    /// correctly through the BATCH (clamped) mapper the frontend now uses.
+    /// Shells out to `dotnet` (slow) → `#[ignore]`. Run with:
+    /// `cargo test --lib razor::commands::tests::e2e_sidecar_first -- --ignored --nocapture`
+    #[test]
+    #[ignore = "integration: runs dotnet + the sidecar (slow)"]
+    fn e2e_sidecar_first_prepare_sample_mvc() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let fixture = repo_root.join("tools/razor-lsp-probe/fixtures/SampleMvc");
+        assert!(fixture.join("SampleMvc.csproj").exists(), "fixture missing");
+        let cache = std::env::temp_dir().join("fluent-razor-sidecar-first-test");
+        let _ = std::fs::create_dir_all(&cache);
+
+        let sidecar = Arc::new(Sidecar::new());
+        let outcome = prepare_blocking(
+            Arc::clone(&sidecar),
+            Some(repo_root),
+            Some(cache),
+            &fixture.to_string_lossy(),
+            &fixture.join("SampleMvc.csproj").to_string_lossy(),
+            "Debug",
+            &["Views/Home/Index.cshtml".to_string()],
+        )
+        .expect("prepare_blocking");
+        sidecar.shutdown();
+
+        assert!(outcome.missing.is_empty(), "missing: {:?}", outcome.missing);
+        assert!(
+            outcome.missing_references.is_empty(),
+            "refs: {:?}",
+            outcome.missing_references
+        );
+        assert_eq!(outcome.views.len(), 1, "one prepared view");
+        let view = &outcome.views[0];
+
+        // The projection landed on disk (what the frontend didOpens into Roslyn).
+        let gcs = std::fs::read_to_string(&view.generated_path).expect("shadow .g.cs on disk");
+        assert!(
+            gcs.contains("Model.NonExistentProperty"),
+            "projection must contain the probe expression"
+        );
+        assert!(view.map.region_count() > 0, "no #line regions parsed");
+
+        // The `@model` TYPE must be source-mapped (`#line (1,8)-(1,37)` around
+        // `SampleMvc.Models.WeatherModel` — Index.cshtml line 1, after `@model `).
+        // Only the NEW Razor compiler emits this mapping; the old 8.0-band one the
+        // sidecar used to pin does NOT — which silently killed ctrl+click/hover on
+        // the model type for any view emitted live. Guards the sidecar's compiler
+        // resolution (newest SDK) from regressing.
+        assert!(
+            gcs.contains("#line (1,8)"),
+            "the @model type must be #line-mapped by the sidecar emit (old Razor \
+             compiler resolved? see ResolveRazorCompilerDll in the sidecar)"
+        );
+
+        // Locate the probe line in the GENERATED text (0-based LSP), then remap
+        // its range through the same batch mapper the diagnostics path uses.
+        let gen_line = gcs
+            .lines()
+            .position(|l| l.trim_start().starts_with("Model.NonExistentProperty"))
+            .expect("probe line in .g.cs") as u32;
+        let len = "Model.NonExistentProperty".len() as u32;
+        let mapped = remap::generated_range_to_source_clamped(
+            &view.map,
+            remap::LspRange {
+                start: LspPos::new(gen_line, 0),
+                end: LspPos::new(gen_line, len),
+            },
+        )
+        .expect("CS1061 range must remap to the .cshtml");
+        // Index.cshtml line 16 (1-based) → LSP line 15; `@Model.` starts at col 8
+        // (0-based; the `#line (16,9)` directive is 1-based col 9).
+        assert_eq!(mapped.start.line, 15, "mapped to .cshtml line 16 (1-based)");
+        assert_eq!(mapped.start.character, 8, "mapped to the expression start");
+        eprintln!(
+            "[test] sidecar-first OK: gen line {} → cshtml ({},{})-({},{})",
+            gen_line,
+            mapped.start.line,
+            mapped.start.character,
+            mapped.end.line,
+            mapped.end.character
+        );
+    }
+
     fn temp_project() -> PathBuf {
-        let id = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let root = std::env::temp_dir().join(format!("fluent-razor-imports-{id}"));
         std::fs::create_dir_all(&root).unwrap();
         root
@@ -607,30 +1062,55 @@ mod tests {
         std::fs::write(proj.join("_ViewImports.cshtml"), "@using App").unwrap();
         std::fs::create_dir_all(proj.join("Views/Home")).unwrap();
         std::fs::write(proj.join("Views/_ViewImports.cshtml"), "@using App.Views").unwrap();
-        std::fs::write(proj.join("Views/_ViewStart.cshtml"), "@{ Layout = \"_Layout\"; }").unwrap();
-        std::fs::write(proj.join("Views/Home/_ViewImports.cshtml"), "@using App.Home").unwrap();
+        std::fs::write(
+            proj.join("Views/_ViewStart.cshtml"),
+            "@{ Layout = \"_Layout\"; }",
+        )
+        .unwrap();
+        std::fs::write(
+            proj.join("Views/Home/_ViewImports.cshtml"),
+            "@using App.Home",
+        )
+        .unwrap();
 
-        let imports =
-            collect_hierarchical_imports(&proj, Path::new("Views/Home/Index.cshtml"));
+        let imports = collect_hierarchical_imports(&proj, Path::new("Views/Home/Index.cshtml"));
 
         // All FOUR applicable import/viewstart files are collected (not just root/Views).
         let rels: Vec<String> = imports
             .specs
             .iter()
             .map(|s| s.path.replace('\\', "/"))
-            .map(|p| p.rsplit("fluent-razor-imports-").next().unwrap().to_string())
+            .map(|p| {
+                p.rsplit("fluent-razor-imports-")
+                    .next()
+                    .unwrap()
+                    .to_string()
+            })
             .collect();
         assert_eq!(imports.specs.len(), 4, "got: {rels:?}");
         // The nearest _ViewImports is the deepest one (Views/Home).
         let (np, _) = imports.nearest_imports.as_ref().expect("nearest imports");
-        assert!(np.replace('\\', "/").ends_with("Views/Home/_ViewImports.cshtml"), "got {np}");
+        assert!(
+            np.replace('\\', "/")
+                .ends_with("Views/Home/_ViewImports.cshtml"),
+            "got {np}"
+        );
         // The nearest _ViewStart is Views/ (none deeper exists).
         let (sp, _) = imports.nearest_start.as_ref().expect("nearest start");
-        assert!(sp.replace('\\', "/").ends_with("Views/_ViewStart.cshtml"), "got {sp}");
+        assert!(
+            sp.replace('\\', "/").ends_with("Views/_ViewStart.cshtml"),
+            "got {sp}"
+        );
         // The view file itself is never included.
-        assert!(imports.specs.iter().all(|s| !s.path.ends_with("Index.cshtml")));
+        assert!(imports
+            .specs
+            .iter()
+            .all(|s| !s.path.ends_with("Index.cshtml")));
         // Every spec carries its text + TargetPath.
-        assert!(imports.specs.iter().all(|s| s.text.is_some() && !s.target_path_b64.is_empty()));
+        assert!(imports
+            .specs
+            .iter()
+            .all(|s| s.text.is_some() && !s.target_path_b64.is_empty()));
 
         let _ = std::fs::remove_dir_all(&proj);
     }
@@ -639,8 +1119,7 @@ mod tests {
     fn collect_hierarchical_imports_empty_when_none_exist() {
         let proj = temp_project();
         std::fs::create_dir_all(proj.join("Views/Home")).unwrap();
-        let imports =
-            collect_hierarchical_imports(&proj, Path::new("Views/Home/Index.cshtml"));
+        let imports = collect_hierarchical_imports(&proj, Path::new("Views/Home/Index.cshtml"));
         assert!(imports.specs.is_empty());
         assert!(imports.nearest_imports.is_none());
         assert!(imports.nearest_start.is_none());
@@ -683,9 +1162,15 @@ mod tests {
     #[test]
     fn shadow_workspace_is_outside_project_and_stable() {
         let (proj_dir, csproj) = if cfg!(windows) {
-            (Path::new("C:\\src\\SampleMvc"), Path::new("C:\\src\\SampleMvc\\SampleMvc.csproj"))
+            (
+                Path::new("C:\\src\\SampleMvc"),
+                Path::new("C:\\src\\SampleMvc\\SampleMvc.csproj"),
+            )
         } else {
-            (Path::new("/src/SampleMvc"), Path::new("/src/SampleMvc/SampleMvc.csproj"))
+            (
+                Path::new("/src/SampleMvc"),
+                Path::new("/src/SampleMvc/SampleMvc.csproj"),
+            )
         };
         let ws = shadow_workspace_for(csproj);
         // Never inside the user's source tree (else the SDK globs the projection).
@@ -709,9 +1194,15 @@ mod tests {
     fn shadow_workspace_isolates_two_csproj_in_same_dir() {
         // Two distinct projects sharing a directory must NOT share a shadow.
         let (a, b) = if cfg!(windows) {
-            (Path::new("C:\\src\\Mono\\A.csproj"), Path::new("C:\\src\\Mono\\B.csproj"))
+            (
+                Path::new("C:\\src\\Mono\\A.csproj"),
+                Path::new("C:\\src\\Mono\\B.csproj"),
+            )
         } else {
-            (Path::new("/src/Mono/A.csproj"), Path::new("/src/Mono/B.csproj"))
+            (
+                Path::new("/src/Mono/A.csproj"),
+                Path::new("/src/Mono/B.csproj"),
+            )
         };
         assert_ne!(shadow_workspace_for(a), shadow_workspace_for(b));
     }

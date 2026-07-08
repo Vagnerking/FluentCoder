@@ -1,0 +1,22 @@
+.status-remote {
+  background: var(--accent);
+  color: #06121b;
+  font-weight: 600;
+}
+.status-remote:hover {
+  background: var(--accent);
+  color: #06121b;
+  filter: brightness(1.08);
+}
+.status-remote-local {
+  background: rgba(96, 205, 255, 0.16);
+  color: var(--accent);
+  padding: 0 9px;
+}
+.status-remote-local:hover {
+  background: rgba(96, 205, 255, 0.3);
+  color: var(--accent);
+}
+.status-remote-local .codicon {
+  font-size: 14px;
+}

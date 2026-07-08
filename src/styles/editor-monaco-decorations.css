@@ -1,0 +1,224 @@
+/* ---- Git Lens inline blame annotations ---- */
+/* Monaco injects `after` content into a span with this class. We raise
+   specificity (.monaco-editor prefix + !important) so the editor's own
+   token colors don't override the muted blame color. */
+.monaco-editor .git-fluent-inline-active {
+  color: #93a1b5 !important;
+  font-style: italic !important;
+  opacity: 1;
+  pointer-events: auto;
+  cursor: help;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.monaco-editor .package-inline-outdated {
+  color: #ffb3c3 !important;
+  font-weight: 700 !important;
+  margin-left: 8px;
+  padding: 0;
+  pointer-events: auto;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  opacity: 0.92;
+}
+
+.monaco-editor .package-inline-security {
+  color: #e2c08d !important;
+  font-weight: 700 !important;
+  margin-left: 8px;
+  padding: 0;
+  pointer-events: auto;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  opacity: 0.9;
+}
+
+.monaco-editor .package-inline-outdated::selection,
+.monaco-editor .package-inline-security::selection,
+.monaco-editor .git-fluent-inline-active::selection {
+  background: transparent !important;
+}
+
+.monaco-editor .git-file-annotation-blame,
+.monaco-editor .git-file-annotation-heatmap {
+  width: 13px !important;
+  pointer-events: auto;
+  cursor: help;
+}
+
+.monaco-editor .git-file-annotation-blame::before,
+.monaco-editor .git-file-annotation-heatmap::before {
+  content: "";
+  display: block;
+  width: 3px;
+  height: 14px;
+  margin: 2px 0 0 5px;
+  border-radius: 999px;
+  background: rgba(147, 161, 181, 0.42);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+
+.monaco-editor .git-file-annotation-blame::before {
+  background: rgba(96, 205, 255, 0.38);
+}
+
+.monaco-editor .git-file-annotation-hot::before {
+  background: rgba(96, 205, 255, 0.86);
+  box-shadow: 0 0 10px rgba(96, 205, 255, 0.24);
+}
+
+.monaco-editor .git-file-annotation-warm::before {
+  background: rgba(143, 224, 173, 0.74);
+}
+
+.monaco-editor .git-file-annotation-cool::before {
+  background: rgba(226, 192, 141, 0.62);
+}
+
+.monaco-editor .git-file-annotation-cold::before {
+  background: rgba(125, 135, 149, 0.44);
+}
+
+/* ---- VS Code-like dirty diff inside normal editor files ---- */
+.monaco-editor .view-overlays .fc-dirty-diff-line-added {
+  background: linear-gradient(90deg, rgba(115, 201, 145, 0.13), rgba(115, 201, 145, 0.035) 42%, transparent) !important;
+}
+
+.monaco-editor .view-overlays .fc-dirty-diff-line-modified {
+  background: linear-gradient(90deg, rgba(96, 205, 255, 0.13), rgba(96, 205, 255, 0.035) 42%, transparent) !important;
+}
+
+.monaco-editor .view-overlays .fc-dirty-diff-line-deleted {
+  background: linear-gradient(90deg, rgba(255, 154, 168, 0.11), rgba(255, 154, 168, 0.028) 38%, transparent) !important;
+}
+
+.monaco-editor .margin-view-overlays .fc-dirty-diff-gutter,
+.monaco-editor .margin-view-overlays .fc-dirty-diff-glyph {
+  width: 13px !important;
+  position: relative;
+}
+
+.monaco-editor .margin-view-overlays .fc-dirty-diff-gutter::before,
+.monaco-editor .margin-view-overlays .fc-dirty-diff-glyph::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 1px;
+  width: 3px;
+  height: calc(100% - 2px);
+  min-height: 13px;
+  border-radius: 999px;
+  opacity: 0.98;
+}
+
+.monaco-editor .margin-view-overlays .fc-dirty-diff-gutter-added::before,
+.monaco-editor .margin-view-overlays .fc-dirty-diff-glyph-added::before {
+  background: #73c991;
+  box-shadow: 0 0 8px rgba(115, 201, 145, 0.16);
+}
+
+.monaco-editor .margin-view-overlays .fc-dirty-diff-gutter-modified::before,
+.monaco-editor .margin-view-overlays .fc-dirty-diff-glyph-modified::before {
+  background: #60cdff;
+  box-shadow: 0 0 8px rgba(96, 205, 255, 0.16);
+}
+
+.monaco-editor .margin-view-overlays .fc-dirty-diff-gutter-deleted::before,
+.monaco-editor .margin-view-overlays .fc-dirty-diff-glyph-deleted::before {
+  left: 1px;
+  top: 7px;
+  width: 0;
+  height: 0;
+  min-height: 0;
+  border-radius: 0;
+  background: transparent;
+  border-left: 7px solid #ff9aa8;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  box-shadow: none;
+}
+
+/* ---- Git diff view decorations ---- */
+.monaco-editor .view-overlays .fc-diff-line {
+  border-left: 2px solid transparent;
+  box-sizing: border-box;
+}
+
+.monaco-editor .view-overlays .fc-diff-line-added {
+  background: linear-gradient(90deg, rgba(46, 160, 67, 0.22), rgba(46, 160, 67, 0.08)) !important;
+  border-left-color: rgba(143, 224, 173, 0.72);
+}
+
+.monaco-editor .view-overlays .fc-diff-line-removed {
+  background: linear-gradient(90deg, rgba(248, 81, 73, 0.23), rgba(248, 81, 73, 0.08)) !important;
+  border-left-color: rgba(255, 154, 168, 0.76);
+}
+
+.monaco-editor .view-overlays .fc-diff-line-modified-added {
+  background:
+    linear-gradient(90deg, rgba(143, 224, 173, 0.24), rgba(143, 224, 173, 0.1)),
+    linear-gradient(0deg, rgba(226, 192, 141, 0.08), rgba(226, 192, 141, 0.08)) !important;
+  border-left-color: rgba(226, 192, 141, 0.78);
+}
+
+.monaco-editor .view-overlays .fc-diff-line-modified-removed {
+  background:
+    linear-gradient(90deg, rgba(255, 154, 168, 0.24), rgba(255, 154, 168, 0.1)),
+    linear-gradient(0deg, rgba(226, 192, 141, 0.08), rgba(226, 192, 141, 0.08)) !important;
+  border-left-color: rgba(226, 192, 141, 0.78);
+}
+
+.monaco-editor .view-overlays .fc-diff-line-hunk {
+  background: rgba(96, 205, 255, 0.1) !important;
+  border-left-color: rgba(96, 205, 255, 0.42);
+}
+
+.monaco-editor .view-overlays .fc-diff-line-header {
+  background: rgba(125, 135, 149, 0.1) !important;
+  border-left-color: rgba(125, 135, 149, 0.46);
+}
+
+.monaco-editor .margin-view-overlays .fc-diff-gutter {
+  width: 13px !important;
+}
+
+.monaco-editor .margin-view-overlays .fc-diff-gutter::before,
+.monaco-editor .margin-view-overlays .fc-diff-glyph::before {
+  content: "";
+  display: block;
+  width: 4px;
+  height: 14px;
+  margin: 2px auto 0;
+  border-radius: 999px;
+  opacity: 0.95;
+}
+
+.monaco-editor .margin-view-overlays .fc-diff-gutter-added::before,
+.monaco-editor .margin-view-overlays .fc-diff-glyph-added::before,
+.monaco-editor .margin-view-overlays .fc-diff-gutter-modified-added::before,
+.monaco-editor .margin-view-overlays .fc-diff-glyph-modified-added::before {
+  background: #8fe0ad;
+  box-shadow: 0 0 8px rgba(143, 224, 173, 0.18);
+}
+
+.monaco-editor .margin-view-overlays .fc-diff-gutter-removed::before,
+.monaco-editor .margin-view-overlays .fc-diff-glyph-removed::before,
+.monaco-editor .margin-view-overlays .fc-diff-gutter-modified-removed::before,
+.monaco-editor .margin-view-overlays .fc-diff-glyph-modified-removed::before {
+  background: #ff9aa8;
+  box-shadow: 0 0 8px rgba(255, 154, 168, 0.18);
+}
+
+.monaco-editor .margin-view-overlays .fc-diff-gutter-hunk::before,
+.monaco-editor .margin-view-overlays .fc-diff-glyph-hunk::before {
+  background: #60cdff;
+  opacity: 0.7;
+}
+
+.monaco-editor .margin-view-overlays .fc-diff-gutter-header::before,
+.monaco-editor .margin-view-overlays .fc-diff-glyph-header::before {
+  background: #7d8795;
+  opacity: 0.62;
+}

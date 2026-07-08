@@ -1,0 +1,77 @@
+/* ---- Side-by-side Git diff editor ---- */
+.editor-diff-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: var(--editor-bg);
+}
+
+.editor-diff-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 46%);
+  align-items: center;
+  gap: 12px;
+  min-height: 34px;
+  padding: 4px 12px;
+  border-bottom: 1px solid rgba(210, 228, 242, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.034), rgba(255,255,255,0.012)),
+    var(--editor-bg);
+  color: var(--text-secondary);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.editor-diff-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-weight: 650;
+}
+
+.editor-diff-title span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-diff-title .codicon {
+  color: var(--accent);
+}
+
+.editor-diff-labels {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.editor-diff-labels span {
+  min-width: 0;
+  padding: 2px 8px;
+  border: 1px solid rgba(210, 228, 242, 0.09);
+  border-radius: var(--radius-control);
+  background: rgba(255,255,255,0.024);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-diff-shell .monaco-diff-editor {
+  flex: 1;
+  min-height: 0;
+}
+
+.editor-diff-shell .diffOverview {
+  background: rgba(255,255,255,0.02);
+}

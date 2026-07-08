@@ -209,13 +209,11 @@ export function installDiagnosticsBridge(
   );
   const usePull = shouldUsePullDiagnostics(mode, hasStaticPullCapability);
   if (usePull) {
-    // One semantic provider per language: drop the compatibility-shim pull
-    // feature so it can't compete with our direct-to-markers pull.
-    try {
-      client.getFeature("textDocument/diagnostic")?.dispose();
-    } catch {
-      /* feature absent or not disposable — ignore */
-    }
+    // The native DiagnosticFeature was already neutralized before start()
+    // (see createLanguageClient → disableNativeClientFeature for
+    // `textDocument/diagnostic`), so our direct-to-markers pull below is the
+    // sole diagnostics source for this server — no duplicate markers, and the
+    // per-`serverId` owner dedup stays intact.
 
     const pullIdentifiers: Array<string | undefined> =
       identifiers && identifiers.length > 0 ? [...identifiers] : [undefined];
@@ -356,7 +354,10 @@ export function installDiagnosticsBridge(
     };
 
     const pull = (model: monaco.editor.ITextModel): void => {
-      const uri = model.uri.toString();
+      // Wire uri via o conversor do cliente: o sync nativo abre docs com o colon
+      // do drive percent-encoded (c%3A); um toString() cru (c:) mira um doc que o
+      // Roslyn não rastreia → pulls vazios/erros silenciosos.
+      const uri = client.code2ProtocolConverter.asUri(model.uri as never);
       let state = pullStates.get(uri);
       if (!state) {
         state = {
@@ -383,7 +384,10 @@ export function installDiagnosticsBridge(
     };
 
     const schedulePull = (model: monaco.editor.ITextModel): void => {
-      const uri = model.uri.toString();
+      // Wire uri via o conversor do cliente: o sync nativo abre docs com o colon
+      // do drive percent-encoded (c%3A); um toString() cru (c:) mira um doc que o
+      // Roslyn não rastreia → pulls vazios/erros silenciosos.
+      const uri = client.code2ProtocolConverter.asUri(model.uri as never);
       const prev = debounce.get(uri);
       if (prev) window.clearTimeout(prev);
       debounce.set(
@@ -397,7 +401,10 @@ export function installDiagnosticsBridge(
 
     const track = (model: monaco.editor.ITextModel): void => {
       if (!matches(model)) return;
-      const uri = model.uri.toString();
+      // Wire uri via o conversor do cliente: o sync nativo abre docs com o colon
+      // do drive percent-encoded (c%3A); um toString() cru (c:) mira um doc que o
+      // Roslyn não rastreia → pulls vazios/erros silenciosos.
+      const uri = client.code2ProtocolConverter.asUri(model.uri as never);
       if (!changeSubs.has(uri)) {
         changeSubs.set(uri, model.onDidChangeContent(() => schedulePull(model)));
       }

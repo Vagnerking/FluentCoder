@@ -9,6 +9,7 @@ export interface WelcomeScreenProps {
   folderName?: string | null;
   /** Absolute path of the open folder (filtered out of the recents list). */
   folderPath?: string | null;
+  workspaceName?: string | null;
   /** Recently-opened folder paths (most recent first). */
   recents: string[];
   onNewFile: () => void;
@@ -76,9 +77,9 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
             <img className="welcome-home-logo" src={logoUrl} alt="" />
             <div>
               <div className="welcome-wordmark">Fluent Coder</div>
-              {props.folderName && (
-                <div className="welcome-context">{props.folderName}</div>
-              )}
+              <div className="welcome-context">
+                {props.workspaceName ?? props.folderName}
+              </div>
             </div>
           </div>
           <div className="welcome-hints">

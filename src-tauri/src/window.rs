@@ -258,6 +258,7 @@ pub async fn open_new_window(
     app: tauri::AppHandle,
     window: tauri::Window,
     remote_attach: Option<String>,
+    local_attach: Option<String>,
 ) -> Result<(), String> {
     let pos = window.outer_position().map_err(|e| e.to_string())?;
     let size = window.outer_size().map_err(|e| e.to_string())?;
@@ -288,9 +289,10 @@ pub async fn open_new_window(
     let effects = tauri::window::EffectsBuilder::new()
         .effect(tauri::window::Effect::Mica)
         .build();
-    let url = match remote_attach {
-        Some(payload) => format!("index.html?freshWindow=1&remoteAttach={payload}"),
-        None => "index.html?freshWindow=1".to_string(),
+    let url = match (remote_attach, local_attach) {
+        (Some(payload), _) => format!("index.html?freshWindow=1&remoteAttach={payload}"),
+        (None, Some(payload)) => format!("index.html?freshWindow=1&localAttach={payload}"),
+        (None, None) => "index.html?freshWindow=1".to_string(),
     };
     let new_window =
         tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::App(url.into()))

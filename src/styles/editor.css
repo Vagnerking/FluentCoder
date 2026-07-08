@@ -1,0 +1,9 @@
+@import './editor-layout.css';
+@import './editor-package.css';
+@import './editor-diff.css';
+@import './editor-annotations-toolbar.css';
+@import './editor-welcome.css';
+@import './editor-monaco-decorations.css';
+@import './editor-monaco-hover.css';
+@import './editor-detached.css';
+@import './editor-media.css';

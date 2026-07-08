@@ -1,0 +1,140 @@
+.git-workspace-list { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 12px; scrollbar-gutter: stable; }
+.git-workspace-root {
+  border-top: 1px solid rgba(210, 228, 242, 0.07);
+  content-visibility: auto;
+  contain-intrinsic-size: 160px;
+}
+.git-workspace-root:first-child { border-top: 0; }
+.git-workspace-root-title {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  padding: 8px 12px 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+}
+.git-workspace-root-title .codicon { color: var(--accent); }
+.git-workspace-root-title small {
+  grid-column: 2;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.git-workspace-root.remote .git-workspace-root-title .codicon { color: var(--text-muted); }
+.git-root-header {
+  display: grid;
+  grid-template-columns: minmax(72px, 1fr) minmax(0, auto) auto;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 2px 6px 2px 8px;
+  color: var(--text-secondary);
+}
+.git-root-header:hover {
+  background: rgba(255, 255, 255, 0.022);
+}
+.git-root-header.is-collapsed {
+  color: var(--text-muted);
+}
+.git-root-main {
+  display: grid;
+  grid-template-columns: 14px 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  height: 26px;
+  padding: 0 2px;
+  border: none;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.git-root-main:hover { color: var(--text); }
+.git-root-main:not(button) { cursor: default; }
+.git-root-header.is-collapsed .git-root-main { font-weight: 600; }
+.git-root-spacer {
+  width: 12px;
+  height: 12px;
+}
+.git-root-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+.git-root-header.is-collapsed .git-root-name { color: var(--text-secondary); }
+.git-root-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text-muted);
+}
+.git-root-branch,
+.git-root-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid rgba(210, 228, 242, 0.075);
+  border-radius: 999px;
+  background: rgba(210, 228, 242, 0.035);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.git-root-chip-muted {
+  color: var(--text-muted);
+  background: transparent;
+}
+.git-root-branch {
+  max-width: 90px;
+}
+.git-root-branch-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-root-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1px;
+  min-width: max-content;
+  opacity: 0.72;
+  transition: opacity 100ms ease;
+}
+.git-root-header:hover .git-root-actions,
+.git-root-header:focus-within .git-root-actions {
+  opacity: 1;
+}
+.git-root-actions .git-actions { gap: 1px; }
+.git-root-actions .git-icon-btn {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+}
+.git-root-header.is-collapsed + .git-group-commit,
+.git-root-header.is-collapsed + .git-lists {
+  display: none;
+}
+.git-panel-embedded .git-group,
+.git-panel-embedded .git-lists {
+  animation: git-panel-section-in 110ms var(--ease-standard, ease-out);
+  will-change: opacity, transform;
+}

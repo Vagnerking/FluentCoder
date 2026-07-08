@@ -1,0 +1,137 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  /* Segoe UI Variable is the Windows 11 system font; graceful fallbacks. */
+  font-family: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI",
+    system-ui, sans-serif;
+  font-size: 13px;
+  color: var(--text-secondary);
+  /* Fully transparent so the Mica backdrop is what we see between surfaces. */
+  background: transparent;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Keyboard-focused tree row (issue 64), distinct from hover/selection. */
+.tree-row.focused {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* A node sitting in the internal clipboard as a "cut" (issue 60). */
+.tree-row.cut {
+  opacity: 0.5;
+}
+
+/* ---- Focus visibility (Fluent keyboard focus) — F2-AUD-003 ----
+   Single focus contract for every interactive element. Any rule that sets
+   `outline: none` MUST provide an equivalent ring via the tokens below; the
+   `.focus-ring` utility is the canonical substitute. */
+button:focus-visible,
+[role="button"]:focus-visible,
+[role="tab"]:focus-visible,
+[role="radio"]:focus-visible,
+[role="menuitem"]:focus-visible,
+[role="option"]:focus-visible,
+a:focus-visible,
+summary:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible,
+.tree-row:focus-visible {
+  outline: var(--focus-ring-width) solid var(--stroke-focus);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+
+/* Utility for controls that need an outset ring (e.g. inputs/handles where a
+   negative offset would clip). Replaces ad-hoc box-shadow focus styles. */
+.focus-ring:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Text fields across features clear the native outline; give them the shared
+   ring so keyboard focus is never invisible (F2-AUD-003 / F2-AUD-013). */
+.search-input:focus-visible,
+.git-message:focus-visible,
+.quick-open-input:focus-visible {
+  outline: none;
+  border-color: var(--stroke-focus);
+  box-shadow: var(--focus-ring);
+}
+
+/* High contrast / forced colors (F2-AUD-002). In Windows high-contrast mode the
+   system overrides backgrounds; keep focus, borders and selection visible by
+   deferring to the system palette instead of our alpha tints. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: var(--focus-ring-width) solid Highlight;
+    outline-offset: var(--focus-ring-offset);
+  }
+  button,
+  input,
+  textarea,
+  select,
+  [role="button"],
+  [role="tab"],
+  [role="menuitem"],
+  [role="option"] {
+    border: 1px solid ButtonBorder;
+  }
+  .tree-row.active,
+  [aria-selected="true"],
+  [aria-current="true"] {
+    background: Highlight;
+    color: HighlightText;
+    forced-color-adjust: none;
+  }
+}
+
+/* ---- Scrollbars ---- */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(184, 199, 213, 0.18);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(184, 199, 213, 0.3);
+  background-clip: padding-box;
+}
+
+/* ---- Reduced motion (F2-AUD-004) ----
+   Global policy: collapse decorative transitions/animations to near-zero so no
+   element keeps moving for users who asked for less motion. Motion that
+   communicates state (e.g. a spinner) is left to opt back in deliberately. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .activity-indicator {
+    transition: none;
+  }
+}

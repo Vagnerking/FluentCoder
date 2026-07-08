@@ -1,0 +1,19 @@
+@page "{id:int?}"
+@model MyApp.Pages.Clientes.EditarModel
+@{
+    ViewData["Title"] = "Editar cliente";
+}
+<h1>Editar cliente</h1>
+
+<form method="post">
+    <input type="hidden" asp-for="Cliente.Id" />
+    <div class="form-group">
+        <label asp-for="Cliente.Nome"></label>
+        <input asp-for="Cliente.Nome" class="form-control" />
+        <span asp-validation-for="Cliente.Nome" class="text-danger"></span>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Salvar</button>
+    <a asp-page="Index" class="btn btn-secondary">Cancelar</a>
+    <button type="submit" asp-page-handler="Excluir" class="btn btn-danger">Excluir</button>
+</form>

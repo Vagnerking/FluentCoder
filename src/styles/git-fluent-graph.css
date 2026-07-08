@@ -1,0 +1,275 @@
+.git-fluent-graph-list {
+  gap: 0;
+  padding: 0 0 2px;
+}
+.git-fluent-filter {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 3px;
+  min-height: 21px;
+  margin: 0 0 2px;
+  padding: 0 3px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+  background: rgba(210, 228, 242, 0.025);
+}
+.git-fluent-filter:focus-within {
+  border-color: rgba(96, 205, 255, 0.42);
+  box-shadow: inset 0 0 0 1px rgba(96, 205, 255, 0.18);
+}
+.git-fluent-filter > .codicon {
+  justify-self: center;
+  color: var(--text-muted);
+}
+.git-fluent-filter input {
+  min-width: 0;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+}
+.git-fluent-filter input::placeholder {
+  color: var(--text-muted);
+}
+.git-fluent-filter input::-webkit-search-cancel-button {
+  display: none;
+}
+.git-fluent-filter button {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+}
+.git-fluent-filter button:hover {
+  color: var(--text);
+  background: var(--fill-subtle-hover);
+}
+.git-fluent-graph-row {
+  position: relative;
+  grid-template-columns: var(--git-graph-width, 44px) minmax(0, 1fr) minmax(0, auto);
+  min-height: 20px;
+  margin: 0;
+  padding: 0 4px 0 0;
+  border-radius: 0;
+  column-gap: 3px;
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: 20px;
+}
+.git-fluent-graph-row:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+.git-fluent-graph-row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+  background: rgba(96, 205, 255, 0.055);
+}
+.git-fluent-graph-row.selected {
+  background: rgba(96, 205, 255, 0.035);
+  box-shadow: inset 1px 0 0 rgba(96, 205, 255, 0.58);
+}
+.git-fluent-graph-row .git-graph-main {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0 2px 0 0;
+}
+.git-fluent-graph-row .git-graph-subject-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+.git-fluent-graph-row .git-graph-subject {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
+  font-size: 11.25px;
+  font-weight: 600;
+  line-height: 18px;
+}
+.git-fluent-graph-row .git-graph-subject span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-fluent-graph-row .git-graph-meta {
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  gap: 4px;
+  min-width: 36px;
+  max-width: 128px;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 18px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.git-fluent-graph-row .git-graph-meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.git-fluent-graph-row .git-graph-hash {
+  display: none;
+  justify-self: end;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-family: var(--font-mono, "Cascadia Mono", Consolas, monospace);
+  line-height: 18px;
+}
+.git-fluent-graph-row .git-graph-rail {
+  position: relative;
+  min-height: 20px;
+  width: var(--git-graph-width, 44px);
+}
+.git-fluent-graph-row .git-graph-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 22px;
+  overflow: visible;
+}
+.git-fluent-graph-row .git-graph-svg-lane,
+.git-fluent-graph-row .git-graph-svg-connector {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.82;
+  vector-effect: non-scaling-stroke;
+}
+.git-fluent-graph-row .git-graph-svg-lane {
+  opacity: 0.74;
+}
+.git-fluent-graph-row .git-graph-svg-connector.merge {
+  opacity: 0.9;
+}
+.git-fluent-graph-row .git-graph-dot {
+  top: 5px;
+  width: 9px;
+  height: 9px;
+  border-width: 2px;
+  background: var(--panel-bg);
+  box-shadow: 0 0 0 1px rgba(17, 24, 33, 0.88);
+}
+.git-fluent-graph-row.head .git-graph-dot {
+  background: var(--git-graph-color, #60cdff);
+}
+.git-fluent-graph-refs {
+  justify-content: flex-end;
+  max-width: 118px;
+  overflow: hidden;
+}
+.git-fluent-graph-refs .git-graph-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 92px;
+  height: 15px;
+  padding-inline: 4px 5px;
+  line-height: 13px;
+  font-size: 9.5px;
+}
+.git-fluent-graph-refs .git-graph-ref .codicon {
+  flex: 0 0 auto;
+  opacity: 0.92;
+}
+.git-fluent-graph-row .git-graph-actions {
+  position: absolute;
+  right: 2px;
+  top: 1px;
+  min-width: 0;
+  justify-content: flex-end;
+  opacity: 0;
+  padding-left: 4px;
+  background: linear-gradient(90deg, transparent, var(--panel-bg) 24%);
+  pointer-events: none;
+  transition: opacity 90ms ease;
+}
+.git-fluent-graph-row:hover .git-graph-actions,
+.git-fluent-graph-row:focus-within .git-graph-actions,
+.git-fluent-graph-row.selected .git-graph-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+.git-fluent-more-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  margin: 2px 4px 0;
+  padding: 1px 6px;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.git-fluent-more-row:hover {
+  color: var(--text-secondary);
+  background: var(--fill-subtle-hover);
+}
+.git-fluent-more-row.passive {
+  cursor: default;
+  pointer-events: none;
+}
+.git-fluent-more-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-fluent-more-row small {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+@media (prefers-reduced-motion: reduce) {
+  .git-fluent-graph-row .git-graph-actions {
+    transition: none;
+  }
+}
+@container (max-width: 430px) {
+  .git-fluent-toolbar-actions {
+    margin-left: 1px;
+  }
+
+  .git-fluent-command-divider,
+  .git-fluent-toolbar-actions button:not(:last-child) {
+    display: none;
+  }
+
+  .git-fluent-graph-row .git-graph-meta,
+  .git-fluent-graph-refs {
+    display: none;
+  }
+
+  .git-fluent-graph-row .git-graph-actions {
+    min-width: 22px;
+  }
+
+  .git-fluent-graph-row .git-graph-actions button:not(:last-child) {
+    display: none;
+  }
+}

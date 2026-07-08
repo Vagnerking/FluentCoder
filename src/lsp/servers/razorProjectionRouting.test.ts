@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   routeDiagnostics,
+  pickWorkspaceSymbolForMetadata,
   routeDefinition,
   remapRangeToMonaco,
   lspRangeToMonaco,
@@ -15,6 +16,7 @@ import {
   isPhantomSelfAmbiguity,
   type LspDiagnostic,
   type RemapFn,
+  type RemapRangesFn,
 } from "./razorProjectionRouting.ts";
 import { canonicalFileUriKey } from "../uri.ts";
 
@@ -24,15 +26,20 @@ import { canonicalFileUriKey } from "../uri.ts";
  *   - hover @Model.City range   .g.cs ( 85,6)-( 85,10) → .cshtml ( 7,11)-( 7,15)
  * Everything else is synthetic scaffolding → null (must be dropped).
  */
-const remapToSource: RemapFn = async (line, character) => {
-  const table: Record<string, { line: number; character: number }> = {
-    "160,6": { line: 15, character: 14 },
-    "160,25": { line: 15, character: 33 },
-    "85,6": { line: 7, character: 11 },
-    "85,10": { line: 7, character: 15 },
-  };
-  return table[`${line},${character}`] ?? null;
+const POS_TABLE: Record<string, { line: number; character: number }> = {
+  "160,6": { line: 15, character: 14 },
+  "160,25": { line: 15, character: 33 },
+  "85,6": { line: 7, character: 11 },
+  "85,10": { line: 7, character: 15 },
 };
+
+/** Batch (range) form of the fake — the shape routing consumes now (1 IPC/N ranges). */
+const remapRanges: RemapRangesFn = async (ranges) =>
+  ranges.map((r) => {
+    const start = POS_TABLE[`${r.start.line},${r.start.character}`] ?? null;
+    const end = POS_TABLE[`${r.end.line},${r.end.character}`] ?? null;
+    return start && end ? { start, end } : null;
+  });
 
 const CS1061: LspDiagnostic = {
   range: { start: { line: 160, character: 6 }, end: { line: 160, character: 25 } },
@@ -42,7 +49,7 @@ const CS1061: LspDiagnostic = {
 };
 
 test("routeDiagnostics remaps a .g.cs range to a 1-based .cshtml marker", async () => {
-  const [m, ...rest] = await routeDiagnostics([CS1061], remapToSource);
+  const [m, ...rest] = await routeDiagnostics([CS1061], remapRanges);
   assert.equal(rest.length, 0);
   // .cshtml 0-based (15,14)-(15,33) → Monaco 1-based (16,15)-(16,34)
   assert.deepEqual(
@@ -59,7 +66,7 @@ test("routeDiagnostics DROPS an unmappable (synthetic) diagnostic", async () => 
     range: { start: { line: 42, character: 0 }, end: { line: 42, character: 5 } },
     message: "scaffolding noise",
   };
-  assert.deepEqual(await routeDiagnostics([synthetic], remapToSource), []);
+  assert.deepEqual(await routeDiagnostics([synthetic], remapRanges), []);
 });
 
 test("routeDiagnostics keeps only the mappable ones in a mixed batch", async () => {
@@ -67,7 +74,7 @@ test("routeDiagnostics keeps only the mappable ones in a mixed batch", async () 
     range: { start: { line: 42, character: 0 }, end: { line: 42, character: 5 } },
     message: "noise",
   };
-  const markers = await routeDiagnostics([synthetic, CS1061], remapToSource);
+  const markers = await routeDiagnostics([synthetic, CS1061], remapRanges);
   assert.equal(markers.length, 1);
   assert.equal(markers[0].code, "CS1061");
 });
@@ -120,7 +127,7 @@ test("isPhantomSelfAmbiguity: false when the message lacks exactly two quoted sy
 });
 
 test("routeDiagnostics DROPS the phantom self-ambiguity CS0229", async () => {
-  assert.deepEqual(await routeDiagnostics([PHANTOM_CS0229], remapToSource), []);
+  assert.deepEqual(await routeDiagnostics([PHANTOM_CS0229], remapRanges), []);
 });
 
 test("routeDiagnostics keeps a REAL CS0229 (distinct symbols)", async () => {
@@ -128,20 +135,20 @@ test("routeDiagnostics keeps a REAL CS0229 (distinct symbols)", async () => {
     ...PHANTOM_CS0229,
     message: "Ambiguity between 'A.Foo' and 'B.Foo'",
   };
-  const markers = await routeDiagnostics([real], remapToSource);
+  const markers = await routeDiagnostics([real], remapRanges);
   assert.equal(markers.length, 1);
   assert.equal(markers[0].code, "CS0229");
 });
 
 test("routeDiagnostics filters VS-custom tags, keeps standard ones", async () => {
   const withTags: LspDiagnostic = { ...CS1061, tags: [1, 2147483642, 2] };
-  const [m] = await routeDiagnostics([withTags], remapToSource);
+  const [m] = await routeDiagnostics([withTags], remapRanges);
   assert.deepEqual((m as unknown as { tags?: number[] }).tags, [1, 2]);
 });
 
 test("remapRangeToMonaco returns null if either endpoint is synthetic", async () => {
   const half = { start: { line: 160, character: 6 }, end: { line: 999, character: 0 } };
-  assert.equal(await remapRangeToMonaco(half, remapToSource), null);
+  assert.equal(await remapRangeToMonaco(half, remapRanges), null);
 });
 
 test("lspSeverityToMonaco maps the LSP severity table to Monaco", () => {
@@ -173,7 +180,7 @@ test("routeDefinition passes a real .cs target through (1-based, uri kept)", asy
   const out = await routeDefinition([target], {
     projectedUriKey,
     cshtmlUri,
-    remapToSource,
+    remapRanges,
     uriKey: canonicalFileUriKey,
   });
   assert.equal(out.length, 1);
@@ -189,7 +196,7 @@ test("routeDefinition rewrites a projected-.g.cs target back to the .cshtml", as
   const out = await routeDefinition([target], {
     projectedUriKey,
     cshtmlUri,
-    remapToSource,
+    remapRanges,
     uriKey: canonicalFileUriKey,
   });
   assert.equal(out.length, 1);
@@ -209,7 +216,7 @@ test("routeDefinition drops an unmappable projected target and foreign .g.cs", a
   const out = await routeDefinition([synthetic, foreign], {
     projectedUriKey,
     cshtmlUri,
-    remapToSource,
+    remapRanges,
     uriKey: canonicalFileUriKey,
   });
   assert.deepEqual(out, []);
@@ -223,7 +230,7 @@ test("routeDefinition handles the LocationLink shape (targetUri/targetSelectionR
   const out = await routeDefinition(link, {
     projectedUriKey,
     cshtmlUri,
-    remapToSource,
+    remapRanges,
     uriKey: canonicalFileUriKey,
   });
   assert.equal(out.length, 1);
@@ -279,4 +286,166 @@ test("pickProjectForCshtml chooses the longest (most specific) containing projec
 test("pickProjectForCshtml returns null for a loose file and ignores non-csproj", () => {
   assert.equal(pickProjectForCshtml(["C:\\a\\A.csproj"], "C:\\b\\Index.cshtml"), null);
   assert.equal(pickProjectForCshtml(["C:\\a\\A.sln"], "C:\\a\\Index.cshtml"), null);
+});
+
+// --- routeWorkspaceEdit (code actions, Fase A2) ---
+
+import { routeWorkspaceEdit, monacoSeverityToLsp } from "./razorProjectionRouting.ts";
+
+test("routeWorkspaceEdit remaps projected edits strictly and passes real files through", async () => {
+  const edit = {
+    changes: {
+      [projectedUri]: [
+        { range: { start: { line: 160, character: 6 }, end: { line: 160, character: 25 } }, newText: "Fixed" },
+      ],
+      "file:///c:/proj/Models/WeatherModel.cs": [
+        { range: { start: { line: 5, character: 18 }, end: { line: 5, character: 22 } }, newText: "City2" },
+      ],
+    },
+  };
+  const routed = await routeWorkspaceEdit(edit, {
+    projectedUriKey,
+    cshtmlUri,
+    remapRangesStrict: remapRanges,
+    uriKey: canonicalFileUriKey,
+  });
+  assert.ok(routed, "edit set must survive");
+  assert.equal(routed.length, 2);
+  const [proj, real] = routed;
+  assert.equal(proj.uri, cshtmlUri, "projected edit lands on the .cshtml");
+  assert.deepEqual(proj.range, { startLineNumber: 16, startColumn: 15, endLineNumber: 16, endColumn: 34 });
+  assert.equal(proj.text, "Fixed");
+  assert.equal(real.uri, "file:///c:/proj/Models/WeatherModel.cs");
+  assert.deepEqual(real.range, { startLineNumber: 6, startColumn: 19, endLineNumber: 6, endColumn: 23 });
+});
+
+test("routeWorkspaceEdit drops the WHOLE action when a projected edit is synthetic", async () => {
+  const edit = {
+    changes: {
+      [projectedUri]: [
+        { range: { start: { line: 160, character: 6 }, end: { line: 160, character: 25 } }, newText: "ok" },
+        { range: { start: { line: 1, character: 0 }, end: { line: 1, character: 5 } }, newText: "synthetic" },
+      ],
+    },
+  };
+  assert.equal(
+    await routeWorkspaceEdit(edit, {
+      projectedUriKey,
+      cshtmlUri,
+      remapRangesStrict: remapRanges,
+      uriKey: canonicalFileUriKey,
+    }),
+    null,
+    "partial application is never allowed"
+  );
+});
+
+test("routeWorkspaceEdit rejects resource ops, foreign .g.cs and unknown shapes", async () => {
+  const opts = { projectedUriKey, cshtmlUri, remapRangesStrict: remapRanges, uriKey: canonicalFileUriKey };
+  assert.equal(await routeWorkspaceEdit({ documentChanges: [{ kind: "rename" }] }, opts), null);
+  assert.equal(
+    await routeWorkspaceEdit(
+      { changes: { "file:///c:/shadow/projected/Other.g.cs": [
+        { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, newText: "x" },
+      ] } },
+      opts
+    ),
+    null
+  );
+  assert.equal(await routeWorkspaceEdit({ documentChanges: [{ edits: [] }] }, opts), null, "no textDocument.uri");
+});
+
+test("routeWorkspaceEdit handles documentChanges (TextDocumentEdit shape)", async () => {
+  const edit = {
+    documentChanges: [
+      {
+        textDocument: { uri: projectedUri, version: 3 },
+        edits: [{ range: { start: { line: 85, character: 6 }, end: { line: 85, character: 10 } }, newText: "Town" }],
+      },
+    ],
+  };
+  const routed = await routeWorkspaceEdit(edit, {
+    projectedUriKey,
+    cshtmlUri,
+    remapRangesStrict: remapRanges,
+    uriKey: canonicalFileUriKey,
+  });
+  assert.ok(routed);
+  assert.equal(routed.length, 1);
+  assert.equal(routed[0].uri, cshtmlUri);
+  assert.equal(routed[0].text, "Town");
+});
+
+test("monacoSeverityToLsp inverts the severity table", () => {
+  assert.equal(monacoSeverityToLsp(8), 1);
+  assert.equal(monacoSeverityToLsp(4), 2);
+  assert.equal(monacoSeverityToLsp(2), 3);
+  assert.equal(monacoSeverityToLsp(1), 4);
+});
+
+// ── pickWorkspaceSymbolForMetadata (metadata → fonte real) ───────────────────
+
+const wsLoc = (uri: string) => ({
+  uri,
+  range: { start: { line: 3, character: 10 }, end: { line: 3, character: 20 } },
+});
+
+test("workspace/symbol: membro escolhe o hit cujo container é o tipo do decompilado", () => {
+  const picked = pickWorkspaceSymbolForMetadata(
+    [
+      { name: "Cpf", containerName: "Pessoa", location: wsLoc("file:///c:/r/Pessoa.cs") },
+      { name: "Cpf", containerName: "ConsultaSerasaCrednet", location: wsLoc("file:///c:/r/Consulta.cs") },
+    ],
+    { word: "Cpf", containerHint: "ConsultaSerasaCrednet" }
+  );
+  assert.equal(picked?.location?.uri, "file:///c:/r/Consulta.cs");
+});
+
+test("workspace/symbol: tipo clicado usa namespace do decompilado para desambiguar", () => {
+  const picked = pickWorkspaceSymbolForMetadata(
+    [
+      { name: "PathFactory", kind: 5, containerName: "Outro.Ns", location: wsLoc("file:///c:/r/a/PathFactory.cs") },
+      { name: "PathFactory", kind: 5, containerName: "Ativus.Core.Factories", location: wsLoc("file:///c:/r/b/PathFactory.cs") },
+    ],
+    { word: "PathFactory", containerHint: "PathFactory", namespaceHint: "Ativus.Core.Factories" }
+  );
+  assert.equal(picked?.location?.uri, "file:///c:/r/b/PathFactory.cs");
+});
+
+test("workspace/symbol: métodos Roslyn com sufixo de assinatura contam como match", () => {
+  const picked = pickWorkspaceSymbolForMetadata(
+    [{ name: "ComponentPath(ComponentsEnum)", containerName: "PathFactory", location: wsLoc("file:///c:/r/PathFactory.cs") }],
+    { word: "ComponentPath", containerHint: "PathFactory" }
+  );
+  assert.equal(picked?.location?.uri, "file:///c:/r/PathFactory.cs");
+});
+
+test("workspace/symbol: ambíguo sem evidência devolve null (mantém metadata)", () => {
+  const picked = pickWorkspaceSymbolForMetadata(
+    [
+      { name: "Nome", containerName: "Cliente", location: wsLoc("file:///c:/r/Cliente.cs") },
+      { name: "Nome", containerName: "Fornecedor", location: wsLoc("file:///c:/r/Fornecedor.cs") },
+    ],
+    { word: "Nome", containerHint: "ConsultaSerasaCrednet" }
+  );
+  assert.equal(picked, null);
+});
+
+test("workspace/symbol: hit único sem evidência ainda vale (inequívoco)", () => {
+  const picked = pickWorkspaceSymbolForMetadata(
+    [{ name: "DocumentoConsultaScr", containerName: "Ativus.Shared.Core.ValueObjects", location: wsLoc("file:///c:/r/Doc.cs") }],
+    { word: "DocumentoConsultaScr", containerHint: "DocumentoConsultaScr" }
+  );
+  assert.equal(picked?.location?.uri, "file:///c:/r/Doc.cs");
+});
+
+test("workspace/symbol: descarta hits em .g.cs e MetadataAsSource", () => {
+  const picked = pickWorkspaceSymbolForMetadata(
+    [
+      { name: "Cpf", containerName: "ConsultaSerasaCrednet", location: wsLoc("file:///c:/r/x.g.cs") },
+      { name: "Cpf", containerName: "ConsultaSerasaCrednet", location: wsLoc("file:///c:/t/MetadataAsSource/y/Consulta.cs") },
+    ],
+    { word: "Cpf", containerHint: "ConsultaSerasaCrednet" }
+  );
+  assert.equal(picked, null);
 });

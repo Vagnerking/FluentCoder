@@ -8,15 +8,20 @@ import {
   type ReactNode,
 } from "react";
 import { cancelSearch, searchInDir } from "../api";
-import type { FileMatches, FileNode, LineMatch, SearchOptions } from "../types";
+import type { FileMatches, FileNode, LineMatch, OpenFile, SearchOptions } from "../types";
 import { Codicon } from "../icons/codicons/Codicon";
 import { FileIcon } from "../icon-theme/material/FileIcon";
+import { Tooltip } from "./Tooltip";
 
 interface SearchPanelProps {
   /** Root folder to search within, or null when no folder is open. */
   rootPath: string | null;
+  /** All roots in a Fluent workspace. SSH roots are searchable when connected. */
+  workspaceRoots?: SearchWorkspaceRoot[];
   /** Sub-folder to scope the search to, or null to use the workspace root. */
   scopePath?: string | null;
+  /** Owning workspace root id for scoped searches, avoiding ambiguous remote paths. */
+  scopeRootId?: string | null;
   /** Clears the folder scope, returning the search to the workspace root. */
   onClearScope?: () => void;
   /**
@@ -31,10 +36,48 @@ interface SearchPanelProps {
   ) => void;
 }
 
+interface SearchWorkspaceRoot {
+  id: string;
+  name: string;
+  path: string;
+  provider: "local" | "ssh";
+  remote?: {
+    host: string;
+    user: string;
+  };
+  connId?: string;
+  status?: "connecting" | "connected" | "error";
+  error?: string;
+}
+
+interface SearchTarget {
+  id: string;
+  label: string;
+  path: string;
+  rootPath: string;
+  provider: "local" | "ssh";
+  remote?: SearchWorkspaceRoot["remote"];
+  connId?: string;
+}
+
+type SearchFileMatches = FileMatches & {
+  rootId?: string;
+  rootLabel?: string;
+  workspaceRemote?: OpenFile["workspaceRemote"];
+};
+
 /** Last path segment, handling Windows and POSIX separators. */
 function baseName(path: string): string {
   const parts = path.split(/[\\/]/);
   return parts[parts.length - 1] || path;
+}
+
+function pathWithinRoot(path: string, root: string): boolean {
+  const normalize = (value: string) =>
+    value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const child = normalize(path);
+  const parent = normalize(root);
+  return child === parent || child.startsWith(`${parent}/`);
 }
 
 /** Splits a comma-separated glob field into trimmed, non-empty patterns. */
@@ -137,12 +180,14 @@ function highlightLine(text: string, ranges: [number, number][]): ReactNode {
  */
 export function SearchPanel({
   rootPath,
+  workspaceRoots = [],
   scopePath = null,
+  scopeRootId = null,
   onClearScope,
   onOpenMatch,
 }: SearchPanelProps) {
   const [query, setQuery] = useState("");
-  const [files, setFiles] = useState<FileMatches[]>([]);
+  const [files, setFiles] = useState<SearchFileMatches[]>([]);
   const [status, setStatus] = useState<"idle" | "searching" | "done">("idle");
   const [summary, setSummary] = useState<{
     limitHit: boolean;
@@ -166,13 +211,77 @@ export function SearchPanel({
   const requestRef = useRef(0);
   // Streaming events are batched into one state update per animation frame, so a
   // burst of file hits doesn't trigger dozens of re-renders that freeze typing.
-  const pendingFilesRef = useRef<FileMatches[]>([]);
+  const pendingFilesRef = useRef<SearchFileMatches[]>([]);
   const rafRef = useRef<number | null>(null);
 
-  // Effective search root: the scoped folder when set, else the workspace root.
-  const searchRoot =
-    scopePath && rootPath && scopePath.startsWith(rootPath) ? scopePath : rootPath;
-  const isScoped = !!searchRoot && searchRoot !== rootPath;
+  const workspaceTargets = useMemo<SearchTarget[]>(
+    () =>
+      workspaceRoots
+        .filter((root) => root.provider === "local" || root.connId)
+        .map((root) => ({
+          id: root.id,
+          label: root.name || baseName(root.path),
+          path: root.path,
+          rootPath: root.path,
+          provider: root.provider,
+          remote: root.remote,
+          connId: root.connId,
+        })),
+    [workspaceRoots]
+  );
+
+  const searchTargets = useMemo<SearchTarget[]>(() => {
+    if (scopePath) {
+      const owner = scopeRootId
+        ? workspaceRoots.find((root) => root.id === scopeRootId)
+        : workspaceRoots.find((root) => pathWithinRoot(scopePath, root.path));
+      if (owner && (owner.provider === "local" || owner.connId)) {
+        return [
+          {
+            id: owner.id,
+            label: owner.name || baseName(owner.path),
+            path: scopePath,
+            rootPath: owner.path,
+            provider: owner.provider,
+            remote: owner.remote,
+            connId: owner.connId,
+          },
+        ];
+      }
+      if (rootPath && pathWithinRoot(scopePath, rootPath)) {
+        return [
+          {
+            id: "root",
+            label: baseName(rootPath),
+            path: scopePath,
+            rootPath,
+            provider: "local",
+          },
+        ];
+      }
+      return [];
+    }
+
+    if (workspaceTargets.length > 0) return workspaceTargets;
+    if (!rootPath) return [];
+    return [
+      {
+        id: "root",
+        label: baseName(rootPath),
+        path: rootPath,
+        rootPath,
+        provider: "local",
+      },
+    ];
+  }, [rootPath, scopePath, scopeRootId, workspaceRoots, workspaceTargets]);
+
+  const hasSearchTarget = searchTargets.length > 0;
+  const showRootLabels = searchTargets.length > 1;
+  const unavailableSshRoots = workspaceRoots.filter(
+    (root) => root.provider === "ssh" && !root.connId
+  );
+  const searchRoot = searchTargets[0]?.path ?? null;
+  const isScoped = !!scopePath && !!searchRoot;
 
   const includeGlobs = useMemo(() => parseGlobs(includeText), [includeText]);
   const excludeGlobs = useMemo(() => parseGlobs(excludeText), [excludeText]);
@@ -192,7 +301,7 @@ export function SearchPanel({
 
   const runSearch = useCallback(
     async (term: string, requestId: number) => {
-      if (!searchRoot || !term || requestId !== requestRef.current) return;
+      if (!searchTargets.length || !term || requestId !== requestRef.current) return;
       setStatus("searching");
       setError(null);
       setRegexInvalid(false);
@@ -213,35 +322,77 @@ export function SearchPanel({
       };
 
       try {
+        const startedAt = performance.now();
+        let limitHit = false;
+        let totalMatches = 0;
+        let totalFiles = 0;
+
         // No explicit cancelSearch() here: starting a search already invalidates
         // any in-flight one on the backend (it bumps the generation), so the
         // extra round-trip only added latency.
-        await searchInDir(searchRoot, term, options, (event) => {
-          // Drop events from a search that's already been superseded.
+        for (const target of searchTargets) {
           if (requestId !== requestRef.current) return;
-          if (event.type === "matches") {
-            pendingFilesRef.current.push(event.file);
-            if (rafRef.current === null) {
-              rafRef.current = requestAnimationFrame(flush);
-            }
-          } else if (!event.cancelled) {
-            // Final flush so the last batch isn't dropped, then close out.
-            if (rafRef.current !== null) {
-              cancelAnimationFrame(rafRef.current);
-              rafRef.current = null;
-            }
-            const batch = pendingFilesRef.current;
-            pendingFilesRef.current = [];
-            if (batch.length) setFiles((prev) => [...prev, ...batch]);
-            setSummary({
-              limitHit: event.limitHit,
-              totalMatches: event.totalMatches,
-              totalFiles: event.totalFiles,
-              elapsedMs: event.elapsedMs,
-            });
-            setStatus("done");
-          }
+          const workspaceRemote =
+            target.provider === "ssh" && target.connId && target.remote
+              ? {
+                  folderId: target.id,
+                  connId: target.connId,
+                  host: target.remote.host,
+                  user: target.remote.user,
+                  rootPath: target.rootPath,
+                }
+              : undefined;
+          await searchInDir(
+            target.path,
+            term,
+            options,
+            (event) => {
+              // Drop events from a search that's already been superseded.
+              if (requestId !== requestRef.current) return;
+              if (event.type === "matches") {
+                pendingFilesRef.current.push({
+                  ...event.file,
+                  rootId: target.id,
+                  rootLabel: showRootLabels ? target.label : undefined,
+                  workspaceRemote,
+                });
+                if (rafRef.current === null) {
+                  rafRef.current = requestAnimationFrame(flush);
+                }
+              } else if (!event.cancelled) {
+                limitHit = limitHit || event.limitHit;
+                totalMatches += event.totalMatches;
+                totalFiles += event.totalFiles;
+                // Final flush for this root so the last batch isn't dropped
+                // while the next root starts.
+                if (rafRef.current !== null) {
+                  cancelAnimationFrame(rafRef.current);
+                  rafRef.current = null;
+                }
+                const batch = pendingFilesRef.current;
+                pendingFilesRef.current = [];
+                if (batch.length) setFiles((prev) => [...prev, ...batch]);
+              }
+            },
+            target.connId
+          );
+        }
+
+        if (requestId !== requestRef.current) return;
+        if (rafRef.current !== null) {
+          cancelAnimationFrame(rafRef.current);
+          rafRef.current = null;
+        }
+        const batch = pendingFilesRef.current;
+        pendingFilesRef.current = [];
+        if (batch.length) setFiles((prev) => [...prev, ...batch]);
+        setSummary({
+          limitHit,
+          totalMatches,
+          totalFiles,
+          elapsedMs: Math.round(performance.now() - startedAt),
         });
+        setStatus("done");
       } catch (err) {
         if (requestId !== requestRef.current) return;
         console.error(err);
@@ -256,7 +407,7 @@ export function SearchPanel({
         setStatus("done");
       }
     },
-    [searchRoot, options, resetBatch]
+    [searchTargets, options, resetBatch, showRootLabels]
   );
 
   // Debounced auto-search: re-runs whenever the query OR any option changes.
@@ -266,7 +417,7 @@ export function SearchPanel({
     const requestId = ++requestRef.current;
     void cancelSearch();
 
-    if (!searchRoot || !term) {
+    if (!hasSearchTarget || !term) {
       resetBatch();
       setFiles([]);
       setSummary(null);
@@ -287,7 +438,7 @@ export function SearchPanel({
         debounceRef.current = null;
       }
     };
-  }, [query, searchRoot, options, runSearch, resetBatch]);
+  }, [query, hasSearchTarget, options, runSearch, resetBatch]);
 
   // Cancel any in-flight search (and its pending batch) when the panel unmounts.
   useEffect(
@@ -306,7 +457,7 @@ export function SearchPanel({
 
   function searchNow() {
     const term = query.trim();
-    if (!searchRoot || !term) return;
+    if (!hasSearchTarget || !term) return;
     if (debounceRef.current !== null) {
       window.clearTimeout(debounceRef.current);
       debounceRef.current = null;
@@ -316,6 +467,12 @@ export function SearchPanel({
   }
 
   const totalMatches = summary?.totalMatches ?? files.reduce((n, f) => n + f.matches.length, 0);
+  const emptyMessage =
+    workspaceRoots.length > 0
+      ? unavailableSshRoots.length > 0 && searchTargets.length === 0
+        ? "Aguardando conexão dos roots SSH para pesquisar."
+        : "Nenhuma pasta pesquisável neste workspace."
+      : "Abra uma pasta para pesquisar.";
 
   return (
     <div className="search-panel">
@@ -340,54 +497,58 @@ export function SearchPanel({
               setStatus(files.length ? "done" : "idle");
             }
           }}
-          disabled={!rootPath}
+          disabled={!hasSearchTarget}
         />
         <div className="search-controls">
-          <button
-            type="button"
-            className={`search-toggle${caseSensitive ? " active" : ""}`}
-            title="Diferenciar maiúsculas de minúsculas (Alt+C)"
-            aria-label="Diferenciar maiúsculas de minúsculas"
-            aria-pressed={caseSensitive}
-            disabled={!rootPath}
-            onClick={() => setCaseSensitive((v) => !v)}
-          >
-            <Codicon name="caseSensitive" size={16} />
-          </button>
-          <button
-            type="button"
-            className={`search-toggle${wholeWord ? " active" : ""}`}
-            title="Palavra inteira (Alt+W)"
-            aria-label="Palavra inteira"
-            aria-pressed={wholeWord}
-            disabled={!rootPath}
-            onClick={() => setWholeWord((v) => !v)}
-          >
-            <Codicon name="wholeWord" size={16} />
-          </button>
-          <button
-            type="button"
-            className={`search-toggle${regex ? " active" : ""}`}
-            title="Usar expressão regular (Alt+R)"
-            aria-label="Usar expressão regular"
-            aria-pressed={regex}
-            disabled={!rootPath}
-            onClick={() => setRegex((v) => !v)}
-          >
-            <Codicon name="regex" size={16} />
-          </button>
+          <Tooltip label="Diferenciar maiúsculas de minúsculas">
+            <button
+              type="button"
+              className={`search-toggle${caseSensitive ? " active" : ""}`}
+              aria-label="Diferenciar maiúsculas de minúsculas"
+              aria-pressed={caseSensitive}
+              disabled={!hasSearchTarget}
+              onClick={() => setCaseSensitive((v) => !v)}
+            >
+              <Codicon name="caseSensitive" size={16} />
+            </button>
+          </Tooltip>
+          <Tooltip label="Palavra inteira">
+            <button
+              type="button"
+              className={`search-toggle${wholeWord ? " active" : ""}`}
+              aria-label="Palavra inteira"
+              aria-pressed={wholeWord}
+              disabled={!hasSearchTarget}
+              onClick={() => setWholeWord((v) => !v)}
+            >
+              <Codicon name="wholeWord" size={16} />
+            </button>
+          </Tooltip>
+          <Tooltip label="Usar expressão regular">
+            <button
+              type="button"
+              className={`search-toggle${regex ? " active" : ""}`}
+              aria-label="Usar expressão regular"
+              aria-pressed={regex}
+              disabled={!hasSearchTarget}
+              onClick={() => setRegex((v) => !v)}
+            >
+              <Codicon name="regex" size={16} />
+            </button>
+          </Tooltip>
           <span className="search-controls-sep" aria-hidden="true" />
-          <button
-            type="button"
-            className={`search-toggle${showFilters ? " active" : ""}`}
-            title="Alternar arquivos a incluir/excluir"
-            aria-label="Alternar arquivos a incluir/excluir"
-            aria-pressed={showFilters}
-            disabled={!rootPath}
-            onClick={() => setShowFilters((v) => !v)}
-          >
-            <Codicon name="filterFiles" size={14} />
-          </button>
+          <Tooltip label="Alternar arquivos a incluir/excluir">
+            <button
+              type="button"
+              className={`search-toggle${showFilters ? " active" : ""}`}
+              aria-label="Alternar arquivos a incluir/excluir"
+              aria-pressed={showFilters}
+              disabled={!hasSearchTarget}
+              onClick={() => setShowFilters((v) => !v)}
+            >
+              <Codicon name="filterFiles" size={14} />
+            </button>
+          </Tooltip>
         </div>
       </div>
 
@@ -400,7 +561,7 @@ export function SearchPanel({
             placeholder="ex.: *.ts, src/**"
             value={includeText}
             onChange={(e) => setIncludeText(e.target.value)}
-            disabled={!rootPath}
+            disabled={!hasSearchTarget}
           />
           <label className="search-filter-label">arquivos a excluir</label>
           <input
@@ -409,7 +570,7 @@ export function SearchPanel({
             placeholder="ex.: **/test/**, *.min.js"
             value={excludeText}
             onChange={(e) => setExcludeText(e.target.value)}
-            disabled={!rootPath}
+            disabled={!hasSearchTarget}
           />
         </div>
       )}
@@ -419,21 +580,22 @@ export function SearchPanel({
           <span className="search-scope-chip" title={searchRoot}>
             <Codicon name="folder" size={12} />
             <span className="search-scope-name">{baseName(searchRoot)}</span>
-            <button
-              className="search-scope-clear"
-              title="Limpar escopo da pasta"
-              aria-label="Limpar escopo da pasta"
-              onClick={() => onClearScope?.()}
-            >
-              <Codicon name="close" size={12} />
-            </button>
+            <Tooltip label="Limpar escopo da pasta">
+              <button
+                className="search-scope-clear"
+                aria-label="Limpar escopo da pasta"
+                onClick={() => onClearScope?.()}
+              >
+                <Codicon name="close" size={12} />
+              </button>
+            </Tooltip>
           </span>
         </div>
       )}
 
       <div className="search-results">
-        {!rootPath ? (
-          <div className="search-empty">Abra uma pasta para pesquisar.</div>
+        {!hasSearchTarget ? (
+          <div className="search-empty">{emptyMessage}</div>
         ) : error ? (
           <div className="search-empty" role="alert">
             {error}
@@ -450,12 +612,17 @@ export function SearchPanel({
             {files.length > 0 && (
               <div className="search-summary">
                 {totalMatches} resultado(s) em {files.length} arquivo(s)
+                {showRootLabels ? ` · ${searchTargets.length} roots` : ""}
                 {summary?.limitHit ? " · limite atingido" : ""}
                 {status === "done" && summary ? ` · ${summary.elapsedMs} ms` : ""}
               </div>
             )}
             {files.map((file) => (
-              <FileGroup key={file.path} file={file} onOpenMatch={onOpenMatch} />
+              <FileGroup
+                key={`${file.rootId ?? "root"}:${file.path}`}
+                file={file}
+                onOpenMatch={onOpenMatch}
+              />
             ))}
           </>
         )}
@@ -473,7 +640,7 @@ const FileGroup = memo(function FileGroup({
   file,
   onOpenMatch,
 }: {
-  file: FileMatches;
+  file: SearchFileMatches;
   onOpenMatch: (
     node: FileNode,
     line: number,
@@ -485,7 +652,8 @@ const FileGroup = memo(function FileGroup({
     <div className="search-file-group">
       <div className="search-file-name" title={file.path}>
         <FileIcon path={file.path} className="search-file-icon" />
-        {file.name}
+        <span className="search-file-label">{file.name}</span>
+        {file.rootLabel && <span className="search-file-root">{file.rootLabel}</span>}
       </div>
       {file.matches.map((m: LineMatch, i) => {
         // First match on the line → 1-based Monaco columns for the selection.
@@ -499,7 +667,12 @@ const FileGroup = memo(function FileGroup({
             title={`${file.path}:${m.line}`}
             onClick={() =>
               onOpenMatch(
-                { name: file.name, path: file.path, isDir: false },
+                {
+                  name: file.name,
+                  path: file.path,
+                  isDir: false,
+                  workspaceRemote: file.workspaceRemote,
+                },
                 m.line,
                 startColumn,
                 endColumn

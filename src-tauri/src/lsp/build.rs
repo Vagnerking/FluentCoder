@@ -36,14 +36,14 @@ pub async fn csharp_build_diagnostics(root_path: String) -> Result<Vec<BuildDiag
     } else {
         "dotnet"
     };
-    let output = tokio::process::Command::new(program)
+    let mut command = tokio::process::Command::new(program);
+    command
         .args(["build", "-nologo", "-clp:NoSummary", "-v", "q"])
-        .current_dir(&root_path)
-        .output()
-        .await
-        .map_err(|e| {
-            format!("Não foi possível executar o dotnet build (o .NET SDK está instalado?): {e}")
-        })?;
+        .current_dir(&root_path);
+    crate::child_process::hide_tokio_console_window(&mut command);
+    let output = command.output().await.map_err(|e| {
+        format!("Não foi possível executar o dotnet build (o .NET SDK está instalado?): {e}")
+    })?;
 
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push('\n');

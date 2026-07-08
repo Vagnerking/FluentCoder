@@ -1,0 +1,10 @@
+@model MyApp.Models.Item
+<article class="item" id="item-@Model.Id">
+    <h3>@Model.Nome</h3>
+    @if (!string.IsNullOrEmpty(Model.Descricao))
+    {
+        <p>@Model.Descricao</p>
+    }
+    <span class="preco">@Model.Preco.ToString("C")</span>
+    @Html.DisplayFor(m => m.DataCadastro)
+</article>

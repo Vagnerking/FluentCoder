@@ -3,11 +3,14 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { listen } from "@tauri-apps/api/event";
 import { termCreate, termWrite, termResize, termClose } from "../api";
+import { terminalTheme } from "../theme/palette";
 import "@xterm/xterm/css/xterm.css";
 
 interface TerminalViewProps {
   id: string;
   cwd: string;
+  /** SSH connection id when this terminal belongs to a remote workspace root. */
+  connId?: string;
   /** When set, the PTY runs this command line on start (used by "Run"). */
   command?: string | null;
 }
@@ -17,27 +20,17 @@ interface TermDataPayload {
   data: string;
 }
 
-export function TerminalView({ id, cwd, command }: TerminalViewProps) {
+export function TerminalView({ id, cwd, connId, command }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
 
     const term = new Terminal({
-      theme: {
-        background: "#1c222b",
-        foreground: "#d2dce7",
-        cursor: "#60cdff",
-        selectionBackground: "rgba(96,205,255,0.3)",
-        black: "#1c222b",
-        brightBlack: "#708090",
-        blue: "#75beff",
-        brightBlue: "#9cdcfe",
-        cyan: "#4ec9b0",
-        brightCyan: "#7fdbca",
-        white: "#d2dce7",
-        brightWhite: "#ffffff",
-      },
+      // Shared palette so the terminal stays in sync with the token layer
+      // (F2-AUD-001); also fills in the previously-missing ANSI red/green/
+      // yellow/magenta so colored CLI output renders correctly.
+      theme: { ...terminalTheme },
       fontFamily: '"Cascadia Code", "Consolas", monospace',
       fontSize: 13,
       lineHeight: 1.2,
@@ -76,7 +69,7 @@ export function TerminalView({ id, cwd, command }: TerminalViewProps) {
       }
       created = true;
       const { cols, rows } = term;
-      termCreate(id, cwd, cols, rows, command).catch(console.error);
+      termCreate(id, cwd, cols, rows, command, connId).catch(console.error);
     };
 
     // Register the output listener BEFORE creating the PTY so no early bytes
@@ -109,7 +102,7 @@ export function TerminalView({ id, cwd, command }: TerminalViewProps) {
       if (created) termClose(id).catch(console.error);
       term.dispose();
     };
-  }, [id, cwd, command]);
+  }, [id, cwd, connId, command]);
 
   return <div ref={containerRef} className="xterm-container" />;
 }

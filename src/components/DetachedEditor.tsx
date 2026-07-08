@@ -6,7 +6,7 @@ import { ImagePreview } from "./ImagePreview";
 import { MediaPreview } from "./MediaPreview";
 import { TabBar } from "./TabBar";
 import { Codicon } from "../icons/codicons/Codicon";
-import { pickSavePath, writeFile } from "../api";
+import { pickSavePath, writeFile, writeSshTextFile } from "../api";
 import { useSnapLayout } from "../snap/useSnapLayout";
 import { reorderFiles } from "../tabOrder";
 import { setActiveRemote } from "../remote/host";
@@ -159,11 +159,23 @@ export function DetachedEditor({ token }: { token: string }) {
         if (!picked) return;
         targetPath = picked;
       }
-      await writeFile(targetPath, active.content);
+      if (active.workspaceRemote && !active.path.startsWith(UNTITLED_PREFIX)) {
+        await writeSshTextFile(active.workspaceRemote.connId, targetPath, active.content);
+      } else {
+        await writeFile(targetPath, active.content);
+      }
       setFiles((prev) =>
         prev.map((f) =>
           f.path === active.path
-            ? { ...f, path: targetPath, name: fileName(targetPath), dirty: false }
+            ? {
+                ...f,
+                path: targetPath,
+                name: fileName(targetPath),
+                dirty: false,
+                workspaceRemote: active.path.startsWith(UNTITLED_PREFIX)
+                  ? undefined
+                  : f.workspaceRemote,
+              }
             : f
         )
       );
@@ -393,6 +405,8 @@ export function DetachedEditor({ token }: { token: string }) {
   }
 
   const mode = active?.mode ?? "text";
+  const activeRemoteConnId = active?.workspaceRemote?.connId ?? remote?.connId;
+  const activeRootPath = active?.workspaceRemote?.rootPath ?? remote?.rootPath ?? null;
 
   return (
     <div className="detached-window">
@@ -511,13 +525,18 @@ export function DetachedEditor({ token }: { token: string }) {
         {!active ? (
           <div className="detached-empty">Sem arquivos abertos.</div>
         ) : mode === "image" ? (
-          <ImagePreview path={active.path} name={active.name} />
+          <ImagePreview path={active.path} name={active.name} connId={activeRemoteConnId} />
         ) : mode === "video" || mode === "audio" ? (
-          <MediaPreview path={active.path} name={active.name} kind={mode} />
+          <MediaPreview
+            path={active.path}
+            name={active.name}
+            kind={mode}
+            connId={activeRemoteConnId}
+          />
         ) : (
           <EditorPane
             file={active}
-            rootPath={null}
+            rootPath={activeRootPath}
             onChange={(v) =>
               setFiles((prev) =>
                 prev.map((f) =>

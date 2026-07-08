@@ -1,0 +1,48 @@
+/* ---- LSP actions menu (pops above the clicked status-bar server item) ---- */
+.lsp-menu-overlay { position: fixed; inset: 0; z-index: 50; }
+.lsp-menu {
+  position: fixed;
+  transform: translateY(-100%);
+  margin-top: -6px;
+  z-index: 51;
+  min-width: 210px;
+  padding: 4px;
+  background: #202734;
+  border: 1px solid var(--acrylic-border-strong);
+  border-radius: var(--radius-card);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+.lsp-menu-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+}
+.lsp-menu-error {
+  padding: 0 8px 6px;
+  max-width: 300px;
+  font-size: 11px;
+  color: #ffb4ab;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.lsp-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+.lsp-menu-item:hover { background: var(--fill-subtle-hover); color: var(--text); }

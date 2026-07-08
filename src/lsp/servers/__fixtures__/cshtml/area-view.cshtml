@@ -1,0 +1,22 @@
+@model MyApp.Areas.Admin.Models.Dashboard
+@{
+    ViewData["Title"] = "Painel administrativo";
+    Layout = "~/Areas/Admin/Views/Shared/_LayoutAdmin.cshtml";
+}
+<h1>Painel administrativo</h1>
+
+<nav class="breadcrumb">
+    <a asp-area="Admin" asp-controller="Home" asp-action="Index">Admin</a>
+    <a asp-area="Admin" asp-controller="Usuarios" asp-action="Index">Usuários</a>
+</nav>
+
+<section class="cards">
+    @foreach (var card in Model.Cards)
+    {
+        <div class="card">
+            <h2>@card.Titulo</h2>
+            <p class="valor">@card.Valor</p>
+            <a asp-area="Admin" asp-controller="@card.Controller" asp-action="Index">ver</a>
+        </div>
+    }
+</section>

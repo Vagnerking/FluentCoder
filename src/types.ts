@@ -1,8 +1,15 @@
+/** Line-ending style of an opened file, preserved on save. Mirrors Rust `Eol`. */
+export type Eol = "Lf" | "Crlf";
+
 /** A node in the file explorer tree. Mirrors the Rust `DirEntry`. */
 export interface FileNode {
   name: string;
   path: string;
   isDir: boolean;
+  /** Owning workspace root, used to avoid path-only ambiguity in multi-root trees. */
+  workspaceRootId?: string;
+  /** Explicit remote origin when a node comes from a workspace SSH root. */
+  workspaceRemote?: OpenFile["workspaceRemote"];
   /** Lazily loaded children; undefined until the folder is first expanded. */
   children?: FileNode[];
   /** Whether the folder is currently expanded in the UI. */
@@ -22,7 +29,7 @@ export interface RawDirEntry {
  * selector (ISSUE-70) lets the user pick which one, and `OpenFile.mode` records
  * the choice so the App can route the buffer to the right view.
  */
-export type OpenMode = "text" | "image" | "video" | "audio" | "graph";
+export type OpenMode = "text" | "image" | "video" | "audio" | "graph" | "diff";
 
 /** One file in the workspace "context graph" (Obsidian-style map). */
 export interface GraphNode {
@@ -93,14 +100,52 @@ export interface OpenFile {
   path: string;
   name: string;
   content: string;
+  /**
+   * Remote origin for a file opened from an SSH root inside a multi-root
+   * workspace. This routes read/save by explicit connection id instead of the
+   * window-wide remote session.
+   */
+  workspaceRemote?: {
+    folderId: string;
+    connId: string;
+    host: string;
+    user: string;
+    rootPath: string;
+  };
   /** True when the buffer differs from what's on disk. */
   dirty: boolean;
+  /** Read-only tabs are virtual views such as Git revisions. */
+  readOnly?: boolean;
+  /** Original file represented by a virtual/read-only tab. */
+  sourcePath?: string;
+  /** Small UI hint shown by editor surfaces for virtual tabs. */
+  sourceLabel?: string;
+  /** Commit metadata for Git revision/diff tabs. */
+  revisionHash?: string;
+  revisionShort?: string;
+  revisionRemoteUrl?: string;
+  /** Left side of a side-by-side diff tab. */
+  originalContent?: string;
+  /** Right side of a side-by-side diff tab. */
+  modifiedContent?: string;
+  /** Labels shown above a side-by-side diff tab. */
+  originalLabel?: string;
+  modifiedLabel?: string;
   /**
    * Which view renders this file. Defaults to `"text"` when omitted (every
    * pre-Open-With caller). Image files opened by double-click default to
    * `"image"`; "Open With…" can override either way.
    */
   mode?: OpenMode;
+  /**
+   * Detected text encoding (e.g. "UTF-8", "UTF-16LE", "windows-1252"). Shown in
+   * the status bar and re-applied on save so an edit keeps the original format.
+   */
+  encoding?: string;
+  /** Whether the file began with a byte-order mark (preserved on save). */
+  bom?: boolean;
+  /** Original line ending; the buffer itself is always LF in memory. */
+  eol?: Eol;
 }
 
 /**
@@ -159,6 +204,31 @@ export interface OpenTab {
   mode?: OpenMode;
 }
 
+/** Workspace shell persisted in the UI session, including unsaved workspaces. */
+export interface SessionWorkspace {
+  filePath: string | null;
+  data: {
+    fluentWorkspace: 1;
+    name?: string;
+    folders: {
+      id?: string;
+      name?: string;
+      path: string;
+      remote?: {
+        type: "ssh";
+        host: string;
+        user: string;
+        port?: number;
+        keyPath?: string;
+      };
+    }[];
+    git?: {
+      mode?: "perFolder";
+    };
+    settings?: Record<string, unknown>;
+  };
+}
+
 /** Persisted UI session, mirroring the Rust `Session`. */
 export interface Session {
   /** Absolute path of the last opened project folder, or null. */
@@ -169,6 +239,8 @@ export interface Session {
   activePath: string | null;
   /** Editor split grid as a JSON blob (tree + per-group tabs); null ⇒ flat. */
   layout?: string | null;
+  /** Multi-root workspace snapshot, present even before saving a .fluent-workspace file. */
+  workspace?: SessionWorkspace | null;
 }
 
 /** Search toggles + glob filters, mirroring the Rust `SearchOptions`. */
@@ -259,10 +331,26 @@ export interface GitStatus {
   files: GitFileStatus[];
 }
 
+/** One linked Git worktree. */
+export interface GitWorktreeInfo {
+  path: string;
+  branch: string;
+  head: string;
+  detached: boolean;
+  bare: boolean;
+  current: boolean;
+}
+
 /** One stash entry, mirroring the Rust `GitStashEntry`. */
 export interface GitStashEntry {
   index: number;
   message: string;
+}
+
+/** One file changed inside a stash entry. */
+export interface GitStashFile {
+  path: string;
+  status: string;
 }
 
 /** One commit in the history list, mirroring the Rust `GitCommit`. */
@@ -270,8 +358,56 @@ export interface GitCommit {
   hash: string;
   short: string;
   author: string;
+  authorEmail?: string;
+  avatarUrl?: string;
+  isCurrentUser?: boolean;
   date: string;
   subject: string;
+  additions?: number;
+  deletions?: number;
+  filesChanged?: number;
+  remoteUrl?: string;
+}
+
+/** Current branch comparison against its configured upstream. */
+export interface GitUpstreamComparison {
+  upstream: string;
+  ahead: GitCommit[];
+  behind: GitCommit[];
+}
+
+/** One row in the Git commit graph. */
+export interface GitGraphCommit {
+  hash: string;
+  short: string;
+  parents: string[];
+  refs: string[];
+  author: string;
+  authorEmail?: string;
+  avatarUrl?: string;
+  isCurrentUser?: boolean;
+  date: string;
+  subject: string;
+  remoteUrl?: string;
+}
+
+export interface GitHistoryTarget {
+  file: string;
+  /** Repo root that owns this file in a multi-root workspace. */
+  rootPath?: string;
+  /** SSH connection id when the repo root is remote. */
+  connId?: string;
+  /** 1-based line number. Present when the history is scoped like Git Fluent Line History. */
+  line?: number;
+}
+
+/** One file changed by a commit, used by Commit Details. */
+export interface GitCommitFile {
+  path: string;
+  oldPath?: string | null;
+  status: string;
+  additions: number;
+  deletions: number;
 }
 
 /**
@@ -300,6 +436,13 @@ export interface GitBranchInfo {
   hasUpstream: boolean;
 }
 
+/** One configured Git remote. */
+export interface GitRemoteInfo {
+  name: string;
+  fetchUrl: string;
+  pushUrl: string;
+}
+
 /** A run/debug configuration, mirroring the Rust `RunConfig`. */
 export interface RunConfig {
   name: string;
@@ -309,15 +452,139 @@ export interface RunConfig {
   cwd: string;
 }
 
+/** Package managers supported by the first dependency-intelligence pass. */
+export type PackageManager = "npm" | "pnpm" | "yarn" | "bun";
+
+export interface PackageLockfile {
+  name: string;
+  path: string;
+  manager: PackageManager;
+}
+
+export type DependencyKind =
+  | "dependencies"
+  | "devDependencies"
+  | "peerDependencies"
+  | "optionalDependencies";
+
+export interface PackageDependency {
+  name: string;
+  declaredVersion: string;
+  kind: DependencyKind;
+}
+
+export interface PackageManagerRecommendation {
+  manager: PackageManager;
+  confidence: "high" | "medium" | "low";
+  reason: string;
+}
+
+export interface DependencyBuckets {
+  dependencies: number;
+  devDependencies: number;
+  peerDependencies: number;
+  optionalDependencies: number;
+}
+
+/** A detected TypeScript/JavaScript package project. */
+export interface JsTsPackageProject {
+  name: string;
+  path: string;
+  dir: string;
+  relativeDir: string;
+  declaredPackageManager: string | null;
+  detectedManager: PackageManagerRecommendation;
+  lockfiles: PackageLockfile[];
+  scripts: string[];
+  dependencies: PackageDependency[];
+  dependencyCounts: DependencyBuckets;
+  hasWorkspaces: boolean;
+  warnings: string[];
+}
+
+export interface PackageOutdatedDependency {
+  name: string;
+  current: string | null;
+  wanted: string | null;
+  latest: string | null;
+  declaredVersion: string | null;
+}
+
+export interface PackageCommandResult {
+  projectPath: string;
+  manager: PackageManager;
+  command: string;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+export interface PackageOutdatedReport extends PackageCommandResult {
+  outdated: PackageOutdatedDependency[];
+}
+
+export interface PackageAuditSummary {
+  total: number;
+  low: number;
+  moderate: number;
+  high: number;
+  critical: number;
+}
+
+export interface PackageAuditVulnerability {
+  package: string;
+  severity: string;
+  title: string;
+  url: string | null;
+  range: string | null;
+  fixAvailable: boolean;
+}
+
+export interface PackageAuditReport extends PackageCommandResult {
+  summary: PackageAuditSummary;
+  vulnerabilities: PackageAuditVulnerability[];
+}
+
+export interface PackageVersionsReport extends PackageCommandResult {
+  packageName: string;
+  versions: string[];
+}
+
+/** Workspace-level dependency/package intelligence summary. */
+export interface PackageWorkspaceSummary {
+  root: string;
+  projects: JsTsPackageProject[];
+  managerCounts: Record<string, number>;
+  warningCount: number;
+}
+
 /** Per-line blame info returned by `git_blame`, mirroring the Rust `BlameHunk`. */
 export interface BlameHunk {
+  /** Full SHA. Empty for uncommitted lines. */
+  hash: string;
   /** Short SHA (7 chars). Empty for uncommitted lines. */
   short: string;
   author: string;
+  /** Author email from git blame; used for avatars and identity matching. */
+  authorEmail?: string;
+  /** True when the author matches the current git user configured for the repo. */
+  isCurrentUser?: boolean;
+  /** Best-effort avatar URL derived from the author email. */
+  avatarUrl?: string;
   /** Relative date, e.g. "há 3 dias". */
   date: string;
   /** First line of the commit message. */
   subject: string;
+  /** First parent commit SHA, when available. */
+  previousHash?: string;
+  /** Lines added by this commit in this file, best-effort. */
+  additions?: number;
+  /** Lines deleted by this commit in this file, best-effort. */
+  deletions?: number;
+  /** Number of changed file entries reported for this commit/path. */
+  filesChanged?: number;
+  /** Remote commit URL when origin/upstream can be converted to a web URL. */
+  remoteUrl?: string;
   /** 1-based line number in the file. */
   line: number;
 }
@@ -435,4 +702,14 @@ export interface EditorActionsApi {
   trigger: (source: string, handlerId: string, payload?: unknown) => void;
   /** Focuses the editor. */
   focus: () => void;
+  /**
+   * Snapshot da seleção atual do editor (texto + linhas 1-based), ou `null`
+   * quando não há seleção não vazia. Usado pelo chat de agentes para referenciar
+   * o trecho selecionado junto do prompt (como o Claude Code faz).
+   */
+  getSelection: () => {
+    text: string;
+    startLine: number;
+    endLine: number;
+  } | null;
 }

@@ -1,0 +1,109 @@
+.git-stash-block {
+  display: grid;
+  gap: 1px;
+}
+.git-stash-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 20px;
+  margin: 0;
+  padding: 0 3px;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.git-stash-row:hover,
+.git-stash-row:focus-within {
+  background: var(--fill-subtle-hover);
+}
+.git-stash-row > .codicon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.git-stash-msg {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-stash-ref,
+.git-stash-count {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 16px;
+}
+.git-stash-ref {
+  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+}
+.git-stash-count {
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: rgba(210, 228, 242, 0.06);
+}
+.git-stash-row .git-file-action {
+  opacity: 0;
+}
+.git-stash-row:hover .git-file-action,
+.git-stash-row:focus-within .git-file-action {
+  opacity: 1;
+}
+.git-disclosure-btn {
+  width: 16px;
+  height: 18px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+  background: transparent;
+}
+.git-disclosure-btn:hover {
+  color: var(--text-primary);
+  background: var(--fill-subtle-hover);
+}
+.git-stash-files {
+  display: grid;
+  gap: 1px;
+  margin: 0 2px 3px 28px;
+}
+.git-stash-file-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 5px;
+  min-height: 20px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  background: transparent;
+  text-align: left;
+}
+.git-stash-file-row:hover,
+.git-stash-file-row:focus-visible {
+  color: var(--text-primary);
+  background: var(--fill-subtle-hover);
+}
+.git-stash-file-row .codicon {
+  color: var(--text-muted);
+  opacity: 0;
+}
+.git-stash-file-row:hover .codicon,
+.git-stash-file-row:focus-within .codicon {
+  opacity: 1;
+}
+.git-stash-file-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-stash-file-empty {
+  min-height: 20px;
+  padding: 2px 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}

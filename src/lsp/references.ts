@@ -7,26 +7,32 @@
  * this bridge:
  *
  *  - Shift+F12 / right-click → "Find All References" returns nothing, and
- *  - clicking a Roslyn CodeLens ("N references") does nothing, because the
- *    CodeLens command (`editor.action.showReferences`) is invoked with raw LSP
- *    `Location[]` JSON that Monaco's command can't consume.
+ *  - clicking a Roslyn CodeLens ("N references") does nothing, because Roslyn
+ *    resolves that CodeLens to the CUSTOM command `roslyn.client.peekReferences`
+ *    (not `editor.action.showReferences`), and nothing registers it — so the
+ *    click hits an unregistered command and silently no-ops.
  *
  * This module registers a real Monaco reference provider (so the native peek
- * widget works) and a command shim that converts LSP locations to Monaco
- * locations before delegating to the built-in `editor.action.showReferences`.
+ * widget works) and command shims — for both `roslyn.client.peekReferences` and
+ * the generic `editor.action.showReferences` — that recover uri+position from
+ * whatever argument shape the server sent and open the built-in peek widget.
  *
  * Mirrors {@link installSemanticTokensBridge} in `client.ts`: the disposables
  * are returned so the manager can tear them down when the client stops.
  */
 import * as monaco from "monaco-editor";
-// Internal Monaco service identifier. `editor.action.showReferences` /
-// `peekLocations` are `CommandsRegistry` commands (NOT editor actions), so they
-// can only be executed through the command service — there is no public
+// VS Code service identifier. `editor.action.showReferences` / `peekLocations`
+// are `CommandsRegistry` commands (NOT editor actions), so they can only be
+// executed through the command service — there is no public
 // `monaco.editor.executeCommand`. The command handler we register receives a
 // service accessor, and resolving `ICommandService` from it is exactly how
-// Monaco's own gotoSymbol handlers delegate (goToCommands.js). The path is
-// stable across the 0.5x line; it's deep-imported deliberately.
-import { ICommandService } from "monaco-editor/esm/vs/platform/commands/common/commands.js";
+// Monaco's own gotoSymbol handlers delegate (goToCommands.js).
+//
+// On the v10 stack the service identifier lives in
+// `@codingame/monaco-vscode-api/services` (the old vanilla deep import
+// `monaco-editor/esm/vs/platform/commands/common/commands.js` is NOT a valid
+// specifier of `@codingame/monaco-vscode-editor-api`).
+import { ICommandService } from "@codingame/monaco-vscode-api/services";
 import type { MonacoLanguageClient } from "monaco-languageclient";
 import type { DocumentSelector } from "vscode-languageclient";
 import { lspLog } from "./debug";
@@ -147,34 +153,51 @@ export function installReferencesBridge(
     })
   );
 
-  // Roslyn's CodeLens fires `editor.action.showReferences` with arguments
-  // `[resourceUri, position, locations]` where `locations` is raw LSP
-  // `Location[]`. Monaco's native handler for this id asserts Monaco-typed args
-  // and would throw on the raw payload, so we override it: normalize the args
-  // and delegate to the underlying `editor.action.peekLocations` (which we do
-  // NOT override) to open the peek widget. registerCommand restores the previous
-  // handler when the returned disposable is disposed.
-  disposables.push(
-    monaco.editor.registerCommand(
-      "editor.action.showReferences",
-      (accessor: ServicesAccessor, ...args: unknown[]) => {
-        // The accessor is only valid synchronously, so resolve the command
-        // service now and hand it to the async opener.
-        const commandService = accessor.get(ICommandService) as CommandService;
-        void openReferencesPeek(client, commandService, args);
-      }
-    )
-  );
+  // A references CodeLens click executes a command whose id depends on the
+  // server:
+  //   - Roslyn (`Microsoft.CodeAnalysis.LanguageServer`) resolves its
+  //     "N references" CodeLens to the CUSTOM id `roslyn.client.peekReferences`
+  //     with a single-object argument `[{ textDocument, position }]`. This id is
+  //     not registered anywhere by default, so the click silently no-ops (the
+  //     original symptom). This is the one that matters for C#.
+  //   - Generic LSP servers use `editor.action.showReferences` with
+  //     `[resourceUri, position, locations]` (raw LSP `Location[]`). Monaco's
+  //     native handler for that id asserts Monaco-typed args and would throw on
+  //     the raw payload.
+  // We register BOTH so either server opens the peek. Each handler normalizes
+  // whatever argument shape it receives and, when locations are absent or
+  // unrecognized, falls back to a live `textDocument/references` request — so we
+  // never depend on a server's exact location payload. registerCommand restores
+  // any previous handler when the returned disposable is disposed.
+  for (const commandId of [
+    "roslyn.client.peekReferences",
+    "editor.action.showReferences",
+  ]) {
+    disposables.push(
+      monaco.editor.registerCommand(
+        commandId,
+        (accessor: ServicesAccessor, ...args: unknown[]) => {
+          // The accessor is only valid synchronously, so resolve the command
+          // service now and hand it to the async opener.
+          lspLog("references CodeLens clicked", serverId, commandId, "argc=", args.length);
+          const commandService = accessor.get(ICommandService) as CommandService;
+          void openReferencesPeek(client, commandService, args);
+        }
+      )
+    );
+  }
 
   lspLog("references bridge registered for", serverId);
   return disposables;
 }
 
 /**
- * Resolves the arguments handed to `editor.action.showReferences` and opens the
- * peek widget on the active editor. Tolerates two shapes:
- *  - `[uri, position, locations]` (standard LSP CodeLens) — uses the supplied
- *    locations directly.
+ * Resolves the arguments handed to a references-CodeLens command and opens the
+ * peek widget on the active editor. Tolerates three shapes:
+ *  - `[uri, position, locations]` (standard LSP CodeLens,
+ *    `editor.action.showReferences`) — uses the supplied locations directly.
+ *  - `[{ textDocument, position }]` (Roslyn `roslyn.client.peekReferences`) — a
+ *    single positional object; locations are fetched live.
  *  - `[uri, position]` (or anything missing locations) — falls back to a live
  *    `textDocument/references` request at the position.
  */
@@ -187,7 +210,11 @@ async function openReferencesPeek(
     monaco.editor.getEditors().find((e) => e.hasTextFocus()) ??
     monaco.editor.getEditors()[0];
 
-  const [rawUri, rawPosition, rawLocations] = args;
+  // Roslyn passes a single object `{ textDocument: { uri }, position }`; the
+  // generic shape is positional `[uri, position, locations]`. Detect the former
+  // and unwrap it so the positional parsing below works for both.
+  const wrapped = unwrapSingleObjectArg(args);
+  const [rawUri, rawPosition, rawLocations] = wrapped ?? args;
   const uri = parseUriArg(rawUri) ?? editor?.getModel()?.uri ?? null;
   const position = parsePositionArg(rawPosition) ?? editor?.getPosition() ?? null;
   if (!uri || !position) {
@@ -223,6 +250,32 @@ async function openReferencesPeek(
   } catch (err) {
     lspLog("showReferences: peekLocations failed", String(err));
   }
+}
+
+/**
+ * Roslyn's `roslyn.client.peekReferences` is invoked with a single positional
+ * object `{ textDocument: { uri }, position }` (occasionally `{ uri, position }`
+ * or with a `locations` array). Detects that shape and re-projects it onto the
+ * `[uri, position, locations]` tuple the positional parsers expect. Returns
+ * `null` when `args` isn't a single-object payload, so the caller keeps using
+ * `args` verbatim.
+ */
+function unwrapSingleObjectArg(args: unknown[]): unknown[] | null {
+  if (args.length !== 1) return null;
+  const only = args[0];
+  if (!only || typeof only !== "object" || Array.isArray(only)) return null;
+  const obj = only as Record<string, unknown>;
+  // A Monaco Uri or a positional tuple element (has lineNumber/line) is NOT the
+  // single-object wrapper — leave those to the positional path.
+  if (only instanceof monaco.Uri) return null;
+  if ("lineNumber" in obj || "line" in obj) return null;
+
+  const td = obj.textDocument as Record<string, unknown> | undefined;
+  const uri = obj.uri ?? td?.uri;
+  const position = obj.position;
+  const locations = obj.locations ?? obj.references;
+  if (uri === undefined && position === undefined) return null;
+  return [uri, position, locations];
 }
 
 /** Coerces the first command arg into a Monaco `Uri`, if possible. */

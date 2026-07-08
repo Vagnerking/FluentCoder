@@ -43,6 +43,8 @@ const EXT_TO_LANG: Record<string, string> = {
   swift: "swift",
   kt: "kotlin",
   dockerfile: "dockerfile",
+  diff: "diff",
+  patch: "diff",
 };
 
 /**
@@ -115,6 +117,7 @@ export const LANGUAGE_LABELS: Record<string, string> = {
   json: "JSON",
   yaml: "YAML",
   dockerfile: "Dockerfile",
+  diff: "Diff",
   shell: "Shell Script",
   plaintext: "Texto sem formatação",
 };

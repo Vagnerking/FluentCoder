@@ -31,35 +31,40 @@ import {
   razorEnsureSidecar,
   razorForget,
   razorPrepare,
+  razorRemapRangesToSource,
+  razorRemapRangesToSourceStrict,
   razorRemapToGenerated,
-  razorRemapToSource,
   razorWarm,
   readFile,
   startLspServer,
   type RazorProjectionInfo,
+  type RazorPrepareResult,
 } from "../../api";
-import { createLanguageClient, registerClientDisposables } from "../client";
+import {
+  createLanguageClient,
+  getRunningClient,
+  registerClientDisposables,
+} from "../client";
 import { lspLog } from "../debug";
 import { canonicalFileUriKey, fromFileUri, toFileUri } from "../uri";
 import { setDiagnostics, clearServerDiagnostics } from "../diagnosticsStore";
 import type { Problem } from "../../types";
-import {
-  htmlComplete,
-  htmlHover,
-  htmlTagComplete,
-  htmlRegionAt,
-  forgetHtmlVirtual,
-  forgetAllHtmlVirtual,
-} from "./cshtmlHtmlService";
 import { wireRoslynStartup } from "./roslynShared";
-import { ROSLYN_INIT_OPTIONS } from "./csharp";
+import { CSHARP_SERVER_ID, ROSLYN_INIT_OPTIONS } from "./csharp";
 import {
+  lspRangeToMonaco,
+  monacoSeverityToLsp,
   pickProjectForCshtml,
+  pickWorkspaceSymbolForMetadata,
   relativize,
   remapRangeToMonaco,
   routeDefinition,
   routeDiagnostics,
-  type RemapFn,
+  routeWorkspaceEdit,
+  type LspWorkspaceEdit,
+  type RemapRangesFn,
+  type RoutedLocation,
+  type WorkspaceSymbolLite,
 } from "./razorProjectionRouting";
 import type { ServerStartContext } from ".";
 
@@ -68,6 +73,18 @@ export const RAZOR_PROJECTION_SERVER_ID = "razor-projection";
 export const CSHTML_PROJECTION_LANGUAGE_ID = "cshtml";
 /** Marker owner reserved for `.cshtml` (docs/context/cshtml-language-service.md). */
 const DIAGNOSTICS_OWNER = "fluent-cshtml";
+type CshtmlHtmlService = typeof import("./cshtmlHtmlService");
+let htmlServicePromise: Promise<CshtmlHtmlService> | null = null;
+function htmlService(): Promise<CshtmlHtmlService> {
+  htmlServicePromise ??= import("./cshtmlHtmlService");
+  return htmlServicePromise;
+}
+function forgetHtmlVirtualIfLoaded(uri: string): void {
+  void htmlServicePromise?.then((mod) => mod.forgetHtmlVirtual(uri));
+}
+function forgetAllHtmlVirtualIfLoaded(): void {
+  void htmlServicePromise?.then((mod) => mod.forgetAllHtmlVirtual());
+}
 /** Build configuration the broker emits/locates the projection under. */
 const CONFIG = "Debug";
 /**
@@ -139,6 +156,41 @@ function openCshtmlModels(): monaco.editor.ITextModel[] {
     );
 }
 
+/**
+ * `openCshtmlModels()`, waiting up to `timeoutMs` for the first one to EXIST.
+ *
+ * Boot race (observed live on session restore; also fixed independently on the
+ * v10 branch as `awaitCshtmlModels` — convergent evolution): the manager starts
+ * this server the moment `cshtml` enters the opened-languages set, but the
+ * restored tab's Monaco model may not be created/re-typed yet — the old code
+ * threw "no .cshtml open to serve", the server latched into the error state,
+ * and the manager never retries (the language is already in its started set).
+ * Waiting for `onDidCreateModel`/`onDidChangeModelLanguage` closes the race
+ * without changing any lifecycle contract.
+ */
+function waitForCshtmlModels(timeoutMs = 15_000): Promise<monaco.editor.ITextModel[]> {
+  const now = openCshtmlModels();
+  if (now.length > 0) return Promise.resolve(now);
+  return new Promise((resolve) => {
+    const subs: monaco.IDisposable[] = [];
+    const timer = window.setTimeout(() => {
+      for (const s of subs) s.dispose();
+      resolve(openCshtmlModels()); // last look — [] means a genuine "nothing to serve"
+    }, timeoutMs);
+    const check = (): void => {
+      const models = openCshtmlModels();
+      if (models.length === 0) return;
+      window.clearTimeout(timer);
+      for (const s of subs) s.dispose();
+      resolve(models);
+    };
+    subs.push(monaco.editor.onDidCreateModel(check));
+    // A restored tab can also be created under another id and re-typed to
+    // `cshtml` afterwards — watch language flips too.
+    subs.push(monaco.editor.onDidChangeModelLanguage(check));
+  });
+}
+
 /** Longest-prefix `.csproj` that contains `cshtmlPath`, or null (loose file). */
 async function resolveProject(
   rootPath: string,
@@ -151,6 +203,63 @@ async function resolveProject(
   );
 }
 
+/** `child` está sob `root` (case-insensitive, separadores normalizados)? */
+function pathIsUnder(child: string, root: string): boolean {
+  const norm = (p: string): string =>
+    p.replace(/\\/g, "/").toLowerCase().replace(/\/+$/, "") + "/";
+  return norm(child).startsWith(norm(root));
+}
+
+/**
+ * Troca um alvo de definition que caiu em MetadataAsSource pelo fonte REAL do
+ * workspace, quando houver. O workspace shadow da projeção referencia os
+ * projetos irmãos como DLL (design sidecar-first: nada de build da solution),
+ * então o Roslyn da projeção decompila símbolos da PRÓPRIA solution em vez de
+ * apontar o `.cs` de origem. O cabeçalho do decompilado identifica o assembly;
+ * se ele vem de dentro do workspace, pergunta ao cliente csharp principal
+ * (solution inteira) via `workspace/symbol` e usa o hit com evidência
+ * (container/namespace batendo). Assemblies externos (BCL, NuGet) ficam no
+ * decompilado — é o alvo correto. Best-effort: qualquer falha mantém o alvo
+ * original.
+ */
+async function metadataTargetToWorkspaceSource(
+  target: RoutedLocation,
+  word: string | undefined,
+  rootPath: string
+): Promise<RoutedLocation | null> {
+  if (!word) return null;
+  const csharp = getRunningClient(CSHARP_SERVER_ID);
+  if (!csharp) return null;
+  let header: string;
+  try {
+    header = (await readFile(fromFileUri(target.uri))).content.slice(0, 4000);
+  } catch {
+    return null;
+  }
+  // Cabeçalho: `#region Assembly …` seguido de `// <caminho do .dll>`.
+  const dll = header.match(/^\/\/\s+(.+\.dll)\s*$/im)?.[1];
+  if (!dll || !pathIsUnder(dll, rootPath)) return null;
+  const namespaceHint = header.match(/^namespace\s+([\w.]+)/m)?.[1];
+  const containerHint = (target.uri.split(/[\\/]/).pop() ?? "").replace(/\.cs$/i, "");
+  let symbols: unknown;
+  try {
+    symbols = await csharp.sendRequest("workspace/symbol", { query: word });
+  } catch {
+    return null;
+  }
+  const picked = pickWorkspaceSymbolForMetadata(
+    (Array.isArray(symbols) ? symbols : []) as WorkspaceSymbolLite[],
+    { word, containerHint, namespaceHint }
+  );
+  if (!picked?.location?.uri || !picked.location.range) return null;
+  lspLog("razor projection: definition metadata→fonte real", {
+    word,
+    de: target.uri.slice(-70),
+    para: picked.location.uri.slice(-70),
+  });
+  return { uri: picked.location.uri, range: lspRangeToMonaco(picked.location.range) };
+}
+
 /**
  * Brings up the CSHTML projection server for `rootPath`. Returns a live client
  * the {@link LspManager} owns; all Monaco providers, watchers and timers are
@@ -161,7 +270,10 @@ export async function startRazorProjectionServer(
   context?: ServerStartContext
 ): Promise<MonacoLanguageClient> {
   // 1. Resolve the project from the first open `.cshtml` and prepare its peers.
-  const models = openCshtmlModels();
+  //    WAIT for the model when needed: on session restore the server can start
+  //    before the restored tab's model exists (boot race — see
+  //    waitForCshtmlModels). Only a timeout means there is truly nothing to serve.
+  const models = await waitForCshtmlModels();
   if (models.length === 0) {
     throw new Error("razor projection: no .cshtml open to serve");
   }
@@ -181,6 +293,25 @@ export async function startRazorProjectionServer(
   const inProject = models.filter((m) => inThisProject(fromFileUri(m.uri.toString())));
   const cshtmlRels = inProject.map((m) => relativize(projectDir, fromFileUri(m.uri.toString())));
 
+  /**
+   * Honest degraded mode: the derive found reference DLLs that don't exist on
+   * disk (ProjectReferences the user never built). Types from those assemblies
+   * will look "missing" to Roslyn — say WHY (log + app event) instead of letting
+   * false errors stand unexplained. Building the project once resolves it.
+   */
+  const surfaceMissingRefs = (res: RazorPrepareResult): void => {
+    if (!res.missingReferences?.length) return;
+    lspLog("razor projection: DEGRADED — missing reference DLLs (build the project once)", {
+      count: res.missingReferences.length,
+      first: res.missingReferences[0],
+    });
+    window.dispatchEvent(
+      new CustomEvent("fluent:razor-degraded", {
+        detail: { missingReferences: res.missingReferences },
+      })
+    );
+  };
+
   lspLog("razor projection: preparing", { projectDir, count: cshtmlRels.length });
   const prepared = await razorPrepare({
     workspaceDir: rootPath,
@@ -189,6 +320,7 @@ export async function startRazorProjectionServer(
     config: CONFIG,
     cshtmlRels,
   });
+  surfaceMissingRefs(prepared);
   lspLog("razor projection: prepared", {
     solutionPath: prepared.solutionPath,
     available: prepared.available.length,
@@ -270,10 +402,31 @@ export async function startRazorProjectionServer(
       sentText.set(gcsUri, text);
     });
 
-  const remapToSourceFor =
-    (cshtmlPath: string): RemapFn =>
-    (line, character) =>
-      razorRemapToSource(cshtmlPath, line, character);
+  /**
+   * Batch range remap bound to one `.cshtml`: N ranges in ONE IPC round-trip
+   * (the per-endpoint position remap cost 2 IPCs per diagnostic per pull).
+   */
+  const remapRangesFor =
+    (cshtmlPath: string): RemapRangesFn =>
+    async (ranges) => {
+      const out = await razorRemapRangesToSource(
+        cshtmlPath,
+        ranges.map((r) => ({
+          startLine: r.start.line,
+          startCharacter: r.start.character,
+          endLine: r.end.line,
+          endCharacter: r.end.character,
+        }))
+      );
+      return out.map((r) =>
+        r
+          ? {
+              start: { line: r.startLine, character: r.startCharacter },
+              end: { line: r.endLine, character: r.endCharacter },
+            }
+          : null
+      );
+    };
 
   const inProjectModelFor = (cshtmlPath: string): monaco.editor.ITextModel | null => {
     const wantKey = canonicalFileUriKey(toFileUri(cshtmlPath));
@@ -309,6 +462,14 @@ export async function startRazorProjectionServer(
       lspLog("razor projection: read .g.cs failed", info.generatedPath, String(err));
       return;
     }
+    // Which `.g.cs` (and how big) is being opened in Roslyn — the source map is
+    // built from THIS file, so its line count must match the positions Roslyn
+    // later reports. A mismatch (e.g. build vs sidecar layout) shows up as the
+    // diagnostics landing outside every region (mapped=0).
+    lspLog("razor projection: openProjection .g.cs", {
+      path: info.generatedPath,
+      lines: text.split("\n").length,
+    });
 
     // Run through the per-doc snapshot queue so this authoritative reopen can't
     // interleave with a live sync / provider ensureFresh for the same doc.
@@ -349,6 +510,7 @@ export async function startRazorProjectionServer(
   const pullDiagnostics = async (doc: ProjectionDoc): Promise<void> => {
     if (disposed) return;
     let result: { items?: unknown[] } | null = null;
+    const startedAt = typeof performance !== "undefined" ? performance.now() : 0;
     try {
       // Serialize against the provisional-completion swap so diagnostics aren't
       // pulled from a temporarily-injected `.g.cs`.
@@ -363,7 +525,21 @@ export async function startRazorProjectionServer(
       return;
     }
     const items = (result?.items ?? []) as Parameters<typeof routeDiagnostics>[0];
-    const markers = await routeDiagnostics(items, remapToSourceFor(doc.cshtmlPath));
+    const markers = await routeDiagnostics(items, remapRangesFor(doc.cshtmlPath));
+    // Visibility into the exact point where diagnostics tend to vanish: how many
+    // Roslyn returned for the `.g.cs` vs how many survived the `#line` remap onto
+    // the `.cshtml`. `pulled>0, mapped=0` ⇒ remap dropped them (source-map/range
+    // bug); `pulled=0` ⇒ Roslyn classified nothing (project not loaded / wrong
+    // .g.cs / shadow unrestored). Both previously looked identical (silent).
+    // `ms` is the Roslyn pull round-trip — surfaces a slow/degraded server.
+    const pullMs =
+      startedAt > 0 ? Math.round(performance.now() - startedAt) : undefined;
+    lspLog("razor projection: diagnostics", {
+      cshtml: doc.cshtmlPath,
+      pulled: items.length,
+      mapped: markers.length,
+      ...(pullMs !== undefined ? { ms: pullMs } : {}),
+    });
     // Staleness guard: the awaits above (server pull + range remap) yield, so the
     // doc may have been closed (forgetDoc) or replaced (reprepare/reopen) while we
     // were waiting. If so, forgetDoc already cleared this file's markers + store;
@@ -543,8 +719,9 @@ export async function startRazorProjectionServer(
         // queried for an HTML position. Only a Razor/C# region falls through to
         // the .g.cs projection. (Gating on `htmlHover` truthiness alone would let
         // C# run when HTML simply had no hover for that tag.)
-        if (htmlRegionAt(model, position) === "html") {
-          return htmlHover(model, position);
+        const html = await htmlService();
+        if (html.htmlRegionAt(model, position) === "html") {
+          return html.htmlHover(model, position);
         }
         // Sync the projection to the current buffer FIRST, so the map + open
         // `.g.cs` match what the user sees (no remap against a stale projection).
@@ -568,7 +745,7 @@ export async function startRazorProjectionServer(
         if (!snapshotStable(doc, model, snap, reqVersion)) return null; // superseded
         let range: monaco.IRange | undefined;
         if (res.range) {
-          const r = await remapRangeToMonaco(res.range, remapToSourceFor(doc.cshtmlPath));
+          const r = await remapRangeToMonaco(res.range, remapRangesFor(doc.cshtmlPath));
           range = r ?? undefined;
         }
         // Re-check AFTER the async remap: a live sync may have committed a newer
@@ -602,12 +779,24 @@ export async function startRazorProjectionServer(
         const routed = await routeDefinition(res, {
           projectedUriKey: canonicalFileUriKey(doc.gcsUri),
           cshtmlUri: doc.cshtmlUri,
-          remapToSource: remapToSourceFor(doc.cshtmlPath),
+          remapRanges: remapRangesFor(doc.cshtmlPath),
           uriKey: canonicalFileUriKey,
         });
         // Re-check AFTER the async route/remap (see hover).
         if (!snapshotStable(doc, model, snap, reqVersion)) return null;
-        return routed.map((r) => ({ uri: monaco.Uri.parse(r.uri), range: r.range }));
+        // O workspace shadow referencia os projetos irmãos como DLL, então
+        // definitions de símbolos da PRÓPRIA solution caem em MetadataAsSource
+        // (decompilado). Antes de entregar, tenta trocar cada alvo desses pelo
+        // fonte real via workspace/symbol no cliente csharp principal.
+        const word = model.getWordAtPosition(position)?.word;
+        const upgraded = await Promise.all(
+          routed.map(async (r) =>
+            /MetadataAsSource/i.test(r.uri)
+              ? (await metadataTargetToWorkspaceSource(r, word, rootPath)) ?? r
+              : r
+          )
+        );
+        return upgraded.map((r) => ({ uri: monaco.Uri.parse(r.uri), range: r.range }));
       },
     })
   );
@@ -621,8 +810,9 @@ export async function startRazorProjectionServer(
         // Region-gated, mutually exclusive (same discipline as hover): an HTML
         // region is answered by the HTML service and RETURNS; only a Razor/C#
         // region falls through to the .g.cs projection. No double suggestions.
-        if (htmlRegionAt(model, position) === "html") {
-          return htmlComplete(monaco, model, position) ?? { suggestions: [] };
+        const html = await htmlService();
+        if (html.htmlRegionAt(model, position) === "html") {
+          return html.htmlComplete(monaco, model, position) ?? { suggestions: [] };
         }
         // Sync the projection to the buffer BEFORE provisional/normal completion so
         // both work against the current `.g.cs` (the "delete → completion bugs"
@@ -648,7 +838,11 @@ export async function startRazorProjectionServer(
         // expression end, complete there, then restore. didChange crashes this
         // Roslyn, so we use the same didClose+didOpen lifecycle as openProjection.
         const dotItems = await provisionalDotCompletion(doc, model, position, token);
-        if (dotItems) {
+        // Only short-circuit when the provisional path actually produced items:
+        // an EMPTY array (Roslyn had nothing at the injected dot / the request
+        // failed benignly) used to be truthy and swallowed the normal completion
+        // path entirely — the user got no suggestions at all.
+        if (dotItems && dotItems.length > 0) {
           if (!snapshotStable(doc, model, snap, reqVersion)) return { suggestions: [] };
           return {
             suggestions: dotItems.map((it) => toCompletion(it as Record<string, unknown>, range)),
@@ -679,6 +873,189 @@ export async function startRazorProjectionServer(
     })
   );
 
+  // Code actions / quick fixes (Fase A2, csharp-ide-parity): forward the range
+  // to the projected `.g.cs`, offer Roslyn's actions, and remap every edit back
+  // with the STRICT mapper — an action whose edit touches synthetic C# is
+  // DROPPED whole (contract: no TextEdit born in synthetic text). Roslyn
+  // returns most actions unresolved (edit comes via `codeAction/resolve`), so
+  // the provider stashes the raw LSP action per Monaco action for resolution.
+  const rawActionByMonaco = new WeakMap<object, { raw: unknown; doc: ProjectionDoc }>();
+  const routeEditOpts = (doc: ProjectionDoc) => ({
+    projectedUriKey: canonicalFileUriKey(doc.gcsUri),
+    cshtmlUri: doc.cshtmlUri,
+    remapRangesStrict: (async (ranges) => {
+      const out = await razorRemapRangesToSourceStrict(
+        doc.cshtmlPath,
+        ranges.map((r) => ({
+          startLine: r.start.line,
+          startCharacter: r.start.character,
+          endLine: r.end.line,
+          endCharacter: r.end.character,
+        }))
+      );
+      return out.map((r) =>
+        r
+          ? {
+              start: { line: r.startLine, character: r.startCharacter },
+              end: { line: r.endLine, character: r.endCharacter },
+            }
+          : null
+      );
+    }) as RemapRangesFn,
+    uriKey: canonicalFileUriKey,
+  });
+
+  /** LSP WorkspaceEdit → Monaco edit set (null ⇒ drop the action). */
+  const toMonacoEdit = async (
+    doc: ProjectionDoc,
+    lspEdit: LspWorkspaceEdit | undefined
+  ): Promise<monaco.languages.WorkspaceEdit | null | undefined> => {
+    if (!lspEdit) return undefined; // no edit (yet) — fine, resolve may add one
+    const routed = await routeWorkspaceEdit(lspEdit, routeEditOpts(doc));
+    if (!routed) return null;
+    return {
+      edits: routed.map((e) => ({
+        resource: monaco.Uri.parse(e.uri),
+        versionId: undefined,
+        textEdit: {
+          range: {
+            startLineNumber: e.range.startLineNumber,
+            startColumn: e.range.startColumn,
+            endLineNumber: e.range.endLineNumber,
+            endColumn: e.range.endColumn,
+          },
+          text: e.text,
+        },
+      })),
+    };
+  };
+
+  disposables.push(
+    monaco.languages.registerCodeActionProvider(sel, {
+      provideCodeActions: async (model, range, context, token) => {
+        const empty = { actions: [], dispose: () => {} };
+        const doc = docFor(model);
+        if (!doc) return empty;
+        // HTML regions have no C# actions; skip the round-trip entirely.
+        const html = await htmlService();
+        if (html.htmlRegionAt(model, range.getStartPosition()) === "html") return empty;
+        if (token.isCancellationRequested || !(await ensureFresh(doc, model))) return empty;
+        const snap = doc.committedSourceVersion;
+        const reqVersion = model.getVersionId();
+        if (token.isCancellationRequested || docFor(model) !== doc) return empty;
+
+        // Map the requested range into the projection. Both endpoints must land
+        // in mapped C#; otherwise there is nothing actionable.
+        const genStart = await razorRemapToGenerated(
+          doc.cshtmlPath,
+          range.startLineNumber - 1,
+          range.startColumn - 1
+        );
+        if (!genStart) return empty;
+        const genEnd =
+          (await razorRemapToGenerated(
+            doc.cshtmlPath,
+            range.endLineNumber - 1,
+            range.endColumn - 1
+          )) ?? genStart;
+
+        // Forward the markers in range as LSP diagnostics (what quick fixes key
+        // on), remapped source→generated per endpoint. Unmappable ones are
+        // omitted — Roslyn recomputes from its own analysis anyway.
+        const lspDiagnostics: unknown[] = [];
+        for (const m of context.markers) {
+          const s = await razorRemapToGenerated(doc.cshtmlPath, m.startLineNumber - 1, m.startColumn - 1);
+          const e = await razorRemapToGenerated(doc.cshtmlPath, m.endLineNumber - 1, m.endColumn - 1);
+          if (!s || !e) continue;
+          lspDiagnostics.push({
+            range: { start: { line: s.line, character: s.character }, end: { line: e.line, character: e.character } },
+            severity: monacoSeverityToLsp(m.severity),
+            code: m.code != null ? String(typeof m.code === "object" ? m.code.value : m.code) : undefined,
+            message: m.message,
+            source: m.source,
+          });
+        }
+
+        let res: unknown[] | null = null;
+        try {
+          res = await mutateGenerated(doc.gcsUri, () =>
+            client.sendRequest<unknown[] | null>(
+              "textDocument/codeAction",
+              {
+                textDocument: { uri: doc.gcsUri },
+                range: {
+                  start: { line: genStart.line, character: genStart.character },
+                  end: { line: genEnd.line, character: genEnd.character },
+                },
+                context: { diagnostics: lspDiagnostics, triggerKind: 1 },
+              },
+              token
+            )
+          );
+        } catch (err) {
+          lspLog("razor projection: codeAction failed", String(err));
+          return empty;
+        }
+        if (!res || token.isCancellationRequested) return empty;
+        if (!snapshotStable(doc, model, snap, reqVersion)) return empty;
+
+        const actions: monaco.languages.CodeAction[] = [];
+        for (const raw of res) {
+          const a = raw as {
+            title?: string;
+            kind?: string;
+            isPreferred?: boolean;
+            disabled?: { reason?: string };
+            edit?: LspWorkspaceEdit;
+            command?: unknown;
+          };
+          // Plain Commands (server-side execution) aren't supported in V1; a
+          // CodeAction that ONLY carries a command is skipped likewise.
+          if (typeof a.title !== "string" || a.disabled) continue;
+          if (!a.edit && a.command && !("edit" in a)) continue;
+          const edit = await toMonacoEdit(doc, a.edit);
+          if (edit === null) continue; // synthetic span — dropped whole
+          const action: monaco.languages.CodeAction = {
+            title: a.title,
+            kind: a.kind,
+            isPreferred: a.isPreferred,
+            edit,
+          };
+          rawActionByMonaco.set(action, { raw, doc });
+          actions.push(action);
+        }
+        return { actions, dispose: () => {} };
+      },
+
+      resolveCodeAction: async (action, token) => {
+        // Already carries its edit (rare with Roslyn) — nothing to do.
+        if (action.edit) return action;
+        const stashed = rawActionByMonaco.get(action);
+        if (!stashed) return action;
+        const { raw, doc } = stashed;
+        // The doc may have been superseded (close/reprepare) since the list was
+        // built — resolving against a dead projection would remap wrong.
+        if (docs.get(canonicalFileUriKey(doc.cshtmlUri)) !== doc) return action;
+        try {
+          const resolved = await mutateGenerated(doc.gcsUri, () =>
+            client.sendRequest<{ edit?: LspWorkspaceEdit } | null>(
+              "codeAction/resolve",
+              raw,
+              token
+            )
+          );
+          if (resolved?.edit) {
+            const edit = await toMonacoEdit(doc, resolved.edit);
+            if (edit) action.edit = edit;
+          }
+        } catch (err) {
+          lspLog("razor projection: codeAction/resolve failed", String(err));
+        }
+        return action;
+      },
+    })
+  );
+
   // Auto-close HTML tags: when the user types `>` or `/` in an HTML region of a
   // `.cshtml`, insert the matching close tag (e.g. `<div>` → `</div>`), mirroring
   // VS Code's `html.autoClosingTags`. The HTML service computes the snippet from
@@ -693,24 +1070,27 @@ export async function startRazorProjectionServer(
       if (!model || model.getLanguageId() !== CSHTML_PROJECTION_LANGUAGE_ID) return;
       const pos = ed.getPosition();
       if (!pos || !docFor(model)) return;
-      const snippet = htmlTagComplete(model, pos);
-      if (!snippet) return;
-      // Defer a tick so the snippet insert doesn't fight the in-progress edit.
-      const contrib = ed.getContribution("snippetController2") as
-        | (monaco.editor.IEditorContribution & { insert?: (t: string) => void })
-        | null;
-      const uri = model.uri.toString();
-      const version = model.getVersionId();
-      window.setTimeout(() => {
-        // Guard against the user switching tab/model/caret within the tick — only
-        // insert if everything is still exactly as it was when `>`/`/` was typed.
-        if (disposed || model.isDisposed()) return;
-        if (ed.getModel() !== model || model.uri.toString() !== uri) return;
-        if (model.getVersionId() !== version) return;
-        const now = ed.getPosition();
-        if (!now || now.lineNumber !== pos.lineNumber || now.column !== pos.column) return;
-        contrib?.insert?.(snippet);
-      }, 0);
+      void (async () => {
+        const html = await htmlService();
+        const snippet = html.htmlTagComplete(model, pos);
+        if (!snippet) return;
+        // Defer a tick so the snippet insert doesn't fight the in-progress edit.
+        const contrib = ed.getContribution("snippetController2") as
+          | (monaco.editor.IEditorContribution & { insert?: (t: string) => void })
+          | null;
+        const uri = model.uri.toString();
+        const version = model.getVersionId();
+        window.setTimeout(() => {
+          // Guard against the user switching tab/model/caret within the tick — only
+          // insert if everything is still exactly as it was when `>`/`/` was typed.
+          if (disposed || model.isDisposed()) return;
+          if (ed.getModel() !== model || model.uri.toString() !== uri) return;
+          if (model.getVersionId() !== version) return;
+          const now = ed.getPosition();
+          if (!now || now.lineNumber !== pos.lineNumber || now.column !== pos.column) return;
+          contrib?.insert?.(snippet);
+        }, 0);
+      })();
     });
     disposables.push(sub);
   };
@@ -739,7 +1119,7 @@ export async function startRazorProjectionServer(
     // Drop this file's store entry too, so a closed `.cshtml` stops coloring the
     // explorer (empty list clears the key).
     setDiagnostics(RAZOR_PROJECTION_SERVER_ID, doc.cshtmlPath, []);
-    forgetHtmlVirtual(doc.cshtmlUri); // release the cached virtual HTML doc
+    forgetHtmlVirtualIfLoaded(doc.cshtmlUri); // release the cached virtual HTML doc
     // Drop live-emit bookkeeping for this file.
     const t = liveTimers.get(key);
     if (t) window.clearTimeout(t);
@@ -775,6 +1155,7 @@ export async function startRazorProjectionServer(
         config: CONFIG,
         cshtmlRels: rels,
       });
+      surfaceMissingRefs(re);
       for (const info of re.available) await openProjection(info);
       pullAllDiagnostics();
     } catch (err) {
@@ -904,11 +1285,17 @@ export async function startRazorProjectionServer(
     );
   };
 
-  const attachModel = (model: monaco.editor.ITextModel): void => {
+  const attachModel = (model: monaco.editor.ITextModel, initial = false): void => {
     if (model.getLanguageId() !== CSHTML_PROJECTION_LANGUAGE_ID || model.uri.scheme !== "file") return;
     if (!inThisProject(fromFileUri(model.uri.toString()))) return; // other project (V1)
-    // A newly-opened `.cshtml` matches disk → safe to reprepare immediately.
-    scheduleReprepare();
+    // Reprepare ONLY for models that appear AFTER startup. The models already
+    // open at start are covered by the initial `prepared`/`openProjection` in
+    // `onProjectInitialized`; firing a reprepare for them here would run a second
+    // `razorPrepare` (emit + materialize) that races the `.g.cs` Roslyn just
+    // opened — observed as `reprepare failed: os error 32` (file lock) and a
+    // desynced map, so every diagnostic dropped (`pulled>0, mapped=0`). A
+    // genuinely new tab, by contrast, has no projection yet and must reprepare.
+    if (!initial) scheduleReprepare();
     // Live re-emit on every (debounced) edit, so detection follows the buffer.
     const sub = model.onDidChangeContent(() => {
       if (disposed) return;
@@ -917,19 +1304,39 @@ export async function startRazorProjectionServer(
     disposables.push(sub);
   };
 
-  disposables.push(monaco.editor.onDidCreateModel(attachModel));
-  // Attach to any `.cshtml` already open when the server starts.
-  for (const m of openCshtmlModels()) attachModel(m);
+  disposables.push(monaco.editor.onDidCreateModel((m) => attachModel(m)));
+  // Attach to any `.cshtml` already open when the server starts. Mark a model
+  // `initial` (suppress its reprepare) ONLY if the startup `prepared` actually
+  // projected it — otherwise a `.cshtml` that opened AFTER `awaitCshtmlModels()`
+  // snapshotted (but before this loop) isn't in `prepared` and would be left
+  // without a projection; those must reprepare like a genuinely new tab.
+  const projectedKeys = new Set(
+    prepared.available.map((info) => canonicalFileUriKey(toFileUri(info.cshtmlPath)))
+  );
+  for (const m of openCshtmlModels()) {
+    const isProjected = projectedKeys.has(canonicalFileUriKey(m.uri.toString()));
+    attachModel(m, isProjected);
+  }
   disposables.push(
     monaco.editor.onWillDisposeModel((model) => forgetDoc(canonicalFileUriKey(model.uri.toString())))
   );
 
-  // Reprepare on SAVE (App dispatches `fluent:file-saved` after `write_file`).
-  // The broker reads disk, so saving is the only moment the on-disk `.cshtml`
-  // matches the buffer — keystroke-driven reprepare would rebuild stale content.
+  // On SAVE (App dispatches `fluent:file-saved` after `write_file`):
+  //  - a served VIEW just needs a live sync — buffer == disk and the sidecar emit
+  //    is ~ms (usually a no-op: the keystroke path already committed this version);
+  //  - a `_ViewImports`/`_ViewStart` (or a view we don't serve yet) changes the
+  //    CONTEXT of other views → full reprepare (cheap now: sidecar-first, no build).
   const onSaved = (e: Event): void => {
     const path = (e as CustomEvent<{ path?: string }>).detail?.path;
-    if (path && /\.cshtml$/i.test(path) && inThisProject(path)) scheduleReprepare();
+    if (!path || !/\.cshtml$/i.test(path) || !inThisProject(path)) return;
+    const isSharedImport = /_view(imports|start)\.cshtml$/i.test(path);
+    const key = canonicalFileUriKey(toFileUri(path));
+    const model = inProjectModelFor(path);
+    if (!isSharedImport && docs.has(key) && model) {
+      void syncLive(key, model);
+      return;
+    }
+    scheduleReprepare();
   };
   window.addEventListener("fluent:file-saved", onSaved);
   disposables.push({ dispose: () => window.removeEventListener("fluent:file-saved", onSaved) });
@@ -977,7 +1384,7 @@ export async function startRazorProjectionServer(
       genChain.clear(); // drop the per-gcsUri mutation queues
       syncChains.clear(); // drop the per-doc live-sync queues
       sentText.clear();
-      forgetAllHtmlVirtual(); // drop any leftover virtual-HTML cache on stop
+      forgetAllHtmlVirtualIfLoaded(); // drop any leftover virtual-HTML cache on stop
       // Belt-and-suspenders: drop EVERY store entry this server owns, in case a
       // doc lifecycle edge was missed or the docs map was incomplete at stop —
       // server stop/reset must clear this owner's diagnostics (CSHTML lifecycle
@@ -992,7 +1399,7 @@ export async function startRazorProjectionServer(
 
 /** Read the projected `.g.cs` from disk via the app's FS command. */
 async function readGenerated(path: string): Promise<string> {
-  return readFile(path);
+  return (await readFile(path)).content;
 }
 
 /** LSP hover contents → Monaco markdown. */

@@ -285,6 +285,7 @@ export function TabBar({
                 aria-selected={f.path === activePath}
                 className={
                   `tab${f.path === activePath ? " active" : ""}` +
+                  (f.readOnly ? " readonly" : "") +
                   (f.path === dragPath ? " dragging" : "") +
                   (isOver ? ` drag-over-${dragOverSide}` : "")
                 }
@@ -390,9 +391,10 @@ export function TabBar({
                   stopAutoScroll();
                   onDragStateChange?.(null);
                 }}
-                title={f.path}
+                title={f.sourceLabel ?? f.path}
               >
-                <FileIcon path={f.path} className="tab-icon" />
+                <FileIcon path={f.sourcePath ?? f.path} className="tab-icon" />
+                {f.readOnly && <Codicon name="lock" size={12} />}
                 <span
                   className={`tab-name${deco ? ` deco-${deco.kind}` : ""}`}
                 >

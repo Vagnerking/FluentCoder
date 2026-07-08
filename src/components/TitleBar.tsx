@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { MenuBar } from "./MenuBar";
+import { Tooltip } from "./Tooltip";
 import { useSnapLayout } from "../snap/useSnapLayout";
 import type { MenuDef } from "../types";
 import logoUrl from "../assets/fluent-coder.png";
@@ -13,6 +14,9 @@ interface TitleBarProps {
   /** Bottom panel (terminal/problems) open state + toggle. */
   panelOpen: boolean;
   onTogglePanel: () => void;
+  /** Secondary side bar (AI agents chat) open state + toggle. */
+  agentsOpen: boolean;
+  onToggleAgents: () => void;
   /** Menu definitions (File, Edit, …) rendered in the left-hand MenuBar. */
   menus: MenuDef[];
 }
@@ -29,6 +33,8 @@ export function TitleBar({
   onToggleSidebar,
   panelOpen,
   onTogglePanel,
+  agentsOpen,
+  onToggleAgents,
   menus,
 }: TitleBarProps) {
   const appWindow = getCurrentWindow();
@@ -77,37 +83,59 @@ export function TitleBar({
       <div className="titlebar-right" data-tauri-drag-region>
       {/* VS Code-style layout controls, just left of the window buttons. */}
       <div className="titlebar-layout" data-tauri-drag-region>
-        <button
-          className={`titlebar-layout-btn${sidebarOpen ? " active" : ""}`}
-          onClick={onToggleSidebar}
-          title={sidebarOpen ? "Ocultar barra lateral" : "Mostrar barra lateral"}
-          aria-label="Alternar barra lateral"
-          aria-pressed={sidebarOpen}
+        <Tooltip
+          label={agentsOpen ? "Ocultar chat de agentes" : "Mostrar chat de agentes"}
+          placement="bottom"
         >
-          <SidebarIcon open={sidebarOpen} />
-        </button>
-        <button
-          className={`titlebar-layout-btn${panelOpen ? " active" : ""}`}
-          onClick={onTogglePanel}
-          title={panelOpen ? "Ocultar painel inferior" : "Mostrar painel inferior"}
-          aria-label="Alternar painel inferior"
-          aria-pressed={panelOpen}
+          <button
+            className={`titlebar-layout-btn${agentsOpen ? " active" : ""}`}
+            onClick={onToggleAgents}
+            aria-label="Alternar chat de agentes"
+            aria-pressed={agentsOpen}
+          >
+            <ChatIcon />
+          </button>
+        </Tooltip>
+        <Tooltip
+          label={sidebarOpen ? "Ocultar barra lateral" : "Mostrar barra lateral"}
+          placement="bottom"
         >
-          <PanelIcon open={panelOpen} />
-        </button>
+          <button
+            className={`titlebar-layout-btn${sidebarOpen ? " active" : ""}`}
+            onClick={onToggleSidebar}
+            aria-label="Alternar barra lateral"
+            aria-pressed={sidebarOpen}
+          >
+            <SidebarIcon open={sidebarOpen} />
+          </button>
+        </Tooltip>
+        <Tooltip
+          label={panelOpen ? "Ocultar painel inferior" : "Mostrar painel inferior"}
+          placement="bottom"
+        >
+          <button
+            className={`titlebar-layout-btn${panelOpen ? " active" : ""}`}
+            onClick={onTogglePanel}
+            aria-label="Alternar painel inferior"
+            aria-pressed={panelOpen}
+          >
+            <PanelIcon open={panelOpen} />
+          </button>
+        </Tooltip>
       </div>
 
       <div className="window-controls" data-tauri-drag-region>
-        <button
-          className="caption-btn"
-          onClick={() => appWindow.minimize()}
-          title="Minimizar"
-          aria-label="Minimizar"
-        >
-          <svg width="10" height="10" viewBox="0 0 10 10">
-            <rect x="0" y="4.5" width="10" height="1" fill="currentColor" />
-          </svg>
-        </button>
+        <Tooltip label="Minimizar" placement="bottom">
+          <button
+            className="caption-btn"
+            onClick={() => appWindow.minimize()}
+            aria-label="Minimizar"
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10">
+              <rect x="0" y="4.5" width="10" height="1" fill="currentColor" />
+            </svg>
+          </button>
+        </Tooltip>
 
         <button
           ref={maxBtnRef}
@@ -128,16 +156,17 @@ export function TitleBar({
           )}
         </button>
 
-        <button
-          className="caption-btn caption-close"
-          onClick={() => appWindow.close()}
-          title="Fechar"
-          aria-label="Fechar"
-        >
-          <svg width="10" height="10" viewBox="0 0 10 10">
-            <path d="M0 0 L10 10 M10 0 L0 10" stroke="currentColor" strokeWidth="1" />
-          </svg>
-        </button>
+        <Tooltip label="Fechar" placement="bottom">
+          <button
+            className="caption-btn caption-close"
+            onClick={() => appWindow.close()}
+            aria-label="Fechar"
+          >
+            <svg width="10" height="10" viewBox="0 0 10 10">
+              <path d="M0 0 L10 10 M10 0 L0 10" stroke="currentColor" strokeWidth="1" />
+            </svg>
+          </button>
+        </Tooltip>
       </div>
       </div>
     </div>
@@ -151,6 +180,20 @@ function SidebarIcon({ open }: { open: boolean }) {
       {open && <rect x="2" y="3" width="4" height="10" fill="currentColor" opacity="0.45" />}
       <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" fill="none" />
       <line x1="6" y1="2.5" x2="6" y2="13.5" stroke="currentColor" />
+    </svg>
+  );
+}
+
+/** Chat bubble glyph for the AI agents secondary side bar toggle. */
+function ChatIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16">
+      <path
+        d="M2 3.5 A1.5 1.5 0 0 1 3.5 2 h9 A1.5 1.5 0 0 1 14 3.5 v6 A1.5 1.5 0 0 1 12.5 11 H6.5 L3.5 13.5 V11 H3.5 A1.5 1.5 0 0 1 2 9.5 Z"
+        stroke="currentColor"
+        fill="none"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }

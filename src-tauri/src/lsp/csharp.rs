@@ -179,7 +179,7 @@ pub async fn ensure_roslyn_server(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 /// Downloads a URL fully into memory.
-async fn download_bytes(url: &str) -> Result<Vec<u8>, String> {
+pub(crate) async fn download_bytes(url: &str) -> Result<Vec<u8>, String> {
     let resp = reqwest::get(url).await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
@@ -189,7 +189,7 @@ async fn download_bytes(url: &str) -> Result<Vec<u8>, String> {
 }
 
 /// Computes the lowercase hex SHA-256 of a byte slice.
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(bytes);
@@ -198,7 +198,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// Extracts a ZIP (the NuGet package) into `dest`.
-fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), String> {
+pub(crate) fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), String> {
     let cursor = std::io::Cursor::new(bytes);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| e.to_string())?;
     for i in 0..archive.len() {
@@ -229,9 +229,10 @@ pub fn detect_dotnet() -> Result<String, String> {
     };
 
     // `dotnet --version` succeeds iff the SDK/runtime is reachable.
-    let probe = std::process::Command::new(program)
-        .arg("--version")
-        .output();
+    let mut command = std::process::Command::new(program);
+    command.arg("--version");
+    crate::child_process::hide_console_window(&mut command);
+    let probe = command.output();
 
     match probe {
         Ok(out) if out.status.success() => Ok(program.to_string()),

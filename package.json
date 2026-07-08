@@ -12,6 +12,23 @@
     "test:unit": "node --experimental-strip-types --test \"src/**/*.test.ts\""
   },
   "dependencies": {
+    "@codingame/monaco-vscode-api": "^25.1.2",
+    "@codingame/monaco-vscode-configuration-service-override": "^25.1.2",
+    "@codingame/monaco-vscode-editor-api": "^25.1.2",
+    "@codingame/monaco-vscode-editor-service-override": "^25.1.2",
+    "@codingame/monaco-vscode-extension-api": "^25.1.2",
+    "@codingame/monaco-vscode-extensions-service-override": "^25.1.2",
+    "@codingame/monaco-vscode-files-service-override": "^25.1.2",
+    "@codingame/monaco-vscode-languages-service-override": "^25.1.2",
+    "@codingame/monaco-vscode-localization-service-override": "^25.1.2",
+    "@codingame/monaco-vscode-log-service-override": "^25.1.2",
+    "@codingame/monaco-vscode-model-service-override": "^25.1.2",
+    "@codingame/monaco-vscode-monarch-service-override": "^25.1.2",
+    "@codingame/monaco-vscode-textmate-service-override": "^25.1.2",
+    "@codingame/monaco-vscode-theme-defaults-default-extension": "^25.1.2",
+    "@codingame/monaco-vscode-theme-service-override": "^25.1.2",
+    "@codingame/monaco-vscode-views-service-override": "^25.1.2",
+    "@codingame/monaco-vscode-workbench-service-override": "^25.1.2",
     "@monaco-editor/react": "^4.6.0",
     "@shikijs/monaco": "^3.23.0",
     "@tauri-apps/api": "^2.1.1",
@@ -20,8 +37,8 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
     "material-icon-theme": "^5.35.0",
-    "monaco-editor": "^0.52.2",
-    "monaco-languageclient": "1.1.0",
+    "monaco-editor": "npm:@codingame/monaco-vscode-editor-api@^25.1.2",
+    "monaco-languageclient": "10.7.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
@@ -30,10 +47,10 @@
     "tslib": "^2.6.2",
     "vscode-html-languageservice": "^5.6.2",
     "vscode-jsonrpc": "~8.0.2",
-    "vscode-languageclient": "~8.0.2",
-    "vscode-languageserver-protocol": "^3.17.5",
+    "vscode-languageclient": "~9.0.1",
+    "vscode-languageserver-protocol": "~3.17.5",
     "vscode-languageserver-textdocument": "^1.0.12",
-    "vscode-ws-jsonrpc": "^3.0.0"
+    "vscode-ws-jsonrpc": "^3.5.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.1.0",
@@ -44,7 +61,8 @@
     "vite": "^6.0.3"
   },
   "comments": {
-    "overrides": "Force-patch transitive vulnerabilities pulled in by material-icon-theme -> biome@0.3.3 (an unused build-time CLI that drags in the legacy request/inquirer chain). None of these packages execute at runtime; the overrides exist only to clear the Dependabot alerts. The deprecated, unpatchable 'request' is aliased to its maintained, SSRF-fixed fork @cypress/request."
+    "overrides": "Force-patch transitive vulnerabilities pulled in by material-icon-theme -> biome@0.3.3 (an unused build-time CLI that drags in the legacy request/inquirer chain). None of these packages execute at runtime; the overrides exist only to clear the Dependabot alerts. The deprecated, unpatchable 'request' is aliased to its maintained, SSRF-fixed fork @cypress/request.",
+    "overrides-dompurify": "@codingame/monaco-vscode-api@25.1.2 hard-pins dompurify@3.3.1, which has 16 open XSS/prototype-pollution advisories. Forced to 3.4.11 (latest 3.x, same stable public API) to clear the alerts without doing a risky major bump of the whole @codingame/monaco stack. dompurify runs at runtime inside monaco-vscode-api."
   },
   "overrides": {
     "lodash": "^4.18.1",
@@ -52,6 +70,7 @@
     "tough-cookie": "^4.1.4",
     "qs": "^6.15.2",
     "uuid": "^11.1.1",
-    "request": "npm:@cypress/request@^4.0.1"
+    "request": "npm:@cypress/request@^4.0.1",
+    "dompurify": "^3.4.11"
   }
 }

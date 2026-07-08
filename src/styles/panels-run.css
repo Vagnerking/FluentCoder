@@ -1,0 +1,23 @@
+/* ---- Run / Debug panel ---- */
+.run-panel { display: flex; flex-direction: column; height: 100%; }
+.run-header { gap: 4px; }
+.run-root-section { border-top: 1px solid rgba(210,228,242,0.06); }
+.run-root-section:first-child { border-top: none; }
+.run-root-header { padding-top: 8px; }
+.run-root-actions { display: flex; justify-content: flex-end; padding: 0 8px 4px; }
+.run-unavailable-root { margin: 4px 8px; padding: 6px 8px; border-radius: var(--radius-control); color: var(--text-muted); background: rgba(226,192,141,0.08); border: 1px solid rgba(226,192,141,0.14); font-size: 11px; }
+.run-draft { display: flex; flex-direction: column; gap: 6px; padding: 4px 12px 10px; }
+.run-draft .search-input { height: 28px; }
+.run-draft-actions { display: flex; align-items: center; gap: 8px; }
+.run-draft-actions .git-commit-btn { flex: 1; }
+.run-lists { flex: 1; overflow-y: auto; padding-bottom: 12px; }
+.run-row { display: flex; align-items: center; gap: 8px; margin: 1px 6px; padding: 4px 6px; border-radius: var(--radius-control); cursor: default; }
+.run-row:hover { background: var(--fill-subtle-hover); }
+.run-play { width: 24px; height: 24px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: transparent; border: none; border-radius: var(--radius-control); color: #73c991; cursor: pointer; font-size: 12px; }
+.run-play:hover { background: var(--fill-subtle-hover); color: #8fe0ad; }
+.run-info { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.run-name { font-size: 13px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-cmd { font-size: 10px; color: var(--text-disabled); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: "Cascadia Code", "Consolas", monospace; }
+.run-remove { width: 20px; height: 20px; flex-shrink: 0; background: transparent; border: none; border-radius: var(--radius-control); color: var(--text-muted); cursor: pointer; font-size: 12px; opacity: 0; }
+.run-row:hover .run-remove { opacity: 1; }
+.run-remove:hover { background: var(--fill-subtle-hover); color: var(--text); }

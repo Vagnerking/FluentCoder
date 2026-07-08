@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
-import type { MatchSelection, EditorActionsApi, FileDecoration, Problem } from "../types";
+import type {
+  BlameHunk,
+  MatchSelection,
+  EditorActionsApi,
+  FileDecoration,
+  OpenFile,
+  Problem,
+} from "../types";
 import type { Edge, EditorGroup } from "../editorGroups";
 import { isDropMeaningful } from "../editorGroups";
 import { Breadcrumbs } from "./Breadcrumbs";
@@ -8,6 +15,7 @@ import { EditorPane } from "./EditorPane";
 import { ImagePreview } from "./ImagePreview";
 import { MediaPreview } from "./MediaPreview";
 import { GraphView } from "./GraphView";
+import type { GitRevisionDiffTarget } from "../api";
 
 export interface EditorGroupViewProps {
   group: EditorGroup;
@@ -37,6 +45,15 @@ export interface EditorGroupViewProps {
   onCursorChange: (line: number, col: number) => void;
   onProblemsChange: (problems: Problem[]) => void;
   onOpenDefinition: (path: string, line: number, column: number) => void;
+  onShowFileHistory?: (path: string, line?: number) => void;
+  onOpenRevision?: (filePath: string, commitHash: string, shortHash: string) => void;
+  onOpenRevisionDiff?: (
+    filePath: string,
+    commitHash: string,
+    shortHash: string,
+    compareTo: GitRevisionDiffTarget
+  ) => void;
+  onCurrentBlameChange?: (hunk: BlameHunk | null, filePath: string | null) => void;
   revealRef?: React.MutableRefObject<
     ((line: number, selection?: MatchSelection) => void) | null
   >;
@@ -48,9 +65,15 @@ export interface EditorGroupViewProps {
   // Drop a dragged tab onto this group (move into it, or split off an edge).
   onTabDrop: (edge: Edge, fromGroupId: string, path: string) => void;
   /** Opens a file by path (used by the graph view's node clicks). */
-  onOpenPath: (path: string) => void;
+  onOpenPath: (path: string, workspaceRemote?: OpenFile["workspaceRemote"]) => void;
   /** The workbench's active real file, highlighted in the graph view. */
   graphActivePath?: string | null;
+  /** Root scanned by the graph tab. Defaults to rootPath for single-root mode. */
+  graphRootPath?: string | null;
+  /** SSH connection id when graphRootPath points at a remote root. */
+  graphConnId?: string | null;
+  /** Explicit SSH origin for graph node opens. */
+  graphWorkspaceRemote?: OpenFile["workspaceRemote"];
   /** True while ANY tab is being dragged — shields this group's editor with a
    *  capture overlay so Monaco doesn't move its cursor/scroll under the drag. */
   tabDragging: boolean;
@@ -170,12 +193,23 @@ export function EditorGroupView(props: EditorGroupViewProps) {
         {!active && props.welcome ? (
           props.welcome
         ) : active && mode === "image" ? (
-          <ImagePreview path={active.path} name={active.name} />
+          <ImagePreview
+            path={active.path}
+            name={active.name}
+            connId={active.workspaceRemote?.connId}
+          />
         ) : active && (mode === "video" || mode === "audio") ? (
-          <MediaPreview path={active.path} name={active.name} kind={mode} />
+          <MediaPreview
+            path={active.path}
+            name={active.name}
+            kind={mode}
+            connId={active.workspaceRemote?.connId}
+          />
         ) : active && mode === "graph" ? (
           <GraphView
-            rootPath={props.rootPath}
+            rootPath={props.graphRootPath ?? props.rootPath}
+            connId={props.graphConnId ?? null}
+            workspaceRemote={props.graphWorkspaceRemote}
             activePath={props.graphActivePath ?? null}
             onOpenFile={props.onOpenPath}
           />
@@ -192,6 +226,11 @@ export function EditorGroupView(props: EditorGroupViewProps) {
             pendingReveal={props.pendingReveal}
             actionsRef={props.actionsRef}
             onOpenDefinition={props.onOpenDefinition}
+            onShowFileHistory={props.onShowFileHistory}
+            onOpenRevision={props.onOpenRevision}
+            onOpenRevisionDiff={props.onOpenRevisionDiff}
+            fileDecoration={active ? props.decorationFor(active.path) : undefined}
+            onCurrentBlameChange={props.onCurrentBlameChange}
           />
         )}
         {/* While a tab is in flight, an opaque-to-events overlay sits over the

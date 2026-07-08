@@ -1,0 +1,177 @@
+/* ============================================================================
+   Base control systems — F2-AUD-014 (buttons) and F2-AUD-013 (inputs).
+
+   Opt-in classes so new screens (and gradual migration of existing ones) stop
+   re-deriving button/input styles per feature. They consume the token layer so
+   states stay consistent. Existing bespoke buttons keep working; migrate them
+   feature by feature rather than all at once.
+   ========================================================================= */
+
+/* ---- Buttons (F2-AUD-014) ---- */
+.ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 84px;
+  height: 30px;
+  padding: 0 14px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text);
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+.ui-button:hover:not(:disabled) {
+  background: var(--acrylic-control-hover);
+}
+.ui-button:active:not(:disabled) {
+  background: var(--acrylic-control-pressed);
+}
+.ui-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Primary / accent — the default/confirming action. */
+.ui-button-primary {
+  color: #06223a;
+  background: var(--accent);
+  border-color: transparent;
+  font-weight: 600;
+}
+.ui-button-primary:hover:not(:disabled) {
+  background: #7ad6ff;
+}
+.ui-button-primary:active:not(:disabled) {
+  background: #4cb8ec;
+}
+
+/* Secondary — explicit alias of the neutral base, for symmetry at call sites. */
+.ui-button-secondary {
+  background: var(--acrylic-control);
+}
+
+/* Danger — destructive actions (delete, discard). */
+.ui-button-danger {
+  color: #2a0d0f;
+  background: var(--color-status-error);
+  border-color: transparent;
+  font-weight: 600;
+}
+.ui-button-danger:hover:not(:disabled) {
+  background: #ff6b6b;
+}
+.ui-button-danger:active:not(:disabled) {
+  background: #d83b3b;
+}
+
+/* Loading: dim + show busy cursor; pair with aria-busy at the call site. */
+.ui-button[aria-busy="true"] {
+  opacity: 0.7;
+  cursor: progress;
+}
+
+/* Icon-only button — square, no min-width, codicon-sized. */
+.ui-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-width: 0;
+  padding: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+.ui-icon-button:hover:not(:disabled) {
+  background: var(--fill-subtle-hover);
+  color: var(--text);
+}
+.ui-icon-button:active:not(:disabled) {
+  background: var(--fill-subtle-active);
+}
+.ui-icon-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+/* Pressed/toggle state for icon buttons that use aria-pressed. */
+.ui-icon-button[aria-pressed="true"] {
+  background: var(--fill-selected);
+  color: var(--text);
+}
+
+/* ---- Inputs (F2-AUD-013) ---- */
+.ui-input,
+.ui-textarea,
+.ui-select {
+  width: 100%;
+  height: 30px;
+  padding: 0 9px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  border-bottom-color: var(--acrylic-border-strong);
+  border-radius: var(--radius-control);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  transition: border-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+.ui-textarea {
+  height: auto;
+  min-height: 48px;
+  padding: 7px 9px;
+  resize: vertical;
+}
+.ui-input::placeholder,
+.ui-textarea::placeholder {
+  color: var(--text-muted);
+}
+.ui-input:hover:not(:disabled),
+.ui-textarea:hover:not(:disabled),
+.ui-select:hover:not(:disabled) {
+  border-color: var(--acrylic-border-strong);
+}
+.ui-input:focus-visible,
+.ui-textarea:focus-visible,
+.ui-select:focus-visible {
+  outline: none;
+  border-color: var(--stroke-focus);
+  box-shadow: var(--focus-ring);
+}
+.ui-input:disabled,
+.ui-textarea:disabled,
+.ui-select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* Invalid: pair with aria-invalid="true" + an aria-describedby message. */
+.ui-input[aria-invalid="true"],
+.ui-textarea[aria-invalid="true"],
+.ui-select[aria-invalid="true"] {
+  border-color: var(--color-status-error);
+}
+.ui-input[aria-invalid="true"]:focus-visible,
+.ui-textarea[aria-invalid="true"]:focus-visible,
+.ui-select[aria-invalid="true"]:focus-visible {
+  box-shadow: 0 0 0 var(--focus-ring-width) var(--color-status-error);
+}
+/* The error text tied to an invalid field via aria-describedby. */
+.ui-field-error {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-status-error);
+}

@@ -34,7 +34,10 @@ impl LspPos {
 
 /// LSP (0-based) -> source-map (1-based). `None` on overflow (malformed input).
 fn to_map(p: LspPos) -> Option<Pos> {
-    Some(Pos::new(p.line.checked_add(1)?, p.character.checked_add(1)?))
+    Some(Pos::new(
+        p.line.checked_add(1)?,
+        p.character.checked_add(1)?,
+    ))
 }
 
 /// source-map (1-based) -> LSP (0-based). `None` if a coordinate is 0 (invalid).
@@ -69,6 +72,18 @@ pub fn generated_range_to_source(map: &RazorSourceMap, r: LspRange) -> Option<Ls
 /// Remap a `.cshtml` range to the generated C# (same-region enforced).
 pub fn source_range_to_generated(map: &RazorSourceMap, r: LspRange) -> Option<LspRange> {
     let (s, e) = map.to_generated_range(to_map(r.start)?, to_map(r.end)?)?;
+    Some(LspRange {
+        start: from_map(s)?,
+        end: from_map(e)?,
+    })
+}
+
+/// [`generated_range_to_source`] with cross-region CLAMPING — for DIAGNOSTICS,
+/// where a truncated-but-visible squiggle beats a silently dropped one. Never
+/// use for `TextEdit`s (those must map exactly; see the source-map contract on
+/// synthetic ranges).
+pub fn generated_range_to_source_clamped(map: &RazorSourceMap, r: LspRange) -> Option<LspRange> {
+    let (s, e) = map.to_source_range_clamped(to_map(r.start)?, to_map(r.end)?)?;
     Some(LspRange {
         start: from_map(s)?,
         end: from_map(e)?,

@@ -45,6 +45,14 @@ pub struct DerivedRefs {
 /// project's TFM + framework refs + resolved compile references + the editorconfig
 /// globals the Razor generator reads. `-t:ResolveAssemblyReferences` makes
 /// MSBuild populate `ReferencePath` (the actual DLLs) which `--getItem` then dumps.
+///
+/// This is a DESIGN-TIME query, never a build: `-p:BuildProjectReferences=false`
+/// resolves ProjectReference outputs via `GetTargetPath` (their would-be DLL paths)
+/// WITHOUT compiling them, and `--no-restore` skips the NuGet walk of the whole
+/// graph. Validated on a 24-project monorepo: identical `ReferencePath` output to
+/// the building variant (all ProjectReference DLLs included), ~4.6s vs minutes.
+/// The DLLs may not exist on disk if the user never built — callers must check
+/// existence and degrade loudly, not silently.
 pub fn derive_command(csproj_path: &str) -> (String, Vec<String>) {
     derive_command_for_tfm(csproj_path, None)
 }
@@ -53,7 +61,29 @@ pub fn derive_command(csproj_path: &str) -> (String, Vec<String>) {
 /// multi-targeting project leaves `TargetFramework` empty until a TFM is selected,
 /// so the resolve target can't populate `ReferencePath`; re-running with `-f <tfm>`
 /// evaluates the project AS that single framework and resolves its references.
-pub fn derive_command_for_tfm(csproj_path: &str, target_framework: Option<&str>) -> (String, Vec<String>) {
+pub fn derive_command_for_tfm(
+    csproj_path: &str,
+    target_framework: Option<&str>,
+) -> (String, Vec<String>) {
+    derive_command_inner(csproj_path, target_framework, true)
+}
+
+/// [`derive_command_for_tfm`] WITH the implicit NuGet restore enabled. Only for
+/// the one-shot retry when the no-restore eval failed because the project was
+/// never restored on this machine (missing `project.assets.json`). O(NuGet graph),
+/// so never on the steady-state path.
+pub fn derive_command_with_restore(
+    csproj_path: &str,
+    target_framework: Option<&str>,
+) -> (String, Vec<String>) {
+    derive_command_inner(csproj_path, target_framework, false)
+}
+
+fn derive_command_inner(
+    csproj_path: &str,
+    target_framework: Option<&str>,
+    no_restore: bool,
+) -> (String, Vec<String>) {
     let mut args = vec![
         "build".to_string(),
         csproj_path.to_string(),
@@ -65,15 +95,50 @@ pub fn derive_command_for_tfm(csproj_path: &str, target_framework: Option<&str>)
         "--getProperty:RazorLangVersion".to_string(),
         "--getItem:FrameworkReference".to_string(),
         "--getItem:ReferencePath".to_string(),
+        // Design-time: resolve ProjectReference DLL paths without building them.
+        "-p:BuildProjectReferences=false".to_string(),
+        "-p:DesignTimeBuild=true".to_string(),
+        "-p:SkipCompilerExecution=true".to_string(),
         "-v:quiet".to_string(),
         "-nologo".to_string(),
     ];
+    if no_restore {
+        args.push("--no-restore".to_string());
+    }
     if let Some(tfm) = target_framework {
         // Insert right after the csproj so `-f` applies to the build evaluation.
         args.insert(2, "-f".to_string());
         args.insert(3, tfm.to_string());
     }
     ("dotnet".to_string(), args)
+}
+
+/// Pick the TFM the editor should analyze as, from a `TargetFrameworks` list.
+/// Prefers the HIGHEST modern `net<major>.<minor>` (e.g. `net8.0` over `net6.0`),
+/// because that is what the dev tooling ecosystem targets; classic monikers
+/// (`net48`, `netstandard2.0`) only win when no modern TFM exists — picking
+/// "the first entry" made `net48;net8.0` analyze as .NET Framework 4.8.
+pub fn pick_tfm(list: &str) -> Option<String> {
+    let entries: Vec<&str> = list
+        .split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    let modern_version = |tfm: &str| -> Option<(u32, u32)> {
+        // Modern SDK monikers: netN.M optionally with a platform suffix
+        // (net8.0-windows). Classic ones (net48) have no dot; netstandard/
+        // netcoreapp are not "net<digit>".
+        let rest = tfm.strip_prefix("net")?;
+        let core = rest.split('-').next().unwrap_or(rest);
+        let (maj, min) = core.split_once('.')?;
+        Some((maj.parse().ok()?, min.parse().ok()?))
+    };
+    entries
+        .iter()
+        .filter_map(|t| modern_version(t).map(|v| (v, *t)))
+        .max_by_key(|(v, _)| *v)
+        .map(|(_, t)| t.to_string())
+        .or_else(|| entries.first().map(|s| s.to_string()))
 }
 
 /// Parse the JSON printed by [`derive_command`]. For a multi-targeting project
@@ -97,13 +162,8 @@ pub fn parse_derived(json: &str) -> Option<DerivedRefs> {
         (single_tfm, false)
     } else {
         // Multi-targeting: `TargetFrameworks` is a `;`-separated list. Pick the
-        // first non-empty entry as the active framework.
-        let first = read_prop("TargetFrameworks")
-            .split(';')
-            .map(str::trim)
-            .find(|s| !s.is_empty())
-            .map(|s| s.to_string());
-        match first {
+        // best analysis TFM (highest modern `netN.M`; see [`pick_tfm`]).
+        match pick_tfm(&read_prop("TargetFrameworks")) {
             Some(t) => (t, true),
             None => return None,
         }
@@ -220,13 +280,45 @@ mod tests {
     }
 
     #[test]
-    fn multi_target_picks_first_tfm_and_flags_it() {
-        // Multi-targeting: empty singular, `;`-separated plural → pick the first.
+    fn multi_target_picks_best_tfm_and_flags_it() {
+        // Multi-targeting: empty singular, `;`-separated plural → pick the highest
+        // MODERN TFM (not merely the first entry).
         let json = r#"{ "Properties": { "TargetFramework": "", "TargetFrameworks": "net8.0;net9.0" },
           "Items": {} }"#;
-        let d = parse_derived(json).expect("should select first TFM");
-        assert_eq!(d.tfm, "net8.0");
-        assert!(d.multi_target_selected, "must flag the multi-target selection");
+        let d = parse_derived(json).expect("should select a TFM");
+        assert_eq!(d.tfm, "net9.0");
+        assert!(
+            d.multi_target_selected,
+            "must flag the multi-target selection"
+        );
+    }
+
+    #[test]
+    fn pick_tfm_prefers_modern_over_classic_and_highest() {
+        // The real-world trap: `net48;net8.0` must analyze as net8.0, not net48.
+        assert_eq!(pick_tfm("net48;net8.0").as_deref(), Some("net8.0"));
+        assert_eq!(pick_tfm("net8.0;net48").as_deref(), Some("net8.0"));
+        assert_eq!(pick_tfm("net6.0;net8.0;net7.0").as_deref(), Some("net8.0"));
+        // Platform suffix still parses as modern.
+        assert_eq!(
+            pick_tfm("net48;net8.0-windows").as_deref(),
+            Some("net8.0-windows")
+        );
+        // No modern TFM → first entry.
+        assert_eq!(pick_tfm("net48;netstandard2.0").as_deref(), Some("net48"));
+        assert_eq!(pick_tfm(" ; "), None);
+    }
+
+    #[test]
+    fn derive_command_is_design_time_no_restore() {
+        let (_, args) = derive_command("C:/p/App.csproj");
+        assert!(args.iter().any(|a| a == "--no-restore"));
+        assert!(args.iter().any(|a| a == "-p:BuildProjectReferences=false"));
+        assert!(args.iter().any(|a| a == "-p:DesignTimeBuild=true"));
+        // The restore-retry variant drops ONLY --no-restore (still design-time).
+        let (_, retry) = derive_command_with_restore("C:/p/App.csproj", None);
+        assert!(!retry.iter().any(|a| a == "--no-restore"));
+        assert!(retry.iter().any(|a| a == "-p:BuildProjectReferences=false"));
     }
 
     #[test]
@@ -238,7 +330,8 @@ mod tests {
     #[test]
     fn no_tfm_at_all_is_none() {
         // Neither property usable → genuinely cannot derive.
-        let json = r#"{ "Properties": { "TargetFramework": "", "TargetFrameworks": "" }, "Items": {} }"#;
+        let json =
+            r#"{ "Properties": { "TargetFramework": "", "TargetFrameworks": "" }, "Items": {} }"#;
         assert_eq!(parse_derived(json), None);
         let json2 = r#"{ "Properties": { "TargetFramework": "" }, "Items": {} }"#;
         assert_eq!(parse_derived(json2), None);
@@ -277,7 +370,10 @@ mod tests {
             { "Identity": "Microsoft.WindowsDesktop.App" }
           ] } }"#;
         let d = parse_derived(json).unwrap();
-        assert_eq!(d.framework_references, vec!["Microsoft.AspNetCore.App", "Microsoft.WindowsDesktop.App"]);
+        assert_eq!(
+            d.framework_references,
+            vec!["Microsoft.AspNetCore.App", "Microsoft.WindowsDesktop.App"]
+        );
     }
 
     #[test]

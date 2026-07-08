@@ -1,0 +1,85 @@
+/* ---- Image preview (ISSUE-70) ---- */
+.image-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background: var(--editor-bg);
+}
+
+.image-preview-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 100%;
+  max-height: 100%;
+  padding: 24px;
+}
+
+.image-preview-img {
+  max-width: 90%;
+  max-height: 80vh;
+  object-fit: contain;
+  background-image:
+    linear-gradient(45deg, rgba(255,255,255,0.06) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255,255,255,0.06) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.06) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.06) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  border: 1px solid var(--acrylic-border, rgba(255,255,255,0.08));
+  border-radius: var(--radius-control, 6px);
+}
+
+.image-preview-caption {
+  color: var(--text-muted, #9aa6b6);
+  font-size: 12px;
+}
+
+.image-preview-loading,
+.image-preview-error {
+  padding: 24px;
+  color: var(--text-muted, #9aa6b6);
+  font-size: 13px;
+  text-align: center;
+}
+
+.image-preview-error {
+  color: var(--error, #f48771);
+}
+
+/* ---- Video / audio preview ---- */
+.media-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background: var(--editor-bg);
+}
+
+.media-preview-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 100%;
+  max-height: 100%;
+  padding: 24px;
+}
+
+.media-preview-video {
+  max-width: 90%;
+  max-height: 80vh;
+  border-radius: var(--radius-control, 6px);
+  background: #000;
+  outline: none;
+}
+
+.media-preview-audio {
+  width: min(560px, 80vw);
+}

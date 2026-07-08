@@ -1,0 +1,24 @@
+# OPT-IN LOCAL: linker lld rápido (Windows x64). NÃO commitar como config.toml.
+#
+# `lld-link.exe` é o linker LLVM no flavor MSVC — linka em PARALELO e corta
+# segundos–dezenas de segundos do passo de LINK (o mais caro numa rebuild do
+# nosso crate). Ganho grande no ciclo de dev; o binário final é o mesmo.
+#
+# POR QUE ISTO É OPT-IN (e não versionado como config.toml ativo):
+# o rustc no MSVC só ativa o LLD quando o linker se CHAMA `lld-link.exe`, então é
+# preciso copiar o `rust-lld.exe` da toolchain com esse nome. Esse arquivo vive em
+# `target/` (gitignored) e NÃO existe num clone limpo / no CI quando as build-deps
+# (proc-macro2, quote, …) compilam — antes de qualquer build.rs rodar. Se o
+# `.cargo/config.toml` versionado apontasse o linker para lá, o CI quebraria com
+# `linker ... not found (os error 3)`. Por isso o linker fica atrás deste opt-in.
+#
+# COMO ATIVAR (uma vez por checkout):
+#   Bash:       scripts/setup-fast-linker.sh
+#   PowerShell: scripts/setup-fast-linker.ps1
+# O script provisiona `target/.linker/lld-link.exe` a partir da sua toolchain e
+# escreve `src-tauri/.cargo/config.toml` (gitignored) com o conteúdo abaixo.
+#
+# COMO DESATIVAR: apague `src-tauri/.cargo/config.toml`.
+
+[target.x86_64-pc-windows-msvc]
+linker = "target/.linker/lld-link.exe"

@@ -1,0 +1,61 @@
+/* ---- Status Bar ---- */
+.status-bar {
+  height: 23px;
+  min-height: 23px;
+  background: linear-gradient(90deg, rgba(93,132,164,0.08), transparent 45%), var(--titlebar-bg);
+  border-top: 1px solid rgba(210,228,242,0.09);
+  display: flex;
+  align-items: stretch;
+  padding: 0 2px;
+  font-size: 12px;
+  color: var(--text-muted);
+  user-select: none;
+  overflow: hidden;
+  /* Lets the items below react to the bar's width (responsive hide). */
+  container-type: inline-size;
+  backdrop-filter: blur(30px) saturate(125%);
+  -webkit-backdrop-filter: blur(30px) saturate(125%);
+}
+.status-left, .status-right { display: flex; align-items: stretch; min-width: 0; }
+/* The left group (remote/git/diagnostics) keeps priority; the right group's
+   lower-value items drop out first as the bar narrows. */
+.status-right { flex-shrink: 0; }
+@container (max-width: 720px) { .status-tabsize { display: none; } }
+@container (max-width: 680px) { .status-eol { display: none; } }
+@container (max-width: 620px) { .status-encoding { display: none; } }
+@container (max-width: 520px) { .status-language { display: none; } }
+@container (max-width: 430px) { .status-cursor { display: none; } }
+@container (max-width: 360px) { .status-workspace { display: none; } }
+@container (max-width: 860px) { .status-blame-subject { display: none; } }
+@container (max-width: 680px) { .status-blame { display: none; } }
+.status-right { margin-left: auto; }
+/* Full-height items with a hover that fills the bar (VS Code), icon + label
+   spaced by a consistent gap. */
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  height: 100%;
+  cursor: default;
+  white-space: nowrap;
+  color: var(--text-muted);
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.status-item[role="button"], .status-clickable { cursor: pointer; }
+.status-item:hover { background: var(--acrylic-control-hover); color: var(--text); }
+/* Proportional icons (the inherited 12px made them read as tiny dots). */
+.status-bar .codicon { font-size: 13.5px; line-height: 1; }
+/* Diagnostics: breathing room between the error and warning groups, and between
+   each icon and its count (they used to read as one glued-together number). */
+.status-diagnostics { gap: 12px; }
+.status-diag { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+.status-diag .codicon { font-size: 13px; }
+.status-diag-error { color: #e85c5c; }
+.status-diag-warning { color: #e0a23b; }
+.status-clickable { cursor: pointer; }
+.status-menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+}
