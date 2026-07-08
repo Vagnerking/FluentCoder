@@ -2590,6 +2590,12 @@ function GitRepositoryPanel({
     if (next) revealPanelView(view);
   }
 
+  function isPanelViewExpanded(view: GitPanelViewId) {
+    if (view === "changes") return showSourceControlRoot;
+    if (view === "graph") return showGitGraphView;
+    return showGitFluentOverview;
+  }
+
   function panelBodyStyle(view: GitPanelViewId): CSSProperties {
     return { "--git-view-height": `${panelViewHeights[view]}px` } as CSSProperties;
   }
@@ -2879,11 +2885,13 @@ function GitRepositoryPanel({
     );
   }
 
-  function renderSourceControlView() {
+  function renderSourceControlView(fillAvailable = false) {
     return (
       <section
         key="changes"
-        className={`git-view-section git-source-views${draggingPanelView === "changes" ? " is-dragging" : ""}`}
+        className={`git-view-section git-source-views${draggingPanelView === "changes" ? " is-dragging" : ""}${
+          fillAvailable ? " is-fill-available" : ""
+        }`}
         ref={panelViewRef("changes")}
       >
         <GitSectionHeader
@@ -2944,11 +2952,13 @@ function GitRepositoryPanel({
     );
   }
 
-  function renderGraphView() {
+  function renderGraphView(fillAvailable = false) {
     return (
       <section
         key="graph"
-        className={`git-view-section git-group git-group-graph${draggingPanelView === "graph" ? " is-dragging" : ""}`}
+        className={`git-view-section git-group git-group-graph${draggingPanelView === "graph" ? " is-dragging" : ""}${
+          fillAvailable ? " is-fill-available" : ""
+        }`}
         ref={panelViewRef("graph")}
       >
         <GitSectionHeader
@@ -2980,11 +2990,13 @@ function GitRepositoryPanel({
     );
   }
 
-  function renderGitFluentView() {
+  function renderGitFluentView(fillAvailable = false) {
     return (
       <section
         key="gitFluent"
-        className={`git-view-section git-group git-group-fluent${draggingPanelView === "gitFluent" ? " is-dragging" : ""}`}
+        className={`git-view-section git-group git-group-fluent${draggingPanelView === "gitFluent" ? " is-dragging" : ""}${
+          fillAvailable ? " is-fill-available" : ""
+        }`}
         ref={panelViewRef("gitFluent")}
       >
         <GitSectionHeader
@@ -3150,11 +3162,16 @@ function GitRepositoryPanel({
     );
   }
 
-  function renderPanelView(view: GitPanelViewId) {
-    if (view === "changes") return renderSourceControlView();
-    if (view === "graph") return renderGraphView();
-    return renderGitFluentView();
+  function renderPanelView(view: GitPanelViewId, fillAvailable = false) {
+    if (view === "changes") return renderSourceControlView(fillAvailable);
+    if (view === "graph") return renderGraphView(fillAvailable);
+    return renderGitFluentView(fillAvailable);
   }
+
+  const expandedPanelViews = panelViewOrder.filter(isPanelViewExpanded);
+  const collapsedPanelViews = panelViewOrder.filter((view) => !isPanelViewExpanded(view));
+  const fillAvailablePanelView = expandedPanelViews.length === 1 ? expandedPanelViews[0] : null;
+  const allPanelViewsCollapsed = expandedPanelViews.length === 0;
 
   return (
     <div className={embedded ? "git-panel git-panel-embedded" : "git-panel"}>
@@ -3199,7 +3216,14 @@ function GitRepositoryPanel({
       {(!embedded || showRepositoryBody) && (
         <div className="git-panel-flow">
           {error && <div className="git-error">{error}</div>}
-          {panelViewOrder.map(renderPanelView)}
+          <div className={`git-panel-active-stack${allPanelViewsCollapsed ? " is-empty" : ""}`}>
+            {expandedPanelViews.map((view) => renderPanelView(view, view === fillAvailablePanelView))}
+          </div>
+          {collapsedPanelViews.length > 0 && (
+            <div className={`git-panel-collapsed-stack${allPanelViewsCollapsed ? " is-all-collapsed" : ""}`}>
+              {collapsedPanelViews.map((view) => renderPanelView(view))}
+            </div>
+          )}
       </div>
       )}
 
