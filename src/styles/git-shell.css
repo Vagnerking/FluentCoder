@@ -15,32 +15,17 @@
   overflow: visible;
   padding-bottom: 4px;
 }
-.git-panel-active-stack,
-.git-panel-collapsed-stack {
+.git-panel-view-stack {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-}
-.git-panel-active-stack {
-  flex: 1 1 auto;
   overflow: hidden;
 }
-.git-panel-active-stack.is-empty {
-  flex: 0 0 auto;
-}
-.git-panel-collapsed-stack {
-  flex: 0 0 auto;
-  margin-top: auto;
-}
-.git-panel-collapsed-stack.is-all-collapsed {
-  margin-top: 0;
-}
-.git-panel-embedded .git-panel-active-stack,
-.git-panel-embedded .git-panel-collapsed-stack {
+.git-panel-embedded .git-panel-view-stack {
   flex: 0 0 auto;
   overflow: visible;
-  margin-top: 0;
 }
 .git-header { gap: 4px; }
 .git-header-embedded { display: flex; justify-content: flex-end; min-height: 26px; padding: 0 8px 4px; }
@@ -131,9 +116,6 @@
 }
 .git-view-section:first-child {
   border-top: 0;
-}
-.git-panel-collapsed-stack:not(.is-all-collapsed) .git-view-section:first-child {
-  border-top: 1px solid rgba(210, 228, 242, 0.055);
 }
 .git-view-section.is-dragging {
   opacity: 0.58;

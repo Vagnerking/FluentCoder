@@ -3169,9 +3169,7 @@ function GitRepositoryPanel({
   }
 
   const expandedPanelViews = panelViewOrder.filter(isPanelViewExpanded);
-  const collapsedPanelViews = panelViewOrder.filter((view) => !isPanelViewExpanded(view));
   const fillAvailablePanelView = expandedPanelViews.length === 1 ? expandedPanelViews[0] : null;
-  const allPanelViewsCollapsed = expandedPanelViews.length === 0;
 
   return (
     <div className={embedded ? "git-panel git-panel-embedded" : "git-panel"}>
@@ -3216,14 +3214,9 @@ function GitRepositoryPanel({
       {(!embedded || showRepositoryBody) && (
         <div className="git-panel-flow">
           {error && <div className="git-error">{error}</div>}
-          <div className={`git-panel-active-stack${allPanelViewsCollapsed ? " is-empty" : ""}`}>
-            {expandedPanelViews.map((view) => renderPanelView(view, view === fillAvailablePanelView))}
+          <div className="git-panel-view-stack">
+            {panelViewOrder.map((view) => renderPanelView(view, view === fillAvailablePanelView))}
           </div>
-          {collapsedPanelViews.length > 0 && (
-            <div className={`git-panel-collapsed-stack${allPanelViewsCollapsed ? " is-all-collapsed" : ""}`}>
-              {collapsedPanelViews.map((view) => renderPanelView(view))}
-            </div>
-          )}
       </div>
       )}
 
