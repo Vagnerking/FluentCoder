@@ -10,6 +10,17 @@ import { DetachedEditor } from "./components/DetachedEditor";
 import { readDetachToken } from "./detach/editorWindow";
 import "./styles.css";
 
+// macOS runs a native, opaque window (a transparent frameless window never
+// materializes there — the app would show only a Dock icon and menu bar). Tag the
+// root before first paint so the CSS paints a solid base under the translucent
+// surfaces instead of leaving them over a void. Windows keeps its Mica backdrop.
+const platform =
+  (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData
+    ?.platform ?? navigator.platform;
+if (/mac/i.test(platform ?? "")) {
+  document.documentElement.classList.add("platform-macos");
+}
+
 // Kill the WebView's native right-click menu (Inspecionar / Recarregar / Salvar
 // como…). The app provides its own context menus everywhere; this suppresses the
 // default one for any spot without a custom handler. Our menus already call
