@@ -7,8 +7,7 @@
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
+  overflow: hidden;
   padding-bottom: 6px;
 }
 .git-panel-embedded .git-panel-flow {
@@ -95,8 +94,11 @@
 .git-error { order: 25; margin: 0 12px 8px; padding: 6px 8px; font-size: 11px; color: #ffb4ab; background: rgba(196,43,28,0.18); border: 1px solid rgba(196,43,28,0.4); border-radius: var(--radius-control); white-space: pre-wrap; overflow-wrap: break-word; }
 
 .git-view-section {
+  display: flex;
+  flex-direction: column;
   flex: 0 0 auto;
   min-width: 0;
+  min-height: 0;
   margin-top: 0;
   border-top: 1px solid rgba(210, 228, 242, 0.055);
 }
@@ -107,12 +109,18 @@
   opacity: 0.58;
 }
 .git-view-pane-body {
+  flex: 0 1 auto;
+  height: var(--git-view-height, 240px);
   min-width: 0;
+  min-height: 0;
   padding: 0 0 8px;
+  overflow: auto;
+  scrollbar-gutter: stable;
   animation: git-panel-section-in 90ms ease-out;
 }
 .git-graph-pane-body {
-  overflow: visible;
+  overflow: auto;
+  contain: content;
 }
 .git-source-views {
   display: flex;
@@ -123,9 +131,12 @@
 }
 .git-source-view-body {
   flex: 0 0 auto;
+  height: var(--git-view-height, 178px);
   min-height: 0;
-  overflow: visible;
+  overflow: auto;
   padding: 0 0 12px;
+  scrollbar-gutter: stable;
+  contain: content;
 }
 .git-commit-box-inline {
   padding: 4px 10px 5px;
@@ -158,7 +169,42 @@
 .git-panel-embedded .git-source-view-body {
   flex: none;
   overflow: visible;
+  height: auto;
   padding-bottom: 8px;
+}
+.git-panel-embedded .git-view-pane-body,
+.git-panel-embedded .git-fluent-board {
+  height: auto;
+  overflow: visible;
+}
+.git-panel-embedded .git-view-resize-handle {
+  display: none;
+}
+.git-view-resize-handle {
+  position: relative;
+  flex: 0 0 5px;
+  min-height: 5px;
+  cursor: ns-resize;
+  touch-action: none;
+}
+.git-view-resize-handle::before {
+  content: "";
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  top: 2px;
+  height: 1px;
+  border-radius: 999px;
+  background: rgba(210, 228, 242, 0.055);
+  transition: background 90ms ease;
+}
+.git-view-resize-handle:hover::before,
+.git-pane-resizing .git-view-resize-handle::before {
+  background: rgba(96, 205, 255, 0.38);
+}
+.git-pane-resizing {
+  cursor: ns-resize;
+  user-select: none;
 }
 
 .git-lists { order: 30; flex: 1; overflow-y: auto; padding-bottom: 12px; scrollbar-gutter: stable; }

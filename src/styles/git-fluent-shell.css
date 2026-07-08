@@ -18,12 +18,18 @@
 .git-fluent-board {
   display: grid;
   gap: 0;
+  flex: 0 1 auto;
+  height: var(--git-view-height, 220px);
+  min-height: 0;
   margin: -1px 0 3px;
   padding: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
   border: 0;
   border-radius: 0;
   background: transparent;
   font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  contain: content;
   animation: git-panel-section-in 110ms var(--ease-standard, ease-out);
 }
 .git-fluent-toolbar {

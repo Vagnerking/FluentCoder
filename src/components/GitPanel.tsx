@@ -1,4 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type DragEvent,
+  type PointerEvent,
+  type ReactNode,
+} from "react";
 import {
   gitBranches,
   gitCheckout,
@@ -175,11 +185,23 @@ const GIT_FLUENT_BRANCH_LAYOUT_STORAGE_KEY = "fluentCoder.gitFluent.branchLayout
 const GIT_FLUENT_REMOTE_BRANCH_LAYOUT_STORAGE_KEY = "fluentCoder.gitFluent.remoteBranchLayout";
 const GIT_FLUENT_TOOLBAR_DENSITY_STORAGE_KEY = "fluentCoder.gitFluent.toolbarDensity";
 const GIT_PANEL_VIEW_ORDER_STORAGE_KEY = "fluentCoder.git.panelViewOrder";
+const GIT_PANEL_VIEW_HEIGHTS_STORAGE_KEY = "fluentCoder.git.panelViewHeights";
 
 type GitPanelViewId = "changes" | "graph" | "gitFluent";
 
 const GIT_PANEL_VIEW_ORDER: GitPanelViewId[] = ["changes", "graph", "gitFluent"];
 const GIT_FLUENT_PANE_TABS = GIT_FLUENT_PRIMARY_TABS.filter((tab) => tab.id !== "graph");
+const GIT_PANEL_DEFAULT_VIEW_HEIGHTS: Record<GitPanelViewId, number> = {
+  changes: 178,
+  graph: 438,
+  gitFluent: 220,
+};
+const GIT_PANEL_MIN_VIEW_HEIGHTS: Record<GitPanelViewId, number> = {
+  changes: 120,
+  graph: 180,
+  gitFluent: 140,
+};
+const GIT_PANEL_MAX_VIEW_HEIGHT = 720;
 
 function readStringSet(key: string): Set<string> {
   try {
@@ -245,6 +267,34 @@ function writeGitPanelViewOrder(order: GitPanelViewId[]) {
   try {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(GIT_PANEL_VIEW_ORDER_STORAGE_KEY, JSON.stringify(order));
+  } catch {
+    // Local storage is only a view preference; ignore quota/privacy failures.
+  }
+}
+
+function readGitPanelViewHeights(): Record<GitPanelViewId, number> {
+  try {
+    if (typeof window === "undefined") return GIT_PANEL_DEFAULT_VIEW_HEIGHTS;
+    const raw = window.localStorage.getItem(GIT_PANEL_VIEW_HEIGHTS_STORAGE_KEY);
+    if (!raw) return GIT_PANEL_DEFAULT_VIEW_HEIGHTS;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return GIT_PANEL_DEFAULT_VIEW_HEIGHTS;
+    return GIT_PANEL_VIEW_ORDER.reduce((acc, view) => {
+      const value = Number((parsed as Partial<Record<GitPanelViewId, number>>)[view]);
+      acc[view] = Number.isFinite(value)
+        ? Math.min(GIT_PANEL_MAX_VIEW_HEIGHT, Math.max(GIT_PANEL_MIN_VIEW_HEIGHTS[view], value))
+        : GIT_PANEL_DEFAULT_VIEW_HEIGHTS[view];
+      return acc;
+    }, {} as Record<GitPanelViewId, number>);
+  } catch {
+    return GIT_PANEL_DEFAULT_VIEW_HEIGHTS;
+  }
+}
+
+function writeGitPanelViewHeights(heights: Record<GitPanelViewId, number>) {
+  try {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(GIT_PANEL_VIEW_HEIGHTS_STORAGE_KEY, JSON.stringify(heights));
   } catch {
     // Local storage is only a view preference; ignore quota/privacy failures.
   }
@@ -861,6 +911,8 @@ function GitRepositoryPanel({
   const [showStaged, setShowStaged] = useState(true);
   const [showChanges, setShowChanges] = useState(true);
   const [panelViewOrder, setPanelViewOrder] = useState<GitPanelViewId[]>(readGitPanelViewOrder);
+  const [panelViewHeights, setPanelViewHeights] =
+    useState<Record<GitPanelViewId, number>>(readGitPanelViewHeights);
   const [draggingPanelView, setDraggingPanelView] = useState<GitPanelViewId | null>(null);
   const panelViewRefs = useRef<Record<GitPanelViewId, HTMLElement | null>>({
     changes: null,
@@ -927,6 +979,10 @@ function GitRepositoryPanel({
   useEffect(() => {
     writeGitPanelViewOrder(panelViewOrder);
   }, [panelViewOrder]);
+
+  useEffect(() => {
+    writeGitPanelViewHeights(panelViewHeights);
+  }, [panelViewHeights]);
 
   useEffect(() => {
     writeStringPreference(GIT_FLUENT_ACTIVE_TAB_STORAGE_KEY, activeGitFluentTab);
@@ -2534,6 +2590,51 @@ function GitRepositoryPanel({
     if (next) revealPanelView(view);
   }
 
+  function panelBodyStyle(view: GitPanelViewId): CSSProperties {
+    return { "--git-view-height": `${panelViewHeights[view]}px` } as CSSProperties;
+  }
+
+  function startPanelViewResize(view: GitPanelViewId, event: PointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    const startY = event.clientY;
+    const startHeight = panelViewHeights[view];
+    const minHeight = GIT_PANEL_MIN_VIEW_HEIGHTS[view];
+    const maxHeight = GIT_PANEL_MAX_VIEW_HEIGHT;
+
+    function onPointerMove(moveEvent: globalThis.PointerEvent) {
+      const nextHeight = Math.min(maxHeight, Math.max(minHeight, startHeight + moveEvent.clientY - startY));
+      setPanelViewHeights((current) =>
+        current[view] === nextHeight ? current : { ...current, [view]: nextHeight }
+      );
+    }
+
+    function onPointerUp() {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+      document.body.classList.remove("git-pane-resizing");
+    }
+
+    document.body.classList.add("git-pane-resizing");
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp, { once: true });
+    window.addEventListener("pointercancel", onPointerUp, { once: true });
+  }
+
+  function renderPanelResizeHandle(view: GitPanelViewId) {
+    return (
+      <div
+        className="git-view-resize-handle"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Redimensionar view"
+        title="Arraste para ajustar a altura"
+        onPointerDown={(event) => startPanelViewResize(view, event)}
+      />
+    );
+  }
+
   function movePanelView(from: GitPanelViewId, to: GitPanelViewId) {
     if (from === to) return;
     setPanelViewOrder((current) => {
@@ -2794,7 +2895,7 @@ function GitRepositoryPanel({
           {...panelViewDragProps("changes")}
         />
         {showSourceControlRoot && (
-          <div className="git-source-view-body">
+          <div className="git-source-view-body" style={panelBodyStyle("changes")}>
             {renderCommitBox()}
 
             {conflicts.length > 0 && (
@@ -2838,6 +2939,7 @@ function GitRepositoryPanel({
             )}
           </div>
         )}
+        {showSourceControlRoot && renderPanelResizeHandle("changes")}
       </section>
     );
   }
@@ -2858,7 +2960,7 @@ function GitRepositoryPanel({
           {...panelViewDragProps("graph")}
         />
         {showGitGraphView && (
-          <div className="git-view-pane-body git-graph-pane-body">
+          <div className="git-view-pane-body git-graph-pane-body" style={panelBodyStyle("graph")}>
             <GitFluentGraphView
               rows={gitFluentGraphRows}
               selectedHash={selectedGraphHash}
@@ -2873,6 +2975,7 @@ function GitRepositoryPanel({
             />
           </div>
         )}
+        {showGitGraphView && renderPanelResizeHandle("graph")}
       </section>
     );
   }
@@ -2893,7 +2996,7 @@ function GitRepositoryPanel({
           {...panelViewDragProps("gitFluent")}
         />
         {showGitFluentOverview && (
-          <div className="git-fluent-board">
+          <div className="git-fluent-board" style={panelBodyStyle("gitFluent")}>
             {gitFluentPaneActiveTab === "compare" && (
               <GitFluentCompareView
                 status={status}
@@ -3042,6 +3145,7 @@ function GitRepositoryPanel({
             )}
           </div>
         )}
+        {showGitFluentOverview && renderPanelResizeHandle("gitFluent")}
       </section>
     );
   }
