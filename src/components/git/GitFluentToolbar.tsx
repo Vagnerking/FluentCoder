@@ -12,6 +12,7 @@ interface GitFluentToolbarProps {
   activeTab: GitFluentTab;
   counts: Record<GitFluentTab, number | undefined>;
   density: GitFluentToolbarDensity;
+  tabs?: typeof GIT_FLUENT_PRIMARY_TABS;
   onSelectTab: (tab: GitFluentTab) => void;
   onOpenMenu: (event: MouseEvent<HTMLButtonElement>) => void;
   viewActions?: ReactNode;
@@ -25,12 +26,13 @@ export function GitFluentToolbar({
   activeTab,
   counts,
   density,
+  tabs,
   onSelectTab,
   onOpenMenu,
   viewActions,
 }: GitFluentToolbarProps) {
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-  const toolbarTabs = GIT_FLUENT_PRIMARY_TABS;
+  const toolbarTabs = tabs ?? GIT_FLUENT_PRIMARY_TABS;
   const activeIndex = Math.max(0, toolbarTabs.findIndex((tab) => tab.id === activeTab));
 
   function selectTab(tab: GitFluentTab, focus = false) {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type DragEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
 import {
   gitBranches,
   gitCheckout,
@@ -169,15 +169,17 @@ const GIT_HIDDEN_REPOSITORIES_STORAGE_KEY = "fluentCoder.git.hiddenRepositories"
 const GIT_COLLAPSED_REPOSITORIES_STORAGE_KEY = "fluentCoder.git.collapsedRepositories";
 const GIT_FLUENT_ACTIVE_TAB_STORAGE_KEY = "fluentCoder.gitFluent.activeTab";
 const GIT_FLUENT_COLLAPSED_STORAGE_KEY = "fluentCoder.gitFluent.collapsed";
+const GIT_FLUENT_GRAPH_COLLAPSED_STORAGE_KEY = "fluentCoder.gitFluent.graphCollapsed";
 const GIT_FLUENT_COLLAPSED_GROUPS_STORAGE_KEY = "fluentCoder.gitFluent.collapsedGroups";
 const GIT_FLUENT_BRANCH_LAYOUT_STORAGE_KEY = "fluentCoder.gitFluent.branchLayout";
 const GIT_FLUENT_REMOTE_BRANCH_LAYOUT_STORAGE_KEY = "fluentCoder.gitFluent.remoteBranchLayout";
 const GIT_FLUENT_TOOLBAR_DENSITY_STORAGE_KEY = "fluentCoder.gitFluent.toolbarDensity";
 const GIT_PANEL_VIEW_ORDER_STORAGE_KEY = "fluentCoder.git.panelViewOrder";
 
-type GitPanelViewId = "changes" | "gitFluent";
+type GitPanelViewId = "changes" | "graph" | "gitFluent";
 
-const GIT_PANEL_VIEW_ORDER: GitPanelViewId[] = ["changes", "gitFluent"];
+const GIT_PANEL_VIEW_ORDER: GitPanelViewId[] = ["changes", "graph", "gitFluent"];
+const GIT_FLUENT_PANE_TABS = GIT_FLUENT_PRIMARY_TABS.filter((tab) => tab.id !== "graph");
 
 function readStringSet(key: string): Set<string> {
   try {
@@ -860,6 +862,14 @@ function GitRepositoryPanel({
   const [showChanges, setShowChanges] = useState(true);
   const [panelViewOrder, setPanelViewOrder] = useState<GitPanelViewId[]>(readGitPanelViewOrder);
   const [draggingPanelView, setDraggingPanelView] = useState<GitPanelViewId | null>(null);
+  const panelViewRefs = useRef<Record<GitPanelViewId, HTMLElement | null>>({
+    changes: null,
+    graph: null,
+    gitFluent: null,
+  });
+  const [showGitGraphView, setShowGitGraphView] = useState(() =>
+    !readBooleanPreference(GIT_FLUENT_GRAPH_COLLAPSED_STORAGE_KEY, false)
+  );
   const [showGitFluentOverview, setShowGitFluentOverview] = useState(() =>
     !readBooleanPreference(GIT_FLUENT_COLLAPSED_STORAGE_KEY, false)
   );
@@ -909,6 +919,10 @@ function GitRepositoryPanel({
   useEffect(() => {
     writeBooleanPreference(GIT_FLUENT_COLLAPSED_STORAGE_KEY, !showGitFluentOverview);
   }, [showGitFluentOverview]);
+
+  useEffect(() => {
+    writeBooleanPreference(GIT_FLUENT_GRAPH_COLLAPSED_STORAGE_KEY, !showGitGraphView);
+  }, [showGitGraphView]);
 
   useEffect(() => {
     writeGitPanelViewOrder(panelViewOrder);
@@ -2447,9 +2461,29 @@ function GitRepositoryPanel({
         label: "Histórico do repositório",
         detail: status?.branch ? `Branch ${status.branch}` : rootName || fileName(rootPath),
       } as const;
-  const gitFluentViewActions = (
+  const gitFluentPaneActiveTab: GitFluentTab =
+    activeGitFluentTab === "graph" ? "contributors" : activeGitFluentTab;
+  const gitGraphHeaderActions = (
     <GitFluentViewActions
-      activeTab={activeGitFluentTab}
+      activeTab="graph"
+      busy={busy}
+      hasUpstream={Boolean(status?.hasUpstream)}
+      onCreateSuggestedBranch={() => void createSuggestedBranch()}
+      onRefreshBranches={() => void loadBranches()}
+      onAddRemote={addRemote}
+      onRefreshRemotes={() => void loadRemotes()}
+      onRefreshGraph={() => void loadCommitGraph()}
+      onRefreshStashes={() => void loadStashes()}
+      onCreateWorktree={() => void createWorktree()}
+      onPruneWorktrees={() => act(() => gitWorktreePrune(rootPath, connId))}
+      onRefreshCompare={() => void loadUpstreamComparison()}
+      onRefreshHistory={() => void loadHistory()}
+      onRefreshRepository={loadGitFluentRepositorySnapshot}
+    />
+  );
+  const gitFluentPaneViewActions = (
+    <GitFluentViewActions
+      activeTab={gitFluentPaneActiveTab}
       busy={busy}
       hasUpstream={Boolean(status?.hasUpstream)}
       onCreateSuggestedBranch={() => void createSuggestedBranch()}
@@ -2467,16 +2501,38 @@ function GitRepositoryPanel({
   );
   const gitFluentHeaderActions = (
     <GitFluentToolbar
-      activeTab={activeGitFluentTab}
+      activeTab={gitFluentPaneActiveTab}
       counts={gitFluentTabCounts}
       density={gitFluentToolbarDensity}
-      viewActions={gitFluentViewActions}
+      tabs={GIT_FLUENT_PANE_TABS}
+      viewActions={gitFluentPaneViewActions}
       onSelectTab={selectGitFluentTab}
       onOpenMenu={(event) => openFileMenu(event, gitFluentViewMenu())}
     />
   );
 
   const sourceControlCount = totalChanges || undefined;
+
+  function panelViewRef(view: GitPanelViewId) {
+    return (node: HTMLElement | null) => {
+      panelViewRefs.current[view] = node;
+    };
+  }
+
+  function revealPanelView(view: GitPanelViewId) {
+    requestAnimationFrame(() => {
+      panelViewRefs.current[view]?.scrollIntoView({
+        block: "nearest",
+        inline: "nearest",
+      });
+    });
+  }
+
+  function togglePanelView(view: GitPanelViewId, expanded: boolean, setExpanded: (value: boolean) => void) {
+    const next = !expanded;
+    setExpanded(next);
+    if (next) revealPanelView(view);
+  }
 
   function movePanelView(from: GitPanelViewId, to: GitPanelViewId) {
     if (from === to) return;
@@ -2727,12 +2783,13 @@ function GitRepositoryPanel({
       <section
         key="changes"
         className={`git-view-section git-source-views${draggingPanelView === "changes" ? " is-dragging" : ""}`}
+        ref={panelViewRef("changes")}
       >
         <GitSectionHeader
           title="Alterações"
           icon="openChanges"
           expanded={showSourceControlRoot}
-          onToggle={() => setShowSourceControlRoot((value) => !value)}
+          onToggle={() => togglePanelView("changes", showSourceControlRoot, setShowSourceControlRoot)}
           count={sourceControlCount}
           {...panelViewDragProps("changes")}
         />
@@ -2785,23 +2842,59 @@ function GitRepositoryPanel({
     );
   }
 
+  function renderGraphView() {
+    return (
+      <section
+        key="graph"
+        className={`git-view-section git-group git-group-graph${draggingPanelView === "graph" ? " is-dragging" : ""}`}
+        ref={panelViewRef("graph")}
+      >
+        <GitSectionHeader
+          title="Grafo"
+          icon="gitGraph"
+          expanded={showGitGraphView}
+          onToggle={() => togglePanelView("graph", showGitGraphView, setShowGitGraphView)}
+          actions={gitGraphHeaderActions}
+          {...panelViewDragProps("graph")}
+        />
+        {showGitGraphView && (
+          <div className="git-view-pane-body git-graph-pane-body">
+            <GitFluentGraphView
+              rows={gitFluentGraphRows}
+              selectedHash={selectedGraphHash}
+              rootPath={repoRootPath}
+              connId={connId}
+              onToggleCommit={(hash) =>
+                setSelectedGraphHash((current) => (current === hash ? null : hash))
+              }
+              onOpenCommitMenu={(event, commit) => openFileMenu(event, commitContextMenu(commit))}
+              onOpenFile={onOpenFile}
+              onOpenRevisionDiff={onOpenRevisionDiff}
+            />
+          </div>
+        )}
+      </section>
+    );
+  }
+
   function renderGitFluentView() {
     return (
       <section
         key="gitFluent"
         className={`git-view-section git-group git-group-fluent${draggingPanelView === "gitFluent" ? " is-dragging" : ""}`}
+        ref={panelViewRef("gitFluent")}
       >
         <GitSectionHeader
           title="Git Fluent"
           icon="graph"
           expanded={showGitFluentOverview}
-          onToggle={() => setShowGitFluentOverview((value) => !value)}
+          onToggle={() => togglePanelView("gitFluent", showGitFluentOverview, setShowGitFluentOverview)}
           actions={gitFluentHeaderActions}
           {...panelViewDragProps("gitFluent")}
         />
         {showGitFluentOverview && (
           <div className="git-fluent-board">
-            {activeGitFluentTab === "compare" && (
+            {gitFluentPaneActiveTab === "compare" && (
               <GitFluentCompareView
                 status={status}
                 comparison={upstreamComparison}
@@ -2813,21 +2906,7 @@ function GitRepositoryPanel({
                 onOpenRemote={openExternal}
               />
             )}
-            {activeGitFluentTab === "graph" && (
-              <GitFluentGraphView
-                rows={gitFluentGraphRows}
-                selectedHash={selectedGraphHash}
-                rootPath={repoRootPath}
-                connId={connId}
-                onToggleCommit={(hash) =>
-                  setSelectedGraphHash((current) => (current === hash ? null : hash))
-                }
-                onOpenCommitMenu={(event, commit) => openFileMenu(event, commitContextMenu(commit))}
-                onOpenFile={onOpenFile}
-                onOpenRevisionDiff={onOpenRevisionDiff}
-              />
-            )}
-            {activeGitFluentTab === "history" && (
+            {gitFluentPaneActiveTab === "history" && (
               <GitFluentHistoryView
                 commits={activeHistoryCommits}
                 scope={historyScope}
@@ -2839,7 +2918,7 @@ function GitRepositoryPanel({
                 onOpenGraph={() => selectGitFluentTab("graph")}
               />
             )}
-            {activeGitFluentTab === "branches" && (
+            {gitFluentPaneActiveTab === "branches" && (
               <GitFluentBranchesView
                 localGroups={localBranchGroups}
                 remoteGroups={remoteBranchGroups}
@@ -2853,7 +2932,7 @@ function GitRepositoryPanel({
                 onCheckoutRemoteBranch={checkoutRemoteBranch}
               />
             )}
-            {activeGitFluentTab === "remotes" && (
+            {gitFluentPaneActiveTab === "remotes" && (
               <GitFluentRemotesView
                 remotes={remotes}
                 remoteBranches={remoteBranches}
@@ -2867,7 +2946,7 @@ function GitRepositoryPanel({
                 onCheckoutRemoteBranch={checkoutRemoteBranch}
               />
             )}
-            {activeGitFluentTab === "tags" && (
+            {gitFluentPaneActiveTab === "tags" && (
               <GitFluentTagsView
                 tags={gitFluentTags}
                 onSelectTag={(tag) => {
@@ -2877,7 +2956,7 @@ function GitRepositoryPanel({
                 onOpenTagMenu={(event, tag) => openFileMenu(event, tagContextMenu(tag))}
               />
             )}
-            {activeGitFluentTab === "contributors" && (
+            {gitFluentPaneActiveTab === "contributors" && (
               <GitFluentContributorsView
                 contributors={gitFluentContributors}
                 onSelectContributor={(contributor) => {
@@ -2887,7 +2966,7 @@ function GitRepositoryPanel({
                 onOpenContributorMenu={(event, contributor) => openFileMenu(event, contributorContextMenu(contributor))}
               />
             )}
-            {activeGitFluentTab === "stashes" && (
+            {gitFluentPaneActiveTab === "stashes" && (
               <GitFluentStashesView
                 stashes={stashes}
                 expandedStashes={expandedStashes}
@@ -2900,7 +2979,7 @@ function GitRepositoryPanel({
                 onOpenStashFile={openStashFile}
               />
             )}
-            {activeGitFluentTab === "worktrees" && (
+            {gitFluentPaneActiveTab === "worktrees" && (
               <GitFluentWorktreesView
                 worktrees={worktrees}
                 busy={busy}
@@ -2910,7 +2989,7 @@ function GitRepositoryPanel({
                 onOpenWorktreeInCurrentWindow={openWorktreeInCurrentWindow}
               />
             )}
-            {activeGitFluentTab === "repositories" && (
+            {gitFluentPaneActiveTab === "repositories" && (
               <GitFluentRepositoryOverviewView
                 repositoryPath={repoRootPath}
                 repositoryName={rootName || fileName(repoRootPath)}
@@ -2968,7 +3047,9 @@ function GitRepositoryPanel({
   }
 
   function renderPanelView(view: GitPanelViewId) {
-    return view === "changes" ? renderSourceControlView() : renderGitFluentView();
+    if (view === "changes") return renderSourceControlView();
+    if (view === "graph") return renderGraphView();
+    return renderGitFluentView();
   }
 
   return (

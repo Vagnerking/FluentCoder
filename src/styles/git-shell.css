@@ -106,6 +106,14 @@
 .git-view-section.is-dragging {
   opacity: 0.58;
 }
+.git-view-pane-body {
+  min-width: 0;
+  padding: 0 0 8px;
+  animation: git-panel-section-in 90ms ease-out;
+}
+.git-graph-pane-body {
+  overflow: visible;
+}
 .git-source-views {
   display: flex;
   flex-direction: column;
