@@ -15,6 +15,43 @@ const MIN_WINDOW_HEIGHT: u32 = 400;
 const CASCADE_OFFSET: i32 = 24;
 static WORKBENCH_WINDOW_SEQ: AtomicU64 = AtomicU64::new(1);
 
+/// Applies the per-platform window chrome to the static main window at startup.
+///
+/// The UI was designed for a frameless, transparent Win11 window: the app draws
+/// its own title bar and the `Mica` desktop material shows through the CSS
+/// surfaces (`html`/`body` are `background: transparent`). The static window in
+/// `tauri.conf.json` is declared decorated + opaque so it renders everywhere;
+/// here we branch by platform:
+///
+/// - **Windows**: restore the frameless + Mica look. The window stays hidden and
+///   is revealed by the frontend's `window_ready` call once the shell has painted
+///   (so Windows never flashes an unpainted white surface).
+/// - **macOS**: keep the native title bar and an opaque surface (a transparent,
+///   decoration-less window never materializes an `NSWindow` — the app showed a
+///   Dock icon and menu bar but zero windows). The frontend's `window_ready`
+///   reveal does not fire reliably in the macOS WebView, and an opaque decorated
+///   window has no unpainted-flash concern, so we show it here directly. The CSS
+///   paints its solid base via the `platform-macos` class in `styles.css`.
+pub fn apply_platform_chrome(window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = window.set_decorations(false);
+        let effects = tauri::window::EffectsBuilder::new()
+            .effect(tauri::window::Effect::Mica)
+            .build();
+        let _ = window.set_effects(effects);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = window.show();
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct WindowPlacement {
@@ -285,14 +322,12 @@ pub async fn open_new_window(
         "workbench-{}",
         WORKBENCH_WINDOW_SEQ.fetch_add(1, Ordering::Relaxed)
     );
-    let effects = tauri::window::EffectsBuilder::new()
-        .effect(tauri::window::Effect::Mica)
-        .build();
     let url = match remote_attach {
         Some(payload) => format!("index.html?freshWindow=1&remoteAttach={payload}"),
         None => "index.html?freshWindow=1".to_string(),
     };
-    let new_window =
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    let mut builder =
         tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::App(url.into()))
             .title("Fluent Coder")
             .position(placement.x as f64 / scale, placement.y as f64 / scale)
@@ -303,12 +338,22 @@ pub async fn open_new_window(
             .min_inner_size(MIN_WINDOW_WIDTH as f64, MIN_WINDOW_HEIGHT as f64)
             .maximized(placement.maximized)
             .resizable(true)
-            .decorations(false)
-            .transparent(true)
-            .effects(effects)
-            .visible(false)
-            .build()
-            .map_err(|e| format!("não foi possível abrir uma nova janela: {e}"))?;
+            .visible(false);
+    // Windows draws its own frameless chrome over the transparent Mica backdrop;
+    // macOS/other keep the native title bar and an opaque surface, because a
+    // transparent decoration-less window fails to materialize on macOS. Keep this
+    // in sync with `apply_platform_chrome` (used for the static main window).
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.decorations(false).transparent(true).effects(
+            tauri::window::EffectsBuilder::new()
+                .effect(tauri::window::Effect::Mica)
+                .build(),
+        );
+    }
+    let new_window = builder
+        .build()
+        .map_err(|e| format!("não foi possível abrir uma nova janela: {e}"))?;
     if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128@2x.png")) {
         let _ = new_window.set_icon(icon);
     }

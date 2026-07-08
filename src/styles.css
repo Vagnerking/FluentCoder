@@ -136,6 +136,21 @@ body {
   background: transparent;
 }
 
+/* macOS keeps a native, opaque window (a transparent frameless window never
+   materializes there), so there is no Mica backdrop behind the translucent
+   surfaces. Paint a solid base — the same tone the acrylic tints resolve to over
+   Mica — so those surfaces read correctly instead of over a black/void window. */
+html.platform-macos,
+html.platform-macos body {
+  background: #191f28;
+}
+/* The app already draws the native title bar zone, so the custom drag region and
+   window controls are redundant on macOS — but the surface tones still apply. */
+html.platform-macos .titlebar {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 /* ---- Title bar ---- */
 .titlebar {
   /* Three zones: [left: icon + menu] [center: title] [right: layout + controls].
