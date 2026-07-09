@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   dotnetBuild,
   dotnetClean,
@@ -651,6 +651,9 @@ function TestsSection({
   const [coverage, setCoverage] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  // Last pendingTest object we already acted on, so recreating `run`/`debugTest`
+  // (e.g. toggling coverage) doesn't re-trigger the previous test.
+  const handledTest = useRef<PendingTest | null>(null);
 
   useEffect(() => {
     setSelected((cur) => cur || csprojs[0] || "");
@@ -706,12 +709,14 @@ function TestsSection({
     [selected]
   );
 
-  // Run a single test when its "▶ Executar Teste" CodeLens is clicked. The
-  // request arrives as a prop from the App (which listens app-wide and switches
-  // to this view first, so the panel is mounted to receive it). Each request is
-  // a fresh object, so the effect re-runs even for the same test twice.
+  // Run/debug a single test when its CodeLens is clicked. The request arrives as
+  // a prop from the App (which listens app-wide and switches to this view first,
+  // so the panel is mounted to receive it). Each click is a fresh object; the ref
+  // guard ensures ONLY a new object triggers — recreating `run`/`debugTest` (e.g.
+  // toggling coverage) must not re-fire the previous test.
   useEffect(() => {
-    if (!pendingTest) return;
+    if (!pendingTest || handledTest.current === pendingTest) return;
+    handledTest.current = pendingTest;
     setSelected(pendingTest.csprojPath);
     if (pendingTest.mode === "debug") {
       void debugTest(pendingTest.fullyQualifiedName, pendingTest.csprojPath);

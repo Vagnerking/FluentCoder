@@ -241,6 +241,7 @@ pub async fn dotnet_test_debug(csproj_path: String, fqn: String) -> Result<u32, 
 
         let Some(pid) = pid else {
             let _ = child.kill();
+            let _ = child.wait(); // reap, so no zombie is left behind
             return Err(
                 "não foi possível obter o PID do testhost (VSTEST_HOST_DEBUG). O projeto compila e o teste existe?"
                     .to_string(),
@@ -276,13 +277,23 @@ fn find_trx(dir: &Path) -> Option<PathBuf> {
 }
 
 /// XPlat coverage lands as `coverage.cobertura.xml` inside a GUID subfolder of
-/// the results dir (unlike the flat TRX), so we recurse to find it.
+/// the results dir (unlike the flat TRX), so we recurse to find it. Depth-bounded
+/// so a stray symlink cycle can't loop forever (the report is one level deep).
 fn find_cobertura(dir: &Path) -> Option<PathBuf> {
+    find_cobertura_depth(dir, 0)
+}
+
+fn find_cobertura_depth(dir: &Path, depth: usize) -> Option<PathBuf> {
+    if depth > 8 {
+        return None;
+    }
     let entries = std::fs::read_dir(dir).ok()?;
     for entry in entries.flatten() {
         let p = entry.path();
-        if p.is_dir() {
-            if let Some(found) = find_cobertura(&p) {
+        // Use symlink_metadata so we never follow a symlinked directory.
+        let meta = std::fs::symlink_metadata(&p).ok()?;
+        if meta.is_dir() {
+            if let Some(found) = find_cobertura_depth(&p, depth + 1) {
                 return Some(found);
             }
         } else if p.file_name().and_then(|n| n.to_str()) == Some("coverage.cobertura.xml") {

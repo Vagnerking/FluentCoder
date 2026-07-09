@@ -18,11 +18,12 @@ function norm(path: string): string {
   return path.replace(/\\/g, "/").toLowerCase();
 }
 
-/** True se o caminho absoluto do modelo termina com o caminho relativo do report. */
+/** True se o caminho absoluto do modelo termina com o caminho relativo do report,
+ *  sempre numa fronteira de segmento (senão `MyCalc.cs` casaria `Calc.cs`). */
 function matches(modelPath: string, coveragePath: string): boolean {
   const m = norm(modelPath);
   const c = norm(coveragePath).replace(/^\/+/, "");
-  return m.endsWith(c) || m.endsWith("/" + c);
+  return m === c || m.endsWith("/" + c);
 }
 
 /**
