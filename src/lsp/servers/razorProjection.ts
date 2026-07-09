@@ -1087,7 +1087,7 @@ export async function startRazorProjectionServer(
     monaco.languages.registerDocumentSymbolProvider(sel, {
       provideDocumentSymbols: (model, token) => {
         if (token.isCancellationRequested || !docFor(model)) return [];
-        return cshtmlDocumentSymbols(model);
+        return cshtmlDocumentSymbols(monaco, model);
       },
     })
   );

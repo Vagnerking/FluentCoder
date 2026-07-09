@@ -10,9 +10,13 @@
  * de tags HTML vem do `vscode-html-languageservice` (somado no adapter).
  *
  * Linhas/colunas aqui são 0-based (estilo LSP); o adapter converte para Monaco.
+ *
+ * Nota: `@code { }` é diretiva Blazor (`.razor`), não MVC — reconhecida aqui de
+ * propósito, como preparo para estender o outline a `.razor` (ADR 0005); é inócua
+ * num `.cshtml` real (nunca aparece).
  */
 
-/** Tipo de símbolo, mapeado a um `SymbolKind` LSP no adapter. */
+/** Tipo de símbolo do outline; o adapter mapeia para o `SymbolKind` do Monaco. */
 export type CshtmlSymbolKind =
   | "model"
   | "page"
@@ -30,6 +34,9 @@ export interface CshtmlSymbol {
   line: number;
   /** Coluna 0-based do início. */
   character: number;
+  /** Coluna 0-based logo após o NOME no fonte (para o selectionRange do adapter,
+   *  sem inferir pelo comprimento do nome de exibição). Sempre na linha `line`. */
+  nameEndCharacter: number;
   /** Linha 0-based do fim (para blocos com `{ }`; = line para diretivas). */
   endLine: number;
   endCharacter: number;
@@ -166,6 +173,7 @@ export function parseCshtmlOutline(text: string): {
         kind: "codeBlock",
         line: start.line,
         character: start.character,
+        nameEndCharacter: start.character + 2, // `@{`
         endLine: endPos.line,
         endCharacter: endPos.character + 1,
       });
@@ -186,20 +194,25 @@ export function parseCshtmlOutline(text: string): {
         kind: lineKind,
         line: start.line,
         character: start.character,
+        nameEndCharacter: start.character + rest.length,
         endLine: start.line,
         endCharacter: start.character + rest.length,
       });
       continue;
     }
 
-    // @section Nome { }, @functions { }, @code { }
+    // @section Nome { }, @functions { }, @code { }. A `{` deve vir logo após a
+    // keyword (só espaços e, para @section, um identificador de nome) — BOUNDED,
+    // senão um `@section` malformado casaria uma `{` distante e engoliria blocos
+    // legítimos no meio. Sem `{` válido nesse trecho → não é bloco, segue.
     const afterKw = at + 1 + kw.length;
-    const braceRel = text.slice(afterKw).search(/\{/);
-    if (braceRel === -1) continue;
-    const braceOff = afterKw + braceRel;
-    // Para @section, o nome está entre a keyword e o `{`.
-    const between = text.slice(afterKw, braceOff).trim();
+    const head = /^\s*([A-Za-z_][\w.]*)?\s*\{/.exec(text.slice(afterKw, afterKw + 256));
+    if (!head) continue;
+    const braceOff = afterKw + head.index + head[0].length - 1; // offset do `{`
+    const between = (head[1] ?? "").trim();
     const name = kw === "section" ? `@section ${between}` : `@${kw}`;
+    // Coluna após o nome/keyword no fonte, antes do `{`.
+    const nameEndChar = start.character + 1 + kw.length + (between ? 1 + between.length : 0);
     // @section tem corpo MARKUP (não lexar C#); @functions/@code são C#.
     const close = matchBrace(text, braceOff, kw !== "section");
     const endPos = close === -1 ? posAt(idx, text.length) : posAt(idx, close);
@@ -208,6 +221,7 @@ export function parseCshtmlOutline(text: string): {
       kind: kw === "section" ? "section" : kw === "functions" ? "functions" : "code",
       line: start.line,
       character: start.character,
+      nameEndCharacter: nameEndChar,
       endLine: endPos.line,
       endCharacter: endPos.character + 1,
     });

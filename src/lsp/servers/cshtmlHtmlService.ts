@@ -30,8 +30,9 @@ function svc(): LanguageService {
   if (!service) {
     service = getLanguageService();
     // Tag Helpers embutidos do MVC (asp-*, <partial>, <environment>, …) somados
-    // aos dados HTML padrão — completion/hover/validação no caminho region-gated
-    // (milestone #7). Custom/view-components ficam para o sidecar (follow-up).
+    // aos dados HTML padrão — completion/hover no caminho region-gated (milestone
+    // #7; o html-service não faz validação de data providers). Custom/view-
+    // components ficam para o sidecar (follow-up).
     service.setDataProviders(true, [
       newHTMLDataProvider("aspnetcore-taghelpers", MVC_TAG_HELPER_DATA),
     ]);
@@ -44,8 +45,18 @@ interface Cached {
   doc: TextDocument;
   html: HTMLDocument;
   mask: Uint8Array;
+  /** Outline Razor (símbolos + folds), calculado lazy — folding e documentSymbol
+   *  são pedidos juntos na mesma versão, então parseamos o `.cshtml` uma vez só. */
+  outline?: ReturnType<typeof parseCshtmlOutline>;
 }
 const cache = new Map<string, Cached>();
+
+/** Outline Razor do model, memoizado na entry `Cached` (por uri+versão). */
+function outlineFor(model: MonacoNs.editor.ITextModel): ReturnType<typeof parseCshtmlOutline> {
+  const entry = virtualFor(model);
+  if (!entry.outline) entry.outline = parseCshtmlOutline(model.getValue());
+  return entry.outline;
+}
 
 /** The virtual HTML `TextDocument` + parsed tree + region mask, cached by version. */
 function virtualFor(model: MonacoNs.editor.ITextModel): Cached {
@@ -256,7 +267,7 @@ export function cshtmlFolding(
     });
   }
   // Razor blocks (the html-service can't see through the blanked regions).
-  const { folds } = parseCshtmlOutline(model.getValue());
+  const { folds } = outlineFor(model);
   for (const f of folds) {
     ranges.push({
       start: f.startLine + 1,
@@ -270,17 +281,32 @@ export function cshtmlFolding(
   return ranges;
 }
 
-/** LSP `SymbolKind` values for the Razor symbols we surface. */
-const SYMBOL_KIND_LSP: Record<string, number> = {
-  model: 5 /* Class */,
-  page: 8 /* Field */,
-  using: 2 /* Module */,
-  inject: 8 /* Field */,
-  section: 6 /* Method */,
-  functions: 6 /* Method */,
-  code: 6 /* Method */,
-  codeBlock: 12 /* Function */,
-};
+/** Cada kind do outline → o `SymbolKind` REAL do Monaco (0-based). Antes um mapa
+ *  com valores LSP (1-based) era coado por `as SymbolKind`, pintando os ícones
+ *  errados (model virava Method, etc.). Resolve com o enum de verdade. */
+function monacoSymbolKind(
+  monaco: typeof MonacoNs,
+  kind: string
+): MonacoNs.languages.SymbolKind {
+  const K = monaco.languages.SymbolKind;
+  switch (kind) {
+    case "model":
+      return K.Class;
+    case "page":
+    case "inject":
+      return K.Field;
+    case "using":
+      return K.Module;
+    case "section":
+    case "functions":
+    case "code":
+      return K.Method;
+    case "codeBlock":
+      return K.Function;
+    default:
+      return K.Constant;
+  }
+}
 
 /**
  * Document symbols for a `.cshtml`: the Razor directives/blocks (`@model`,
@@ -288,9 +314,10 @@ const SYMBOL_KIND_LSP: Record<string, number> = {
  * source. Returns Monaco `DocumentSymbol`s (1-based ranges).
  */
 export function cshtmlDocumentSymbols(
+  monaco: typeof MonacoNs,
   model: MonacoNs.editor.ITextModel
 ): MonacoNs.languages.DocumentSymbol[] {
-  const { symbols } = parseCshtmlOutline(model.getValue());
+  const { symbols } = outlineFor(model);
   return symbols.map((s) => {
     const range: MonacoNs.IRange = {
       startLineNumber: s.line + 1,
@@ -298,17 +325,18 @@ export function cshtmlDocumentSymbols(
       endLineNumber: s.endLine + 1,
       endColumn: s.endCharacter + 1,
     };
-    // O selectionRange (o trecho destacado ao navegar) cobre o nome do símbolo na
-    // sua primeira linha, sem passar do fim da `range` (contrato do Monaco:
-    // selectionRange ⊆ range). Para blocos multi-linha o nome fica todo na 1ª.
+    // O selectionRange (o trecho destacado ao navegar) usa o fim REAL do nome no
+    // fonte (`nameEndCharacter`, calculado no parser), não o comprimento do nome
+    // de exibição — que difere quando há espaços colapsados (`@section  X`) ou o
+    // nome é reconstruído (`@{ }`). Capado no fim da `range` (contrato do Monaco).
     const nameEndColumn =
       s.line === s.endLine
-        ? Math.min(s.character + 1 + s.name.length, range.endColumn)
-        : s.character + 1 + s.name.length;
+        ? Math.min(s.nameEndCharacter + 1, range.endColumn)
+        : s.nameEndCharacter + 1;
     return {
       name: s.name,
       detail: "",
-      kind: (SYMBOL_KIND_LSP[s.kind] ?? 13) as MonacoNs.languages.SymbolKind,
+      kind: monacoSymbolKind(monaco, s.kind),
       tags: [],
       range,
       selectionRange: {
