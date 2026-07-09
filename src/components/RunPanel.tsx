@@ -7,6 +7,12 @@ import {
   dotnetTestDebug,
   dotnetTestList,
   dotnetTestRun,
+  efcoreDetect,
+  efcoreToolVersion,
+  efcoreToolInstall,
+  efcoreMigrationsList,
+  efcoreMigrationsAdd,
+  efcoreDatabaseUpdate,
   listProjectFiles,
   runConfigsDetect,
   runConfigsLoad,
@@ -14,7 +20,14 @@ import {
   type DotnetActionResult,
   type DotnetProcess,
   type DotnetTestResult,
+  type EfMigration,
 } from "../api";
+import {
+  migrationStatus,
+  migrationsSummary,
+  sortMigrations,
+  isValidMigrationName,
+} from "../efcore/migrations.ts";
 import type { RunConfig } from "../types";
 import {
   debugSession,
@@ -206,6 +219,7 @@ export function RunPanel({ rootPath, onRun, pendingTest }: RunPanelProps) {
         <DebugSection rootPath={rootPath} />
         <TestsSection rootPath={rootPath} pendingTest={pendingTest ?? null} />
         <ProjectActionsSection rootPath={rootPath} />
+        <EfCoreSection rootPath={rootPath} />
 
         <div className="git-group">
           <div className="git-group-header">
@@ -978,6 +992,231 @@ function ProjectActionsSection({ rootPath }: { rootPath: string }) {
             </button>
           ))}
         </div>
+        {result && (
+          <div className={result.success ? "test-pass" : "git-error"}>
+            {result.success ? "✓ Concluído" : "✗ Falhou"}
+            {result.output.trim() && (
+              <pre className="run-action-output">{result.output.trim()}</pre>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * EF Core (issue #97): migrations e DbContext de um `.csproj` que usa EF Core.
+ * A seção só aparece para projetos com PackageReference
+ * `Microsoft.EntityFrameworkCore*` (detecção no backend). Lista as migrations
+ * (aplicada/pendente/desconhecida), cria migration (nome via prompt) e aplica
+ * (`database update`). Quando a tool `dotnet-ef` não está instalada, oferece
+ * instalá-la globalmente antes de habilitar as ações.
+ */
+function EfCoreSection({ rootPath }: { rootPath: string }) {
+  const csprojs = useCsprojs(rootPath);
+  // Só os `.csproj` que usam EF Core (detectado no backend).
+  const [efProjects, setEfProjects] = useState<string[]>([]);
+  const [selected, setSelected] = useState<string>("");
+  // undefined = ainda verificando; null = tool ausente; string = versão.
+  const [toolVersion, setToolVersion] = useState<string | null | undefined>(undefined);
+  const [migrations, setMigrations] = useState<EfMigration[]>([]);
+  const [busy, setBusy] = useState<string>("");
+  const [result, setResult] = useState<DotnetActionResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Descobre quais projetos usam EF Core quando a lista de csprojs muda.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const flags = await Promise.all(
+        csprojs.map((p) => efcoreDetect(p).catch(() => false))
+      );
+      if (cancelled) return;
+      const ef = csprojs.filter((_, i) => flags[i]);
+      setEfProjects(ef);
+      setSelected((cur) => (cur && ef.includes(cur) ? cur : ef[0] ?? ""));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [csprojs]);
+
+  // Verifica a tool uma vez ao montar a seção.
+  useEffect(() => {
+    let cancelled = false;
+    void efcoreToolVersion()
+      .then((v) => !cancelled && setToolVersion(v))
+      .catch(() => !cancelled && setToolVersion(null));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const refreshMigrations = useCallback(async (csproj: string) => {
+    if (!csproj) return;
+    setBusy("list");
+    setError(null);
+    try {
+      setMigrations(await efcoreMigrationsList(csproj));
+    } catch (err) {
+      setMigrations([]);
+      setError(String(err));
+    } finally {
+      setBusy("");
+    }
+  }, []);
+
+  // Recarrega as migrations quando o projeto selecionado muda (e a tool existe).
+  useEffect(() => {
+    setMigrations([]);
+    setResult(null);
+    if (selected && toolVersion) void refreshMigrations(selected);
+  }, [selected, toolVersion, refreshMigrations]);
+
+  if (efProjects.length === 0) return null;
+
+  const installTool = async () => {
+    setBusy("install");
+    setResult(null);
+    try {
+      const r = await efcoreToolInstall();
+      setResult(r);
+      if (r.success) setToolVersion(await efcoreToolVersion());
+    } catch (err) {
+      setResult({ success: false, output: String(err) });
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const addMigration = async () => {
+    const name = window.prompt("Nome da migration (ex.: AddOrders):", "");
+    if (name === null) return;
+    if (!isValidMigrationName(name.trim())) {
+      setError("Nome inválido: use letras, números e _ (começando com letra).");
+      return;
+    }
+    setBusy("add");
+    setResult(null);
+    try {
+      const r = await efcoreMigrationsAdd(selected, name.trim());
+      setResult(r);
+      if (r.success) await refreshMigrations(selected);
+    } catch (err) {
+      setResult({ success: false, output: String(err) });
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const updateDatabase = async () => {
+    setBusy("update");
+    setResult(null);
+    try {
+      const r = await efcoreDatabaseUpdate(selected);
+      setResult(r);
+      if (r.success) await refreshMigrations(selected);
+    } catch (err) {
+      setResult({ success: false, output: String(err) });
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const summary = migrationsSummary(migrations);
+
+  return (
+    <div className="git-group debug-section">
+      <div className="git-group-header">
+        <span>EF Core</span>
+        {summary && <span className="git-count">{summary}</span>}
+      </div>
+      <div className="debug-launcher">
+        {efProjects.length > 1 && (
+          <select
+            className="search-input"
+            value={selected}
+            onChange={(e) => setSelected(e.target.value)}
+            disabled={busy !== ""}
+          >
+            {efProjects.map((p) => (
+              <option key={p} value={p}>
+                {p.split(/[/]/).pop()}
+              </option>
+            ))}
+          </select>
+        )}
+
+        {toolVersion === undefined ? (
+          <div className="panel-empty">Verificando dotnet-ef…</div>
+        ) : toolVersion === null ? (
+          <>
+            <div className="panel-empty">
+              A ferramenta <code>dotnet-ef</code> não está instalada.
+            </div>
+            <button
+              className="git-commit-btn"
+              disabled={busy !== ""}
+              onClick={() => void installTool()}
+            >
+              {busy === "install" ? "Instalando…" : "Instalar dotnet-ef"}
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="run-draft-actions">
+              <button
+                className="git-link-btn"
+                disabled={busy !== ""}
+                onClick={() => void addMigration()}
+              >
+                {busy === "add" ? "Criando…" : "Nova migration"}
+              </button>
+              <button
+                className="git-link-btn"
+                disabled={busy !== "" || migrations.length === 0}
+                onClick={() => void updateDatabase()}
+              >
+                {busy === "update" ? "Aplicando…" : "Aplicar (update)"}
+              </button>
+              <button
+                className="git-link-btn"
+                disabled={busy !== ""}
+                onClick={() => void refreshMigrations(selected)}
+              >
+                {busy === "list" ? "Atualizando…" : "Atualizar"}
+              </button>
+            </div>
+
+            {migrations.length === 0 && busy !== "list" && !error ? (
+              <div className="panel-empty">Nenhuma migration.</div>
+            ) : (
+              sortMigrations(migrations).map((m) => {
+                const status = migrationStatus(m);
+                return (
+                  <div key={m.id} className="run-row" title={m.id}>
+                    <span
+                      className={
+                        status === "pendente"
+                          ? "git-error"
+                          : status === "aplicada"
+                            ? "test-pass"
+                            : "git-count"
+                      }
+                    >
+                      {status === "pendente" ? "○" : status === "aplicada" ? "●" : "?"}
+                    </span>
+                    <span className="debug-var-name">{m.name}</span>
+                    <span className="debug-var-value">{status}</span>
+                  </div>
+                );
+              })
+            )}
+          </>
+        )}
+
+        {error && <div className="git-error">{error}</div>}
         {result && (
           <div className={result.success ? "test-pass" : "git-error"}>
             {result.success ? "✓ Concluído" : "✗ Falhou"}
