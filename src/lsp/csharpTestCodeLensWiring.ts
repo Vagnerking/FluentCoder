@@ -24,8 +24,10 @@ import { lspLog } from "./debug";
 
 /** Event name the RunPanel + App listen for to run a test from a CodeLens. */
 export const RUN_TEST_EVENT = "fluent:run-test";
+/** Event name to DEBUG a test from a CodeLens (milestone #10). */
+export const DEBUG_TEST_EVENT = "fluent:debug-test";
 
-/** Detail payload of {@link RUN_TEST_EVENT}. */
+/** Detail payload of {@link RUN_TEST_EVENT} / {@link DEBUG_TEST_EVENT}. */
 export interface RunTestEventDetail {
   csprojPath: string;
   fullyQualifiedName: string;
@@ -48,14 +50,21 @@ export async function installCsharpTestCodeLens(
         .map((f) => f.path);
       return pickTestCsproj(csprojs);
     };
-    const run = (csprojPath: string, fullyQualifiedName: string): void => {
+    const dispatch = (event: string) => (
+      csprojPath: string,
+      fullyQualifiedName: string
+    ): void => {
       window.dispatchEvent(
-        new CustomEvent<RunTestEventDetail>(RUN_TEST_EVENT, {
+        new CustomEvent<RunTestEventDetail>(event, {
           detail: { csprojPath, fullyQualifiedName },
         })
       );
     };
-    const disposables = await installTestCodeLens(resolver, run);
+    const disposables = await installTestCodeLens(
+      resolver,
+      dispatch(RUN_TEST_EVENT),
+      dispatch(DEBUG_TEST_EVENT)
+    );
     addClientContributions(client, disposables);
     lspLog("test CodeLens registered for csharp");
   } catch (err) {

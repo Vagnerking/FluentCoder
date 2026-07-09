@@ -25,6 +25,7 @@ import { RunPanel, type PendingTest } from "./components/RunPanel";
 import { NugetManager } from "./components/NugetManager";
 import {
   RUN_TEST_EVENT,
+  DEBUG_TEST_EVENT,
   type RunTestEventDetail,
 } from "./lsp/csharpTestCodeLensWiring";
 import { PlaceholderPanel } from "./components/PlaceholderPanel";
@@ -3771,11 +3772,12 @@ export default function App() {
     return () => window.removeEventListener("fluent:debug-stopped", onDebugStopped);
   });
 
-  // "▶ Executar Teste" CodeLens → switch to the "Executar e Depurar" view (so the
-  // RunPanel is mounted) and hand it the test to run. Listening here (app-wide,
-  // always mounted) avoids losing the event before the panel mounts.
+  // "▶ Executar Teste" / "🐞 Depurar Teste" CodeLens → switch to the "Executar e
+  // Depurar" view (so the RunPanel is mounted) and hand it the test to run/debug.
+  // Listening here (app-wide, always mounted) avoids losing the event before the
+  // panel mounts.
   useEffect(() => {
-    const onRunTest = (e: Event) => {
+    const handle = (mode: "run" | "debug") => (e: Event) => {
       const d = (e as CustomEvent<RunTestEventDetail>).detail;
       if (!d?.csprojPath || !d.fullyQualifiedName) return;
       setActiveView("debug");
@@ -3783,10 +3785,17 @@ export default function App() {
       setPendingTest({
         csprojPath: d.csprojPath,
         fullyQualifiedName: d.fullyQualifiedName,
+        mode,
       });
     };
-    window.addEventListener(RUN_TEST_EVENT, onRunTest);
-    return () => window.removeEventListener(RUN_TEST_EVENT, onRunTest);
+    const onRun = handle("run");
+    const onDebug = handle("debug");
+    window.addEventListener(RUN_TEST_EVENT, onRun);
+    window.addEventListener(DEBUG_TEST_EVENT, onDebug);
+    return () => {
+      window.removeEventListener(RUN_TEST_EVENT, onRun);
+      window.removeEventListener(DEBUG_TEST_EVENT, onDebug);
+    };
   }, []);
 
   /** Opens the bottom panel focused on a specific tab (e.g. Problems). */

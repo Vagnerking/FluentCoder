@@ -4965,6 +4965,27 @@ button .codicon { pointer-events: none; }
   flex-shrink: 0;
 }
 
+/* ── Test tree (milestone #10) ── */
+.test-coverage-toggle {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--text-muted); user-select: none;
+}
+.test-group-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 8px; cursor: pointer; font-size: 12px;
+}
+.test-group-header:hover { background: var(--bg-elevated, rgba(127,127,127,0.08)); }
+.test-expander { width: 12px; flex-shrink: 0; opacity: 0.7; font-size: 10px; }
+.test-class { color: var(--text); font-weight: 500; }
+.test-namespace { color: var(--text-muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.test-group-header .git-count { margin-left: auto; }
+.test-leaf { padding-left: 22px; }
+.test-debug-btn { font-size: 11px; }
+
+/* Coverage gutter bands (from the Cobertura report). */
+.coverage-covered { background: rgba(64, 191, 128, 0.55); width: 3px !important; margin-left: 3px; }
+.coverage-uncovered { background: rgba(229, 83, 75, 0.6); width: 3px !important; margin-left: 3px; }
+
 /* ── NuGet manager modal (milestone #11) ── */
 .nuget-manager { width: min(680px, 92vw); max-height: 80vh; }
 .nuget-toolbar { display: flex; gap: 8px; align-items: center; padding: 0 12px 8px; }
