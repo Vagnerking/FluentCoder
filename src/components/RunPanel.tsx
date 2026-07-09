@@ -15,7 +15,13 @@ import {
   type DotnetTestResult,
 } from "../api";
 import type { RunConfig } from "../types";
-import { debugSession } from "../dap/debugSession";
+import {
+  debugSession,
+  type VariableView,
+  type WatchView,
+} from "../dap/debugSession";
+import { loadLaunchProfiles } from "../dap/loadLaunchProfiles";
+import type { LaunchProfile } from "../dap/launchSettings";
 
 /** Loads the workspace's `.csproj` paths once per root (shared by the .NET sections). */
 function useCsprojs(rootPath: string): string[] {
@@ -289,16 +295,41 @@ function DebugSection({ rootPath }: { rootPath: string }) {
   const csprojs = useCsprojs(rootPath);
   const [selected, setSelected] = useState<string>("");
   const [procs, setProcs] = useState<DotnetProcess[] | null>(null);
+  const [profiles, setProfiles] = useState<LaunchProfile[]>([]);
+  const [profileName, setProfileName] = useState<string>("");
 
   useEffect(() => {
     setSelected((cur) => cur || csprojs[0] || "");
   }, [csprojs]);
+
+  // Load launchSettings.json profiles whenever the selected project changes.
+  useEffect(() => {
+    if (!selected) {
+      setProfiles([]);
+      return;
+    }
+    let cancelled = false;
+    void loadLaunchProfiles(selected).then((p) => {
+      if (cancelled) return;
+      setProfiles(p);
+      setProfileName(p[0]?.name ?? "");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected]);
 
   const busy = state.status === "starting";
   const active = state.status === "running" || state.status === "stopped";
 
   // Nothing to debug in this workspace — keep the panel clean.
   if (csprojs.length === 0 && !active) return null;
+
+  const launch = () => {
+    const cwd = selected.replace(/[\\/][^\\/]+$/, "");
+    const profile = profiles.find((p) => p.name === profileName);
+    void debugSession.launchProject(selected, cwd, profile);
+  };
 
   return (
     <div className="git-group debug-section">
@@ -327,15 +358,27 @@ function DebugSection({ rootPath }: { rootPath: string }) {
               </option>
             ))}
           </select>
+          {profiles.length > 0 && (
+            <select
+              className="search-input"
+              value={profileName}
+              onChange={(e) => setProfileName(e.target.value)}
+              disabled={busy}
+              title="Perfil do launchSettings.json (env, args, URL)"
+            >
+              {profiles.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          )}
           <div className="run-draft-actions">
             <button
               className="git-commit-btn"
               disabled={!selected || busy}
               title="Compila e inicia sob o depurador"
-              onClick={() => {
-                const cwd = selected.replace(/[\\/][^\\/]+$/, "");
-                void debugSession.launchProject(selected, cwd);
-              }}
+              onClick={launch}
             >
               ▶ Iniciar Depuração
             </button>
@@ -431,9 +474,13 @@ function DebugSection({ rootPath }: { rootPath: string }) {
               {state.frames.map((f) => (
                 <button
                   key={f.id}
-                  className="debug-frame-row"
+                  className={
+                    "debug-frame-row" +
+                    (f.id === state.selectedFrameId ? " selected" : "")
+                  }
                   title={f.path}
                   onClick={() => {
+                    void debugSession.selectFrame(f.id);
                     if (f.path && f.line) {
                       window.dispatchEvent(
                         new CustomEvent("fluent:debug-stopped", {
@@ -450,14 +497,18 @@ function DebugSection({ rootPath }: { rootPath: string }) {
             </div>
           )}
 
+          <WatchPanel watches={state.watches} />
+
           {state.scopes.map((s) => (
-            <div key={s.name} className="debug-block">
+            <div key={s.variablesReference} className="debug-block">
               <div className="debug-block-title">{s.name}</div>
               {s.variables.map((v) => (
-                <div key={v.name} className="debug-var-row" title={v.type}>
-                  <span className="debug-var-name">{v.name}</span>
-                  <span className="debug-var-value">{v.value}</span>
-                </div>
+                <VariableTree
+                  key={v.name}
+                  variable={v}
+                  depth={0}
+                  childrenByRef={state.children}
+                />
               ))}
             </div>
           ))}
@@ -471,6 +522,98 @@ function DebugSection({ rootPath }: { rootPath: string }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * One node of the (lazily expanded) variables tree. Objects/collections carry a
+ * `variablesReference` > 0; clicking the chevron fetches their children once
+ * (cached in `childrenByRef`) and toggles visibility.
+ */
+function VariableTree({
+  variable,
+  depth,
+  childrenByRef,
+}: {
+  variable: VariableView;
+  depth: number;
+  childrenByRef: Record<number, VariableView[]>;
+}) {
+  const [open, setOpen] = useState(false);
+  const expandable = variable.variablesReference > 0;
+  const kids = childrenByRef[variable.variablesReference];
+
+  const toggle = () => {
+    if (!expandable) return;
+    if (!open && !kids) void debugSession.expand(variable.variablesReference);
+    setOpen((o) => !o);
+  };
+
+  return (
+    <>
+      <div
+        className="debug-var-row"
+        style={{ paddingLeft: 8 + depth * 12 }}
+        title={variable.type}
+        role={expandable ? "button" : undefined}
+        onClick={toggle}
+      >
+        <span className="debug-var-expander">
+          {expandable ? (open ? "▾" : "▸") : ""}
+        </span>
+        <span className="debug-var-name">{variable.name}</span>
+        <span className="debug-var-value">{variable.value}</span>
+      </div>
+      {open &&
+        kids?.map((child) => (
+          <VariableTree
+            key={child.name}
+            variable={child}
+            depth={depth + 1}
+            childrenByRef={childrenByRef}
+          />
+        ))}
+    </>
+  );
+}
+
+/** Watch expressions panel: add/remove and show the last evaluation. */
+function WatchPanel({ watches }: { watches: WatchView[] }) {
+  const [draft, setDraft] = useState("");
+  const submit = () => {
+    const e = draft.trim();
+    if (!e) return;
+    debugSession.addWatch(e);
+    setDraft("");
+  };
+  return (
+    <div className="debug-block">
+      <div className="debug-block-title">Watch</div>
+      <div className="debug-watch-input">
+        <input
+          className="search-input"
+          placeholder="Expressão (ex.: cliente.Nome)…"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+        />
+      </div>
+      {watches.map((w) => (
+        <div key={w.expression} className="debug-var-row" title={w.type ?? w.error}>
+          <span className="debug-var-name">{w.expression}</span>
+          <span className={"debug-var-value" + (w.error ? " debug-var-error" : "")}>
+            {w.error ?? w.value}
+          </span>
+          <button
+            className="debug-watch-remove"
+            title="Remover"
+            onClick={() => debugSession.removeWatch(w.expression)}
+          >
+            ✕
+          </button>
+        </div>
+      ))}
     </div>
   );
 }
