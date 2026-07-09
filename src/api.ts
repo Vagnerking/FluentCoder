@@ -1113,6 +1113,47 @@ export function dotnetRebuild(target: string): Promise<DotnetActionResult> {
   return invoke<DotnetActionResult>("dotnet_rebuild", { target });
 }
 
+/** An installed NuGet package (milestone #11). `latestVersion` is set when a
+ *  newer version is available (from `dotnet list package --outdated`). */
+export interface NugetPackage {
+  id: string;
+  requestedVersion: string;
+  resolvedVersion: string;
+  latestVersion: string | null;
+}
+
+/** A nuget.org search hit. */
+export interface NugetSearchHit {
+  id: string;
+  latestVersion: string;
+  totalDownloads: number | null;
+  owners: string | null;
+}
+
+export function nugetList(csprojPath: string): Promise<NugetPackage[]> {
+  return invoke<NugetPackage[]>("nuget_list", { csprojPath });
+}
+export function nugetSearch(query: string): Promise<NugetSearchHit[]> {
+  return invoke<NugetSearchHit[]>("nuget_search", { query });
+}
+export function nugetAdd(
+  csprojPath: string,
+  packageId: string,
+  version?: string
+): Promise<DotnetActionResult> {
+  return invoke<DotnetActionResult>("nuget_add", {
+    csprojPath,
+    packageId,
+    version: version ?? null,
+  });
+}
+export function nugetRemove(
+  csprojPath: string,
+  packageId: string
+): Promise<DotnetActionResult> {
+  return invoke<DotnetActionResult>("nuget_remove", { csprojPath, packageId });
+}
+
 /**
  * Starts a language server ON THE REMOTE host (issue #8, Phase 6) and bridges its
  * stdio to a local WebSocket — returns the same `{ port, token }` as

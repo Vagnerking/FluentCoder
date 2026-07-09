@@ -22,6 +22,7 @@ import { FileExplorer } from "./components/FileExplorer";
 import { SearchPanel } from "./components/SearchPanel";
 import { GitPanel } from "./components/GitPanel";
 import { RunPanel, type PendingTest } from "./components/RunPanel";
+import { NugetManager } from "./components/NugetManager";
 import {
   RUN_TEST_EVENT,
   type RunTestEventDetail,
@@ -634,6 +635,8 @@ export default function App() {
   // Latest "▶ Executar Teste" CodeLens request, handed to the RunPanel. A fresh
   // object each time so re-clicking the same test re-runs it.
   const [pendingTest, setPendingTest] = useState<PendingTest | null>(null);
+  // NuGet manager modal: null when closed, else the workspace's .csproj paths.
+  const [nugetCsprojs, setNugetCsprojs] = useState<string[] | null>(null);
   const [branchPickerOpen, setBranchPickerOpen] = useState(false);
   // Generic VS Code-style quick-pick, reused by any "pick one option" flow (the
   // TypeScript version picker today; future runtime/version selectors next).
@@ -1141,6 +1144,27 @@ export default function App() {
               alert(`Não foi possível localizar o .editorconfig:\n${err}`);
             }
           })();
+        },
+      },
+      {
+        id: "nuget.manage",
+        title: "NuGet: Gerenciar Pacotes…",
+        detail: ".NET",
+        run: () => {
+          if (!rootPath) {
+            alert("Abra uma pasta primeiro.");
+            return;
+          }
+          void listProjectFiles(rootPath).then((files) => {
+            const csprojs = files
+              .filter((f) => f.name.toLowerCase().endsWith(".csproj"))
+              .map((f) => f.path);
+            if (csprojs.length === 0) {
+              alert("Nenhum projeto .csproj no workspace.");
+              return;
+            }
+            setNugetCsprojs(csprojs);
+          });
         },
       },
     ],
@@ -4999,6 +5023,13 @@ export default function App() {
             handleOpenFile({ name: baseName(path), path, isDir: false }, line)
           }
           onClose={() => setSymbolSearchOpen(false)}
+        />
+      )}
+
+      {nugetCsprojs && (
+        <NugetManager
+          csprojs={nugetCsprojs}
+          onClose={() => setNugetCsprojs(null)}
         />
       )}
 
