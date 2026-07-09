@@ -152,15 +152,33 @@ export function EditorPane({
     const path = fromFileUri(model.uri.toString());
     const decs: editor.IModelDeltaDecoration[] = debugSession
       .breakpointsFor(path)
-      .filter((line) => line <= model.getLineCount())
-      .map((line) => ({
-        range: new monaco.Range(line, 1, line, 1),
-        options: {
-          glyphMarginClassName: "debug-breakpoint-glyph",
-          glyphMarginHoverMessage: { value: "Breakpoint" },
-          stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
-        },
-      }));
+      .filter((bp) => bp.line <= model.getLineCount())
+      .map((bp) => {
+        // Distinct glyph per kind so conditional/logpoint breakpoints read at a
+        // glance; the hover shows the condition/message.
+        const isLog = Boolean(bp.logMessage);
+        const isConditional = Boolean(bp.condition || bp.hitCondition);
+        const glyph = isLog
+          ? "debug-logpoint-glyph"
+          : isConditional
+            ? "debug-breakpoint-conditional-glyph"
+            : "debug-breakpoint-glyph";
+        const hover = isLog
+          ? `Logpoint: ${bp.logMessage}`
+          : bp.condition
+            ? `Breakpoint condicional: ${bp.condition}`
+            : bp.hitCondition
+              ? `Breakpoint (hit ${bp.hitCondition})`
+              : "Breakpoint";
+        return {
+          range: new monaco.Range(bp.line, 1, bp.line, 1),
+          options: {
+            glyphMarginClassName: glyph,
+            glyphMarginHoverMessage: { value: hover },
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+          },
+        };
+      });
     const stopped = debugSession.getState().stoppedAt;
     if (
       stopped &&
@@ -477,6 +495,39 @@ export function EditorPane({
       const model = editorInstance.getModel();
       if (!line || !model || model.uri.scheme !== "file") return;
       debugSession.toggleBreakpoint(fromFileUri(model.uri.toString()), line);
+    });
+    // Right-click on the glyph margin: edit the breakpoint's condition / logpoint
+    // (a conditional breakpoint or logpoint, VS Code-style). Prompt-based to match
+    // the app's lightweight input idiom (branch name, stash message, …).
+    editorInstance.onContextMenu((e) => {
+      if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) return;
+      const line = e.target.position?.lineNumber;
+      const model = editorInstance.getModel();
+      if (!line || !model || model.uri.scheme !== "file") return;
+      e.event.preventDefault();
+      e.event.stopPropagation();
+      const path = fromFileUri(model.uri.toString());
+      const current = debugSession.breakpointsFor(path).find((b) => b.line === line);
+      const condition = window.prompt(
+        "Condição do breakpoint (vazio = incondicional):",
+        current?.condition ?? ""
+      );
+      if (condition === null) return; // cancelled
+      const logMessage = window.prompt(
+        "Logpoint (mensagem, {expr} interpolado; vazio = breakpoint normal):",
+        current?.logMessage ?? ""
+      );
+      if (logMessage === null) return;
+      const hitCondition = window.prompt(
+        'Contagem de hits (ex.: "5", ">3"; vazio = toda vez):',
+        current?.hitCondition ?? ""
+      );
+      if (hitCondition === null) return;
+      debugSession.setBreakpointSpec(path, line, {
+        condition: condition.trim() || undefined,
+        logMessage: logMessage.trim() || undefined,
+        hitCondition: hitCondition.trim() || undefined,
+      });
     });
     editorInstance.onDidChangeModel(() => applyDebugDecorations());
     applyDebugDecorations();

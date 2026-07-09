@@ -4812,6 +4812,15 @@ button .codicon { pointer-events: none; }
   background: radial-gradient(circle at 50% 50%, #e5484d 0 42%, transparent 46%);
   cursor: pointer;
 }
+/* Conditional breakpoint: hollow red dot. Logpoint: diamond-ish amber. (#9) */
+.debug-breakpoint-conditional-glyph {
+  background: radial-gradient(circle at 50% 50%, transparent 0 26%, #e5484d 30% 42%, transparent 46%);
+  cursor: pointer;
+}
+.debug-logpoint-glyph {
+  background: radial-gradient(circle at 50% 50%, #f5a623 0 42%, transparent 46%);
+  cursor: pointer;
+}
 /* Yellow arrow-ish marker + line highlight where execution is stopped. */
 .debug-stopped-glyph {
   background: radial-gradient(circle at 50% 50%, #f5d90a 0 38%, transparent 44%);
@@ -4902,6 +4911,19 @@ button .codicon { pointer-events: none; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Variables tree + watch (milestone #9). */
+.debug-var-row[role="button"] { cursor: pointer; }
+.debug-var-row[role="button"]:hover { background: rgba(127, 127, 127, 0.08); }
+.debug-var-expander { width: 12px; flex-shrink: 0; opacity: 0.7; font-size: 10px; }
+.debug-var-error { color: #e5484d; font-style: italic; }
+.debug-watch-input { padding: 2px 12px; }
+.debug-watch-input .search-input { width: 100%; font-size: 12px; }
+.debug-watch-remove {
+  margin-left: auto; background: none; border: none; color: var(--text-muted);
+  cursor: pointer; opacity: 0; flex-shrink: 0;
+}
+.debug-var-row:hover .debug-watch-remove { opacity: 0.7; }
+.debug-frame-row.selected { background: rgba(127, 127, 127, 0.16); font-weight: 500; }
 .debug-attach-list {
   display: flex;
   flex-direction: column;
