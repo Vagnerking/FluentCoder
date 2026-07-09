@@ -5,14 +5,20 @@
  *   setBreakpoints (every file that has any) → configurationDone →
  *   [event stopped] → threads → stackTrace → scopes → variables.
  *
- * Breakpoints live HERE (per absolute file path, 1-based lines, with optional
- * condition/hitCondition/logMessage) so they survive across sessions; the editor
- * renders them and calls `toggleBreakpoint`/`setBreakpointSpec`. React subscribes
- * via `subscribe`/`getState` (useSyncExternalStore-friendly).
+ * Breakpoints são GLOBAIS (breakpointStore): cada manager vivo observa o store
+ * e empurra `setBreakpoints` quando algo muda; `toggleBreakpoint`/
+ * `setBreakpointSpec`/`breakpointsFor` continuam aqui como delegações de
+ * compatibilidade. React subscribes via `subscribe`/`getState`
+ * (useSyncExternalStore-friendly).
  *
  * Milestone #9 additions: conditional breakpoints/logpoints/hit-count, an
  * expandable variables tree (lazy `variables` by reference) with a selectable
  * stack frame, watch expressions (`evaluate`), and launchSettings.json profiles.
+ *
+ * Issue #100 (multi-sessão): a classe deixou de ser singleton — cada instância
+ * recebe um `sessionId` único (usado no dap_start_session/dap_stop_session do
+ * backend, que já é multi-sessão) e vive no `debugSessions` (registry) no fim
+ * deste arquivo.
  */
 import {
   dapEnsureNetcoredbg,
@@ -25,6 +31,12 @@ import {
 import { DapClient } from "./client";
 import { toFileUri } from "../lsp/uri";
 import type { LaunchProfile } from "./launchSettings";
+import { breakpointStore, type BreakpointSpec, type BreakpointView } from "./breakpointStore";
+import { DebugSessionRegistry } from "./debugSessionRegistry";
+
+// Compat: os tipos de breakpoint moraram aqui até a issue #100; call sites
+// antigos continuam importando deste módulo.
+export type { BreakpointSpec, BreakpointView } from "./breakpointStore";
 
 export type DebugStatus = "idle" | "starting" | "running" | "stopped" | "error";
 
@@ -59,24 +71,11 @@ export interface WatchView {
   error?: string;
 }
 
-/** Optional conditions on a breakpoint (all absent = a plain breakpoint). */
-export interface BreakpointSpec {
-  /** Break only when this expression is true. */
-  condition?: string;
-  /** Break after N hits (e.g. "5", ">3"). */
-  hitCondition?: string;
-  /** Logpoint: log this message instead of breaking (`{expr}` interpolated). */
-  logMessage?: string;
-}
-
-/** A breakpoint as surfaced to the editor: line + its spec. */
-export interface BreakpointView extends BreakpointSpec {
-  line: number;
-}
-
 export interface DebugState {
   status: DebugStatus;
   error?: string;
+  /** Nome curto para o seletor de sessões (projeto · perfil, ou PID). */
+  label?: string;
   /** Console/debuggee output lines (bounded). */
   output: string[];
   frames: StackFrameView[];
@@ -94,7 +93,6 @@ export interface DebugState {
   stoppedAt?: { path: string; line: number };
 }
 
-const SESSION_ID = "netcoredbg";
 const MAX_OUTPUT_LINES = 500;
 
 /** The per-frame execution state, cleared whenever we leave a stopped frame
@@ -110,11 +108,11 @@ const CLEARED_EXEC_STATE = {
 
 type Listener = () => void;
 
-class DebugSessionManager {
+export class DebugSessionManager {
   private client: DapClient | null = null;
   private threadId: number | null = null;
-  private breakpoints = new Map<string, Map<number, BreakpointSpec>>();
   private watchExprs: string[] = [];
+  private unsubscribeStore: () => void;
   // Bumped on every stop/continue. Async scope/variable/watch fetches capture it
   // and discard their result if execution moved on meanwhile (a `continued` or a
   // newer `stopped`), so stale frame data never overwrites the current state.
@@ -130,6 +128,20 @@ class DebugSessionManager {
     breakpoints: {},
   };
 
+  constructor(public readonly sessionId: string) {
+    // Breakpoints são globais: qualquer mudança re-renderiza este estado e,
+    // se esta sessão está conectada, empurra o arquivo alterado ao adaptador.
+    this.unsubscribeStore = breakpointStore.subscribe((path) => {
+      this.setState({});
+      if (this.client) void this.pushBreakpoints(path);
+    });
+  }
+
+  /** Chamado pelo registry quando a sessão sai da lista. */
+  dispose(): void {
+    this.unsubscribeStore();
+  }
+
   // ── React wiring ──────────────────────────────────────────────────────────
   subscribe = (l: Listener): (() => void) => {
     this.listeners.add(l);
@@ -141,53 +153,22 @@ class DebugSessionManager {
     this.state = {
       ...this.state,
       ...patch,
-      breakpoints: Object.fromEntries(
-        [...this.breakpoints.entries()].map(([p, m]) => [
-          p,
-          [...m.entries()]
-            .map(([line, spec]) => ({ line, ...spec }))
-            .sort((a, b) => a.line - b.line),
-        ])
-      ),
+      breakpoints: breakpointStore.toRecord(),
     };
     for (const l of [...this.listeners]) l();
   }
 
-  // ── breakpoints ───────────────────────────────────────────────────────────
-  /** Toggles a plain breakpoint on/off at `line` (keeps any existing spec off). */
+  // ── breakpoints (delegação de compatibilidade — a fonte é o store global) ──
   toggleBreakpoint(path: string, line: number): void {
-    const map = this.breakpoints.get(path) ?? new Map<number, BreakpointSpec>();
-    if (map.has(line)) map.delete(line);
-    else map.set(line, {});
-    this.commitBreakpoints(path, map);
+    breakpointStore.toggleBreakpoint(path, line);
   }
 
-  /** Sets (or updates) a breakpoint's condition/hitCondition/logMessage. An
-   *  all-empty spec removes the breakpoint. */
   setBreakpointSpec(path: string, line: number, spec: BreakpointSpec): void {
-    const map = this.breakpoints.get(path) ?? new Map<number, BreakpointSpec>();
-    const clean: BreakpointSpec = {};
-    if (spec.condition?.trim()) clean.condition = spec.condition.trim();
-    if (spec.hitCondition?.trim()) clean.hitCondition = spec.hitCondition.trim();
-    if (spec.logMessage?.trim()) clean.logMessage = spec.logMessage.trim();
-    // Keep the breakpoint even if the spec is empty (an explicit set = "on").
-    map.set(line, clean);
-    this.commitBreakpoints(path, map);
-  }
-
-  private commitBreakpoints(path: string, map: Map<number, BreakpointSpec>): void {
-    if (map.size === 0) this.breakpoints.delete(path);
-    else this.breakpoints.set(path, map);
-    this.setState({});
-    if (this.client) void this.pushBreakpoints(path);
+    breakpointStore.setBreakpointSpec(path, line, spec);
   }
 
   breakpointsFor(path: string): BreakpointView[] {
-    const map = this.breakpoints.get(path);
-    if (!map) return [];
-    return [...map.entries()]
-      .map(([line, spec]) => ({ line, ...spec }))
-      .sort((a, b) => a.line - b.line);
+    return breakpointStore.breakpointsFor(path);
   }
 
   private async pushBreakpoints(path: string): Promise<void> {
@@ -330,6 +311,9 @@ class DebugSessionManager {
   /** Build the csproj and launch its DLL under the debugger, honoring a
    *  launchSettings.json profile (env vars, args, ASPNETCORE_URLS) when given. */
   async launchProject(csprojPath: string, cwd: string, profile?: LaunchProfile): Promise<void> {
+    // Rótulo do seletor de sessões: nome do projeto (+ perfil quando houver).
+    const proj = csprojPath.split(/[/\\]/).pop()?.replace(/\.csproj$/i, "") ?? csprojPath;
+    this.setState({ label: profile ? `${proj} · ${profile.name}` : proj });
     await this.start(async (client) => {
       this.appendOutput(`[build] dotnet build ${csprojPath}`);
       const dll = await dapResolveDotnetTarget(csprojPath);
@@ -353,6 +337,7 @@ class DebugSessionManager {
 
   /** Attach to a running dotnet process. */
   async attach(pid: number): Promise<void> {
+    this.setState({ label: `attach · pid ${pid}` });
     await this.start(async (client) => {
       this.appendOutput(`[attach] pid ${pid}`);
       await client.request("attach", { name: ".NET Attach", type: "coreclr", request: "attach", processId: pid });
@@ -373,7 +358,7 @@ class DebugSessionManager {
     });
     try {
       const exe = await dapEnsureNetcoredbg();
-      const info = await dapStartSession(SESSION_ID, exe, ["--interpreter=vscode"], ".");
+      const info = await dapStartSession(this.sessionId, exe, ["--interpreter=vscode"], ".");
       const client = await DapClient.connect(info.port, info.token);
       this.client = client;
       this.wireEvents(client);
@@ -402,7 +387,7 @@ class DebugSessionManager {
   private wireEvents(client: DapClient): void {
     client.on("initialized", () => {
       void (async () => {
-        for (const path of this.breakpoints.keys()) await this.pushBreakpoints(path);
+        for (const path of breakpointStore.paths()) await this.pushBreakpoints(path);
         try {
           await client.request("configurationDone");
         } catch (err) {
@@ -485,11 +470,18 @@ class DebugSessionManager {
         await this.loadScopes(top.id, gen);
         await this.refreshWatches(gen);
       }
-      // Reveal the stopped location in the editor via the app's open flow.
+      // Reveal the stopped location in the editor via the app's open flow. O
+      // `sessionId` deixa o registry promover esta sessão a ativa (a que parou
+      // ganha foco, como no VS Code) — ver o listener em `debugSessions`.
       if (gen === this.generation && top?.path && top.line) {
         window.dispatchEvent(
           new CustomEvent("fluent:debug-stopped", {
-            detail: { path: top.path, line: top.line, uri: toFileUri(top.path) },
+            detail: {
+              path: top.path,
+              line: top.line,
+              uri: toFileUri(top.path),
+              sessionId: this.sessionId,
+            },
           })
         );
       }
@@ -529,7 +521,7 @@ class DebugSessionManager {
       }
       client.close();
     }
-    await dapStopSession(SESSION_ID).catch(() => {});
+    await dapStopSession(this.sessionId).catch(() => {});
     this.setState({ status: "idle", ...CLEARED_EXEC_STATE });
   }
 
@@ -545,5 +537,68 @@ function shortErr(err: unknown): string {
   return String(err).replace(/^Error:\s*/, "").split("\n")[0].slice(0, 120);
 }
 
-/** App-wide singleton (one debug session at a time). */
-export const debugSession = new DebugSessionManager();
+/**
+ * Registry de sessões (issue #100). Cada sessão é um `DebugSessionManager` com
+ * `sessionId` único; o registry mantém sempre pelo menos uma (a default) e a
+ * noção de "sessão ativa" que a UI segue. O backend Rust já é multi-sessão.
+ */
+export const debugSessions = new DebugSessionRegistry<DebugSessionManager>(
+  (sessionId) => new DebugSessionManager(sessionId)
+);
+
+// A sessão que para num breakpoint ganha foco (vira ativa) — assim a toolbar,
+// pilha, variáveis e o highlight de linha seguem quem parou, como no VS Code.
+if (typeof window !== "undefined") {
+  window.addEventListener("fluent:debug-stopped", (e) => {
+    const id = (e as CustomEvent<{ sessionId?: string }>).detail?.sessionId;
+    if (id) debugSessions.setActive(id);
+  });
+}
+
+/**
+ * Handle de compatibilidade: encaminha para a SESSÃO ATIVA do registry. Os call
+ * sites antigos (EditorPane, DebugSection) continuam usando `debugSession.*` e
+ * automaticamente seguem a sessão ativa. `subscribe` re-inscreve quando a ativa
+ * troca, então o consumidor re-renderiza tanto na mudança de estado da ativa
+ * quanto na troca de sessão. Breakpoints delegam ao store global (independem da
+ * sessão), então valem para todas de qualquer forma.
+ */
+export const debugSession = {
+  get sessionId(): string {
+    return debugSessions.active.sessionId;
+  },
+  getState: (): DebugState => debugSessions.active.getState(),
+  subscribe(listener: Listener): () => void {
+    let inner = debugSessions.active.subscribe(listener);
+    // Ao trocar a sessão ativa, re-inscreve no novo manager e notifica.
+    const outer = debugSessions.subscribe(() => {
+      inner();
+      inner = debugSessions.active.subscribe(listener);
+      listener();
+    });
+    return () => {
+      inner();
+      outer();
+    };
+  },
+  toggleBreakpoint: (path: string, line: number): void =>
+    breakpointStore.toggleBreakpoint(path, line),
+  setBreakpointSpec: (path: string, line: number, spec: BreakpointSpec): void =>
+    breakpointStore.setBreakpointSpec(path, line, spec),
+  breakpointsFor: (path: string): BreakpointView[] => breakpointStore.breakpointsFor(path),
+  launchProject: (csprojPath: string, cwd: string, profile?: LaunchProfile): Promise<void> =>
+    debugSessions.active.launchProject(csprojPath, cwd, profile),
+  attach: (pid: number): Promise<void> => debugSessions.active.attach(pid),
+  listProcesses: (): Promise<DotnetProcess[]> => debugSessions.active.listProcesses(),
+  continue_: (): Promise<void> => debugSessions.active.continue_(),
+  pause: (): Promise<void> => debugSessions.active.pause(),
+  stepOver: (): Promise<void> => debugSessions.active.stepOver(),
+  stepIn: (): Promise<void> => debugSessions.active.stepIn(),
+  stepOut: (): Promise<void> => debugSessions.active.stepOut(),
+  stop: (): Promise<void> => debugSessions.active.stop(),
+  selectFrame: (frameId: number): Promise<void> => debugSessions.active.selectFrame(frameId),
+  expand: (variablesReference: number): Promise<void> =>
+    debugSessions.active.expand(variablesReference),
+  addWatch: (expression: string): void => debugSessions.active.addWatch(expression),
+  removeWatch: (expression: string): void => debugSessions.active.removeWatch(expression),
+};

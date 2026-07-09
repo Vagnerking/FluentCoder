@@ -18,6 +18,7 @@ import {
 import type { RunConfig } from "../types";
 import {
   debugSession,
+  debugSessions,
   type VariableView,
   type WatchView,
 } from "../dap/debugSession";
@@ -300,6 +301,9 @@ function buildCommand(cfg: RunConfig): string {
  */
 function DebugSection({ rootPath }: { rootPath: string }) {
   const state = useSyncExternalStore(debugSession.subscribe, debugSession.getState);
+  // Registry de sessões (issue #100): o seletor abaixo troca a sessão ativa,
+  // que o `debugSession` (proxy) segue — toolbar, pilha e variáveis vão junto.
+  const registry = useSyncExternalStore(debugSessions.subscribe, debugSessions.getSnapshot);
   const csprojs = useCsprojs(rootPath);
   const [selected, setSelected] = useState<string>("");
   const [procs, setProcs] = useState<DotnetProcess[] | null>(null);
@@ -351,6 +355,23 @@ function DebugSection({ rootPath }: { rootPath: string }) {
           {state.status === "error" && "erro"}
         </span>
       </div>
+
+      {/* Seletor de sessões — só aparece com mais de uma sessão viva. */}
+      {registry.sessions.length > 1 && (
+        <div className="debug-session-tabs">
+          {registry.sessions.map((s) => (
+            <button
+              key={s.id}
+              className={`debug-session-tab${s.id === registry.activeId ? " active" : ""}`}
+              title={`${s.label} · ${s.status}`}
+              onClick={() => debugSessions.setActive(s.id)}
+            >
+              <span className={`debug-status-dot debug-status-${s.status}`} />
+              {s.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {!active && (
         <div className="debug-launcher">
@@ -473,6 +494,13 @@ function DebugSection({ rootPath }: { rootPath: string }) {
               onClick={() => void debugSession.stop()}
             >
               ⏹
+            </button>
+            <button
+              className="debug-btn"
+              title="Nova sessão de depuração (depurar outro processo em paralelo)"
+              onClick={() => debugSessions.createSession()}
+            >
+              ＋
             </button>
           </div>
 
