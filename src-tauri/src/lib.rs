@@ -168,6 +168,7 @@ pub fn run() {
             dap::dap_resolve_dotnet_target,
             testrunner::dotnet_test_list,
             testrunner::dotnet_test_run,
+            testrunner::dotnet_test_debug,
             dotnet_tools::dotnet_build,
             dotnet_tools::dotnet_clean,
             dotnet_tools::dotnet_restore,

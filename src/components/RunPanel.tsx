@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   dotnetBuild,
   dotnetClean,
   dotnetRebuild,
   dotnetRestore,
+  dotnetTestDebug,
   dotnetTestList,
   dotnetTestRun,
   listProjectFiles,
@@ -22,6 +23,12 @@ import {
 } from "../dap/debugSession";
 import { loadLaunchProfiles } from "../dap/loadLaunchProfiles";
 import type { LaunchProfile } from "../dap/launchSettings";
+import { groupTests } from "../testing/testTree";
+import {
+  applyCoverageDecorations,
+  clearCoverageDecorations,
+} from "../testing/coverageDecorations";
+import { Tooltip } from "./Tooltip";
 
 /** Loads the workspace's `.csproj` paths once per root (shared by the .NET sections). */
 function useCsprojs(rootPath: string): string[] {
@@ -42,13 +49,14 @@ function useCsprojs(rootPath: string): string[] {
   }, [rootPath]);
   return csprojs;
 }
-import { Tooltip } from "./Tooltip";
 
-/** A test to run, requested from a "▶ Executar Teste" CodeLens click. A fresh
- *  object on every request so re-clicking the same test re-runs it. */
+/** A test to run/debug, requested from a CodeLens click. A fresh object on every
+ *  request so re-clicking the same test re-triggers it. */
 export interface PendingTest {
   csprojPath: string;
   fullyQualifiedName: string;
+  /** "run" executes; "debug" launches under the debugger. */
+  mode: "run" | "debug";
 }
 
 interface RunPanelProps {
@@ -643,7 +651,12 @@ function TestsSection({
   const [tests, setTests] = useState<string[] | null>(null);
   const [results, setResults] = useState<Map<string, DotnetTestResult>>(new Map());
   const [busy, setBusy] = useState<"" | "discover" | "run">("");
+  const [coverage, setCoverage] = useState(false);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  // Last pendingTest object we already acted on, so recreating `run`/`debugTest`
+  // (e.g. toggling coverage) doesn't re-trigger the previous test.
+  const handledTest = useRef<PendingTest | null>(null);
 
   useEffect(() => {
     setSelected((cur) => cur || csprojs[0] || "");
@@ -657,19 +670,39 @@ function TestsSection({
   }, [selected]);
 
   const run = useCallback(
-    async (filter?: string, csprojOverride?: string) => {
+    async (filters: string[] = [], csprojOverride?: string) => {
       const csproj = csprojOverride || selected;
       if (!csproj) return;
       setBusy("run");
       setError(null);
       try {
-        const out = await dotnetTestRun(csproj, filter);
+        const out = await dotnetTestRun(csproj, filters, coverage);
         setResults((prev) => {
           const next = new Map(prev);
           for (const r of out.results) next.set(r.name, r);
           return next;
         });
         if (out.results.length === 0) setError(out.outputTail);
+        applyCoverageDecorations(out.coverage);
+      } catch (err) {
+        setError(String(err));
+      } finally {
+        setBusy("");
+      }
+    },
+    [selected, coverage]
+  );
+
+  /** Debug one test: launch it under VSTEST_HOST_DEBUG, attach the debugger. */
+  const debugTest = useCallback(
+    async (fqn: string, csprojOverride?: string) => {
+      const csproj = csprojOverride || selected;
+      if (!csproj) return;
+      setBusy("run");
+      setError(null);
+      try {
+        const pid = await dotnetTestDebug(csproj, fqn);
+        await debugSession.attach(pid);
       } catch (err) {
         setError(String(err));
       } finally {
@@ -679,15 +712,21 @@ function TestsSection({
     [selected]
   );
 
-  // Run a single test when its "▶ Executar Teste" CodeLens is clicked. The
-  // request arrives as a prop from the App (which listens app-wide and switches
-  // to this view first, so the panel is mounted to receive it). Each request is
-  // a fresh object, so the effect re-runs even for the same test twice.
+  // Run/debug a single test when its CodeLens is clicked. The request arrives as
+  // a prop from the App (which listens app-wide and switches to this view first,
+  // so the panel is mounted to receive it). Each click is a fresh object; the ref
+  // guard ensures ONLY a new object triggers — recreating `run`/`debugTest` (e.g.
+  // toggling coverage) must not re-fire the previous test.
   useEffect(() => {
-    if (!pendingTest) return;
+    if (!pendingTest || handledTest.current === pendingTest) return;
+    handledTest.current = pendingTest;
     setSelected(pendingTest.csprojPath);
-    void run(pendingTest.fullyQualifiedName, pendingTest.csprojPath);
-  }, [pendingTest, run]);
+    if (pendingTest.mode === "debug") {
+      void debugTest(pendingTest.fullyQualifiedName, pendingTest.csprojPath);
+    } else {
+      void run([pendingTest.fullyQualifiedName], pendingTest.csprojPath);
+    }
+  }, [pendingTest, run, debugTest]);
 
   // All hooks are above this line — the early return must stay below them so the
   // hook order is stable across renders (Rules of Hooks).
@@ -706,10 +745,30 @@ function TestsSection({
     }
   };
 
-  /** TRX names can be `Ns.Class.Method` or carry args — match by prefix too. */
+  // Índice de resultados por FQN. TRX nomeia Theory como `Fqn(args)`, então além
+  // do lookup exato mantemos um índice pelo prefixo (parte antes do `(`). Montado
+  // UMA vez por render (linear) — antes o `resultFor` era O(n) por chamada, ×N
+  // testes ×cada render = O(n²).
+  const byPrefix = new Map<string, DotnetTestResult>();
+  for (const r of results.values()) {
+    const base = r.name.split("(")[0];
+    if (!byPrefix.has(base)) byPrefix.set(base, r);
+  }
   const resultFor = (fqn: string): DotnetTestResult | undefined =>
-    results.get(fqn) ??
-    [...results.values()].find((r) => r.name === fqn || r.name.startsWith(`${fqn}(`));
+    results.get(fqn) ?? byPrefix.get(fqn);
+
+  const groups = tests ? groupTests(tests) : [];
+  const failedFqns = tests
+    ? tests.filter((t) => resultFor(t)?.outcome === "Failed")
+    : [];
+
+  const toggleGroup = (container: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(container)) next.delete(container);
+      else next.add(container);
+      return next;
+    });
 
   return (
     <div className="git-group debug-section">
@@ -730,6 +789,19 @@ function TestsSection({
             </option>
           ))}
         </select>
+        <label className="test-coverage-toggle">
+          <input
+            type="checkbox"
+            checked={coverage}
+            disabled={busy !== ""}
+            onChange={(e) => {
+              setCoverage(e.target.checked);
+              // Desligar limpa as faixas na hora (não esperam o próximo run).
+              if (!e.target.checked) clearCoverageDecorations();
+            }}
+          />
+          Cobertura
+        </label>
         <div className="run-draft-actions">
           <button
             className="git-commit-btn"
@@ -747,6 +819,16 @@ function TestsSection({
               {busy === "run" ? "Executando…" : "Executar todos"}
             </button>
           )}
+          {failedFqns.length > 0 && (
+            <button
+              className="git-link-btn"
+              disabled={busy !== ""}
+              title="Reexecutar apenas os testes que falharam"
+              onClick={() => void run(failedFqns)}
+            >
+              Reexecutar falhas ({failedFqns.length})
+            </button>
+          )}
         </div>
         {error && <div className="git-error">{error}</div>}
       </div>
@@ -754,31 +836,68 @@ function TestsSection({
       {tests && tests.length === 0 && (
         <div className="panel-empty">Nenhum teste neste projeto.</div>
       )}
-      {tests?.map((t) => {
-        const r = resultFor(t);
-        const icon =
-          r?.outcome === "Passed" ? "✓" : r?.outcome === "Failed" ? "✗" : "·";
-        const cls =
-          r?.outcome === "Passed"
-            ? "test-pass"
-            : r?.outcome === "Failed"
-              ? "test-fail"
-              : "";
+
+      {groups.map((g) => {
+        const isCollapsed = collapsed.has(g.container);
+        const groupFailed = g.leaves.some((l) => resultFor(l.fqn)?.outcome === "Failed");
         return (
-          <div key={t} className="test-row" title={r?.message ?? t}>
-            <button
-              className="run-play"
-              title={`Executar ${t}`}
-              disabled={busy !== ""}
-              onClick={() => void run(t)}
+          <div key={g.container} className="test-group">
+            <div
+              className="test-group-header"
+              role="button"
+              tabIndex={0}
+              onClick={() => toggleGroup(g.container)}
+              onKeyDown={(e) => e.key === "Enter" && toggleGroup(g.container)}
+              title={g.container}
             >
-              ▶
-            </button>
-            <span className={`test-icon ${cls}`}>{icon}</span>
-            <span className="test-name">{t.split(".").slice(-2).join(".")}</span>
-            {r?.durationMs != null && (
-              <span className="test-duration">{Math.round(r.durationMs)}ms</span>
-            )}
+              <span className="test-expander">{isCollapsed ? "▸" : "▾"}</span>
+              <span className={"test-class" + (groupFailed ? " test-fail" : "")}>
+                {g.className || g.container}
+              </span>
+              {g.namespace && <span className="test-namespace">{g.namespace}</span>}
+              <span className="git-count">{g.leaves.length}</span>
+            </div>
+            {!isCollapsed &&
+              g.leaves.map((leaf) => {
+                const r = resultFor(leaf.fqn);
+                const icon =
+                  r?.outcome === "Passed" ? "✓" : r?.outcome === "Failed" ? "✗" : "·";
+                const cls =
+                  r?.outcome === "Passed"
+                    ? "test-pass"
+                    : r?.outcome === "Failed"
+                      ? "test-fail"
+                      : "";
+                return (
+                  <div
+                    key={leaf.fqn}
+                    className="test-row test-leaf"
+                    title={r?.message ?? leaf.fqn}
+                  >
+                    <button
+                      className="run-play"
+                      title={`Executar ${leaf.method}`}
+                      disabled={busy !== ""}
+                      onClick={() => void run([leaf.fqn])}
+                    >
+                      ▶
+                    </button>
+                    <button
+                      className="run-play test-debug-btn"
+                      title={`Depurar ${leaf.method}`}
+                      disabled={busy !== ""}
+                      onClick={() => void debugTest(leaf.fqn)}
+                    >
+                      🐞
+                    </button>
+                    <span className={`test-icon ${cls}`}>{icon}</span>
+                    <span className="test-name">{leaf.method}</span>
+                    {r?.durationMs != null && (
+                      <span className="test-duration">{Math.round(r.durationMs)}ms</span>
+                    )}
+                  </div>
+                );
+              })}
           </div>
         );
       })}

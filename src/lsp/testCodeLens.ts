@@ -53,6 +53,9 @@ export interface TestMethod {
 /** Command id do lens "Executar Teste". Exportado para o caller / testes. */
 export const RUN_TEST_COMMAND_ID = "fluentcoder.runTest";
 
+/** Command id do lens "Depurar Teste" (milestone #10). */
+export const DEBUG_TEST_COMMAND_ID = "fluentcoder.debugTest";
+
 /**
  * Atributos que marcam um método como teste, em nome simples. A detecção casa
  * o nome com ou sem namespace qualificado (`Xunit.Fact`) e com ou sem args
@@ -376,25 +379,30 @@ function isKeywordStart(_rest: string): boolean {
  */
 export async function installTestCodeLens(
   csprojResolver: () => Promise<string | null>,
-  runTest: (csprojPath: string, fullyQualifiedName: string) => void | Promise<void>
+  runTest: (csprojPath: string, fullyQualifiedName: string) => void | Promise<void>,
+  debugTest?: (csprojPath: string, fullyQualifiedName: string) => void | Promise<void>
 ): Promise<monaco.IDisposable[]> {
   const monaco = await import("monaco-editor");
   const disposables: monaco.IDisposable[] = [];
 
-  // Comando disparado pelo clique no lens. Recebe o FQN como argumento; resolve
-  // o csproj no momento do clique (o workspace pode ter mudado) e delega.
-  disposables.push(
-    monaco.editor.registerCommand(
-      RUN_TEST_COMMAND_ID,
-      (_accessor: unknown, fullyQualifiedName: string) => {
+  // Comandos disparados pelo clique nos lenses. Recebem o FQN; resolvem o csproj
+  // no momento do clique (o workspace pode ter mudado) e delegam.
+  const wireCommand = (
+    id: string,
+    action: (csproj: string, fqn: string) => void | Promise<void>
+  ) =>
+    disposables.push(
+      monaco.editor.registerCommand(id, (_accessor: unknown, fqn: string) => {
         void (async () => {
           const csproj = await csprojResolver();
           if (!csproj) return;
-          await runTest(csproj, fullyQualifiedName);
+          await action(csproj, fqn);
         })();
-      }
-    )
-  );
+      })
+    );
+
+  wireCommand(RUN_TEST_COMMAND_ID, runTest);
+  if (debugTest) wireCommand(DEBUG_TEST_COMMAND_ID, debugTest);
 
   const selector: monaco.languages.LanguageSelector = {
     language: "csharp",
@@ -405,19 +413,33 @@ export async function installTestCodeLens(
     monaco.languages.registerCodeLensProvider(selector, {
       provideCodeLenses: (model) => {
         const methods = findTestMethods(model.getValue());
-        const lenses: monaco.languages.CodeLens[] = methods.map((m) => ({
-          range: {
+        const lenses: monaco.languages.CodeLens[] = [];
+        for (const m of methods) {
+          const range = {
             startLineNumber: m.line,
             startColumn: 1,
             endLineNumber: m.line,
             endColumn: 1,
-          },
-          command: {
-            id: RUN_TEST_COMMAND_ID,
-            title: "▶ Executar Teste",
-            arguments: [m.fullyQualifiedName],
-          },
-        }));
+          };
+          lenses.push({
+            range,
+            command: {
+              id: RUN_TEST_COMMAND_ID,
+              title: "▶ Executar Teste",
+              arguments: [m.fullyQualifiedName],
+            },
+          });
+          if (debugTest) {
+            lenses.push({
+              range,
+              command: {
+                id: DEBUG_TEST_COMMAND_ID,
+                title: "🐞 Depurar Teste",
+                arguments: [m.fullyQualifiedName],
+              },
+            });
+          }
+        }
         return { lenses, dispose: () => {} };
       },
       resolveCodeLens: (_model, codeLens) => codeLens,

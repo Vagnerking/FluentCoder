@@ -1074,9 +1074,20 @@ export interface DotnetTestResult {
   message: string | null;
 }
 
+/** Per-file line coverage from a run (milestone #10). */
+export interface FileCoverage {
+  path: string;
+  /** Fraction of lines covered, 0–1. */
+  lineRate: number;
+  coveredLines: number[];
+  uncoveredLines: number[];
+}
+
 export interface DotnetTestRun {
   results: DotnetTestResult[];
   outputTail: string;
+  /** Per-file coverage when the run collected it; empty otherwise. */
+  coverage: FileCoverage[];
 }
 
 /** Lists fully-qualified test names (builds the project as a side effect). */
@@ -1084,12 +1095,29 @@ export function dotnetTestList(csprojPath: string): Promise<string[]> {
   return invoke<string[]>("dotnet_test_list", { csprojPath });
 }
 
-/** Runs all tests (or only `filter` = one FullyQualifiedName). */
+/**
+ * Runs tests. `filters` empty ⇒ all; one FQN ⇒ single test; many ⇒ re-run those
+ * (OR-ed — used by "re-run failed"). `collectCoverage` adds line coverage.
+ */
 export function dotnetTestRun(
   csprojPath: string,
-  filter?: string
+  filters: string[] = [],
+  collectCoverage = false
 ): Promise<DotnetTestRun> {
-  return invoke<DotnetTestRun>("dotnet_test_run", { csprojPath, filter: filter ?? null });
+  return invoke<DotnetTestRun>("dotnet_test_run", {
+    csprojPath,
+    filters,
+    collectCoverage,
+  });
+}
+
+/**
+ * Launches a single test under `VSTEST_HOST_DEBUG=1` and returns the testhost
+ * PID so the debugger can attach to it (milestone #10). The test blocks until the
+ * attach happens, then runs under the debugger.
+ */
+export function dotnetTestDebug(csprojPath: string, fqn: string): Promise<number> {
+  return invoke<number>("dotnet_test_debug", { csprojPath, fqn });
 }
 
 /** Result of an explicit build/clean/restore/rebuild action (milestone #11). */
