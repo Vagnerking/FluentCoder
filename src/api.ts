@@ -1177,6 +1177,26 @@ export function dotnetNewCreate(
   });
 }
 
+/** Adds a project reference: `dotnet add <from> reference <to>` (issue #95). */
+export function dotnetAddReference(
+  fromCsproj: string,
+  toCsproj: string
+): Promise<DotnetActionResult> {
+  return invoke<DotnetActionResult>("dotnet_add_reference", {
+    fromCsproj,
+    toCsproj,
+  });
+}
+
+/** The `.csproj` that owns the project defining `typeName` in workspace source,
+ *  or null when the type isn't found in any project (e.g. it's from a package). */
+export function dotnetFindTypeProject(
+  root: string,
+  typeName: string
+): Promise<string | null> {
+  return invoke<string | null>("dotnet_find_type_project", { root, typeName });
+}
+
 /**
  * Starts a language server ON THE REMOTE host (issue #8, Phase 6) and bridges its
  * stdio to a local WebSocket — returns the same `{ port, token }` as

@@ -1,8 +1,9 @@
 import type { MonacoLanguageClient } from "monaco-languageclient";
 import { ensureCsharpServer, startLspServer } from "../../api";
 import { getActiveRemote } from "../../remote/host";
-import { createLanguageClient } from "../client";
+import { addClientContributions, createLanguageClient } from "../client";
 import { toFileUri } from "../uri";
+import { installAddProjectReferenceProvider } from "../addProjectReferenceProvider";
 import { wireRoslynStartup } from "./roslynShared";
 import { installCsharpTestCodeLens } from "../csharpTestCodeLensWiring";
 import type { ServerStartContext } from ".";
@@ -83,6 +84,10 @@ export async function startCsharpServer(
   // "▶ Executar Teste" CodeLens on `.cs` (milestone #5). Disposables are tied to
   // this client, so the reset command and workspace switches tear it down.
   void installCsharpTestCodeLens(client, rootPath);
+
+  // "Adicionar referência ao projeto" quick fix (issue #95). Tied to this client
+  // so the reset command / workspace switch tears it down.
+  addClientContributions(client, installAddProjectReferenceProvider(rootPath));
 
   return client;
 }

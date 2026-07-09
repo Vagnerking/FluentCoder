@@ -430,6 +430,130 @@ pub async fn dotnet_new_create(
     .await
 }
 
+// ── Cross-project reference quick fix (issue #95) ───────────────────────────
+//
+// When a `.cs` references a type from another project the current project does
+// NOT reference yet (common in DDD layering), the C# Dev Kit offers "Add project
+// reference". The standalone Roslyn doesn't. This resolves the type → owning
+// `.csproj` by a light source scan, then `dotnet add <from> reference <to>`.
+
+/// True when `body` declares a type named `type_name` (class/interface/struct/
+/// enum/record). Word-boundary match so `Cliente` doesn't hit `ClienteService`.
+pub(crate) fn declares_type(body: &str, type_name: &str) -> bool {
+    for kw in ["class", "interface", "struct", "enum", "record"] {
+        // Look for `<kw> <TypeName>` at a word boundary.
+        let needle = format!("{kw} {type_name}");
+        let mut from = 0;
+        while let Some(pos) = body[from..].find(&needle) {
+            let abs = from + pos;
+            let after = abs + needle.len();
+            let next = body[after..].chars().next();
+            // Next char must not continue an identifier (so `enum Foo` != `enum Foobar`).
+            if next.map_or(true, |c| !c.is_alphanumeric() && c != '_') {
+                return true;
+            }
+            from = after;
+        }
+    }
+    false
+}
+
+/// The owning `.csproj` for a `.cs` file: the nearest `.csproj` walking up from
+/// the file's directory, bounded by `root`. Pure — takes the candidate csproj
+/// paths and picks the one whose directory is the deepest ancestor of the file.
+pub(crate) fn owning_csproj<'a>(cs_file: &str, csprojs: &'a [String]) -> Option<&'a String> {
+    let file = cs_file.replace('\\', "/");
+    let file_dir = file.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+    csprojs
+        .iter()
+        .filter(|c| {
+            let cdir = c.replace('\\', "/");
+            let cdir = cdir.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
+            file_dir == cdir || file_dir.starts_with(&format!("{cdir}/"))
+        })
+        // Deepest (longest) directory = nearest project.
+        .max_by_key(|c| c.len())
+}
+
+/// Adds a project reference: `dotnet add <from_csproj> reference <to_csproj>`.
+#[tauri::command]
+pub async fn dotnet_add_reference(
+    from_csproj: String,
+    to_csproj: String,
+) -> Result<DotnetActionResult, String> {
+    run_dotnet_action_opts(
+        "add",
+        from_csproj,
+        vec!["reference".to_string(), to_csproj],
+        false,
+    )
+    .await
+}
+
+/// Finds the `.csproj` that owns the project defining `type_name`, by scanning
+/// the workspace's `.cs` files (skipping bin/obj) for a declaration, then mapping
+/// the file to its nearest `.csproj`. Returns None when the type isn't found in
+/// source (e.g. it lives in a NuGet package — a project reference wouldn't help).
+#[tauri::command]
+pub async fn dotnet_find_type_project(
+    root: String,
+    type_name: String,
+) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        // Only bare identifiers — guards against odd input reaching a scan.
+        if type_name.is_empty() || !type_name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return Ok(None);
+        }
+        let mut csprojs: Vec<String> = Vec::new();
+        let mut cs_files: Vec<std::path::PathBuf> = Vec::new();
+        collect_dotnet_sources(std::path::Path::new(&root), &mut csprojs, &mut cs_files, 0);
+        for cs in &cs_files {
+            if let Ok(body) = std::fs::read_to_string(cs) {
+                if declares_type(&body, &type_name) {
+                    let cs_str = cs.to_string_lossy();
+                    if let Some(owner) = owning_csproj(&cs_str, &csprojs) {
+                        return Ok(Some(owner.clone()));
+                    }
+                }
+            }
+        }
+        Ok(None)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Recursively collects `.csproj` and `.cs` paths under `dir` (skipping bin/obj/
+/// node_modules/.git), bounded to a sane depth so huge trees don't stall.
+fn collect_dotnet_sources(
+    dir: &std::path::Path,
+    csprojs: &mut Vec<String>,
+    cs_files: &mut Vec<std::path::PathBuf>,
+    depth: usize,
+) {
+    if depth > 12 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if matches!(name.as_ref(), "bin" | "obj" | "node_modules" | ".git" | "target") {
+                continue;
+            }
+            collect_dotnet_sources(&p, csprojs, cs_files, depth + 1);
+        } else {
+            match p.extension().and_then(|e| e.to_str()) {
+                Some("csproj") => csprojs.push(p.to_string_lossy().into_owned()),
+                Some("cs") => cs_files.push(p),
+                _ => {}
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,6 +640,43 @@ Class Library                                 classlib                      [C#]
     #[test]
     fn template_list_without_table_is_empty() {
         assert!(parse_template_list("No templates found.").is_empty());
+    }
+
+    #[test]
+    fn declares_type_matches_each_kind_at_word_boundary() {
+        assert!(declares_type("public class Cliente { }", "Cliente"));
+        assert!(declares_type("internal interface IRepo {}", "IRepo"));
+        assert!(declares_type("public struct Money;", "Money"));
+        assert!(declares_type("public enum Status { A }", "Status"));
+        assert!(declares_type("public record Pedido(int Id);", "Pedido"));
+        // Word boundary: `Cliente` must not match `ClienteService`.
+        assert!(!declares_type("public class ClienteService { }", "Cliente"));
+        // Different type entirely.
+        assert!(!declares_type("public class Outro { }", "Cliente"));
+    }
+
+    #[test]
+    fn owning_csproj_picks_nearest_ancestor() {
+        let csprojs = vec![
+            "/repo/App.csproj".to_string(),
+            "/repo/src/Api/Api.csproj".to_string(),
+        ];
+        // File under src/Api → Api.csproj (deeper) beats the root App.csproj.
+        assert_eq!(
+            owning_csproj("/repo/src/Api/Controllers/Home.cs", &csprojs),
+            Some(&"/repo/src/Api/Api.csproj".to_string())
+        );
+        // File only under the root → App.csproj.
+        assert_eq!(
+            owning_csproj("/repo/Program.cs", &csprojs),
+            Some(&"/repo/App.csproj".to_string())
+        );
+    }
+
+    #[test]
+    fn owning_csproj_none_when_outside_any_project() {
+        let csprojs = vec!["/repo/src/Api/Api.csproj".to_string()];
+        assert_eq!(owning_csproj("/other/Foo.cs", &csprojs), None);
     }
 
     #[test]
