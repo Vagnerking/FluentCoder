@@ -1154,6 +1154,29 @@ export function nugetRemove(
   return invoke<DotnetActionResult>("nuget_remove", { csprojPath, packageId });
 }
 
+/** A `dotnet new` template (milestone #11). */
+export interface DotnetTemplate {
+  name: string;
+  /** Short name passed to `dotnet new`, e.g. "mvc". */
+  shortName: string;
+  tags: string;
+}
+
+export function dotnetNewList(): Promise<DotnetTemplate[]> {
+  return invoke<DotnetTemplate[]>("dotnet_new_list");
+}
+export function dotnetNewCreate(
+  template: string,
+  name: string,
+  outputDir: string
+): Promise<DotnetActionResult> {
+  return invoke<DotnetActionResult>("dotnet_new_create", {
+    template,
+    name,
+    outputDir,
+  });
+}
+
 /**
  * Starts a language server ON THE REMOTE host (issue #8, Phase 6) and bridges its
  * stdio to a local WebSocket — returns the same `{ port, token }` as

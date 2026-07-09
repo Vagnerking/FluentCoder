@@ -335,6 +335,101 @@ pub async fn nuget_remove(
     run_dotnet_action_opts("remove", csproj_path, vec!["package".to_string(), package_id], false).await
 }
 
+// ── Templates (`dotnet new`) ────────────────────────────────────────────────
+//
+// `dotnet new list` has no JSON output, so we parse its fixed-width table using
+// the `---` separator row to find column spans (resilient to spaces inside
+// values). Creating a project is `dotnet new <shortName> -n <name> -o <dir>`.
+
+/// A `dotnet new` template.
+#[derive(serde::Serialize, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DotnetTemplate {
+    pub name: String,
+    /// The short name passed to `dotnet new` (e.g. "mvc"); first when comma-listed.
+    pub short_name: String,
+    pub tags: String,
+}
+
+/// Parses `dotnet new list` output. Uses the `---` separator row to compute each
+/// column's character span, then slices every data row by those spans. Columns:
+/// Template Name | Short Name | Language | Tags. Returns [] if the table is absent.
+pub(crate) fn parse_template_list(stdout: &str) -> Vec<DotnetTemplate> {
+    let lines: Vec<&str> = stdout.lines().collect();
+    // Find the separator row: starts with '-' and is all '-'/space.
+    let sep_idx = lines.iter().position(|l| {
+        let t = l.trim();
+        !t.is_empty() && t.starts_with('-') && l.chars().all(|c| c == '-' || c == ' ')
+    });
+    let Some(sep_idx) = sep_idx else { return Vec::new() };
+    // Column spans = [start, end) of each run of '-' in the separator.
+    let sep = lines[sep_idx];
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    let bytes: Vec<char> = sep.chars().collect();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == '-' {
+            let start = i;
+            while i < bytes.len() && bytes[i] == '-' {
+                i += 1;
+            }
+            spans.push((start, i));
+        } else {
+            i += 1;
+        }
+    }
+    if spans.len() < 4 {
+        return Vec::new();
+    }
+    let slice = |chars: &[char], (s, e): (usize, usize)| -> String {
+        // The last column extends to end-of-line; others stop at their span end.
+        let end = e.min(chars.len()).max(s.min(chars.len()));
+        chars.get(s..end).map(|c| c.iter().collect::<String>()).unwrap_or_default().trim().to_string()
+    };
+    let mut out = Vec::new();
+    for line in &lines[sep_idx + 1..] {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let chars: Vec<char> = line.chars().collect();
+        let name = slice(&chars, spans[0]);
+        let short_full = slice(&chars, spans[1]);
+        // Tags column runs to end of line (values can be long).
+        let tags = chars.get(spans[3].0..).map(|c| c.iter().collect::<String>()).unwrap_or_default().trim().to_string();
+        if name.is_empty() || short_full.is_empty() {
+            continue;
+        }
+        // Short name may be comma-listed ("webapp,razor"); take the first.
+        let short_name = short_full.split(',').next().unwrap_or(&short_full).trim().to_string();
+        out.push(DotnetTemplate { name, short_name, tags });
+    }
+    out
+}
+
+/// Lists installed `dotnet new` templates.
+#[tauri::command]
+pub async fn dotnet_new_list() -> Result<Vec<DotnetTemplate>, String> {
+    let stdout = dotnet_capture(vec!["new".into(), "list".into()]).await?;
+    Ok(parse_template_list(&stdout))
+}
+
+/// Creates a project from `template` (short name) named `name` under `output_dir`.
+#[tauri::command]
+pub async fn dotnet_new_create(
+    template: String,
+    name: String,
+    output_dir: String,
+) -> Result<DotnetActionResult, String> {
+    // `dotnet new <tpl> -n <name> -o <dir>` — no target/-nologo.
+    run_dotnet_action_opts(
+        "new",
+        String::new(),
+        vec![template, "-n".into(), name, "-o".into(), output_dir],
+        false,
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,6 +493,29 @@ mod tests {
     fn empty_list_yields_no_packages() {
         let empty = r#"{ "projects": [{ "frameworks": [{ "framework": "net8.0", "topLevelPackages": [] }] }] }"#;
         assert!(parse_nuget_list(empty).unwrap().is_empty());
+    }
+
+    #[test]
+    fn parses_template_list_by_separator_spans() {
+        let out = "These templates matched your input: \n\n\
+Template Name                                 Short Name                    Language    Tags                              \n\
+--------------------------------------------  ----------------------------  ----------  ----------------------------------\n\
+ASP.NET Core Web App (Model-View-Controller)  mvc                           [C#],F#     Web/MVC                           \n\
+ASP.NET Core Web App (Razor Pages)            webapp,razor                  [C#]        Web/MVC/Razor Pages               \n\
+Class Library                                 classlib                      [C#],F#,VB  Common/Library                    \n";
+        let t = parse_template_list(out);
+        assert_eq!(t.len(), 3);
+        assert_eq!(t[0].name, "ASP.NET Core Web App (Model-View-Controller)");
+        assert_eq!(t[0].short_name, "mvc");
+        assert_eq!(t[0].tags, "Web/MVC");
+        // Comma-listed short name → first token.
+        assert_eq!(t[1].short_name, "webapp");
+        assert_eq!(t[2].short_name, "classlib");
+    }
+
+    #[test]
+    fn template_list_without_table_is_empty() {
+        assert!(parse_template_list("No templates found.").is_empty());
     }
 
     #[test]

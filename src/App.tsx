@@ -91,6 +91,8 @@ import {
   gitStatus,
   isFreshWindow,
   listProjectFiles,
+  dotnetNewList,
+  dotnetNewCreate,
   buildContextBundle,
   mcpConfig,
   mcpWriteProjectConfig,
@@ -1164,6 +1166,47 @@ export default function App() {
               return;
             }
             setNugetCsprojs(csprojs);
+          });
+        },
+      },
+      {
+        id: "dotnet.newProject",
+        title: "Novo Projeto .NET…",
+        detail: ".NET",
+        run: () => {
+          if (!rootPath) {
+            alert("Abra uma pasta primeiro.");
+            return;
+          }
+          void dotnetNewList().then((templates) => {
+            if (templates.length === 0) {
+              alert("Nenhum template .NET encontrado (o SDK está instalado?).");
+              return;
+            }
+            setQuickPick({
+              title: "Novo Projeto .NET",
+              placeholder: "Escolha um template…",
+              items: templates.map((t) => ({
+                id: t.shortName,
+                label: t.name,
+                description: `${t.shortName}${t.tags ? " · " + t.tags : ""}`,
+                keywords: `${t.shortName} ${t.tags}`,
+                icon: "file" as const,
+              })),
+              onPick: (it) => {
+                const name = window.prompt("Nome do projeto:")?.trim();
+                if (!name) return;
+                // Create under <root>/<name> so it lands in the workspace.
+                const outDir = `${rootPath}/${name}`;
+                void dotnetNewCreate(it.id, name, outDir).then((r) => {
+                  if (!r.success) {
+                    alert(`Falha ao criar o projeto:\n${r.output}`);
+                    return;
+                  }
+                  void refreshExplorerRoot();
+                });
+              },
+            });
           });
         },
       },

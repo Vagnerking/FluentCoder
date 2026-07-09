@@ -176,6 +176,8 @@ pub fn run() {
             dotnet_tools::nuget_search,
             dotnet_tools::nuget_add,
             dotnet_tools::nuget_remove,
+            dotnet_tools::dotnet_new_list,
+            dotnet_tools::dotnet_new_create,
             razor::commands::razor_prepare,
             razor::commands::razor_emit_live,
             razor::commands::razor_commit_live_map,
