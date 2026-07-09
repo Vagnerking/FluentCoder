@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import {
+  dotnetBuild,
+  dotnetClean,
+  dotnetRebuild,
+  dotnetRestore,
   dotnetTestList,
   dotnetTestRun,
   listProjectFiles,
   runConfigsDetect,
   runConfigsLoad,
   runConfigsSave,
+  type DotnetActionResult,
   type DotnetProcess,
   type DotnetTestResult,
 } from "../api";
@@ -186,6 +191,7 @@ export function RunPanel({ rootPath, onRun, pendingTest }: RunPanelProps) {
       <div className="run-lists">
         <DebugSection rootPath={rootPath} />
         <TestsSection rootPath={rootPath} pendingTest={pendingTest ?? null} />
+        <ProjectActionsSection rootPath={rootPath} />
 
         <div className="git-group">
           <div className="git-group-header">
@@ -625,6 +631,92 @@ function TestsSection({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/** The four explicit project actions, in the order shown. */
+const PROJECT_ACTIONS = [
+  { key: "build", label: "Compilar", run: dotnetBuild },
+  { key: "rebuild", label: "Recompilar", run: dotnetRebuild },
+  { key: "clean", label: "Limpar", run: dotnetClean },
+  { key: "restore", label: "Restaurar", run: dotnetRestore },
+] as const;
+
+/**
+ * Explicit build/rebuild/clean/restore for a selected `.csproj` (or the whole
+ * workspace) — the actions the C# Dev Kit exposes on the Solution Explorer
+ * (milestone #11). Distinct from build-on-save diagnostics (that stays in the
+ * Problems panel); here the user triggers the action and sees success + output.
+ */
+function ProjectActionsSection({ rootPath }: { rootPath: string }) {
+  const csprojs = useCsprojs(rootPath);
+  // "" = whole workspace; otherwise a specific project path.
+  const [target, setTarget] = useState<string>("");
+  const [busy, setBusy] = useState<string>("");
+  const [result, setResult] = useState<DotnetActionResult | null>(null);
+
+  useEffect(() => {
+    setResult(null);
+  }, [target]);
+
+  if (csprojs.length === 0) return null;
+
+  const runAction = async (
+    key: string,
+    fn: (t: string) => Promise<DotnetActionResult>
+  ) => {
+    setBusy(key);
+    setResult(null);
+    try {
+      setResult(await fn(target));
+    } catch (err) {
+      setResult({ success: false, output: String(err) });
+    } finally {
+      setBusy("");
+    }
+  };
+
+  return (
+    <div className="git-group debug-section">
+      <div className="git-group-header">
+        <span>Ações do projeto (.NET)</span>
+      </div>
+      <div className="debug-launcher">
+        <select
+          className="search-input"
+          value={target}
+          onChange={(e) => setTarget(e.target.value)}
+          disabled={busy !== ""}
+        >
+          <option value="">Solução inteira</option>
+          {csprojs.map((p) => (
+            <option key={p} value={p}>
+              {p.split(/[\/]/).pop()}
+            </option>
+          ))}
+        </select>
+        <div className="run-draft-actions">
+          {PROJECT_ACTIONS.map((a) => (
+            <button
+              key={a.key}
+              className="git-link-btn"
+              disabled={busy !== ""}
+              onClick={() => void runAction(a.key, a.run)}
+            >
+              {busy === a.key ? `${a.label}…` : a.label}
+            </button>
+          ))}
+        </div>
+        {result && (
+          <div className={result.success ? "test-pass" : "git-error"}>
+            {result.success ? "✓ Concluído" : "✗ Falhou"}
+            {result.output.trim() && (
+              <pre className="run-action-output">{result.output.trim()}</pre>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

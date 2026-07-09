@@ -1795,7 +1795,9 @@ pub async fn ssh_run_configs_detect(
     } else {
         Some(pkg)
     };
-    Ok(crate::runner::detect_configs(pkg_json, runner, has_cargo))
+    // Remote .csproj scanning isn't wired over SSH yet; pass no .NET projects so
+    // the shared detector still handles npm/cargo. (dotnet-run-over-SSH later.)
+    Ok(crate::runner::detect_configs(pkg_json, runner, has_cargo, &[]))
 }
 
 /// Reads the saved `.project/run.json` on the host (empty when absent).

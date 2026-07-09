@@ -4943,6 +4943,44 @@ button .codicon { pointer-events: none; }
   flex-shrink: 0;
 }
 
+/* ── NuGet manager modal (milestone #11) ── */
+.nuget-manager { width: min(680px, 92vw); max-height: 80vh; }
+.nuget-toolbar { display: flex; gap: 8px; align-items: center; padding: 0 12px 8px; }
+.nuget-toolbar .search-input { flex: 1; min-width: 0; }
+.nuget-tabs { display: flex; gap: 2px; flex-shrink: 0; }
+.nuget-tab {
+  background: transparent; border: none; color: var(--text-muted);
+  padding: 4px 10px; font-size: 12px; cursor: pointer; border-radius: 4px;
+}
+.nuget-tab.active { color: var(--text); background: var(--bg-elevated, rgba(127,127,127,0.12)); }
+.nuget-error { margin: 0 12px 6px; max-height: 100px; overflow: auto; white-space: pre-wrap; font-size: 11px; }
+.nuget-list { max-height: 56vh; }
+.nuget-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px; border-bottom: 1px solid var(--border-subtle, rgba(127,127,127,0.12));
+}
+.nuget-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.nuget-id { font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nuget-version { font-size: 11px; color: var(--text-muted); }
+.nuget-update { color: var(--accent); font-weight: 600; }
+.nuget-owners, .nuget-downloads { opacity: 0.8; }
+.nuget-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.nuget-remove-btn { color: var(--danger, #e5534b); }
+
+/* Output tail of an explicit .NET project action (build/clean/restore). */
+.run-action-output {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  max-height: 160px;
+  overflow: auto;
+  font-size: 11px;
+  font-family: var(--mono-font, monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-elevated, rgba(127, 127, 127, 0.08));
+  border-radius: 4px;
+}
+
 /* ── Solution Explorer (roadmap csharp-ide-parity, Fase D) ────────────────── */
 .sln-project { padding: 2px 0; }
 .sln-project-row {
