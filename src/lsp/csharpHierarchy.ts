@@ -24,8 +24,8 @@ export interface RangedSymbol {
   children?: RangedSymbol[];
 }
 
-/** LSP SymbolKind (1-based) → vscode SymbolKind (0-based). O `as unknown` mascarava
- *  esse off-by-one, pintando ícones errados na árvore de hierarquia. */
+/** LSP SymbolKind (1-based) → vscode SymbolKind (0-based). Passar o valor LSP cru
+ *  como vscode SymbolKind pintaria o ícone errado (class viraria method, etc.). */
 export function lspKindToVscode(lspKind: number): number {
   // vscode: File=0, Module=1, Namespace=2, Package=3, Class=4, Method=5,
   // Property=6, Field=7, Constructor=8, Enum=9, Interface=10, Function=11,
@@ -56,27 +56,33 @@ function contains(range: LspRange, pos: Pos): boolean {
   return afterStart && beforeEnd;
 }
 
-/** LSP SymbolKind de itens "chamáveis"/containers relevantes. */
-const CALLABLE_KINDS = new Set([
+/** Conjunto amplo de containers (para agrupar uma referência pelo símbolo que a
+ *  envolve, seja método ou tipo — o "chamador" no incoming call). */
+export const CONTAINER_KINDS = new Set([
   5 /* Class */, 6 /* Method */, 9 /* Constructor */, 12 /* Function */,
   11 /* Interface */, 23 /* Struct */, 10 /* Enum */, 7 /* Property */,
 ]);
 
 /**
- * Acha o símbolo MAIS PROFUNDO (método/construtor/…) que contém `pos`, caminhando
- * a árvore de `documentSymbol`. Usado para agrupar uma referência pelo método que
- * a envolve (o "chamador", no incoming call). Retorna null se nenhum a contém.
+ * Acha o símbolo MAIS PROFUNDO cujo kind está em `kinds` e que contém `pos`,
+ * caminhando a árvore de `documentSymbol`. Parametrizar `kinds` é essencial:
+ *   - Type Hierarchy passa {@link TYPE_KINDS} → com o cursor no CORPO de um método,
+ *     ainda acha o TIPO envolvente (o método não é um kind de tipo, então é
+ *     ignorado e o tipo pai vence);
+ *   - Call Hierarchy passa {@link CALL_KINDS} → só métodos/ctors/props/funções;
+ *   - o agrupamento de referências passa {@link CONTAINER_KINDS} (amplo).
+ * Retorna null se nenhum símbolo de `kinds` contém `pos`.
  */
 export function containerOfPosition(
   symbols: readonly RangedSymbol[],
-  pos: Pos
+  pos: Pos,
+  kinds: ReadonlySet<number> = CONTAINER_KINDS
 ): RangedSymbol | null {
   let best: RangedSymbol | null = null;
   const visit = (list: readonly RangedSymbol[]) => {
     for (const s of list) {
       if (!contains(s.range, pos)) continue;
-      // Prefere o container "chamável" mais profundo (método > classe).
-      if (CALLABLE_KINDS.has(s.kind)) best = s;
+      if (kinds.has(s.kind)) best = s; // mais profundo do kind pedido vence
       if (s.children) visit(s.children);
     }
   };

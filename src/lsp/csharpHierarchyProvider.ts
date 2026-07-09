@@ -20,6 +20,7 @@ import {
   lspKindToVscode,
   TYPE_KINDS,
   CALL_KINDS,
+  CONTAINER_KINDS,
   type RangedSymbol,
 } from "./csharpHierarchy";
 import { lspLog } from "./debug";
@@ -107,10 +108,15 @@ function typeItem(
 const typeHierarchyProvider: vscode.TypeHierarchyProvider = {
   async prepareTypeHierarchy(document, position) {
     const uri = document.uri.toString();
-    // Acha o símbolo (tipo) que contém a posição via documentSymbol.
+    // O TIPO envolvente da posição — com TYPE_KINDS, o cursor no corpo de um método
+    // ainda resolve para o tipo (o método é ignorado; o tipo pai vence), como no VS.
     const syms = await documentSymbols(uri);
-    const container = containerOfPosition(syms, { line: position.line, character: position.character });
-    if (!container || !TYPE_KINDS.has(container.kind)) return undefined;
+    const container = containerOfPosition(
+      syms,
+      { line: position.line, character: position.character },
+      TYPE_KINDS
+    );
+    if (!container) return undefined;
     return typeItem(container.name, container.kind, uri, container.range, container.selectionRange);
   },
 
@@ -119,7 +125,7 @@ const typeHierarchyProvider: vscode.TypeHierarchyProvider = {
     // hover no NOME do tipo → parse da cláusula de base.
     const pos = { line: item.selectionRange.start.line, character: item.selectionRange.start.character };
     const results: vscode.TypeHierarchyItem[] = [];
-    // 1) hover → nomes de supertipos → workspace/symbol para localizá-los.
+    // hover no tipo → parse dos nomes da cláusula de base → workspace/symbol.
     const hover = await lspRequest<{ contents?: unknown }>("textDocument/hover", {
       textDocument: { uri }, position: pos,
     });
@@ -139,9 +145,11 @@ const typeHierarchyProvider: vscode.TypeHierarchyProvider = {
       textDocument: { uri }, position: pos,
     });
     const out: vscode.TypeHierarchyItem[] = [];
+    const symCache = new Map<string, RangedSymbol[]>();
     for (const loc of asLocations(res)) {
-      const name = await symbolNameAt(loc);
-      out.push(typeItem(name ?? "(tipo)", 5, loc.uri, loc.range));
+      const sym = await symbolAt(loc, symCache);
+      // Usa o nome E o kind reais (interface vs class → ícone correto).
+      out.push(typeItem(sym?.name ?? "(tipo)", sym?.kind ?? 5, loc.uri, loc.range));
     }
     return out;
   },
@@ -170,10 +178,14 @@ const callHierarchyProvider: vscode.CallHierarchyProvider = {
   async prepareCallHierarchy(document, position) {
     const uri = document.uri.toString();
     const syms = await documentSymbols(uri);
-    const container = containerOfPosition(syms, { line: position.line, character: position.character });
     // Só métodos/ctors/props/funções são chamáveis — cursor numa classe/em branco
     // não vira item de call hierarchy (evita references ao nome do tipo).
-    if (!container || !CALL_KINDS.has(container.kind)) return undefined;
+    const container = containerOfPosition(
+      syms,
+      { line: position.line, character: position.character },
+      CALL_KINDS
+    );
+    if (!container) return undefined;
     return callItem(container.name, container.kind, uri, container.range, container.selectionRange);
   },
 
@@ -204,7 +216,7 @@ const callHierarchyProvider: vscode.CallHierarchyProvider = {
         syms = await documentSymbols(ref.uri);
         symCache.set(ref.uri, syms);
       }
-      const container = containerOfPosition(syms, ref.range.start);
+      const container = containerOfPosition(syms, ref.range.start, CONTAINER_KINDS);
       if (!container) continue;
       const key = `${ref.uri}#${container.name}#${container.range.start.line}`;
       let entry = byContainer.get(key);
@@ -226,17 +238,23 @@ const callHierarchyProvider: vscode.CallHierarchyProvider = {
     const uri = item.uri.toString();
     const text = await fileText(uri);
     if (text == null) return [];
-    const calls = scanOutgoingCalls(text, item.range);
+    // Começa DEPOIS da linha da assinatura (selectionRange), senão o próprio nome
+    // do método casa o regex e vira uma "chamada para si mesmo".
+    const bodyStart = { line: item.selectionRange.end.line, character: 0 };
+    const calls = scanOutgoingCalls(text, { start: bodyStart, end: item.range.end });
     const out: vscode.CallHierarchyOutgoingCall[] = [];
+    const symCache = new Map<string, RangedSymbol[]>();
     for (const call of calls) {
+      if (call.name === item.name) continue; // recursão para si mesmo — ignora
       const def = await lspRequest<unknown>("textDocument/definition", {
         textDocument: { uri }, position: { line: call.line, character: call.character },
       });
       const loc = asLocations(def)[0];
       if (!loc) continue;
+      const sym = await symbolAt(loc, symCache);
       out.push(
         new vscode.CallHierarchyOutgoingCall(
-          callItem(call.name, 6 /* Method */, loc.uri, loc.range),
+          callItem(call.name, sym?.kind ?? 6, loc.uri, loc.range, sym?.selectionRange ?? loc.range),
           [new vscode.Range(call.line, call.character, call.line, call.character + call.name.length)]
         )
       );
@@ -254,23 +272,32 @@ function hoverToText(contents: unknown): string {
   return "";
 }
 
-/** Resolve um tipo pelo nome simples via workspace/symbol (primeiro hit em fonte). */
+/** Resolve um tipo pelo nome simples via workspace/symbol (primeiro hit em fonte).
+ *  Nota: homônimos em namespaces diferentes resolvem para o primeiro hit
+ *  (limitação MVP aceitável — ver ADR 0004). */
 async function resolveTypeByName(name: string): Promise<LspLocation | null> {
   const res = await lspRequest<Array<{ name: string; location?: LspLocation; kind?: number }>>(
     "workspace/symbol", { query: name }
   );
   if (!Array.isArray(res)) return null;
   const hit = res.find(
-    (s) => s.name === name && s.location && !/\.g\.cs$/i.test(s.location.uri) && [5, 10, 11, 23].includes(s.kind ?? -1)
+    (s) => s.name === name && s.location && !/\.g\.cs$/i.test(s.location.uri) && TYPE_KINDS.has(s.kind ?? -1)
   );
   return hit?.location ?? null;
 }
 
-/** Nome do símbolo cujo range começa em `loc` (via documentSymbol do arquivo). */
-async function symbolNameAt(loc: LspLocation): Promise<string | null> {
-  const syms = await documentSymbols(loc.uri);
-  const found = containerOfPosition(syms, loc.range.start);
-  return found?.name ?? null;
+/** Símbolo (nome+kind) na posição `loc`, via documentSymbol do arquivo. `symCache`
+ *  memoiza o documentSymbol por arquivo (subtypes pode ter N locs no mesmo). */
+async function symbolAt(
+  loc: LspLocation,
+  symCache: Map<string, RangedSymbol[]>
+): Promise<RangedSymbol | null> {
+  let syms = symCache.get(loc.uri);
+  if (!syms) {
+    syms = await documentSymbols(loc.uri);
+    symCache.set(loc.uri, syms);
+  }
+  return containerOfPosition(syms, loc.range.start, CONTAINER_KINDS);
 }
 
 /** Conteúdo de um arquivo: do model Monaco aberto, senão do disco. */
@@ -291,10 +318,16 @@ async function fileText(uri: string): Promise<string | null> {
   }
 }
 
-/** Alvos de chamada no corpo de `range`: identificador seguido de `(`. */
+/** Palavras-chave C# seguidas de `(` que NÃO são chamadas. */
+const NON_CALL_KEYWORDS =
+  /^(if|else|for|foreach|while|do|switch|case|default|catch|using|lock|fixed|return|new|nameof|typeof|sizeof|checked|unchecked|stackalloc|is|as|base|this|when|await)$/;
+
+/** Alvos de chamada no corpo de `range` (0-based): identificador seguido de `(`.
+ *  Dedup por NOME — a árvore de call hierarchy mostra uma aresta por callee, não
+ *  uma por ocorrência (a primeira posição basta para resolver a definition). */
 function scanOutgoingCalls(
   text: string,
-  range: vscode.Range
+  range: { start: { line: number }; end: { line: number } }
 ): { name: string; line: number; character: number }[] {
   const lines = text.split(/\r?\n/);
   const out: { name: string; line: number; character: number }[] = [];
@@ -305,28 +338,21 @@ function scanOutgoingCalls(
     let m: RegExpExecArray | null;
     while ((m = re.exec(lineText)) !== null) {
       const name = m[1];
-      // pula keywords de controle / não-chamadas.
-      if (
-        /^(if|else|for|foreach|while|do|switch|case|catch|using|lock|fixed|return|new|nameof|typeof|sizeof|checked|unchecked|stackalloc|is|as|base|this|when|await)$/.test(
-          name
-        )
-      )
-        continue;
-      const character = m.index;
-      const key = `${name}#${ln}#${character}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ name, line: ln, character });
+      if (NON_CALL_KEYWORDS.test(name) || seen.has(name)) continue;
+      seen.add(name);
+      out.push({ name, line: ln, character: m.index });
     }
   }
   return out;
 }
 
 /**
- * Registra os providers de Call/Type Hierarchy para `.cs`. Retorna os disposables
- * (entram no contribution set do cliente C# → reset de servidores).
+ * Registra os providers de Call/Type Hierarchy para `.cs`. Retorna disposables
+ * como `{ dispose(): void }` — o tipo estrutural que `vscode.Disposable` e
+ * `monaco.IDisposable` compartilham — para o caller passar a
+ * `addClientContributions` sem um `as unknown as` (entram no reset do cliente C#).
  */
-export function installCsharpHierarchyProviders(): vscode.Disposable[] {
+export function installCsharpHierarchyProviders(): { dispose(): void }[] {
   const selector: vscode.DocumentSelector = { language: "csharp", scheme: "file" };
   return [
     vscode.languages.registerTypeHierarchyProvider(selector, typeHierarchyProvider),

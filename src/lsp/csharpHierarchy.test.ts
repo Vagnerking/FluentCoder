@@ -5,6 +5,8 @@ import {
   isLikelyCall,
   parseSupertypes,
   lspKindToVscode,
+  TYPE_KINDS,
+  CALL_KINDS,
   type RangedSymbol,
 } from "./csharpHierarchy.ts";
 
@@ -39,6 +41,28 @@ test("containerOfPosition finds the deepest callable containing a position", () 
   assert.equal(containerOfPosition(symbols, { line: 7, character: 0 })?.name, "MyClass");
   // Outside everything.
   assert.equal(containerOfPosition(symbols, { line: 30, character: 0 }), null);
+});
+
+test("containerOfPosition with TYPE_KINDS finds the enclosing type from a method body", () => {
+  const symbols: RangedSymbol[] = [
+    {
+      name: "MyClass",
+      kind: 5, // Class
+      range: r(0, 0, 20, 1),
+      selectionRange: r(0, 6, 0, 13),
+      children: [{ name: "Foo", kind: 6, range: r(2, 4, 6, 5), selectionRange: r(2, 8, 2, 11) }],
+    },
+  ];
+  // Cursor inside the METHOD Foo, but Type Hierarchy wants the enclosing TYPE.
+  assert.equal(
+    containerOfPosition(symbols, { line: 4, character: 8 }, TYPE_KINDS)?.name,
+    "MyClass"
+  );
+  // With CALL_KINDS, the same position resolves to the method.
+  assert.equal(
+    containerOfPosition(symbols, { line: 4, character: 8 }, CALL_KINDS)?.name,
+    "Foo"
+  );
 });
 
 test("isLikelyCall: distinguishes a call from a method group", () => {

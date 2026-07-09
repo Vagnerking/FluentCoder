@@ -92,10 +92,12 @@ export async function startCsharpServer(
 
   // Call/Type hierarchy (ADR 0004): composto de definition/implementation/
   // references pois o Roslyn standalone não implementa os endpoints nativos.
-  // Registrado via a API `vscode`; disposables no reset do cliente.
+  // Registrado via a API `vscode`; disposables no reset do cliente. Os providers
+  // devolvem `{ dispose(): void }` — o tipo comum a vscode.Disposable e
+  // monaco.IDisposable — então o cast é direto (sem `as unknown`).
   addClientContributions(
     client,
-    installCsharpHierarchyProviders() as unknown as import("monaco-editor").IDisposable[]
+    installCsharpHierarchyProviders() as import("monaco-editor").IDisposable[]
   );
 
   return client;
