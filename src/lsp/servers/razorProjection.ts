@@ -54,9 +54,16 @@ import {
   htmlHover,
   htmlTagComplete,
   htmlRegionAt,
+  cshtmlFolding,
+  cshtmlDocumentSymbols,
   forgetHtmlVirtual,
   forgetAllHtmlVirtual,
 } from "./cshtmlHtmlService";
+import {
+  applySemanticTokenDecorations,
+  clearSemanticTokenDecorations,
+} from "../semanticColorizer";
+import { remapSemanticTokens, type TokenRange, type RemappedRange } from "./cshtmlSemanticTokens";
 import { wireRoslynStartup } from "./roslynShared";
 import { CSHARP_SERVER_ID, ROSLYN_INIT_OPTIONS } from "./csharp";
 import {
@@ -560,9 +567,70 @@ export async function startRazorProjectionServer(
     setDiagnostics(RAZOR_PROJECTION_SERVER_ID, doc.cshtmlPath, markersToProblems(doc.cshtmlPath, markers));
   };
 
+  /** The `.g.cs` server's semantic-tokens legend (token type names), read once
+   *  from its `initialize` result. Empty legend ⇒ semantic coloring is skipped. */
+  const semanticLegend = ((): { tokenTypes: string[] } => {
+    const caps = client.initializeResult?.capabilities as
+      | { semanticTokensProvider?: { legend?: { tokenTypes?: string[] } } }
+      | undefined;
+    return { tokenTypes: caps?.semanticTokensProvider?.legend?.tokenTypes ?? [] };
+  })();
+
+  /**
+   * Pull semantic tokens for one doc from the `.g.cs`, remap each token gen→source
+   * (STRICT — synthetic C# dropped), and paint the surviving tokens on the
+   * `.cshtml` via decorations (same painter as the C# client, owner-isolated).
+   * Best-effort: colors are cosmetic, never block anything.
+   */
+  const pullSemanticTokens = async (doc: ProjectionDoc): Promise<void> => {
+    if (disposed || semanticLegend.tokenTypes.length === 0) return;
+    let res: { data?: number[] } | null = null;
+    try {
+      res = await mutateGenerated(doc.gcsUri, () =>
+        client.sendRequest<{ data?: number[] } | null>("textDocument/semanticTokens/full", {
+          textDocument: { uri: doc.gcsUri },
+        })
+      );
+    } catch (err) {
+      lspLog("razor projection: semanticTokens pull failed", String(err));
+      return;
+    }
+    const data = res?.data ?? [];
+    if (data.length === 0) return;
+    const strictRemap = async (ranges: TokenRange[]): Promise<RemappedRange[]> => {
+      const out = await razorRemapRangesToSourceStrict(
+        doc.cshtmlPath,
+        ranges.map((r) => ({
+          startLine: r.start.line,
+          startCharacter: r.start.character,
+          endLine: r.end.line,
+          endCharacter: r.end.character,
+        }))
+      );
+      return out.map((r) =>
+        r
+          ? {
+              start: { line: r.startLine, character: r.startCharacter },
+              end: { line: r.endLine, character: r.endCharacter },
+            }
+          : null
+      );
+    };
+    const remapped = await remapSemanticTokens(data, semanticLegend, strictRemap);
+    // Staleness guard (same as diagnostics): the doc may have closed/superseded.
+    if (disposed || docs.get(canonicalFileUriKey(doc.cshtmlUri)) !== doc) return;
+    const model = monaco.editor.getModel(monaco.Uri.parse(doc.cshtmlUri));
+    if (model && !model.isDisposed()) {
+      applySemanticTokenDecorations(model, remapped, semanticLegend);
+    }
+  };
+
   /** Pull diagnostics for every open doc once. */
   const pullAllOnce = (): void => {
-    for (const doc of docs.values()) void pullDiagnostics(doc);
+    for (const doc of docs.values()) {
+      void pullDiagnostics(doc);
+      void pullSemanticTokens(doc);
+    }
   };
 
   /** Pull now, then on a backoff that outlasts the shadow's compilation warmup. */
@@ -796,6 +864,85 @@ export async function startRazorProjectionServer(
     })
   );
 
+  // Find All References (#7): same shape as definition — the `.g.cs` returns
+  // `Location[]`, each either in the projection (remap gen→source, drop if it
+  // lands in synthetic scaffolding) or in a real `.cs` (passes through). Reuses
+  // `routeDefinition` since references and definition targets are identical LSP
+  // `Location`s. HTML regions have no C# references.
+  disposables.push(
+    monaco.languages.registerReferenceProvider(sel, {
+      provideReferences: async (model, position, context, token) => {
+        const doc = docFor(model);
+        if (!doc) return [];
+        if (htmlRegionAt(model, position) === "html") return [];
+        if (token.isCancellationRequested || !(await ensureFresh(doc, model))) return [];
+        const snap = doc.committedSourceVersion;
+        const reqVersion = model.getVersionId();
+        if (token.isCancellationRequested || docFor(model) !== doc) return [];
+        const gen = await razorRemapToGenerated(doc.cshtmlPath, position.lineNumber - 1, position.column - 1);
+        if (!gen) return [];
+        const res = await mutateGenerated(doc.gcsUri, () =>
+          client.sendRequest<unknown>(
+            "textDocument/references",
+            {
+              textDocument: { uri: doc.gcsUri },
+              position: { line: gen.line, character: gen.character },
+              context: { includeDeclaration: context.includeDeclaration },
+            },
+            token
+          )
+        );
+        if (token.isCancellationRequested || !snapshotStable(doc, model, snap, reqVersion)) return [];
+        const routed = await routeDefinition(res, {
+          projectedUriKey: canonicalFileUriKey(doc.gcsUri),
+          cshtmlUri: doc.cshtmlUri,
+          remapRanges: remapRangesFor(doc.cshtmlPath),
+          uriKey: canonicalFileUriKey,
+        });
+        if (!snapshotStable(doc, model, snap, reqVersion)) return [];
+        return routed.map((r) => ({ uri: monaco.Uri.parse(r.uri), range: r.range }));
+      },
+    })
+  );
+
+  // Rename (#7): the `.g.cs` rename yields a multi-file WorkspaceEdit; each edit
+  // is routed generated→source with the STRICT mapper — the whole action is
+  // dropped if ANY edit lands in synthetic scaffolding (contract: no TextEdit
+  // born in synthetic text). Reuses `routeWorkspaceEdit` (shared with codeAction).
+  disposables.push(
+    monaco.languages.registerRenameProvider(sel, {
+      provideRenameEdits: async (model, position, newName, token) => {
+        const doc = docFor(model);
+        if (!doc) return { edits: [] };
+        if (htmlRegionAt(model, position) === "html") return { edits: [] };
+        if (token.isCancellationRequested || !(await ensureFresh(doc, model))) return { edits: [] };
+        const snap = doc.committedSourceVersion;
+        const reqVersion = model.getVersionId();
+        if (token.isCancellationRequested || docFor(model) !== doc) return { edits: [] };
+        const gen = await razorRemapToGenerated(doc.cshtmlPath, position.lineNumber - 1, position.column - 1);
+        if (!gen) return { edits: [] };
+        const res = await mutateGenerated(doc.gcsUri, () =>
+          client.sendRequest<LspWorkspaceEdit | null>(
+            "textDocument/rename",
+            {
+              textDocument: { uri: doc.gcsUri },
+              position: { line: gen.line, character: gen.character },
+              newName,
+            },
+            token
+          )
+        );
+        if (token.isCancellationRequested || !snapshotStable(doc, model, snap, reqVersion)) {
+          return { edits: [] };
+        }
+        const routed = await toMonacoEdit(doc, res ?? undefined);
+        if (!snapshotStable(doc, model, snap, reqVersion)) return { edits: [] };
+        // `null` = an edit fell in synthetic text → drop the whole rename.
+        return routed ?? { edits: [] };
+      },
+    })
+  );
+
   disposables.push(
     monaco.languages.registerCompletionItemProvider(sel, {
       triggerCharacters: [".", "@", "(", "<", " "],
@@ -923,6 +1070,27 @@ export async function startRazorProjectionServer(
       })),
     };
   };
+
+  // Folding + document symbols operate DIRECTLY on the `.cshtml` (HTML tags via
+  // the html-service, Razor blocks via the pure outline parser) — no `.g.cs`
+  // round-trip, so no remap/version dance. Ranges are already in `.cshtml` coords.
+  disposables.push(
+    monaco.languages.registerFoldingRangeProvider(sel, {
+      provideFoldingRanges: (model, _context, token) => {
+        if (token.isCancellationRequested || !docFor(model)) return [];
+        return cshtmlFolding(monaco, model);
+      },
+    })
+  );
+
+  disposables.push(
+    monaco.languages.registerDocumentSymbolProvider(sel, {
+      provideDocumentSymbols: (model, token) => {
+        if (token.isCancellationRequested || !docFor(model)) return [];
+        return cshtmlDocumentSymbols(monaco, model);
+      },
+    })
+  );
 
   disposables.push(
     monaco.languages.registerCodeActionProvider(sel, {
@@ -1105,7 +1273,10 @@ export async function startRazorProjectionServer(
     });
     void razorForget(doc.cshtmlPath).catch(() => {});
     const model = monaco.editor.getModel(monaco.Uri.parse(doc.cshtmlUri));
-    if (model && !model.isDisposed()) monaco.editor.setModelMarkers(model, DIAGNOSTICS_OWNER, []);
+    if (model && !model.isDisposed()) {
+      monaco.editor.setModelMarkers(model, DIAGNOSTICS_OWNER, []);
+      clearSemanticTokenDecorations(model); // drop this file's semantic coloring
+    }
     // Drop this file's store entry too, so a closed `.cshtml` stops coloring the
     // explorer (empty list clears the key).
     setDiagnostics(RAZOR_PROJECTION_SERVER_ID, doc.cshtmlPath, []);
@@ -1218,6 +1389,7 @@ export async function startRazorProjectionServer(
       // more meanwhile, we're still stale and a later sync will catch up.
       doc.committedSourceVersion = version;
       void pullDiagnostics(doc);
+      void pullSemanticTokens(doc);
       return model.getVersionId() === version;
     });
 

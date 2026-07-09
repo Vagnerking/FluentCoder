@@ -13,6 +13,7 @@
 import type * as MonacoNs from "monaco-editor";
 import {
   getLanguageService,
+  newHTMLDataProvider,
   TextDocument,
   type LanguageService,
   type HTMLDocument,
@@ -21,10 +22,21 @@ import {
   type Range as LspRange,
 } from "vscode-html-languageservice";
 import { buildVirtualHtml, regionAt, type Region } from "./cshtmlHtmlProjection";
+import { parseCshtmlOutline } from "./cshtmlOutline";
+import { MVC_TAG_HELPER_DATA } from "./tagHelperData";
 
 let service: LanguageService | null = null;
 function svc(): LanguageService {
-  if (!service) service = getLanguageService();
+  if (!service) {
+    service = getLanguageService();
+    // Tag Helpers embutidos do MVC (asp-*, <partial>, <environment>, …) somados
+    // aos dados HTML padrão — completion/hover no caminho region-gated (milestone
+    // #7; o html-service não faz validação de data providers). Custom/view-
+    // components ficam para o sidecar (follow-up).
+    service.setDataProviders(true, [
+      newHTMLDataProvider("aspnetcore-taghelpers", MVC_TAG_HELPER_DATA),
+    ]);
+  }
   return service;
 }
 
@@ -33,8 +45,18 @@ interface Cached {
   doc: TextDocument;
   html: HTMLDocument;
   mask: Uint8Array;
+  /** Outline Razor (símbolos + folds), calculado lazy — folding e documentSymbol
+   *  são pedidos juntos na mesma versão, então parseamos o `.cshtml` uma vez só. */
+  outline?: ReturnType<typeof parseCshtmlOutline>;
 }
 const cache = new Map<string, Cached>();
+
+/** Outline Razor do model, memoizado na entry `Cached` (por uri+versão). */
+function outlineFor(model: MonacoNs.editor.ITextModel): ReturnType<typeof parseCshtmlOutline> {
+  const entry = virtualFor(model);
+  if (!entry.outline) entry.outline = parseCshtmlOutline(model.getValue());
+  return entry.outline;
+}
 
 /** The virtual HTML `TextDocument` + parsed tree + region mask, cached by version. */
 function virtualFor(model: MonacoNs.editor.ITextModel): Cached {
@@ -218,4 +240,111 @@ export function htmlTagComplete(
       html // reuse the cached parse (no reparse per keystroke)
     ) ?? null
   );
+}
+
+/**
+ * Folding ranges for a `.cshtml` (milestone #7): HTML tag folding from the
+ * html-service over the virtual view, PLUS Razor block folds (`@{ }`,
+ * `@section/@functions/@code { }`, `@* *@`) from the pure outline parser. The
+ * virtual view has identity offsets, so the HTML ranges already line up.
+ * Returns Monaco `FoldingRange`s (1-based lines).
+ */
+export function cshtmlFolding(
+  monaco: typeof MonacoNs,
+  model: MonacoNs.editor.ITextModel
+): MonacoNs.languages.FoldingRange[] {
+  const { doc } = virtualFor(model);
+  const ranges: MonacoNs.languages.FoldingRange[] = [];
+  // HTML tags (+ its own comment folding on the blanked view — harmless).
+  for (const r of svc().getFoldingRanges(doc)) {
+    ranges.push({
+      start: r.startLine + 1,
+      end: r.endLine + 1,
+      kind:
+        r.kind === "comment"
+          ? monaco.languages.FoldingRangeKind.Comment
+          : monaco.languages.FoldingRangeKind.Region,
+    });
+  }
+  // Razor blocks (the html-service can't see through the blanked regions).
+  const { folds } = outlineFor(model);
+  for (const f of folds) {
+    ranges.push({
+      start: f.startLine + 1,
+      end: f.endLine + 1,
+      kind:
+        f.kind === "comment"
+          ? monaco.languages.FoldingRangeKind.Comment
+          : monaco.languages.FoldingRangeKind.Region,
+    });
+  }
+  return ranges;
+}
+
+/** Cada kind do outline → o `SymbolKind` REAL do Monaco (0-based). Antes um mapa
+ *  com valores LSP (1-based) era coado por `as SymbolKind`, pintando os ícones
+ *  errados (model virava Method, etc.). Resolve com o enum de verdade. */
+function monacoSymbolKind(
+  monaco: typeof MonacoNs,
+  kind: string
+): MonacoNs.languages.SymbolKind {
+  const K = monaco.languages.SymbolKind;
+  switch (kind) {
+    case "model":
+      return K.Class;
+    case "page":
+    case "inject":
+      return K.Field;
+    case "using":
+      return K.Module;
+    case "section":
+    case "functions":
+    case "code":
+      return K.Method;
+    case "codeBlock":
+      return K.Function;
+    default:
+      return K.Constant;
+  }
+}
+
+/**
+ * Document symbols for a `.cshtml`: the Razor directives/blocks (`@model`,
+ * `@page`, `@section Nome`, `@functions`, `@code`, `@{ }`) parsed from the
+ * source. Returns Monaco `DocumentSymbol`s (1-based ranges).
+ */
+export function cshtmlDocumentSymbols(
+  monaco: typeof MonacoNs,
+  model: MonacoNs.editor.ITextModel
+): MonacoNs.languages.DocumentSymbol[] {
+  const { symbols } = outlineFor(model);
+  return symbols.map((s) => {
+    const range: MonacoNs.IRange = {
+      startLineNumber: s.line + 1,
+      startColumn: s.character + 1,
+      endLineNumber: s.endLine + 1,
+      endColumn: s.endCharacter + 1,
+    };
+    // O selectionRange (o trecho destacado ao navegar) usa o fim REAL do nome no
+    // fonte (`nameEndCharacter`, calculado no parser), não o comprimento do nome
+    // de exibição — que difere quando há espaços colapsados (`@section  X`) ou o
+    // nome é reconstruído (`@{ }`). Capado no fim da `range` (contrato do Monaco).
+    const nameEndColumn =
+      s.line === s.endLine
+        ? Math.min(s.nameEndCharacter + 1, range.endColumn)
+        : s.nameEndCharacter + 1;
+    return {
+      name: s.name,
+      detail: "",
+      kind: monacoSymbolKind(monaco, s.kind),
+      tags: [],
+      range,
+      selectionRange: {
+        startLineNumber: s.line + 1,
+        startColumn: s.character + 1,
+        endLineNumber: s.line + 1,
+        endColumn: nameEndColumn,
+      },
+    };
+  });
 }
