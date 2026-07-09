@@ -298,6 +298,13 @@ export function cshtmlDocumentSymbols(
       endLineNumber: s.endLine + 1,
       endColumn: s.endCharacter + 1,
     };
+    // O selectionRange (o trecho destacado ao navegar) cobre o nome do símbolo na
+    // sua primeira linha, sem passar do fim da `range` (contrato do Monaco:
+    // selectionRange ⊆ range). Para blocos multi-linha o nome fica todo na 1ª.
+    const nameEndColumn =
+      s.line === s.endLine
+        ? Math.min(s.character + 1 + s.name.length, range.endColumn)
+        : s.character + 1 + s.name.length;
     return {
       name: s.name,
       detail: "",
@@ -308,7 +315,7 @@ export function cshtmlDocumentSymbols(
         startLineNumber: s.line + 1,
         startColumn: s.character + 1,
         endLineNumber: s.line + 1,
-        endColumn: s.character + 2,
+        endColumn: nameEndColumn,
       },
     };
   });

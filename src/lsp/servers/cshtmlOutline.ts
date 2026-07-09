@@ -75,26 +75,38 @@ const LINE_DIRECTIVE_KINDS: Record<string, CshtmlSymbolKind> = {
 
 /**
  * Acha o índice do `}` que fecha o `{` em `open` (offset do `{`), respeitando
- * strings, comentários e aninhamento. Retorna o offset do `}` ou -1.
+ * aninhamento. Retorna o offset do `}` ou -1.
+ *
+ * `csharp = true` (blocos `@{ }`/`@code`/`@functions`): o corpo é C#, então pula
+ * strings/chars e comentários `//`/`/* *​/` para não confundir chaves neles.
+ *
+ * `csharp = false` (`@section Nome { markup }`): o corpo é MARKUP Razor, não C#.
+ * Aplicar lexing de C# aqui quebraria em apóstrofos de texto (`<p>Don't</p>`) e
+ * em `//` de URLs (`https://…`). Aqui só balanceamos `{`/`}`, ignorando apenas os
+ * comentários Razor `@* *@` (onde uma chave literal não conta).
  */
-function matchBrace(text: string, open: number): number {
+function matchBrace(text: string, open: number, csharp: boolean): number {
   let depth = 0;
   for (let i = open; i < text.length; i++) {
     const c = text[i];
-    if (c === '"' || c === "'") {
-      // pula string/char (com escape)
+    if (csharp && (c === '"' || c === "'")) {
+      // pula string/char C# (com escape)
       const quote = c;
       i++;
       while (i < text.length && text[i] !== quote) {
         if (text[i] === "\\") i++;
         i++;
       }
-    } else if (c === "/" && text[i + 1] === "/") {
+    } else if (csharp && c === "/" && text[i + 1] === "/") {
       while (i < text.length && text[i] !== "\n") i++;
-    } else if (c === "/" && text[i + 1] === "*") {
+    } else if (csharp && c === "/" && text[i + 1] === "*") {
       i += 2;
       while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) i++;
       i++;
+    } else if (!csharp && c === "@" && text[i + 1] === "*") {
+      // comentário Razor @* … *@ no markup — não conta chaves nele.
+      const end = text.indexOf("*@", i + 2);
+      i = end === -1 ? text.length : end + 1;
     } else if (c === "{") {
       depth++;
     } else if (c === "}") {
@@ -146,8 +158,8 @@ export function parseCshtmlOutline(text: string): {
     }
 
     if (kw === "{") {
-      // Bloco de código @{ … }
-      const close = matchBrace(text, at + 1);
+      // Bloco de código @{ … } — corpo C#.
+      const close = matchBrace(text, at + 1, true);
       const endPos = close === -1 ? posAt(idx, text.length) : posAt(idx, close);
       symbols.push({
         name: "@{ }",
@@ -188,7 +200,8 @@ export function parseCshtmlOutline(text: string): {
     // Para @section, o nome está entre a keyword e o `{`.
     const between = text.slice(afterKw, braceOff).trim();
     const name = kw === "section" ? `@section ${between}` : `@${kw}`;
-    const close = matchBrace(text, braceOff);
+    // @section tem corpo MARKUP (não lexar C#); @functions/@code são C#.
+    const close = matchBrace(text, braceOff, kw !== "section");
     const endPos = close === -1 ? posAt(idx, text.length) : posAt(idx, close);
     symbols.push({
       name,

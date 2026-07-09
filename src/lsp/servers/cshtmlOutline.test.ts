@@ -96,3 +96,25 @@ test("real directive still parses next to escaped @@ and identifiers", () => {
   assert.equal(symbols[0].kind, "model");
   assert.equal(symbols[0].name, "@model Foo.Bar");
 });
+
+test("@section body is markup — apostrophes and // in URLs don't break brace matching", () => {
+  const src = `@section Scripts {
+  <p>Don't click <a href="https://ex.com//x">here</a></p>
+}
+<footer>fim</footer>`;
+  const { symbols, folds } = parseCshtmlOutline(src);
+  const section = symbols.find((s) => s.kind === "section");
+  assert.equal(section?.name, "@section Scripts");
+  // Fecha na linha 2 (o } real), não é engolido até o EOF.
+  assert.equal(section?.endLine, 2);
+  assert.ok(folds.some((f) => f.startLine === 0 && f.endLine === 2));
+});
+
+test("@functions body is C# — braces inside strings still ignored", () => {
+  const src = `@functions {
+  string S() => "a } b";
+}`;
+  const { symbols } = parseCshtmlOutline(src);
+  const fn = symbols.find((s) => s.kind === "functions");
+  assert.equal(fn?.endLine, 2); // o } real, não o da string
+});
