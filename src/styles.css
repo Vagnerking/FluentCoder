@@ -4848,6 +4848,39 @@ button .codicon { pointer-events: none; }
 .debug-status-running { color: #63c174; }
 .debug-status-error { color: #e5484d; }
 
+/* Seletor de sessões de debug (issue #100) — abas compactas por sessão viva. */
+.debug-session-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 8px 0;
+}
+.debug-session-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  font-size: 11px;
+  border: 1px solid var(--border, #3a3a3a);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.75;
+}
+.debug-session-tab.active {
+  opacity: 1;
+  border-color: var(--accent, #4d7cff);
+  background: color-mix(in srgb, var(--accent, #4d7cff) 14%, transparent);
+}
+.debug-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
 .debug-launcher {
   display: flex;
   flex-direction: column;
