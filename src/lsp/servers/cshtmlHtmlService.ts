@@ -13,6 +13,7 @@
 import type * as MonacoNs from "monaco-editor";
 import {
   getLanguageService,
+  newHTMLDataProvider,
   TextDocument,
   type LanguageService,
   type HTMLDocument,
@@ -21,10 +22,20 @@ import {
   type Range as LspRange,
 } from "vscode-html-languageservice";
 import { buildVirtualHtml, regionAt, type Region } from "./cshtmlHtmlProjection";
+import { parseCshtmlOutline } from "./cshtmlOutline";
+import { MVC_TAG_HELPER_DATA } from "./tagHelperData";
 
 let service: LanguageService | null = null;
 function svc(): LanguageService {
-  if (!service) service = getLanguageService();
+  if (!service) {
+    service = getLanguageService();
+    // Tag Helpers embutidos do MVC (asp-*, <partial>, <environment>, …) somados
+    // aos dados HTML padrão — completion/hover/validação no caminho region-gated
+    // (milestone #7). Custom/view-components ficam para o sidecar (follow-up).
+    service.setDataProviders(true, [
+      newHTMLDataProvider("aspnetcore-taghelpers", MVC_TAG_HELPER_DATA),
+    ]);
+  }
   return service;
 }
 
@@ -218,4 +229,87 @@ export function htmlTagComplete(
       html // reuse the cached parse (no reparse per keystroke)
     ) ?? null
   );
+}
+
+/**
+ * Folding ranges for a `.cshtml` (milestone #7): HTML tag folding from the
+ * html-service over the virtual view, PLUS Razor block folds (`@{ }`,
+ * `@section/@functions/@code { }`, `@* *@`) from the pure outline parser. The
+ * virtual view has identity offsets, so the HTML ranges already line up.
+ * Returns Monaco `FoldingRange`s (1-based lines).
+ */
+export function cshtmlFolding(
+  monaco: typeof MonacoNs,
+  model: MonacoNs.editor.ITextModel
+): MonacoNs.languages.FoldingRange[] {
+  const { doc } = virtualFor(model);
+  const ranges: MonacoNs.languages.FoldingRange[] = [];
+  // HTML tags (+ its own comment folding on the blanked view — harmless).
+  for (const r of svc().getFoldingRanges(doc)) {
+    ranges.push({
+      start: r.startLine + 1,
+      end: r.endLine + 1,
+      kind:
+        r.kind === "comment"
+          ? monaco.languages.FoldingRangeKind.Comment
+          : monaco.languages.FoldingRangeKind.Region,
+    });
+  }
+  // Razor blocks (the html-service can't see through the blanked regions).
+  const { folds } = parseCshtmlOutline(model.getValue());
+  for (const f of folds) {
+    ranges.push({
+      start: f.startLine + 1,
+      end: f.endLine + 1,
+      kind:
+        f.kind === "comment"
+          ? monaco.languages.FoldingRangeKind.Comment
+          : monaco.languages.FoldingRangeKind.Region,
+    });
+  }
+  return ranges;
+}
+
+/** LSP `SymbolKind` values for the Razor symbols we surface. */
+const SYMBOL_KIND_LSP: Record<string, number> = {
+  model: 5 /* Class */,
+  page: 8 /* Field */,
+  using: 2 /* Module */,
+  inject: 8 /* Field */,
+  section: 6 /* Method */,
+  functions: 6 /* Method */,
+  code: 6 /* Method */,
+  codeBlock: 12 /* Function */,
+};
+
+/**
+ * Document symbols for a `.cshtml`: the Razor directives/blocks (`@model`,
+ * `@page`, `@section Nome`, `@functions`, `@code`, `@{ }`) parsed from the
+ * source. Returns Monaco `DocumentSymbol`s (1-based ranges).
+ */
+export function cshtmlDocumentSymbols(
+  model: MonacoNs.editor.ITextModel
+): MonacoNs.languages.DocumentSymbol[] {
+  const { symbols } = parseCshtmlOutline(model.getValue());
+  return symbols.map((s) => {
+    const range: MonacoNs.IRange = {
+      startLineNumber: s.line + 1,
+      startColumn: s.character + 1,
+      endLineNumber: s.endLine + 1,
+      endColumn: s.endCharacter + 1,
+    };
+    return {
+      name: s.name,
+      detail: "",
+      kind: (SYMBOL_KIND_LSP[s.kind] ?? 13) as MonacoNs.languages.SymbolKind,
+      tags: [],
+      range,
+      selectionRange: {
+        startLineNumber: s.line + 1,
+        startColumn: s.character + 1,
+        endLineNumber: s.line + 1,
+        endColumn: s.character + 2,
+      },
+    };
+  });
 }
