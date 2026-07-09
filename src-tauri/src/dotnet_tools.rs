@@ -6,8 +6,6 @@
 //! Diagnostics-on-save stays in `lsp/build.rs`; this module is for the explicit,
 //! user-triggered project actions the C# Dev Kit exposes.
 
-use std::path::Path;
-
 /// Builds a `dotnet` Command with the shared hardening: English CLI output (so
 /// any text we surface is stable) and no console-window flash on Windows.
 fn dotnet_command() -> std::process::Command {
@@ -114,21 +112,6 @@ pub async fn dotnet_rebuild(target: String) -> Result<DotnetActionResult, String
     }
     // `--no-incremental` forces a full recompile, matching "Rebuild" semantics.
     run_dotnet_action("build", target, vec!["--no-incremental".to_string()]).await
-}
-
-/// Validates that a target path (when non-empty) points at a `.csproj`/`.sln`
-/// under `root`. Pure so it can be unit-tested; used to reject stray paths.
-pub(crate) fn is_valid_dotnet_target(root: &str, target: &str) -> bool {
-    if target.is_empty() {
-        return true; // "" = whole workspace, always allowed
-    }
-    let ok_ext = target.to_lowercase();
-    if !(ok_ext.ends_with(".csproj") || ok_ext.ends_with(".sln") || ok_ext.ends_with(".slnx")) {
-        return false;
-    }
-    // Must live inside the workspace root.
-    Path::new(target).starts_with(Path::new(root))
-        || Path::new(target).is_relative()
 }
 
 // ── NuGet package management ────────────────────────────────────────────────
@@ -557,24 +540,6 @@ fn collect_dotnet_sources(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn empty_target_is_valid() {
-        assert!(is_valid_dotnet_target("/repo", ""));
-    }
-
-    #[test]
-    fn csproj_and_sln_under_root_are_valid() {
-        assert!(is_valid_dotnet_target("/repo", "/repo/App/App.csproj"));
-        assert!(is_valid_dotnet_target("/repo", "/repo/App.sln"));
-        assert!(is_valid_dotnet_target("/repo", "/repo/App.slnx"));
-    }
-
-    #[test]
-    fn non_project_extension_is_rejected() {
-        assert!(!is_valid_dotnet_target("/repo", "/repo/App/Program.cs"));
-        assert!(!is_valid_dotnet_target("/repo", "/etc/passwd"));
-    }
 
     #[test]
     fn tail_keeps_the_end() {

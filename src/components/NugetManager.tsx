@@ -61,10 +61,12 @@ export function NugetManager({ csprojs, onClose }: NugetManagerProps) {
 
   // Debounced nuget.org search while on the Browse tab.
   useEffect(() => {
-    if (tab !== "browse") return;
     const q = query.trim();
-    if (!q) {
+    // Nothing to search (wrong tab or empty query): clear any lingering "search"
+    // busy so the modal never freezes when the query is emptied mid-request.
+    if (tab !== "browse" || !q) {
       setHits([]);
+      setBusy((b) => (b === "search" ? "" : b));
       return;
     }
     let cancelled = false;
