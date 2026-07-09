@@ -1,0 +1,139 @@
+/**
+ * Lógica PURA de composição de Call/Type Hierarchy para C# (ADR 0004). O Roslyn
+ * standalone não implementa `callHierarchy`/`typeHierarchy` (endpoints retornam
+ * `-32601`), então a hierarquia é derivada de `definition`/`implementation`/
+ * `references`/`documentSymbol`. Este módulo contém só as partes puras/testáveis;
+ * o wiring `vscode` fino vive em `csharpHierarchyProvider.ts`.
+ */
+
+/** Um símbolo com range (0-based, meio-aberto) — subconjunto do LSP DocumentSymbol. */
+export interface RangedSymbol {
+  name: string;
+  /** LSP SymbolKind. */
+  kind: number;
+  range: { start: { line: number; character: number }; end: { line: number; character: number } };
+  /** Símbolos aninhados (métodos dentro de classe, etc.). */
+  children?: RangedSymbol[];
+}
+
+/** Posição 0-based. */
+export interface Pos {
+  line: number;
+  character: number;
+}
+
+function contains(
+  range: RangedSymbol["range"],
+  pos: Pos
+): boolean {
+  const afterStart =
+    pos.line > range.start.line ||
+    (pos.line === range.start.line && pos.character >= range.start.character);
+  const beforeEnd =
+    pos.line < range.end.line ||
+    (pos.line === range.end.line && pos.character <= range.end.character);
+  return afterStart && beforeEnd;
+}
+
+/** LSP SymbolKind de itens "chamáveis"/containers relevantes. */
+const CALLABLE_KINDS = new Set([
+  5 /* Class */, 6 /* Method */, 9 /* Constructor */, 12 /* Function */,
+  11 /* Interface */, 23 /* Struct */, 10 /* Enum */, 7 /* Property */,
+]);
+
+/**
+ * Acha o símbolo MAIS PROFUNDO (método/construtor/…) que contém `pos`, caminhando
+ * a árvore de `documentSymbol`. Usado para agrupar uma referência pelo método que
+ * a envolve (o "chamador", no incoming call). Retorna null se nenhum a contém.
+ */
+export function containerOfPosition(
+  symbols: readonly RangedSymbol[],
+  pos: Pos
+): RangedSymbol | null {
+  let best: RangedSymbol | null = null;
+  const visit = (list: readonly RangedSymbol[]) => {
+    for (const s of list) {
+      if (!contains(s.range, pos)) continue;
+      // Prefere o container "chamável" mais profundo (método > classe).
+      if (CALLABLE_KINDS.has(s.kind)) best = s;
+      if (s.children) visit(s.children);
+    }
+  };
+  visit(symbols);
+  return best;
+}
+
+/**
+ * Heurística "esta referência é uma CHAMADA?": o identificador é seguido (pulando
+ * espaços/generics `<...>`) de um `(`. Distingue `foo()` (chamada) de `var f =
+ * foo;` (method group) na maioria dos casos. `identEnd` é o offset logo APÓS o
+ * identificador na linha/texto.
+ */
+export function isLikelyCall(lineText: string, identEnd: number): boolean {
+  let i = identEnd;
+  // pula espaços
+  while (i < lineText.length && /\s/.test(lineText[i])) i++;
+  // pula um bloco de generics <...> balanceado numa linha só
+  if (lineText[i] === "<") {
+    let depth = 0;
+    while (i < lineText.length) {
+      if (lineText[i] === "<") depth++;
+      else if (lineText[i] === ">") {
+        depth--;
+        if (depth === 0) {
+          i++;
+          break;
+        }
+      } else if (lineText[i] === ";" || lineText[i] === "=") {
+        return false; // não era generics de chamada
+      }
+      i++;
+    }
+    while (i < lineText.length && /\s/.test(lineText[i])) i++;
+  }
+  return lineText[i] === "(";
+}
+
+/**
+ * Extrai os nomes de SUPERTIPOS de um texto de hover/assinatura C# do tipo, do
+ * padrão `... class Circle : Base, IShape ...` (ou `struct`/`interface`/`record`).
+ * Retorna os identificadores após `:` até `{`/quebra/`where`, sem argumentos
+ * genéricos aninhados. Vazio quando não há cláusula de base.
+ */
+export function parseSupertypes(hoverText: string): string[] {
+  // Pega "class Nome<...> : LISTA" — a LISTA vai até `{`, `where` ou fim de linha.
+  const m = hoverText.match(
+    /\b(?:class|struct|interface|record(?:\s+(?:class|struct))?)\s+[A-Za-z_]\w*(?:<[^>]*>)?\s*:\s*([^\{]+)/
+  );
+  if (!m) return [];
+  let list = m[1];
+  // corta em `where` (constraints) e no `;` de um tipo sem corpo (`record X : Y;`).
+  const whereIdx = list.search(/\bwhere\b/);
+  if (whereIdx !== -1) list = list.slice(0, whereIdx);
+  const semi = list.indexOf(";");
+  if (semi !== -1) list = list.slice(0, semi);
+  // separa por vírgula no nível 0 (ignora vírgulas dentro de <...>).
+  const parts: string[] = [];
+  let depth = 0;
+  let token = "";
+  for (const ch of list) {
+    if (ch === "<") depth++;
+    else if (ch === ">") depth--;
+    else if (ch === "," && depth === 0) {
+      parts.push(token);
+      token = "";
+      continue;
+    }
+    token += ch;
+  }
+  parts.push(token);
+  return parts
+    .map((p) => p.trim())
+    // só o nome simples (sem generics nem namespace) para resolver por workspace/symbol.
+    .map((p) => p.replace(/<.*$/, "").trim())
+    .map((p) => {
+      const dot = p.lastIndexOf(".");
+      return dot === -1 ? p : p.slice(dot + 1);
+    })
+    .filter((p) => /^[A-Za-z_]\w*$/.test(p));
+}

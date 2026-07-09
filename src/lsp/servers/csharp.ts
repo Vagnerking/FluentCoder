@@ -6,6 +6,7 @@ import { toFileUri } from "../uri";
 import { installAddProjectReferenceProvider } from "../addProjectReferenceProvider";
 import { wireRoslynStartup } from "./roslynShared";
 import { installCsharpTestCodeLens } from "../csharpTestCodeLensWiring";
+import { installCsharpHierarchyProviders } from "../csharpHierarchyProvider";
 import type { ServerStartContext } from ".";
 
 export const CSHARP_SERVER_ID = "csharp";
@@ -88,6 +89,14 @@ export async function startCsharpServer(
   // "Adicionar referência ao projeto" quick fix (issue #95). Tied to this client
   // so the reset command / workspace switch tears it down.
   addClientContributions(client, installAddProjectReferenceProvider(rootPath));
+
+  // Call/Type hierarchy (ADR 0004): composto de definition/implementation/
+  // references pois o Roslyn standalone não implementa os endpoints nativos.
+  // Registrado via a API `vscode`; disposables no reset do cliente.
+  addClientContributions(
+    client,
+    installCsharpHierarchyProviders() as unknown as import("monaco-editor").IDisposable[]
+  );
 
   return client;
 }
