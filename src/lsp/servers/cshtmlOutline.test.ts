@@ -78,3 +78,21 @@ test("single-line constructs produce no folds", () => {
   const { folds } = parseCshtmlOutline(`@{ var x = 1; }\n<p>@x</p>`);
   assert.deepEqual(folds, []);
 });
+
+test("keyword needs a word boundary — @modelData is not @model", () => {
+  const { symbols } = parseCshtmlOutline(`<p>@modelData.Foo</p>\n@codeStuff { }`);
+  assert.equal(symbols.length, 0);
+});
+
+test("@@ escape (literal @) is not a directive", () => {
+  const { symbols } = parseCshtmlOutline(`<p>email@@model.com</p>`);
+  assert.equal(symbols.length, 0);
+});
+
+test("real directive still parses next to escaped @@ and identifiers", () => {
+  const src = `<p>a@@b</p>\n@model Foo.Bar\n<span>@modeling</span>`;
+  const { symbols } = parseCshtmlOutline(src);
+  assert.equal(symbols.length, 1);
+  assert.equal(symbols[0].kind, "model");
+  assert.equal(symbols[0].name, "@model Foo.Bar");
+});

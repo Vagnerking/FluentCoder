@@ -121,12 +121,16 @@ export function parseCshtmlOutline(text: string): {
   const symbols: CshtmlSymbol[] = [];
   const folds: CshtmlFold[] = [];
 
-  const re = /@(model|page|using|inject|section|functions|code|\{|\*)/g;
+  // As keywords exigem fronteira de palavra à direita (senão `@modelData` casaria
+  // `@model`); `{`/`*` não. `@@` (escape Razor) é filtrado abaixo pelo char anterior.
+  const re = /@(?:(model|page|using|inject|section|functions|code)(?![A-Za-z0-9_])|(\{|\*))/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     const at = m.index;
-    // `@@` é escape — não é transição. (re não casa `@@` porque exige palavra/{/*.)
-    const kw = m[1];
+    // `@@` é escape do Razor (um `@` literal) — não é uma transição. Pula quando
+    // o caractere anterior também é `@`.
+    if (at > 0 && text[at - 1] === "@") continue;
+    const kw = m[1] ?? m[2];
     const start = posAt(idx, at);
 
     if (kw === "*") {
