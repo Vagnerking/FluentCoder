@@ -518,10 +518,15 @@ export function EditorPane({
         current?.logMessage ?? ""
       );
       if (logMessage === null) return;
+      const hitCondition = window.prompt(
+        'Contagem de hits (ex.: "5", ">3"; vazio = toda vez):',
+        current?.hitCondition ?? ""
+      );
+      if (hitCondition === null) return;
       debugSession.setBreakpointSpec(path, line, {
         condition: condition.trim() || undefined,
         logMessage: logMessage.trim() || undefined,
-        hitCondition: current?.hitCondition,
+        hitCondition: hitCondition.trim() || undefined,
       });
     });
     editorInstance.onDidChangeModel(() => applyDebugDecorations());

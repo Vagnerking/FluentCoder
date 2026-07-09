@@ -557,7 +557,15 @@ function VariableTree({
         style={{ paddingLeft: 8 + depth * 12 }}
         title={variable.type}
         role={expandable ? "button" : undefined}
+        tabIndex={expandable ? 0 : undefined}
+        aria-expanded={expandable ? open : undefined}
         onClick={toggle}
+        onKeyDown={(e) => {
+          if (expandable && (e.key === "Enter" || e.key === " ")) {
+            e.preventDefault();
+            toggle();
+          }
+        }}
       >
         <span className="debug-var-expander">
           {expandable ? (open ? "▾" : "▸") : ""}

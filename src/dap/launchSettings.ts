@@ -39,7 +39,7 @@ interface RawLaunchSettings {
 export function parseLaunchSettings(content: string): LaunchProfile[] {
   let raw: RawLaunchSettings;
   try {
-    raw = JSON.parse(content.replace(/^﻿/, "")) as RawLaunchSettings;
+    raw = JSON.parse(content.replace(/^\uFEFF/, "")) as RawLaunchSettings;
   } catch {
     return [];
   }

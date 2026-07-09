@@ -97,6 +97,17 @@ export interface DebugState {
 const SESSION_ID = "netcoredbg";
 const MAX_OUTPUT_LINES = 500;
 
+/** The per-frame execution state, cleared whenever we leave a stopped frame
+ *  (resume, stop, session close). Watches are handled separately — on `continued`
+ *  they keep their row with an "executando" marker; on teardown they reset too. */
+const CLEARED_EXEC_STATE = {
+  frames: [] as StackFrameView[],
+  scopes: [] as ScopeView[],
+  children: {} as Record<number, VariableView[]>,
+  selectedFrameId: undefined as number | undefined,
+  stoppedAt: undefined as DebugState["stoppedAt"],
+} satisfies Partial<DebugState>;
+
 type Listener = () => void;
 
 class DebugSessionManager {
@@ -216,48 +227,66 @@ class DebugSessionManager {
   private async refreshWatches(gen = this.generation): Promise<void> {
     const client = this.client;
     const frameId = this.state.selectedFrameId;
-    const watches: WatchView[] = [];
-    for (const expression of this.watchExprs) {
-      if (!client || frameId == null) {
-        watches.push({ expression, variablesReference: 0, error: "não pausado" });
-        continue;
-      }
-      try {
-        const r = await client.request<{
-          result: string;
-          type?: string;
-          variablesReference?: number;
-        }>("evaluate", { expression, frameId, context: "watch" });
-        if (gen !== this.generation) return; // resumed / re-stopped meanwhile
-        watches.push({
+    if (!client || frameId == null) {
+      this.setState({
+        watches: this.watchExprs.map((expression) => ({
           expression,
-          value: r.result,
-          type: r.type,
-          variablesReference: r.variablesReference ?? 0,
-        });
-      } catch (err) {
-        watches.push({ expression, variablesReference: 0, error: shortErr(err) });
-      }
+          variablesReference: 0,
+          error: "não pausado",
+        })),
+      });
+      return;
     }
-    if (gen !== this.generation) return;
+    // Watches are independent `evaluate` calls — run them concurrently but keep
+    // the declared order (Promise.all preserves index).
+    const watches = await Promise.all(
+      this.watchExprs.map(async (expression): Promise<WatchView> => {
+        try {
+          const r = await client.request<{
+            result: string;
+            type?: string;
+            variablesReference?: number;
+          }>("evaluate", { expression, frameId, context: "watch" });
+          return {
+            expression,
+            value: r.result,
+            type: r.type,
+            variablesReference: r.variablesReference ?? 0,
+          };
+        } catch (err) {
+          return { expression, variablesReference: 0, error: shortErr(err) };
+        }
+      })
+    );
+    if (gen !== this.generation) return; // resumed / re-stopped meanwhile
     this.setState({ watches });
   }
 
+  /** DAP `variables` request → normalized `VariableView[]` (shared by the
+   *  scope loader and the lazy tree expansion — the shape is identical). */
+  private async fetchVariables(client: DapClient, variablesReference: number): Promise<VariableView[]> {
+    const r = await client.request<{
+      variables?: { name: string; value: string; type?: string; variablesReference?: number }[];
+    }>("variables", { variablesReference });
+    return (r.variables ?? []).map((v) => ({
+      name: v.name,
+      value: v.value,
+      type: v.type,
+      variablesReference: v.variablesReference ?? 0,
+    }));
+  }
+
   // ── variables tree (lazy) ─────────────────────────────────────────────────
-  /** Fetches (once) and caches the children of `variablesReference`. */
+  /** Fetches (once) and caches the children of `variablesReference`. Guarded by
+   *  the current generation so a fetch that resolves after a resume/re-stop is
+   *  discarded instead of caching children of a frame that no longer exists. */
   async expand(variablesReference: number): Promise<void> {
     const client = this.client;
     if (!client || !variablesReference || this.state.children[variablesReference]) return;
+    const gen = this.generation;
     try {
-      const r = await client.request<{
-        variables?: { name: string; value: string; type?: string; variablesReference?: number }[];
-      }>("variables", { variablesReference });
-      const children: VariableView[] = (r.variables ?? []).map((v) => ({
-        name: v.name,
-        value: v.value,
-        type: v.type,
-        variablesReference: v.variablesReference ?? 0,
-      }));
+      const children = await this.fetchVariables(client, variablesReference);
+      if (gen !== this.generation) return; // execution moved on — drop stale children
       this.setState({ children: { ...this.state.children, [variablesReference]: children } });
     } catch (err) {
       this.appendOutput(`[variables] ${String(err)}`);
@@ -277,30 +306,23 @@ class DebugSessionManager {
   private async loadScopes(frameId: number, gen = this.generation): Promise<void> {
     const client = this.client;
     if (!client) return;
-    const sc = await client.request<{ scopes?: { name: string; variablesReference: number }[] }>(
-      "scopes",
-      { frameId }
-    );
-    if (gen !== this.generation) return;
-    const scopes: ScopeView[] = [];
-    for (const s of sc.scopes ?? []) {
-      if (!s.variablesReference) continue;
-      const vars = await client.request<{
-        variables?: { name: string; value: string; type?: string; variablesReference?: number }[];
-      }>("variables", { variablesReference: s.variablesReference });
+    try {
+      const sc = await client.request<{ scopes?: { name: string; variablesReference: number }[] }>(
+        "scopes",
+        { frameId }
+      );
       if (gen !== this.generation) return;
-      scopes.push({
-        name: s.name,
-        variablesReference: s.variablesReference,
-        variables: (vars.variables ?? []).map((v) => ({
-          name: v.name,
-          value: v.value,
-          type: v.type,
-          variablesReference: v.variablesReference ?? 0,
-        })),
-      });
+      const scopes: ScopeView[] = [];
+      for (const s of sc.scopes ?? []) {
+        if (!s.variablesReference) continue;
+        const variables = await this.fetchVariables(client, s.variablesReference);
+        if (gen !== this.generation) return;
+        scopes.push({ name: s.name, variablesReference: s.variablesReference, variables });
+      }
+      this.setState({ scopes });
+    } catch (err) {
+      this.appendOutput(`[scopes] ${String(err)}`);
     }
-    this.setState({ scopes });
   }
 
   // ── session lifecycle ─────────────────────────────────────────────────────
@@ -347,11 +369,7 @@ class DebugSessionManager {
       status: "starting",
       error: undefined,
       output: [],
-      frames: [],
-      scopes: [],
-      children: {},
-      selectedFrameId: undefined,
-      stoppedAt: undefined,
+      ...CLEARED_EXEC_STATE,
     });
     try {
       const exe = await dapEnsureNetcoredbg();
@@ -407,11 +425,7 @@ class DebugSessionManager {
       this.generation++;
       this.setState({
         status: "running",
-        frames: [],
-        scopes: [],
-        children: {},
-        selectedFrameId: undefined,
-        stoppedAt: undefined,
+        ...CLEARED_EXEC_STATE,
         watches: this.state.watches.map((w) => ({ ...w, value: undefined, error: "executando" })),
       });
     });
@@ -427,8 +441,11 @@ class DebugSessionManager {
     client.onceClosed(() => {
       if (this.client === client) {
         this.client = null;
+        // Invalidate any scope/variable/watch fetch still in flight against the
+        // now-dead adapter so it can't write back after teardown.
+        this.generation++;
         if (this.state.status !== "idle" && this.state.status !== "error") {
-          this.setState({ status: "idle", frames: [], scopes: [], children: {}, stoppedAt: undefined });
+          this.setState({ status: "idle", ...CLEARED_EXEC_STATE });
         }
       }
     });
@@ -501,6 +518,9 @@ class DebugSessionManager {
     const client = this.client;
     this.client = null;
     this.threadId = null;
+    // Any scope/variable/watch fetch still awaiting is now stale — bump so it
+    // discards its result instead of repopulating a torn-down session.
+    this.generation++;
     if (client) {
       try {
         await client.request("disconnect", { terminateDebuggee: true }, 3000);
@@ -510,14 +530,7 @@ class DebugSessionManager {
       client.close();
     }
     await dapStopSession(SESSION_ID).catch(() => {});
-    this.setState({
-      status: "idle",
-      frames: [],
-      scopes: [],
-      children: {},
-      selectedFrameId: undefined,
-      stoppedAt: undefined,
-    });
+    this.setState({ status: "idle", ...CLEARED_EXEC_STATE });
   }
 
   private appendOutput(line: string): void {
