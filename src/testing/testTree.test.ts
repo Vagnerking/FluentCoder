@@ -26,13 +26,15 @@ test("sorts groups by container and leaves by method, stable", () => {
   assert.deepEqual(groups[0].leaves.map((l) => l.method), ["A", "Z"]);
 });
 
-test("strips Theory args so cases fold under one method", () => {
+test("Theory cases group under one class, keeping distinct fqns", () => {
+  // Cada caso vira uma folha própria (fqn distinto), sob a mesma classe.
+  // Nota: `--list-tests` NÃO traz args, então na prática cada Theory aparece uma
+  // vez; este caso cobre o TRX (que traz args) chegando ao agrupador.
   const groups = groupTests([
     "App.T.C.Theory(x: 1)",
     "App.T.C.Theory(x: 2)",
   ]);
   assert.equal(groups.length, 1);
-  // Both cases keep their distinct fqn but share the method grouping.
   assert.equal(groups[0].leaves.length, 2);
   assert.equal(groups[0].leaves[0].method, "Theory");
 });

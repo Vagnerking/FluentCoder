@@ -22,7 +22,8 @@ pub struct DotnetTestResult {
 #[derive(serde::Serialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct FileCoverage {
-    /// Absolute source-file path (as recorded by the coverage collector).
+    /// Source-file path: absoluto quando o report traz `<sources>` (o caso do
+    /// coletor XPlat/coverlet); senão o `filename` relativo do report como veio.
     pub path: String,
     /// Fraction of lines covered, 0.0–1.0.
     pub line_rate: f64,
@@ -149,7 +150,9 @@ pub async fn dotnet_test_run(
         // small-project case; multi-project layouts work either way).
         let runsettings = results_dir.join("coverage.runsettings");
         if collect_coverage {
-            let _ = std::fs::write(&runsettings, COVERAGE_RUNSETTINGS);
+            // Propaga a falha — se o arquivo não for escrito, `--settings` apontaria
+            // para um inexistente e o dotnet falharia com mensagem confusa dele.
+            std::fs::write(&runsettings, COVERAGE_RUNSETTINGS).map_err(|e| e.to_string())?;
             cmd.arg("--collect:XPlat Code Coverage");
             cmd.arg("--settings");
             cmd.arg(&runsettings);
@@ -207,11 +210,12 @@ pub async fn dotnet_test_debug(csproj_path: String, fqn: String) -> Result<u32, 
             return Err("nome do teste vazio".to_string());
         }
         let mut cmd = dotnet_command();
-        cmd.env("VSTEST_HOST_DEBUG", "1")
-            .args(["test", &csproj_path, "--nologo", "--filter"])
-            .arg(format!("FullyQualifiedName={fqn}"))
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+        cmd.env("VSTEST_HOST_DEBUG", "1").args(["test", &csproj_path, "--nologo"]);
+        // Reusa a mesma construção de filtro do run normal (não duplica o formato).
+        if let Some(expr) = build_filter_expr(&[fqn]) {
+            cmd.arg("--filter").arg(expr);
+        }
+        cmd.stdout(Stdio::piped()).stderr(Stdio::null());
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("dotnet test (debug): {e}"))?;
@@ -223,9 +227,14 @@ pub async fn dotnet_test_debug(csproj_path: String, fqn: String) -> Result<u32, 
         let mut reader = BufReader::new(stdout);
         let mut pid: Option<u32> = None;
         let mut line = String::new();
-        // Read until the "Process Id:" line (VSTEST_HOST_DEBUG prints it early,
-        // then blocks). Bound the scan so a broken run can't loop forever.
-        for _ in 0..200 {
+        // Read until the "Process Id:" line. `dotnet test` builds first, so a
+        // verbose restore/warnings run can print MANY lines before it — bound by a
+        // deadline (not a small line count) so valid-but-noisy runs still work, and
+        // keep the output so a failed run reports WHY (build error), like the
+        // normal run path does.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        let mut collected = String::new();
+        while std::time::Instant::now() < deadline {
             line.clear();
             match reader.read_line(&mut line) {
                 Ok(0) => break, // EOF before the PID → the run ended/failed
@@ -233,6 +242,10 @@ pub async fn dotnet_test_debug(csproj_path: String, fqn: String) -> Result<u32, 
                     if let Some(found) = parse_testhost_pid(&line) {
                         pid = Some(found);
                         break;
+                    }
+                    collected.push_str(&line);
+                    if collected.len() > 8192 {
+                        collected.drain(..collected.len() - 8192);
                     }
                 }
                 Err(_) => break,
@@ -242,23 +255,17 @@ pub async fn dotnet_test_debug(csproj_path: String, fqn: String) -> Result<u32, 
         let Some(pid) = pid else {
             let _ = child.kill();
             let _ = child.wait(); // reap, so no zombie is left behind
-            return Err(
-                "não foi possível obter o PID do testhost (VSTEST_HOST_DEBUG). O projeto compila e o teste existe?"
-                    .to_string(),
-            );
+            return Err(format!(
+                "não foi possível obter o PID do testhost (VSTEST_HOST_DEBUG). O projeto compila e o teste existe?\n{}",
+                tail(&collected, 600)
+            ));
         };
 
         // Drain the rest and reap the process in the background so the testhost
-        // keeps running after the debugger attaches (we must NOT kill it).
+        // keeps running after the debugger attaches (we must NOT kill it). O
+        // conteúdo é descartado (`sink`) — só precisamos consumir o pipe.
         std::thread::spawn(move || {
-            let mut sink = String::new();
-            for l in reader.lines().map_while(Result::ok) {
-                sink.push_str(&l);
-                sink.push('\n');
-                if sink.len() > 8192 {
-                    sink.clear();
-                }
-            }
+            let _ = std::io::copy(&mut reader, &mut std::io::sink());
             let _ = child.wait();
         });
 
@@ -290,8 +297,9 @@ fn find_cobertura_depth(dir: &Path, depth: usize) -> Option<PathBuf> {
     let entries = std::fs::read_dir(dir).ok()?;
     for entry in entries.flatten() {
         let p = entry.path();
-        // Use symlink_metadata so we never follow a symlinked directory.
-        let meta = std::fs::symlink_metadata(&p).ok()?;
+        // Use symlink_metadata so we never follow a symlinked directory. Um entry
+        // ilegível não deve abortar a busca inteira — pula (`continue`).
+        let Ok(meta) = std::fs::symlink_metadata(&p) else { continue };
         if meta.is_dir() {
             if let Some(found) = find_cobertura_depth(&p, depth + 1) {
                 return Some(found);
@@ -301,6 +309,12 @@ fn find_cobertura_depth(dir: &Path, depth: usize) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// True se `p` é um caminho absoluto do Windows (`C:\…` ou `C:/…`).
+fn is_windows_abs(p: &str) -> bool {
+    let b = p.as_bytes();
+    b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
 }
 
 /// Runsettings that makes the collector include the test assembly and emit
@@ -322,21 +336,39 @@ const COVERAGE_RUNSETTINGS: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 
 /// Parses a Cobertura report into per-file line coverage, aggregating the
 /// multiple `<class filename="…">` chunks that can target the same file (partial/
-/// nested classes). A line with `hits > 0` is covered. `filename` is taken as-is
-/// from the report (the collector records a project-relative path).
+/// nested classes). A line with `hits > 0` is covered.
+///
+/// O `filename` do report é RELATIVO à raiz declarada em `<sources><source>…`;
+/// juntamos os dois para um caminho ABSOLUTO, então o frontend casa por igualdade
+/// (não por sufixo — que confundia arquivos homônimos entre projetos). Entidades
+/// XML no filename são desescapadas.
 pub(crate) fn parse_cobertura(xml: &str) -> Vec<FileCoverage> {
     use std::collections::BTreeMap;
+    // Raiz absoluta do primeiro <source> (Cobertura do coverlet emite uma).
+    let source_root = xml
+        .find("<source>")
+        .and_then(|s| xml[s + 8..].find("</source>").map(|e| (s + 8, s + 8 + e)))
+        .map(|(s, e)| unescape(xml[s..e].trim()));
+
     // file → (covered set, uncovered set)
     let mut files: BTreeMap<String, (std::collections::BTreeSet<u32>, std::collections::BTreeSet<u32>)> =
         BTreeMap::new();
 
     for class_chunk in xml.split("<class ").skip(1) {
-        let Some(filename) = attr(class_chunk, "filename") else { continue };
+        let Some(raw_filename) = attr(class_chunk, "filename") else { continue };
+        let filename = unescape(raw_filename);
+        // Junta com a raiz absoluta quando o filename é relativo.
+        let abs = match &source_root {
+            Some(root) if !filename.starts_with('/') && !is_windows_abs(&filename) => {
+                format!("{}/{}", root.trim_end_matches(['/', '\\']), filename)
+            }
+            _ => filename,
+        };
         // This class's lines run until the next `<class ` (already split) or the
         // closing `</class>`; scan `<line ` entries in that scope.
         let end = class_chunk.find("</class>").unwrap_or(class_chunk.len());
         let scope = &class_chunk[..end];
-        let entry = files.entry(filename.to_string()).or_default();
+        let entry = files.entry(abs).or_default();
         for line_chunk in scope.split("<line ").skip(1) {
             let Some(number) = attr(line_chunk, "number").and_then(|n| n.parse::<u32>().ok()) else {
                 continue;
@@ -537,6 +569,28 @@ mod tests {
     #[test]
     fn cobertura_empty_report_yields_nothing() {
         assert!(parse_cobertura("<coverage><packages /></coverage>").is_empty());
+    }
+
+    #[test]
+    fn cobertura_joins_source_root_and_unescapes_filename() {
+        // Report com <sources> absoluto + filename relativo com entidade XML.
+        let xml = r#"<coverage>
+<sources><source>/repo/My &amp; App</source></sources>
+<class name="C" filename="src/Calc.cs"><line number="1" hits="1" /></class>
+</coverage>"#;
+        let cov = parse_cobertura(xml);
+        assert_eq!(cov[0].path, "/repo/My & App/src/Calc.cs");
+    }
+
+    #[test]
+    fn cobertura_absolute_filename_is_not_double_joined() {
+        // filename já absoluto (Windows) → não concatena com o source root.
+        let xml = r#"<coverage>
+<sources><source>/repo</source></sources>
+<class name="C" filename="C:\proj\Calc.cs"><line number="1" hits="1" /></class>
+</coverage>"#;
+        let cov = parse_cobertura(xml);
+        assert_eq!(cov[0].path, "C:\\proj\\Calc.cs");
     }
 
     #[test]

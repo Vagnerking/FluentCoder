@@ -24,7 +24,10 @@ import {
 import { loadLaunchProfiles } from "../dap/loadLaunchProfiles";
 import type { LaunchProfile } from "../dap/launchSettings";
 import { groupTests } from "../testing/testTree";
-import { applyCoverageDecorations } from "../testing/coverageDecorations";
+import {
+  applyCoverageDecorations,
+  clearCoverageDecorations,
+} from "../testing/coverageDecorations";
 import { Tooltip } from "./Tooltip";
 
 /** Loads the workspace's `.csproj` paths once per root (shared by the .NET sections). */
@@ -742,10 +745,17 @@ function TestsSection({
     }
   };
 
-  /** TRX names can be `Ns.Class.Method` or carry args — match by prefix too. */
+  // Índice de resultados por FQN. TRX nomeia Theory como `Fqn(args)`, então além
+  // do lookup exato mantemos um índice pelo prefixo (parte antes do `(`). Montado
+  // UMA vez por render (linear) — antes o `resultFor` era O(n) por chamada, ×N
+  // testes ×cada render = O(n²).
+  const byPrefix = new Map<string, DotnetTestResult>();
+  for (const r of results.values()) {
+    const base = r.name.split("(")[0];
+    if (!byPrefix.has(base)) byPrefix.set(base, r);
+  }
   const resultFor = (fqn: string): DotnetTestResult | undefined =>
-    results.get(fqn) ??
-    [...results.values()].find((r) => r.name === fqn || r.name.startsWith(`${fqn}(`));
+    results.get(fqn) ?? byPrefix.get(fqn);
 
   const groups = tests ? groupTests(tests) : [];
   const failedFqns = tests
@@ -784,7 +794,11 @@ function TestsSection({
             type="checkbox"
             checked={coverage}
             disabled={busy !== ""}
-            onChange={(e) => setCoverage(e.target.checked)}
+            onChange={(e) => {
+              setCoverage(e.target.checked);
+              // Desligar limpa as faixas na hora (não esperam o próximo run).
+              if (!e.target.checked) clearCoverageDecorations();
+            }}
           />
           Cobertura
         </label>
