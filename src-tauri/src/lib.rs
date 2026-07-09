@@ -1,5 +1,6 @@
 mod agents;
 mod dap;
+mod dotnet_tools;
 mod file_index;
 mod fs_commands;
 mod git;
@@ -167,6 +168,10 @@ pub fn run() {
             dap::dap_resolve_dotnet_target,
             testrunner::dotnet_test_list,
             testrunner::dotnet_test_run,
+            dotnet_tools::dotnet_build,
+            dotnet_tools::dotnet_clean,
+            dotnet_tools::dotnet_restore,
+            dotnet_tools::dotnet_rebuild,
             razor::commands::razor_prepare,
             razor::commands::razor_emit_live,
             razor::commands::razor_commit_live_map,

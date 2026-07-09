@@ -1092,6 +1092,27 @@ export function dotnetTestRun(
   return invoke<DotnetTestRun>("dotnet_test_run", { csprojPath, filter: filter ?? null });
 }
 
+/** Result of an explicit build/clean/restore/rebuild action (milestone #11). */
+export interface DotnetActionResult {
+  success: boolean;
+  /** Tail of the combined stdout+stderr. */
+  output: string;
+}
+
+/** `target` = a `.csproj`/`.sln` path, or "" to act on the whole workspace. */
+export function dotnetBuild(target: string): Promise<DotnetActionResult> {
+  return invoke<DotnetActionResult>("dotnet_build", { target });
+}
+export function dotnetClean(target: string): Promise<DotnetActionResult> {
+  return invoke<DotnetActionResult>("dotnet_clean", { target });
+}
+export function dotnetRestore(target: string): Promise<DotnetActionResult> {
+  return invoke<DotnetActionResult>("dotnet_restore", { target });
+}
+export function dotnetRebuild(target: string): Promise<DotnetActionResult> {
+  return invoke<DotnetActionResult>("dotnet_rebuild", { target });
+}
+
 /**
  * Starts a language server ON THE REMOTE host (issue #8, Phase 6) and bridges its
  * stdio to a local WebSocket — returns the same `{ port, token }` as

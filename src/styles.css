@@ -4943,6 +4943,20 @@ button .codicon { pointer-events: none; }
   flex-shrink: 0;
 }
 
+/* Output tail of an explicit .NET project action (build/clean/restore). */
+.run-action-output {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  max-height: 160px;
+  overflow: auto;
+  font-size: 11px;
+  font-family: var(--mono-font, monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-elevated, rgba(127, 127, 127, 0.08));
+  border-radius: 4px;
+}
+
 /* ── Solution Explorer (roadmap csharp-ide-parity, Fase D) ────────────────── */
 .sln-project { padding: 2px 0; }
 .sln-project-row {
