@@ -1,6 +1,7 @@
 mod agents;
 mod dap;
 mod dotnet_tools;
+mod efcore;
 mod file_index;
 mod fs_commands;
 mod git;
@@ -181,6 +182,13 @@ pub fn run() {
             dotnet_tools::dotnet_new_create,
             dotnet_tools::dotnet_add_reference,
             dotnet_tools::dotnet_find_type_project,
+            efcore::efcore_detect,
+            efcore::efcore_tool_version,
+            efcore::efcore_tool_install,
+            efcore::efcore_migrations_list,
+            efcore::efcore_migrations_add,
+            efcore::efcore_database_update,
+            efcore::efcore_dbcontext_list,
             razor::commands::razor_prepare,
             razor::commands::razor_emit_live,
             razor::commands::razor_commit_live_map,

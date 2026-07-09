@@ -8,7 +8,8 @@
 
 /// Builds a `dotnet` Command with the shared hardening: English CLI output (so
 /// any text we surface is stable) and no console-window flash on Windows.
-fn dotnet_command() -> std::process::Command {
+/// `pub(crate)` so sibling dotnet-CLI modules (e.g. `efcore`) share the hardening.
+pub(crate) fn dotnet_command() -> std::process::Command {
     let mut cmd = std::process::Command::new(if cfg!(windows) { "dotnet.exe" } else { "dotnet" });
     cmd.env("DOTNET_CLI_UI_LANGUAGE", "en");
     #[cfg(windows)]
@@ -30,7 +31,7 @@ pub struct DotnetActionResult {
     pub output: String,
 }
 
-fn tail(s: &str, chars: usize) -> String {
+pub(crate) fn tail(s: &str, chars: usize) -> String {
     let count = s.chars().count();
     s.chars().skip(count.saturating_sub(chars)).collect()
 }

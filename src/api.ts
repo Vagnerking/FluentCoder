@@ -1225,6 +1225,53 @@ export function dotnetFindTypeProject(
   return invoke<string | null>("dotnet_find_type_project", { root, typeName });
 }
 
+// ── EF Core tools (issue #97) ───────────────────────────────────────────────
+
+export type { EfMigration } from "./efcore/migrations.ts";
+
+/** A DbContext reported by `dotnet ef dbcontext list --json`. */
+export interface EfDbContext {
+  fullName: string;
+  safeName: string;
+  name: string;
+}
+
+/** True when the `.csproj` references `Microsoft.EntityFrameworkCore*`. */
+export function efcoreDetect(csprojPath: string): Promise<boolean> {
+  return invoke<boolean>("efcore_detect", { csprojPath });
+}
+
+/** Version of the global `dotnet-ef` tool, or null when it isn't installed. */
+export function efcoreToolVersion(): Promise<string | null> {
+  return invoke<string | null>("efcore_tool_version");
+}
+
+/** Installs `dotnet-ef` globally (`dotnet tool install --global dotnet-ef`). */
+export function efcoreToolInstall(): Promise<DotnetActionResult> {
+  return invoke<DotnetActionResult>("efcore_tool_install");
+}
+
+export function efcoreMigrationsList(
+  csprojPath: string
+): Promise<import("./efcore/migrations.ts").EfMigration[]> {
+  return invoke("efcore_migrations_list", { csprojPath });
+}
+
+export function efcoreMigrationsAdd(
+  csprojPath: string,
+  name: string
+): Promise<DotnetActionResult> {
+  return invoke<DotnetActionResult>("efcore_migrations_add", { csprojPath, name });
+}
+
+export function efcoreDatabaseUpdate(csprojPath: string): Promise<DotnetActionResult> {
+  return invoke<DotnetActionResult>("efcore_database_update", { csprojPath });
+}
+
+export function efcoreDbcontextList(csprojPath: string): Promise<EfDbContext[]> {
+  return invoke<EfDbContext[]>("efcore_dbcontext_list", { csprojPath });
+}
+
 /**
  * Starts a language server ON THE REMOTE host (issue #8, Phase 6) and bridges its
  * stdio to a local WebSocket — returns the same `{ port, token }` as
