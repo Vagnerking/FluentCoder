@@ -502,9 +502,9 @@ function DebugSection({ rootPath }: { rootPath: string }) {
           {state.scopes.map((s) => (
             <div key={s.variablesReference} className="debug-block">
               <div className="debug-block-title">{s.name}</div>
-              {s.variables.map((v) => (
+              {s.variables.map((v, i) => (
                 <VariableTree
-                  key={v.name}
+                  key={`${v.name}#${v.variablesReference}#${i}`}
                   variable={v}
                   depth={0}
                   childrenByRef={state.children}
@@ -566,9 +566,9 @@ function VariableTree({
         <span className="debug-var-value">{variable.value}</span>
       </div>
       {open &&
-        kids?.map((child) => (
+        kids?.map((child, i) => (
           <VariableTree
-            key={child.name}
+            key={`${child.name}#${child.variablesReference}#${i}`}
             variable={child}
             depth={depth + 1}
             childrenByRef={childrenByRef}

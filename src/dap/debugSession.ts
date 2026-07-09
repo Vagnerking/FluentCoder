@@ -104,6 +104,10 @@ class DebugSessionManager {
   private threadId: number | null = null;
   private breakpoints = new Map<string, Map<number, BreakpointSpec>>();
   private watchExprs: string[] = [];
+  // Bumped on every stop/continue. Async scope/variable/watch fetches capture it
+  // and discard their result if execution moved on meanwhile (a `continued` or a
+  // newer `stopped`), so stale frame data never overwrites the current state.
+  private generation = 0;
   private listeners = new Set<Listener>();
   private state: DebugState = {
     status: "idle",
@@ -207,8 +211,9 @@ class DebugSessionManager {
     this.setState({ watches: this.state.watches.filter((w) => w.expression !== expression) });
   }
 
-  /** Re-evaluates every watch against the selected frame (on stop / frame change). */
-  private async refreshWatches(): Promise<void> {
+  /** Re-evaluates every watch against the selected frame (on stop / frame change).
+   *  `gen` (when given) guards against execution moving on mid-evaluation. */
+  private async refreshWatches(gen = this.generation): Promise<void> {
     const client = this.client;
     const frameId = this.state.selectedFrameId;
     const watches: WatchView[] = [];
@@ -223,6 +228,7 @@ class DebugSessionManager {
           type?: string;
           variablesReference?: number;
         }>("evaluate", { expression, frameId, context: "watch" });
+        if (gen !== this.generation) return; // resumed / re-stopped meanwhile
         watches.push({
           expression,
           value: r.result,
@@ -233,6 +239,7 @@ class DebugSessionManager {
         watches.push({ expression, variablesReference: 0, error: shortErr(err) });
       }
     }
+    if (gen !== this.generation) return;
     this.setState({ watches });
   }
 
@@ -257,27 +264,31 @@ class DebugSessionManager {
     }
   }
 
-  /** Selects a stack frame and refreshes its scopes + watches. */
+  /** Selects a stack frame and refreshes its scopes + watches. Only meaningful
+   *  while stopped; guarded by the current generation. */
   async selectFrame(frameId: number): Promise<void> {
-    if (this.state.selectedFrameId === frameId) return;
+    if (this.state.selectedFrameId === frameId || this.state.status !== "stopped") return;
+    const gen = this.generation;
     this.setState({ selectedFrameId: frameId, scopes: [], children: {} });
-    await this.loadScopes(frameId);
-    await this.refreshWatches();
+    await this.loadScopes(frameId, gen);
+    await this.refreshWatches(gen);
   }
 
-  private async loadScopes(frameId: number): Promise<void> {
+  private async loadScopes(frameId: number, gen = this.generation): Promise<void> {
     const client = this.client;
     if (!client) return;
     const sc = await client.request<{ scopes?: { name: string; variablesReference: number }[] }>(
       "scopes",
       { frameId }
     );
+    if (gen !== this.generation) return;
     const scopes: ScopeView[] = [];
     for (const s of sc.scopes ?? []) {
       if (!s.variablesReference) continue;
       const vars = await client.request<{
         variables?: { name: string; value: string; type?: string; variablesReference?: number }[];
       }>("variables", { variablesReference: s.variablesReference });
+      if (gen !== this.generation) return;
       scopes.push({
         name: s.name,
         variablesReference: s.variablesReference,
@@ -387,11 +398,13 @@ class DebugSessionManager {
     });
     client.on("stopped", (body) => {
       const b = body as { threadId?: number; reason?: string };
+      this.generation++;
       this.threadId = b?.threadId ?? this.threadId;
       this.appendOutput(`[parado] ${b?.reason ?? ""}`);
       void this.refreshStopped();
     });
     client.on("continued", () => {
+      this.generation++;
       this.setState({
         status: "running",
         frames: [],
@@ -399,6 +412,7 @@ class DebugSessionManager {
         children: {},
         selectedFrameId: undefined,
         stoppedAt: undefined,
+        watches: this.state.watches.map((w) => ({ ...w, value: undefined, error: "executando" })),
       });
     });
     const ended = (): void => {
@@ -424,6 +438,7 @@ class DebugSessionManager {
   private async refreshStopped(): Promise<void> {
     const client = this.client;
     if (!client) return;
+    const gen = this.generation;
     try {
       if (this.threadId == null) {
         const t = await client.request<{ threads?: { id: number }[] }>("threads");
@@ -433,6 +448,7 @@ class DebugSessionManager {
       const st = await client.request<{
         stackFrames?: { id: number; name: string; line?: number; source?: { path?: string } }[];
       }>("stackTrace", { threadId: this.threadId, startFrame: 0, levels: 20 });
+      if (gen !== this.generation) return; // execution moved on — drop stale result
       const frames: StackFrameView[] = (st.stackFrames ?? []).map((f) => ({
         id: f.id,
         name: f.name,
@@ -449,11 +465,11 @@ class DebugSessionManager {
         stoppedAt: top?.path && top.line ? { path: top.path, line: top.line } : undefined,
       });
       if (top) {
-        await this.loadScopes(top.id);
-        await this.refreshWatches();
+        await this.loadScopes(top.id, gen);
+        await this.refreshWatches(gen);
       }
       // Reveal the stopped location in the editor via the app's open flow.
-      if (top?.path && top.line) {
+      if (gen === this.generation && top?.path && top.line) {
         window.dispatchEvent(
           new CustomEvent("fluent:debug-stopped", {
             detail: { path: top.path, line: top.line, uri: toFileUri(top.path) },
