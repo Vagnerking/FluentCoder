@@ -21,7 +21,11 @@ import {
 import { FileExplorer } from "./components/FileExplorer";
 import { SearchPanel } from "./components/SearchPanel";
 import { GitPanel } from "./components/GitPanel";
-import { RunPanel } from "./components/RunPanel";
+import { RunPanel, type PendingTest } from "./components/RunPanel";
+import {
+  RUN_TEST_EVENT,
+  type RunTestEventDetail,
+} from "./lsp/csharpTestCodeLensWiring";
 import { PlaceholderPanel } from "./components/PlaceholderPanel";
 import { EditorGrid } from "./components/EditorGrid";
 import { EditorGroupView } from "./components/EditorGroupView";
@@ -39,6 +43,7 @@ import { ActivityBar } from "./components/ActivityBar";
 import { StatusBar } from "./components/StatusBar";
 import { TerminalPanel, type PanelTab } from "./components/TerminalPanel";
 import { QuickOpen } from "./components/QuickOpen";
+import { SymbolSearch } from "./components/SymbolSearch";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import {
   RAZOR_PROJECTION_FLAG_KEY,
@@ -49,6 +54,13 @@ import {
   isFormatOnSaveEnabled,
   toggleFormatOnSave,
 } from "./lsp/formatOnSave";
+import {
+  isCsharpInlayHintsEnabled,
+  toggleCsharpInlayHints,
+} from "./lsp/csharpInlayHints";
+import { getRunningClient, nudgeClientConfiguration } from "./lsp/client";
+import { CSHARP_SERVER_ID } from "./lsp/servers/csharp";
+import { findNearestEditorConfig } from "./lsp/editorConfig";
 import { AboutDialog } from "./components/AboutDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { AgentSidebar } from "./components/AgentSidebar";
@@ -617,7 +629,11 @@ export default function App() {
   const [panelTabNonce, setPanelTabNonce] = useState(0);
   const [activeView, setActiveView] = useState("explorer");
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
+  const [symbolSearchOpen, setSymbolSearchOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  // Latest "▶ Executar Teste" CodeLens request, handed to the RunPanel. A fresh
+  // object each time so re-clicking the same test re-runs it.
+  const [pendingTest, setPendingTest] = useState<PendingTest | null>(null);
   const [branchPickerOpen, setBranchPickerOpen] = useState(false);
   // Generic VS Code-style quick-pick, reused by any "pick one option" flow (the
   // TypeScript version picker today; future runtime/version selectors next).
@@ -1060,6 +1076,71 @@ export default function App() {
         run: () => {
           // Read live at every save (formatOnSave.ts) — no reload needed.
           toggleFormatOnSave();
+        },
+      },
+      {
+        id: "csharp.toggleInlayHints",
+        title: isCsharpInlayHintsEnabled()
+          ? "C#: desligar Dicas em Linha (inlay hints)"
+          : "C#: ligar Dicas em Linha (inlay hints)",
+        detail: "C#",
+        run: () => {
+          // Flip the pull-config flag, then nudge Roslyn to re-pull so the change
+          // applies live: Roslyn re-reads the inlay-hint options and its
+          // `inlayHint/refresh` makes the native provider re-query. No reload.
+          toggleCsharpInlayHints();
+          const client = getRunningClient(CSHARP_SERVER_ID);
+          if (client) nudgeClientConfiguration(client);
+        },
+      },
+      {
+        id: "editor.goToImplementation",
+        title: "Ir para Implementação",
+        detail: "Navegar",
+        run: () => editorActionsRef.current?.run("editor.action.goToImplementation"),
+      },
+      {
+        id: "editor.goToTypeDefinition",
+        title: "Ir para Definição de Tipo",
+        detail: "Navegar",
+        run: () => editorActionsRef.current?.run("editor.action.goToTypeDefinition"),
+      },
+      {
+        id: "editor.formatSelection",
+        title: "Formatar Seleção",
+        detail: "Editor",
+        run: () => editorActionsRef.current?.run("editor.action.formatSelection"),
+      },
+      {
+        id: "editor.goToSymbolInWorkspace",
+        title: "Ir para Símbolo no Projeto…",
+        detail: "Navegar",
+        run: () => setSymbolSearchOpen(true),
+      },
+      {
+        id: "csharp.openEditorConfig",
+        title: "C#: Abrir .editorconfig (regras de estilo)",
+        detail: "C#",
+        run: () => {
+          if (!rootPath) {
+            alert("Abra uma pasta primeiro.");
+            return;
+          }
+          void (async () => {
+            try {
+              const files = await listProjectFiles(rootPath);
+              const cfg = findNearestEditorConfig(files, activePathRef.current);
+              if (!cfg) {
+                alert(
+                  "Nenhum .editorconfig no projeto. O Roslyn usa os padrões; crie um .editorconfig na raiz para definir regras de estilo e análise."
+                );
+                return;
+              }
+              await handleOpenFileRef.current?.({ name: ".editorconfig", path: cfg, isDir: false });
+            } catch (err) {
+              alert(`Não foi possível localizar o .editorconfig:\n${err}`);
+            }
+          })();
         },
       },
     ],
@@ -3575,6 +3656,12 @@ export default function App() {
         setQuickOpenOpen(true);
         return;
       }
+      // Ctrl+T → Go to Symbol in Workspace (whole-solution symbols, via Roslyn).
+      if (key === "t" && !e.shiftKey) {
+        e.preventDefault();
+        setSymbolSearchOpen(true);
+        return;
+      }
       // Ctrl+W → close the active tab (through the unsaved-changes guard).
       if (key === "w") {
         e.preventDefault();
@@ -3616,6 +3703,24 @@ export default function App() {
     window.addEventListener("fluent:debug-stopped", onDebugStopped);
     return () => window.removeEventListener("fluent:debug-stopped", onDebugStopped);
   });
+
+  // "▶ Executar Teste" CodeLens → switch to the "Executar e Depurar" view (so the
+  // RunPanel is mounted) and hand it the test to run. Listening here (app-wide,
+  // always mounted) avoids losing the event before the panel mounts.
+  useEffect(() => {
+    const onRunTest = (e: Event) => {
+      const d = (e as CustomEvent<RunTestEventDetail>).detail;
+      if (!d?.csprojPath || !d.fullyQualifiedName) return;
+      setActiveView("debug");
+      setSidebarOpen(true);
+      setPendingTest({
+        csprojPath: d.csprojPath,
+        fullyQualifiedName: d.fullyQualifiedName,
+      });
+    };
+    window.addEventListener(RUN_TEST_EVENT, onRunTest);
+    return () => window.removeEventListener(RUN_TEST_EVENT, onRunTest);
+  }, []);
 
   /** Opens the bottom panel focused on a specific tab (e.g. Problems). */
   const showPanelTab = useCallback((tab: PanelTab) => {
@@ -4420,7 +4525,13 @@ export default function App() {
           />
         );
       case "debug":
-        return <RunPanel rootPath={rootPath} onRun={handleRun} />;
+        return (
+          <RunPanel
+            rootPath={rootPath}
+            onRun={handleRun}
+            pendingTest={pendingTest}
+          />
+        );
       case "backlinks":
         return (
           <BacklinksPanel
@@ -4879,6 +4990,15 @@ export default function App() {
           rootPath={rootPath}
           onOpenFile={handleOpenFile}
           onClose={() => setQuickOpenOpen(false)}
+        />
+      )}
+
+      {symbolSearchOpen && (
+        <SymbolSearch
+          onOpenSymbol={(path, line) =>
+            handleOpenFile({ name: baseName(path), path, isDir: false }, line)
+          }
+          onClose={() => setSymbolSearchOpen(false)}
         />
       )}
 

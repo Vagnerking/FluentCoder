@@ -33,11 +33,20 @@ function useCsprojs(rootPath: string): string[] {
 }
 import { Tooltip } from "./Tooltip";
 
+/** A test to run, requested from a "▶ Executar Teste" CodeLens click. A fresh
+ *  object on every request so re-clicking the same test re-runs it. */
+export interface PendingTest {
+  csprojPath: string;
+  fullyQualifiedName: string;
+}
+
 interface RunPanelProps {
   /** Open folder; configs live in `<root>/.project/run.json`. Null = none. */
   rootPath: string | null;
   /** Asks the app to run `command` in the integrated terminal. */
   onRun: (command: string) => void;
+  /** Latest test-run request from a CodeLens (App-level listener), or null. */
+  pendingTest?: PendingTest | null;
 }
 
 /** Empty draft used by the "new configuration" form. */
@@ -51,7 +60,7 @@ const EMPTY_DRAFT: RunConfig = { name: "", command: "", cwd: "" };
  * Debugging (breakpoints/step via DAP) is a planned next phase; for now this
  * covers the "Executar" half end-to-end.
  */
-export function RunPanel({ rootPath, onRun }: RunPanelProps) {
+export function RunPanel({ rootPath, onRun, pendingTest }: RunPanelProps) {
   const [configs, setConfigs] = useState<RunConfig[]>([]);
   const [suggestions, setSuggestions] = useState<RunConfig[]>([]);
   const [draft, setDraft] = useState<RunConfig | null>(null);
@@ -176,7 +185,7 @@ export function RunPanel({ rootPath, onRun }: RunPanelProps) {
 
       <div className="run-lists">
         <DebugSection rootPath={rootPath} />
-        <TestsSection rootPath={rootPath} />
+        <TestsSection rootPath={rootPath} pendingTest={pendingTest ?? null} />
 
         <div className="git-group">
           <div className="git-group-header">
@@ -465,7 +474,13 @@ function DebugSection({ rootPath }: { rootPath: string }) {
  * `.csproj` (`dotnet test --list-tests`) and run all / one, with pass/fail and
  * duration inline (outcomes come from the locale-independent TRX report).
  */
-function TestsSection({ rootPath }: { rootPath: string }) {
+function TestsSection({
+  rootPath,
+  pendingTest,
+}: {
+  rootPath: string;
+  pendingTest: PendingTest | null;
+}) {
   const csprojs = useCsprojs(rootPath);
   const [selected, setSelected] = useState<string>("");
   const [tests, setTests] = useState<string[] | null>(null);
@@ -484,6 +499,41 @@ function TestsSection({ rootPath }: { rootPath: string }) {
     setError(null);
   }, [selected]);
 
+  const run = useCallback(
+    async (filter?: string, csprojOverride?: string) => {
+      const csproj = csprojOverride || selected;
+      if (!csproj) return;
+      setBusy("run");
+      setError(null);
+      try {
+        const out = await dotnetTestRun(csproj, filter);
+        setResults((prev) => {
+          const next = new Map(prev);
+          for (const r of out.results) next.set(r.name, r);
+          return next;
+        });
+        if (out.results.length === 0) setError(out.outputTail);
+      } catch (err) {
+        setError(String(err));
+      } finally {
+        setBusy("");
+      }
+    },
+    [selected]
+  );
+
+  // Run a single test when its "▶ Executar Teste" CodeLens is clicked. The
+  // request arrives as a prop from the App (which listens app-wide and switches
+  // to this view first, so the panel is mounted to receive it). Each request is
+  // a fresh object, so the effect re-runs even for the same test twice.
+  useEffect(() => {
+    if (!pendingTest) return;
+    setSelected(pendingTest.csprojPath);
+    void run(pendingTest.fullyQualifiedName, pendingTest.csprojPath);
+  }, [pendingTest, run]);
+
+  // All hooks are above this line — the early return must stay below them so the
+  // hook order is stable across renders (Rules of Hooks).
   if (csprojs.length === 0) return null;
 
   const discover = async () => {
@@ -494,24 +544,6 @@ function TestsSection({ rootPath }: { rootPath: string }) {
     } catch (err) {
       setError(String(err));
       setTests(null);
-    } finally {
-      setBusy("");
-    }
-  };
-
-  const run = async (filter?: string) => {
-    setBusy("run");
-    setError(null);
-    try {
-      const out = await dotnetTestRun(selected, filter);
-      setResults((prev) => {
-        const next = new Map(prev);
-        for (const r of out.results) next.set(r.name, r);
-        return next;
-      });
-      if (out.results.length === 0) setError(out.outputTail);
-    } catch (err) {
-      setError(String(err));
     } finally {
       setBusy("");
     }

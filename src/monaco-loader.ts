@@ -68,6 +68,20 @@ export const whenMonacoReady: Promise<void> = ensureVscodeServices().then(() => 
       keybinding: monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyP,
       command: null,
     },
+    // Ctrl+T is VS Code's `workbench.action.showAllSymbols`; unbind it so the
+    // key bubbles to the app's own "Ir para símbolo no projeto" (SymbolSearch).
+    {
+      keybinding: monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyT,
+      command: null,
+    },
     { keybinding: monaco.KeyCode.F1, command: null },
+    // Go to Type Definition has no default VS Code chord — bind the C# Dev Kit
+    // shortcut so it works with the editor focused (milestone #5). Go to
+    // Implementation (Ctrl+F12) and Format Selection (Ctrl+K Ctrl+F) already
+    // ship as @codingame defaults, so they need no rule here.
+    {
+      keybinding: monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.F12,
+      command: "editor.action.goToTypeDefinition",
+    },
   ]);
 });

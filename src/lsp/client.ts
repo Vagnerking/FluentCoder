@@ -13,6 +13,7 @@ import { installReferencesBridge } from "./references";
 import { installDiagnosticsBridge } from "./diagnostics";
 import { ensureVscodeServices } from "./vscodeServices";
 import { disableNativeClientFeature } from "./nativeFeatures";
+import { summarizeCapabilities } from "./capabilities";
 import type { DiagnosticMode } from "./diagnosticMode";
 import {
   applySemanticTokenDecorations,
@@ -245,6 +246,7 @@ export async function createLanguageClient(
     throw err;
   }
   lspLog("client.start() RESOLVED for", config.serverId, "state=", client.state);
+  logServerCapabilities(client, config.serverId);
 
   runningClientsById.set(config.serverId, client);
   serverIdByClient.set(client, config.serverId);
@@ -304,6 +306,31 @@ export async function createLanguageClient(
   }
 
   return client;
+}
+
+/**
+ * Logs the server's advertised capabilities once at startup. This turns the
+ * "what does Roslyn actually offer" question from a guess into a logged fact —
+ * the features in milestone #5 (inlay hints, implementation, type-definition,
+ * workspace symbols, range/on-type formatting) all rely on the native client
+ * feature auto-registering ONLY when the matching capability is present here.
+ */
+function logServerCapabilities(
+  client: MonacoLanguageClient,
+  serverId: string
+): void {
+  try {
+    const caps = client.initializeResult?.capabilities as
+      | Record<string, unknown>
+      | undefined;
+    const { present, absent } = summarizeCapabilities(caps);
+    lspLog("server capabilities", serverId, {
+      present: present.join(","),
+      absent: absent.join(","),
+    });
+  } catch (err) {
+    lspLog("could not read server capabilities", serverId, String(err));
+  }
 }
 
 /**
@@ -378,6 +405,19 @@ export function refreshLanguageClientSemanticTokens(
   client: MonacoLanguageClient
 ): void {
   clientContributions.get(client)?.refreshSemanticTokens?.();
+}
+
+/**
+ * Nudges a Roslyn client to re-pull `workspace/configuration`. Roslyn caches the
+ * settings it pulled at startup; a `didChangeConfiguration` notification makes it
+ * ask again (answered live in `csharpConfiguration.ts`). Used when a runtime
+ * preference that maps to a pulled setting changes — e.g. the inlay-hints toggle
+ * — so the change takes effect without a reload. Best-effort; never throws.
+ */
+export function nudgeClientConfiguration(client: MonacoLanguageClient): void {
+  void client
+    .sendNotification("workspace/didChangeConfiguration", { settings: {} })
+    .catch((err) => lspLog("didChangeConfiguration nudge failed", String(err)));
 }
 
 /**

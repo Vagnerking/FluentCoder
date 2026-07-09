@@ -4,6 +4,7 @@ import { getActiveRemote } from "../../remote/host";
 import { createLanguageClient } from "../client";
 import { toFileUri } from "../uri";
 import { wireRoslynStartup } from "./roslynShared";
+import { installCsharpTestCodeLens } from "../csharpTestCodeLensWiring";
 import type { ServerStartContext } from ".";
 
 export const CSHARP_SERVER_ID = "csharp";
@@ -78,6 +79,10 @@ export async function startCsharpServer(
     rootPath,
     context,
   });
+
+  // "▶ Executar Teste" CodeLens on `.cs` (milestone #5). Disposables are tied to
+  // this client, so the reset command and workspace switches tear it down.
+  void installCsharpTestCodeLens(client, rootPath);
 
   return client;
 }

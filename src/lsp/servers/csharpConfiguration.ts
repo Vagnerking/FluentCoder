@@ -20,6 +20,7 @@
  * token itself contains a `|` (`csharp|background_analysis`); the option name is
  * everything after the FIRST `.` that follows the group.
  */
+import { csharpInlayHintConfiguration } from "../csharpInlayHints.ts";
 
 /**
  * The settings Roslyn pulls, keyed by `"{group}.{name}"` (the exact section the
@@ -48,19 +49,10 @@ export const CSHARP_CONFIGURATION: Readonly<Record<string, unknown>> = {
   "csharp|code_lens.dotnet_enable_references_code_lens": true,
   "csharp|code_lens.dotnet_enable_tests_code_lens": true,
 
-  // --- Inlay hints: off by default, like the C# extension out of the box ---
-  "csharp|inlay_hints.csharp_enable_inlay_hints_for_implicit_object_creation": false,
-  "csharp|inlay_hints.csharp_enable_inlay_hints_for_implicit_variable_types": false,
-  "csharp|inlay_hints.csharp_enable_inlay_hints_for_lambda_parameter_types": false,
-  "csharp|inlay_hints.csharp_enable_inlay_hints_for_types": false,
-  "csharp|inlay_hints.dotnet_enable_inlay_hints_for_indexer_parameters": false,
-  "csharp|inlay_hints.dotnet_enable_inlay_hints_for_literal_parameters": false,
-  "csharp|inlay_hints.dotnet_enable_inlay_hints_for_object_creation_parameters": false,
-  "csharp|inlay_hints.dotnet_enable_inlay_hints_for_other_parameters": false,
-  "csharp|inlay_hints.dotnet_enable_inlay_hints_for_parameters": false,
-  "csharp|inlay_hints.dotnet_suppress_inlay_hints_for_parameters_that_differ_only_by_suffix": false,
-  "csharp|inlay_hints.dotnet_suppress_inlay_hints_for_parameters_that_match_argument_name": false,
-  "csharp|inlay_hints.dotnet_suppress_inlay_hints_for_parameters_that_match_method_intent": false,
+  // --- Inlay hints ---
+  // The `csharp|inlay_hints.*` values are NOT here: they follow the user toggle
+  // (`csharp.inlayHints`, off by default) and are merged in at resolution time
+  // by `resolveConfigurationSections`. See `../csharpInlayHints.ts`.
 
   // --- Implement type generation preferences ---
   "csharp|implement_type.dotnet_insertion_behavior": "with_other_members_of_the_same_kind",
@@ -82,9 +74,15 @@ export function resolveConfigurationSections(
   params: ConfigurationParams
 ): unknown[] {
   const items = params?.items ?? [];
+  // Inlay-hint sections follow the live toggle, so resolve them each pull.
+  const inlayHints = csharpInlayHintConfiguration();
   return items.map((item) => {
     const section = item?.section;
-    if (section && Object.prototype.hasOwnProperty.call(CSHARP_CONFIGURATION, section)) {
+    if (!section) return null;
+    if (Object.prototype.hasOwnProperty.call(inlayHints, section)) {
+      return inlayHints[section];
+    }
+    if (Object.prototype.hasOwnProperty.call(CSHARP_CONFIGURATION, section)) {
       return CSHARP_CONFIGURATION[section];
     }
     return null;
