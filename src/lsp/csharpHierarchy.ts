@@ -6,15 +6,38 @@
  * o wiring `vscode` fino vive em `csharpHierarchyProvider.ts`.
  */
 
+interface LspRange {
+  start: { line: number; character: number };
+  end: { line: number; character: number };
+}
+
 /** Um símbolo com range (0-based, meio-aberto) — subconjunto do LSP DocumentSymbol. */
 export interface RangedSymbol {
   name: string;
   /** LSP SymbolKind. */
   kind: number;
-  range: { start: { line: number; character: number }; end: { line: number; character: number } };
+  /** Range do símbolo inteiro (assinatura + corpo). */
+  range: LspRange;
+  /** Range só do NOME (para pedir references/definition no lugar certo). */
+  selectionRange: LspRange;
   /** Símbolos aninhados (métodos dentro de classe, etc.). */
   children?: RangedSymbol[];
 }
+
+/** LSP SymbolKind (1-based) → vscode SymbolKind (0-based). O `as unknown` mascarava
+ *  esse off-by-one, pintando ícones errados na árvore de hierarquia. */
+export function lspKindToVscode(lspKind: number): number {
+  // vscode: File=0, Module=1, Namespace=2, Package=3, Class=4, Method=5,
+  // Property=6, Field=7, Constructor=8, Enum=9, Interface=10, Function=11,
+  // Variable=12, Constant=13, … EnumMember=21, Struct=22. LSP é tudo +1.
+  return lspKind >= 1 ? lspKind - 1 : lspKind;
+}
+
+/** Kinds LSP que são TIPOS (class/enum/interface/struct/record→class). */
+export const TYPE_KINDS = new Set([5, 10, 11, 23]);
+
+/** Kinds LSP "chamáveis" para call hierarchy (método/ctor/propriedade/função). */
+export const CALL_KINDS = new Set([6, 9, 12, 7]);
 
 /** Posição 0-based. */
 export interface Pos {
@@ -22,16 +45,14 @@ export interface Pos {
   character: number;
 }
 
-function contains(
-  range: RangedSymbol["range"],
-  pos: Pos
-): boolean {
+function contains(range: LspRange, pos: Pos): boolean {
   const afterStart =
     pos.line > range.start.line ||
     (pos.line === range.start.line && pos.character >= range.start.character);
+  // Range LSP é meio-aberto: `end` é exclusivo (`<`), não inclusivo.
   const beforeEnd =
     pos.line < range.end.line ||
-    (pos.line === range.end.line && pos.character <= range.end.character);
+    (pos.line === range.end.line && pos.character < range.end.character);
   return afterStart && beforeEnd;
 }
 

@@ -4,6 +4,7 @@ import {
   containerOfPosition,
   isLikelyCall,
   parseSupertypes,
+  lspKindToVscode,
   type RangedSymbol,
 } from "./csharpHierarchy.ts";
 
@@ -12,15 +13,23 @@ const r = (sl: number, sc: number, el: number, ec: number) => ({
   end: { line: el, character: ec },
 });
 
+test("lspKindToVscode maps 1-based LSP to 0-based vscode kinds", () => {
+  assert.equal(lspKindToVscode(5), 4); // Class: LSP 5 → vscode 4
+  assert.equal(lspKindToVscode(6), 5); // Method: LSP 6 → vscode 5
+  assert.equal(lspKindToVscode(11), 10); // Interface
+  assert.equal(lspKindToVscode(10), 9); // Enum
+});
+
 test("containerOfPosition finds the deepest callable containing a position", () => {
   const symbols: RangedSymbol[] = [
     {
       name: "MyClass",
       kind: 5, // Class
       range: r(0, 0, 20, 1),
+      selectionRange: r(0, 6, 0, 13),
       children: [
-        { name: "Foo", kind: 6 /* Method */, range: r(2, 4, 6, 5) },
-        { name: "Bar", kind: 6, range: r(8, 4, 14, 5) },
+        { name: "Foo", kind: 6 /* Method */, range: r(2, 4, 6, 5), selectionRange: r(2, 8, 2, 11) },
+        { name: "Bar", kind: 6, range: r(8, 4, 14, 5), selectionRange: r(8, 8, 8, 11) },
       ],
     },
   ];
