@@ -1811,6 +1811,17 @@ html.platform-macos .titlebar {
   user-select: none;
 }
 
+/* ---- Hover de símbolo: folga acima da linha ---- */
+/* Com `hover: { above: true }` o balão fica colado na linha do símbolo (e por
+   cima da linha de cima). NÃO dá pra usar `margin`: o content widget MEDE a
+   altura do widget e recalcula o `top` do wrapper pra manter a base colada — a
+   margem seria absorvida. `transform` não entra nessa medição, então desloca o
+   balão visualmente sem o Monaco compensar. translateY negativo = sobe (folga
+   acima). Não mexe no alinhamento horizontal (borda no símbolo, estilo VS Code). */
+.monaco-editor .monaco-resizable-hover {
+  transform: translateY(-16px);
+}
+
 /* ---- Focus visibility (Fluent keyboard focus) — F2-AUD-003 ----
    Single focus contract for every interactive element. Any rule that sets
    `outline: none` MUST provide an equivalent ring via the tokens below; the

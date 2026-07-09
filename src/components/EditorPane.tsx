@@ -716,6 +716,11 @@ export function EditorPane({
         formatOnPaste: true,
         padding: { top: 12 },
         mouseWheelZoom: true,
+        // Hover ACIMA da linha (como o VS Code), caindo pra baixo só quando não
+        // cabe em cima. O default do Monaco é `above: false`, que renderiza o
+        // balão embaixo e cobre a linha seguinte — o texto que o usuário ia
+        // clicar. `above: true` restaura o posicionamento do VS Code.
+        hover: { above: true },
         // Suggest (IntelliSense) widget sizing. Monaco derives each row's
         // height from `suggestLineHeight` or, when 0, the editor's computed
         // `fontInfo.lineHeight`. Pinning both font size and line height keeps
