@@ -68,6 +68,12 @@ export const whenMonacoReady: Promise<void> = ensureVscodeServices().then(() => 
       keybinding: monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyP,
       command: null,
     },
+    // Ctrl+T is VS Code's `workbench.action.showAllSymbols`; unbind it so the
+    // key bubbles to the app's own "Ir para símbolo no projeto" (SymbolSearch).
+    {
+      keybinding: monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyT,
+      command: null,
+    },
     { keybinding: monaco.KeyCode.F1, command: null },
   ]);
 });

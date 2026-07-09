@@ -3822,6 +3822,8 @@ select:focus-visible,
 .quick-open-name { font-size: 13px; color: var(--text); white-space: nowrap; flex-shrink: 0; }
 .quick-open-match { color: var(--accent); font-weight: 600; }
 .quick-open-path { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Symbol-kind tag in the "Go to symbol" list (class/method/enum/…). */
+.symbol-kind-tag { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; flex-shrink: 0; opacity: 0.8; }
 
 /* ---- Generic quick pick / quick input (command palette, SSH flow) ---- */
 .quick-pick-title { padding: 10px 12px 0; font-size: 11px; letter-spacing: 0.02em; text-transform: uppercase; color: var(--text-muted); }
