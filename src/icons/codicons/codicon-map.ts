@@ -131,7 +131,10 @@ export type IconAction =
   | "tag"
   | "bookmark"
   | "key"
-  | "lock";
+  | "lock"
+  // Form controls (src/components/ui)
+  | "checkmark"
+  | "indeterminate";
 
 /** action → codicon name (without the `codicon-` prefix). */
 export const CODICON_MAP: Record<IconAction, string> = {
@@ -271,6 +274,10 @@ export const CODICON_MAP: Record<IconAction, string> = {
   bookmark: "bookmark",
   key: "key",
   lock: "lock",
+
+  // Form controls (src/components/ui)
+  checkmark: "check",
+  indeterminate: "dash",
 };
 
 /** Codicon names that should spin (loading/sync feedback). */

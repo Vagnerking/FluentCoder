@@ -37,6 +37,64 @@
 
   --radius-control: 6px;
   --radius-card: 8px;
+  /* Fluent 2 radius scale used by the `src/components/ui` primitives: compact
+     controls (button/input/select/checkbox) sit at 4px, surfaces (flyouts,
+     dialogs, cards) at 8px. */
+  --radius-sm: 4px;
+  --radius-surface: var(--radius-card);
+
+  /* ---- Accent states ----
+     Filled accent (primary buttons, checked checkbox/switch). Text on top of
+     the accent fill must use `--text-on-accent` for AA contrast. */
+  --accent-hover: #7ad6ff;
+  --accent-pressed: #4cb8ec;
+  --text-on-accent: #06223a;
+
+  /* Raised surface — opaque layer one step above the editor (cards, popups
+     that must not let content bleed through). */
+  --color-surface-raised: #262e3b;
+
+  /* ---- Spacing (Fluent 2, base 4px) ---- */
+  --space-none: 0;
+  --space-xxs: 2px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+
+  /* ---- Type ramp (Fluent 2) ----
+     Semantic sizes + line-heights; components pick a role, never a raw px.
+     `--font-base` is the app's compact body (the global 13px), used by
+     medium-size controls so they match the surrounding UI density. */
+  --font-caption: 12px;
+  --line-height-caption: 16px;
+  --font-base: 13px;
+  --line-height-base: 18px;
+  --font-body: 14px;
+  --line-height-body: 20px;
+  --font-subtitle: 16px;
+  --line-height-subtitle: 22px;
+  --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, ui-monospace,
+    "SF Mono", Menlo, monospace;
+
+  /* ---- Control metrics ---- */
+  --control-h-sm: 24px;
+  --control-h-md: 32px;
+  --control-h-lg: 36px;
+  --icon-sm: 14px;
+  --icon-md: 16px;
+  --opacity-disabled: 0.4;
+
+  /* ---- Legacy aliases ----
+     Names older rules referenced without ever defining (they only rendered
+     through their inline fallbacks). Mapped onto the real tokens so every
+     surface resolves from one palette. Prefer the target token in new code. */
+  --bg-elevated: var(--acrylic-control-hover);
+  --fill-subtle: var(--acrylic-control-hover);
+  --acrylic-bg: var(--color-surface-overlay);
+  --danger: var(--color-status-error);
+  --mono-font: var(--font-mono);
 
   /* ---- Semantic status tokens (F2-AUD-001 / F2-AUD-012) ----
      Single source of truth for error/warning/success/info. Status must never

@@ -5,6 +5,7 @@ import {
   outputVersion,
   subscribeOutput,
 } from "../output/outputStore";
+import { Select } from "./ui";
 
 /**
  * The bottom panel's "Saída" tab (issue #6). Renders one output channel at a
@@ -38,21 +39,18 @@ export function OutputPanel() {
   return (
     <div className="output-panel">
       <div className="output-toolbar">
-        <label className="output-channel-label" htmlFor="output-channel">
+        <span className="output-channel-label" id="output-channel-label">
           Canal:
-        </label>
-        <select
+        </span>
+        <Select
           id="output-channel"
           className="output-channel-select"
+          size="sm"
+          ariaLabelledBy="output-channel-label"
           value={selected}
-          onChange={(e) => setSelected(e.target.value)}
-        >
-          {channels.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </select>
+          onChange={setSelected}
+          options={channels.map((c) => ({ value: c, label: c }))}
+        />
       </div>
       <div className="output-lines" role="log" aria-label={`Saída: ${selected}`}>
         {lines.length === 0 ? (

@@ -4,6 +4,7 @@ import {
   ReactNode,
   isValidElement,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -33,6 +34,7 @@ import { highlightCode } from "../agents/codeHighlight";
 import { tokenizeInline } from "../agents/inlineCode";
 import { Codicon } from "../icons/codicons/Codicon";
 import type { IconAction } from "../icons/codicons/codicon-map";
+import { Button, Select } from "./ui";
 
 /** UI metadata for each permission mode, shown in the composer's mode picker. */
 const MODE_META: Record<
@@ -318,9 +320,9 @@ function AgentHistory({
           Crie um agente do Claude ou do Codex vinculado a este workspace e
           converse sem sair do código.
         </p>
-        <button className="agent-button primary" onClick={onCreate}>
+        <Button variant="primary" onClick={onCreate}>
           Criar agente
-        </button>
+        </Button>
       </div>
     );
   }
@@ -976,6 +978,7 @@ function AgentConfigForm({
 }) {
   const [draft, setDraft] = useState<AgentDraft>(EMPTY_DRAFT);
   const [validation, setValidation] = useState<string | null>(null);
+  const fieldId = useId();
 
   useEffect(() => {
     setDraft(
@@ -1020,12 +1023,14 @@ function AgentConfigForm({
         />
       </label>
 
-      <label className="agent-field">
-        <span>Provedor</span>
-        <select
+      {/* div (não label): o Select é um botão com popup; o nome acessível vem
+          do span via aria-labelledby. */}
+      <div className="agent-field">
+        <span id={`${fieldId}-provider`}>Provedor</span>
+        <Select
+          ariaLabelledBy={`${fieldId}-provider`}
           value={draft.provider}
-          onChange={(event) => {
-            const provider = event.target.value as AgentDraft["provider"];
+          onChange={(provider) => {
             setDraft((current) => ({
               ...current,
               provider,
@@ -1033,30 +1038,25 @@ function AgentConfigForm({
               model: acpDefaultModel(provider),
             }));
           }}
-        >
-          {acpProviders().map((provider) => (
-            <option key={provider.id} value={provider.id}>
-              {provider.label}
-            </option>
-          ))}
-        </select>
+          options={acpProviders().map((provider) => ({
+            value: provider.id,
+            label: provider.label,
+          }))}
+        />
         <small>{acpProvider(draft.provider).description}</small>
-      </label>
+      </div>
 
-      <label className="agent-field">
-        <span>Modelo</span>
-        <select
+      <div className="agent-field">
+        <span id={`${fieldId}-model`}>Modelo</span>
+        <Select
+          ariaLabelledBy={`${fieldId}-model`}
           value={acpResolveModel(draft.provider, draft.model)}
-          onChange={(event) =>
-            setDraft((current) => ({ ...current, model: event.target.value }))
-          }
-        >
-          {acpModels(draft.provider).map((model) => (
-            <option key={model.id} value={model.id}>
-              {model.label}
-            </option>
-          ))}
-        </select>
+          onChange={(model) => setDraft((current) => ({ ...current, model }))}
+          options={acpModels(draft.provider).map((model) => ({
+            value: model.id,
+            label: model.label,
+          }))}
+        />
         <small>
           {
             (
@@ -1066,7 +1066,7 @@ function AgentConfigForm({
             ).hint
           }
         </small>
-      </label>
+      </div>
 
       <label className="agent-field agent-color-field">
         <span>Cor identificadora</span>
@@ -1112,12 +1112,10 @@ function AgentConfigForm({
       )}
 
       <div className="agent-form-actions">
-        <button type="button" className="agent-button secondary" onClick={onCancel}>
-          Cancelar
-        </button>
-        <button type="submit" className="agent-button primary">
+        <Button onClick={onCancel}>Cancelar</Button>
+        <Button type="submit" variant="primary">
           Salvar e abrir chat
-        </button>
+        </Button>
       </div>
     </form>
   );

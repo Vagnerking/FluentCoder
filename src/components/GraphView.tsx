@@ -11,6 +11,7 @@ import {
 import { applySpatialRepulsion } from "../graph/physics";
 import { invalidateIndex } from "../knowledge/knowledgeCache";
 import type { GraphData, GraphEdge, GraphNode, OpenFile } from "../types";
+import { Checkbox } from "./ui";
 
 interface GraphViewProps {
   /** Workspace root to scan; null ⇒ empty state ("open a folder"). */
@@ -1332,30 +1333,33 @@ export function GraphView({
           spellCheck={false}
         />
         <div className="graph-toolbar-spacer" />
-        <label className="graph-toggle">
-          <input type="checkbox" checked={showCode} onChange={(e) => setShowCode(e.target.checked)} />
-          Código
-        </label>
-        <label className="graph-toggle">
-          <input
-            type="checkbox"
-            checked={showOrphans}
-            onChange={(e) => setShowOrphans(e.target.checked)}
-          />
-          Sem conexões
-        </label>
-        <label className="graph-toggle">
-          <input type="checkbox" checked={byFolder} onChange={(e) => setByFolder(e.target.checked)} />
-          Por pasta
-        </label>
-        <label className="graph-toggle" title="Aproxima hubs e arquivos referenciados sem desenhar grupos">
-          <input type="checkbox" checked={showCells} onChange={(e) => setShowCells(e.target.checked)} />
-          Aglomerar
-        </label>
-        <label className="graph-toggle" title="Mostra a direção das referências quando houver espaço visual">
-          <input type="checkbox" checked={showArrows} onChange={(e) => setShowArrows(e.target.checked)} />
-          Setas
-        </label>
+        <Checkbox
+          label="Código"
+          checked={showCode}
+          onChange={(e) => setShowCode(e.target.checked)}
+        />
+        <Checkbox
+          label="Sem conexões"
+          checked={showOrphans}
+          onChange={(e) => setShowOrphans(e.target.checked)}
+        />
+        <Checkbox
+          label="Por pasta"
+          checked={byFolder}
+          onChange={(e) => setByFolder(e.target.checked)}
+        />
+        <Checkbox
+          label="Aglomerar"
+          title="Aproxima hubs e arquivos referenciados sem desenhar grupos"
+          checked={showCells}
+          onChange={(e) => setShowCells(e.target.checked)}
+        />
+        <Checkbox
+          label="Setas"
+          title="Mostra a direção das referências quando houver espaço visual"
+          checked={showArrows}
+          onChange={(e) => setShowArrows(e.target.checked)}
+        />
         <button
           type="button"
           className="graph-icon-btn"

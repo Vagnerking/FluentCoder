@@ -8,6 +8,7 @@ import {
   type NugetSearchHit,
 } from "../api";
 import { useModalDismiss } from "./useModalDismiss";
+import { Select } from "./ui";
 
 interface NugetManagerProps {
   /** The `.csproj` paths in the workspace (from the caller). */
@@ -108,19 +109,17 @@ export function NugetManager({ csprojs, onClose }: NugetManagerProps) {
         <div className="quick-pick-title">Gerenciar Pacotes NuGet</div>
 
         <div className="nuget-toolbar">
-          <select
-            className="search-input"
+          <Select
+            className="nuget-project-select"
             value={csproj}
-            onChange={(e) => setCsproj(e.target.value)}
+            onChange={setCsproj}
             disabled={busy !== ""}
-            aria-label="Projeto"
-          >
-            {csprojs.map((p) => (
-              <option key={p} value={p}>
-                {p.split(/[\/]/).pop()}
-              </option>
-            ))}
-          </select>
+            ariaLabel="Projeto"
+            options={csprojs.map((p) => ({
+              value: p,
+              label: p.split(/[\/]/).pop() ?? p,
+            }))}
+          />
           <div className="nuget-tabs" role="tablist">
             <button
               role="tab"

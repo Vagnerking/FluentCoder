@@ -73,9 +73,28 @@ select:focus-visible,
   box-shadow: var(--focus-ring);
 }
 
-/* High contrast / forced colors (F2-AUD-002). In Windows high-contrast mode the
-   system overrides backgrounds; keep focus, borders and selection visible by
-   deferring to the system palette instead of our alpha tints. */
+/* ============================================================================
+   Base control systems — F2-AUD-014 (buttons) and F2-AUD-013 (inputs).
+
+   Styles behind the React primitives in `src/components/ui` (Button,
+   IconButton, Select, Checkbox, Switch). New screens use those components
+   instead of re-deriving controls per feature; the classes consume the token
+   layer (`:root`) so every state — rest, hover, pressed, selected, disabled,
+   focus-visible — stays consistent. Compact controls use the 4px radius,
+   transient surfaces (the select popup) the 8px one.
+   ========================================================================= */
+
+/* Shared keyboard-focus ring for the primitives: an outset 2px stroke, so it
+   stays visible on accent fills (the global inset ring would blend into them). */
+.ui-button:focus-visible,
+.ui-icon-button:focus-visible,
+.ui-select:focus-visible,
+.ui-switch:focus-visible,
+.ui-checkbox-input:focus-visible + .ui-checkbox-box {
+  outline: var(--focus-ring-width) solid var(--stroke-focus);
+  outline-offset: var(--focus-ring-offset);
+}
+
 @media (forced-colors: active) {
   :focus-visible {
     outline: var(--focus-ring-width) solid Highlight;

@@ -51,18 +51,7 @@
 .graph-search::placeholder {
   color: var(--text-disabled);
 }
-.graph-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.graph-toggle input {
-  accent-color: var(--accent);
-  cursor: pointer;
-}
+
 .graph-refresh,
 .graph-icon-btn {
   appearance: none;

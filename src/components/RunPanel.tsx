@@ -29,6 +29,7 @@ import {
   clearCoverageDecorations,
 } from "../testing/coverageDecorations";
 import { Tooltip } from "./Tooltip";
+import { Checkbox, Select } from "./ui";
 
 /** Loads the workspace's `.csproj` paths once per root (shared by the .NET sections). */
 function useCsprojs(rootPath: string, connId?: string): string[] {
@@ -460,32 +461,25 @@ function DebugSection({ rootPath }: { rootPath: string }) {
 
       {!active && (
         <div className="debug-launcher">
-          <select
-            className="search-input"
+          <Select
+            ariaLabel="Projeto a depurar"
             value={selected}
-            onChange={(e) => setSelected(e.target.value)}
+            onChange={setSelected}
             disabled={busy}
-          >
-            {csprojs.map((p) => (
-              <option key={p} value={p}>
-                {p.split(/[\\/]/).pop()}
-              </option>
-            ))}
-          </select>
+            options={csprojs.map((p) => ({
+              value: p,
+              label: p.split(/[\\/]/).pop() ?? p,
+            }))}
+          />
           {profiles.length > 0 && (
-            <select
-              className="search-input"
+            <Select
+              ariaLabel="Perfil de inicialização"
               value={profileName}
-              onChange={(e) => setProfileName(e.target.value)}
+              onChange={setProfileName}
               disabled={busy}
               title="Perfil do launchSettings.json (env, args, URL)"
-            >
-              {profiles.map((p) => (
-                <option key={p.name} value={p.name}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
+              options={profiles.map((p) => ({ value: p.name, label: p.name }))}
+            />
           )}
           <div className="run-draft-actions">
             <button
@@ -883,31 +877,27 @@ function TestsSection({
         {tests && <span className="git-count">{tests.length}</span>}
       </div>
       <div className="debug-launcher">
-        <select
-          className="search-input"
+        <Select
+          ariaLabel="Projeto de testes"
           value={selected}
-          onChange={(e) => setSelected(e.target.value)}
+          onChange={setSelected}
           disabled={busy !== ""}
-        >
-          {csprojs.map((p) => (
-            <option key={p} value={p}>
-              {p.split(/[\/]/).pop()}
-            </option>
-          ))}
-        </select>
-        <label className="test-coverage-toggle">
-          <input
-            type="checkbox"
-            checked={coverage}
-            disabled={busy !== ""}
-            onChange={(e) => {
-              setCoverage(e.target.checked);
-              // Desligar limpa as faixas na hora (não esperam o próximo run).
-              if (!e.target.checked) clearCoverageDecorations();
-            }}
-          />
-          Cobertura
-        </label>
+          options={csprojs.map((p) => ({
+            value: p,
+            label: p.split(/[\/]/).pop() ?? p,
+          }))}
+        />
+        <Checkbox
+          className="test-coverage-toggle"
+          label="Cobertura"
+          checked={coverage}
+          disabled={busy !== ""}
+          onChange={(e) => {
+            setCoverage(e.target.checked);
+            // Desligar limpa as faixas na hora (não esperam o próximo run).
+            if (!e.target.checked) clearCoverageDecorations();
+          }}
+        />
         <div className="run-draft-actions">
           <button
             className="git-commit-btn"
@@ -1059,19 +1049,16 @@ function ProjectActionsSection({ rootPath }: { rootPath: string }) {
         <span>Ações do projeto (.NET)</span>
       </div>
       <div className="debug-launcher">
-        <select
-          className="search-input"
+        <Select
+          ariaLabel="Alvo das ações"
           value={target}
-          onChange={(e) => setTarget(e.target.value)}
+          onChange={setTarget}
           disabled={busy !== ""}
-        >
-          <option value="">Solução inteira</option>
-          {csprojs.map((p) => (
-            <option key={p} value={p}>
-              {p.split(/[\/]/).pop()}
-            </option>
-          ))}
-        </select>
+          options={[
+            { value: "", label: "Solução inteira" },
+            ...csprojs.map((p) => ({ value: p, label: p.split(/[\/]/).pop() ?? p })),
+          ]}
+        />
         <div className="run-draft-actions">
           {PROJECT_ACTIONS.map((a) => (
             <button

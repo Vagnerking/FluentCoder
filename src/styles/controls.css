@@ -1,99 +1,145 @@
-/* ============================================================================
-   Base control systems — F2-AUD-014 (buttons) and F2-AUD-013 (inputs).
-
-   Opt-in classes so new screens (and gradual migration of existing ones) stop
-   re-deriving button/input styles per feature. They consume the token layer so
-   states stay consistent. Existing bespoke buttons keep working; migrate them
-   feature by feature rather than all at once.
-   ========================================================================= */
-
 /* ---- Buttons (F2-AUD-014) ---- */
 .ui-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-width: 84px;
-  height: 30px;
-  padding: 0 14px;
+  gap: var(--space-sm);
+  min-width: 0;
+  height: var(--control-h-md);
+  padding: 0 var(--space-md);
   font-family: inherit;
-  font-size: 13px;
-  line-height: 1;
+  font-size: var(--font-base);
+  line-height: var(--line-height-base);
+  font-weight: 600;
+  white-space: nowrap;
   color: var(--text);
   background: var(--acrylic-control);
   border: 1px solid var(--acrylic-border);
-  border-radius: var(--radius-control);
+  border-bottom-color: var(--acrylic-border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-rest);
   cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-standard),
-    border-color var(--duration-fast) var(--ease-standard);
+  user-select: none;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.ui-button-sm {
+  height: var(--control-h-sm);
+  padding: 0 var(--space-sm);
+  gap: var(--space-xs);
+  font-size: var(--font-caption);
+  line-height: var(--line-height-caption);
+}
+
+.ui-button-icon {
+  flex: 0 0 auto;
+  font-size: var(--icon-md);
+}
+
+.ui-button-sm .ui-button-icon {
+  font-size: var(--icon-sm);
 }
 .ui-button:hover:not(:disabled) {
   background: var(--acrylic-control-hover);
 }
 .ui-button:active:not(:disabled) {
   background: var(--acrylic-control-pressed);
+  color: var(--text-secondary);
 }
 .ui-button:disabled {
-  opacity: 0.45;
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 
-/* Primary / accent — the default/confirming action. */
+/* Primary / accent — the default/confirming action (one per context). */
 .ui-button-primary {
-  color: #06223a;
+  color: var(--text-on-accent);
   background: var(--accent);
   border-color: transparent;
-  font-weight: 600;
 }
 .ui-button-primary:hover:not(:disabled) {
-  background: #7ad6ff;
+  background: var(--accent-hover);
 }
 .ui-button-primary:active:not(:disabled) {
-  background: #4cb8ec;
+  color: var(--text-on-accent);
+  background: var(--accent-pressed);
 }
 
-/* Secondary — explicit alias of the neutral base, for symmetry at call sites. */
+/* Subtle — transparent until hovered (toolbars, inline actions). */
+.ui-button-subtle {
+  color: var(--text-secondary);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.ui-button-subtle:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--fill-subtle-hover);
+}
+
+.ui-button-subtle:active:not(:disabled) {
+  background: var(--fill-subtle-active);
+}
+
+/* Secondary — the neutral base, explicit for symmetry at call sites. */
 .ui-button-secondary {
   background: var(--acrylic-control);
 }
 
-/* Danger — destructive actions (delete, discard). */
+/* Danger — destructive actions (delete, discard). Outlined in the status color
+   so it reads as dangerous without competing with the primary fill; the label
+   (a verb) carries the meaning, never the color alone. */
 .ui-button-danger {
-  color: #2a0d0f;
-  background: var(--color-status-error);
-  border-color: transparent;
-  font-weight: 600;
+  color: var(--error);
+  background: transparent;
+  border-color: color-mix(in srgb, var(--error) 45%, transparent);
 }
 .ui-button-danger:hover:not(:disabled) {
-  background: #ff6b6b;
+  background: color-mix(in srgb, var(--error) 14%, transparent);
+  border-color: var(--error);
 }
 .ui-button-danger:active:not(:disabled) {
-  background: #d83b3b;
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 8%, transparent);
 }
 
-/* Loading: dim + show busy cursor; pair with aria-busy at the call site. */
+/* Loading: busy cursor + spinner (aria-busy is set by <Button loading>). */
 .ui-button[aria-busy="true"] {
-  opacity: 0.7;
   cursor: progress;
 }
 
-/* Icon-only button — square, no min-width, codicon-sized. */
+/* Icon-only button — square, no min-width, 16px codicon. */
 .ui-icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: 0 0 auto;
   width: 28px;
   height: 28px;
-  min-width: 0;
   padding: 0;
   color: var(--text-secondary);
   background: transparent;
   border: none;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background var(--duration-fast) var(--ease-standard),
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
     color var(--duration-fast) var(--ease-standard);
 }
+
+.ui-icon-button-sm {
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+}
+
+.ui-icon-button-icon {
+  font-size: var(--icon-md);
+}
+
 .ui-icon-button:hover:not(:disabled) {
   background: var(--fill-subtle-hover);
   color: var(--text);
@@ -102,37 +148,42 @@
   background: var(--fill-subtle-active);
 }
 .ui-icon-button:disabled {
-  opacity: 0.4;
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
-/* Pressed/toggle state for icon buttons that use aria-pressed. */
+
+/* Pressed/toggle state (aria-pressed via <IconButton pressed>). */
 .ui-icon-button[aria-pressed="true"] {
   background: var(--fill-selected);
   color: var(--text);
 }
 
+.ui-icon-button[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--fill-selected-hover);
+}
+
 /* ---- Inputs (F2-AUD-013) ---- */
 .ui-input,
-.ui-textarea,
-.ui-select {
+.ui-textarea {
   width: 100%;
-  height: 30px;
-  padding: 0 9px;
+  height: var(--control-h-md);
+  padding: 0 var(--space-sm);
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--font-base);
   color: var(--text);
   background: var(--acrylic-control);
   border: 1px solid var(--acrylic-border);
   border-bottom-color: var(--acrylic-border-strong);
-  border-radius: var(--radius-control);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
-  transition: border-color var(--duration-fast) var(--ease-standard),
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-rest);
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
     box-shadow var(--duration-fast) var(--ease-standard);
 }
 .ui-textarea {
   height: auto;
   min-height: 48px;
-  padding: 7px 9px;
+  padding: 6px var(--space-sm);
   resize: vertical;
 }
 .ui-input::placeholder,
@@ -140,21 +191,21 @@
   color: var(--text-muted);
 }
 .ui-input:hover:not(:disabled),
-.ui-textarea:hover:not(:disabled),
-.ui-select:hover:not(:disabled) {
+.ui-textarea:hover:not(:disabled) {
   border-color: var(--acrylic-border-strong);
 }
+
+/* The outline is replaced by the shared outset ring, never removed without a
+   substitute (F2-AUD-003). */
 .ui-input:focus-visible,
-.ui-textarea:focus-visible,
-.ui-select:focus-visible {
+.ui-textarea:focus-visible {
   outline: none;
-  border-color: var(--stroke-focus);
+  border-bottom-color: var(--stroke-focus);
   box-shadow: var(--focus-ring);
 }
 .ui-input:disabled,
-.ui-textarea:disabled,
-.ui-select:disabled {
-  opacity: 0.5;
+.ui-textarea:disabled {
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 /* Invalid: pair with aria-invalid="true" + an aria-describedby message. */
@@ -164,14 +215,367 @@
   border-color: var(--color-status-error);
 }
 .ui-input[aria-invalid="true"]:focus-visible,
-.ui-textarea[aria-invalid="true"]:focus-visible,
-.ui-select[aria-invalid="true"]:focus-visible {
+.ui-textarea[aria-invalid="true"]:focus-visible {
   box-shadow: 0 0 0 var(--focus-ring-width) var(--color-status-error);
 }
 /* The error text tied to an invalid field via aria-describedby. */
 .ui-field-error {
   display: block;
-  margin-top: 4px;
-  font-size: 12px;
+  margin-top: var(--space-xs);
+  font-size: var(--font-caption);
+  line-height: var(--line-height-caption);
   color: var(--color-status-error);
+}
+
+/* ---- Select (dropdown) — <Select> ----
+   The trigger looks like a field (value + chevron); the popup is a flyout
+   portalled to <body> (position: fixed) so no overflow ancestor clips it. */
+.ui-select {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  min-width: 0;
+  height: var(--control-h-md);
+  padding: 0 var(--space-sm) 0 10px;
+  font-family: inherit;
+  font-size: var(--font-base);
+  line-height: var(--line-height-base);
+  text-align: left;
+  color: var(--text);
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  border-bottom-color: var(--acrylic-border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-rest);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+.ui-select-sm {
+  height: var(--control-h-sm);
+  padding: 0 var(--space-xs) 0 var(--space-sm);
+  gap: var(--space-xs);
+  font-size: var(--font-caption);
+  line-height: var(--line-height-caption);
+}
+
+.ui-select:hover:not(:disabled) {
+  background: var(--acrylic-control-hover);
+  border-color: var(--acrylic-border-strong);
+}
+
+.ui-select:active:not(:disabled),
+.ui-select.is-open {
+  background: var(--acrylic-control-pressed);
+  border-bottom-color: var(--accent);
+}
+
+.ui-select:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: default;
+}
+
+.ui-select-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-select.is-placeholder .ui-select-value {
+  color: var(--text-muted);
+}
+
+.ui-select-chevron {
+  flex: 0 0 auto;
+  font-size: var(--icon-md);
+  color: var(--text-secondary);
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.ui-select-sm .ui-select-chevron {
+  font-size: var(--icon-sm);
+}
+
+.ui-select.is-open .ui-select-chevron {
+  transform: rotate(180deg);
+}
+
+.ui-select-popup {
+  position: fixed;
+  /* Above modal overlays (≤ 10000), below tooltips (10001). */
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-width: min(480px, calc(100vw - 16px));
+  padding: var(--space-xs);
+  overflow-y: auto;
+  font-size: var(--font-base);
+  line-height: var(--line-height-base);
+  color: var(--text);
+  background: var(--color-surface-overlay);
+  border: 1px solid var(--color-surface-overlay-border);
+  border-radius: var(--radius-surface);
+  box-shadow: var(--shadow-flyout);
+  animation: ui-flyout-in var(--duration-medium) var(--ease-decelerate);
+}
+
+.ui-select-popup.is-above {
+  animation-name: ui-flyout-in-above;
+}
+
+@keyframes ui-flyout-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes ui-flyout-in-above {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Row + 1px gap mirror OPTION_HEIGHT (28px) in Select.tsx. */
+.ui-select-option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex: 0 0 auto;
+  min-height: 27px;
+  padding: 0 var(--space-sm) 0 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ui-select-option-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Highlight (hover or aria-activedescendant) vs. selected value. */
+.ui-select-option.is-active {
+  background: var(--fill-subtle-hover);
+}
+
+.ui-select-option.is-selected {
+  background: var(--fill-selected);
+}
+
+.ui-select-option.is-selected.is-active {
+  background: var(--fill-selected-hover);
+}
+
+/* Fluent selection indicator: a short accent pill on the leading edge, so the
+   selected row isn't signalled by the fill tint alone. */
+.ui-select-option.is-selected::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--accent);
+  transform: translateY(-50%);
+}
+
+.ui-select-option-check {
+  flex: 0 0 auto;
+  font-size: var(--icon-sm);
+  color: var(--accent);
+}
+
+.ui-select-option[aria-disabled="true"] {
+  opacity: var(--opacity-disabled);
+  cursor: default;
+}
+
+/* ---- Checkbox — <Checkbox> ----
+   The native input stays focusable/clickable but is visually hidden; the
+   16px box right after it mirrors its state through sibling selectors. */
+.ui-checkbox {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-height: var(--control-h-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ui-checkbox.is-disabled {
+  opacity: var(--opacity-disabled);
+  cursor: default;
+}
+
+.ui-checkbox-input {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.ui-checkbox-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  color: transparent;
+  background: transparent;
+  border: 1px solid var(--text-muted);
+  border-radius: var(--radius-sm);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+/* Hidden (not just transparent) while unchecked, so forced-colors mode —
+   which repaints text in CanvasText — never shows a phantom checkmark. */
+.ui-checkbox-mark {
+  font-size: 12px;
+  visibility: hidden;
+}
+
+.ui-checkbox-input:checked + .ui-checkbox-box .ui-checkbox-mark,
+.ui-checkbox-input:indeterminate + .ui-checkbox-box .ui-checkbox-mark {
+  visibility: visible;
+}
+
+.ui-checkbox:hover:not(.is-disabled) .ui-checkbox-box {
+  border-color: var(--text-secondary);
+  background: var(--fill-subtle-hover);
+}
+
+.ui-checkbox:active:not(.is-disabled) .ui-checkbox-box {
+  background: var(--fill-subtle-active);
+}
+
+.ui-checkbox-input:checked + .ui-checkbox-box,
+.ui-checkbox-input:indeterminate + .ui-checkbox-box {
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.ui-checkbox:hover:not(.is-disabled) .ui-checkbox-input:checked + .ui-checkbox-box,
+.ui-checkbox:hover:not(.is-disabled) .ui-checkbox-input:indeterminate + .ui-checkbox-box {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.ui-checkbox:active:not(.is-disabled) .ui-checkbox-input:checked + .ui-checkbox-box,
+.ui-checkbox:active:not(.is-disabled) .ui-checkbox-input:indeterminate + .ui-checkbox-box {
+  background: var(--accent-pressed);
+  border-color: var(--accent-pressed);
+}
+
+.ui-checkbox-label {
+  min-width: 0;
+}
+
+/* ---- Switch — <Switch> (role="switch") ---- */
+.ui-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-height: var(--control-h-sm);
+  padding: 0;
+  font: inherit;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.ui-switch:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: default;
+}
+
+.ui-switch-track {
+  position: relative;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 20px;
+  border: 1px solid var(--text-muted);
+  border-radius: 10px;
+  background: transparent;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+.ui-switch-thumb {
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transform: translateY(-50%);
+  transition:
+    left var(--duration-fast) var(--ease-standard),
+    width var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+
+.ui-switch:hover:not(:disabled) .ui-switch-track {
+  border-color: var(--text-secondary);
+  background: var(--fill-subtle-hover);
+}
+
+.ui-switch:hover:not(:disabled) .ui-switch-thumb {
+  background: var(--text);
+}
+
+/* Fluent "squish" on press: the thumb widens toward its travel direction. */
+.ui-switch:active:not(:disabled) .ui-switch-thumb {
+  width: 14px;
+}
+
+.ui-switch.is-checked .ui-switch-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.ui-switch.is-checked:hover:not(:disabled) .ui-switch-track {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.ui-switch.is-checked .ui-switch-thumb,
+.ui-switch.is-checked:hover:not(:disabled) .ui-switch-thumb {
+  left: 23px;
+  background: var(--text-on-accent);
+}
+
+.ui-switch.is-checked:active:not(:disabled) .ui-switch-thumb {
+  left: 21px;
+}
+
+.ui-switch-label {
+  min-width: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-select-popup {
+    animation: none;
+  }
+
 }

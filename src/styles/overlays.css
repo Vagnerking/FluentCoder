@@ -286,7 +286,11 @@
 
 /* Actions */
 .ssh-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
-.ssh-dialog-actions button {
+
+/* Legacy buttons still used by the remote folder browser; the connect dialog
+   itself uses the shared <Button> (`.ui-button`), which these don't touch. */
+.ssh-dialog-cancel,
+.ssh-dialog-connect {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -301,7 +305,10 @@
   transition: background 0.12s ease, filter 0.12s ease, box-shadow 0.12s ease;
 }
 .ssh-dialog-connect .codicon { font-size: 14px; }
-.ssh-dialog-actions button:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent); }
+
+.ssh-dialog-cancel:focus-visible,
+.ssh-dialog-connect:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent); }
+
 .ssh-dialog-cancel { color: var(--text); background: var(--acrylic-control); border-color: var(--acrylic-border); }
 .ssh-dialog-cancel:hover { background: var(--acrylic-control-hover); }
 .ssh-dialog-connect { color: #06121b; background: var(--accent); }
@@ -508,76 +515,29 @@
   font-size: 18px;
 }
 
-.about-version {
-  margin: 0 0 12px;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.about-link a {
-  color: var(--accent);
-  font-size: 12px;
-  text-decoration: none;
-}
-
-.about-link a:hover {
-  text-decoration: underline;
-}
-
-.about-shortcuts {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.about-shortcut-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 6px 4px;
-}
-
-.about-shortcut-row + .about-shortcut-row {
-  border-top: 1px solid var(--acrylic-border);
-}
-
-.about-shortcut-label {
-  color: var(--text);
-  font-size: 13px;
-}
-
-.about-shortcut-keys {
-  padding: 2px 6px;
-  border: 1px solid var(--acrylic-border);
-  border-radius: var(--radius-control);
-  color: var(--text-muted);
-  background: var(--acrylic-control);
-  font-family: var(--font-mono, monospace);
-  font-size: 11px;
-}
-
-/* ---- Confirm dialog (reusable Fluent 2 modal: unsaved guard, delete, etc.) ---- */
+/* ---- Confirm dialog (reusable Fluent 2 modal: unsaved guard, delete, …) ----
+   The action row uses the shared <Button> primitive (`.ui-button-*`). */
 .confirm-overlay {
   position: fixed;
   inset: 0;
   z-index: 200;
   display: flex;
-  align-items: center;
   justify-content: center;
-  background: rgba(0,0,0,0.4);
+  align-items: center;
+  background: rgba(0, 0, 0, 0.4);
 }
 
 .confirm-dialog {
+  width: 440px;
+  max-width: calc(100vw - var(--space-xl));
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  width: 440px;
-  max-width: calc(100vw - 32px);
+  gap: var(--space-sm);
   padding: 20px;
-  border: 1px solid var(--acrylic-border-strong);
-  border-radius: var(--radius-card);
+  color: var(--text);
   background: var(--acrylic-tint-strong);
+  border: 1px solid var(--acrylic-border-strong);
+  border-radius: var(--radius-surface);
   box-shadow: var(--shadow-dialog);
   backdrop-filter: blur(40px) saturate(140%);
   -webkit-backdrop-filter: blur(40px) saturate(140%);
@@ -586,72 +546,29 @@
 
 .confirm-title {
   margin: 0;
-  color: var(--text);
   font-size: 15px;
   font-weight: 600;
+  color: var(--text);
 }
 
 .confirm-message {
-  margin: 0 0 8px;
-  color: var(--text-secondary);
-  font-size: 13px;
+  margin: 0 0 var(--space-sm);
+  font-size: var(--font-base);
   line-height: 1.5;
+  color: var(--text-secondary);
 }
 
 .confirm-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--space-sm);
 }
 
-.confirm-button {
-  min-width: 84px;
-  height: 30px;
-  padding: 0 14px;
-  border: 1px solid var(--acrylic-border);
-  border-radius: var(--radius-control);
-  color: var(--text);
-  background: var(--acrylic-control);
-  font-family: inherit;
-  font-size: 13px;
-  cursor: pointer;
-  outline: none;
+.confirm-actions .ui-button {
+  min-width: 80px;
 }
 
-.confirm-button:hover {
-  background: var(--acrylic-control-hover);
-}
-
-.confirm-button:focus-visible {
-  border-color: var(--accent);
+/* The default button (initial focus + Enter) keeps a thin accent ring at rest. */
+.confirm-actions .confirm-default {
   box-shadow: 0 0 0 1px var(--accent);
-}
-
-.confirm-button.is-default {
-  box-shadow: 0 0 0 1px var(--accent);
-}
-
-.confirm-primary {
-  border-color: var(--accent);
-  color: #1a1a1a;
-  background: var(--accent);
-  font-weight: 600;
-}
-
-.confirm-primary:hover {
-  background: #7ad6ff;
-}
-
-.confirm-secondary {
-  /* neutral, inherits the base style */
-}
-
-.confirm-danger {
-  border-color: rgba(255,153,164,0.4);
-  color: var(--error);
-}
-
-.confirm-danger:hover {
-  border-color: var(--error);
-  background: rgba(255,153,164,0.14);
 }

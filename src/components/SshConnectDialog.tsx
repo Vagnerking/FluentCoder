@@ -3,6 +3,7 @@ import { Codicon } from "../icons/codicons/Codicon";
 import type { SshConnectInput } from "../api";
 import { useModalDismiss } from "./useModalDismiss";
 import { useModalFocus } from "./useModalFocus";
+import { Button } from "./ui";
 
 interface SshConnectDialogProps {
   /** Prefill (e.g. from a saved host without a user, or a key host). */
@@ -235,18 +236,15 @@ export function SshConnectDialog({
         )}
 
         <div className="ssh-dialog-actions">
-          <button type="button" className="ssh-dialog-cancel" onClick={dismiss}>
-            {onBack ? "Voltar" : "Cancelar"}
-          </button>
-          <button
-            type="button"
-            className="ssh-dialog-connect"
+          <Button onClick={dismiss}>{onBack ? "Voltar" : "Cancelar"}</Button>
+          <Button
+            variant="primary"
+            loading={connecting}
             disabled={!canSubmit}
             onClick={() => void submit()}
           >
-            {connecting && <Codicon name="loading" />}
             {connecting ? "Conectando…" : "Conectar"}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

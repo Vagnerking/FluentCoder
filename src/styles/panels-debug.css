@@ -159,10 +159,9 @@
 }
 
 /* ── Test tree (milestone #10) ── */
-.test-coverage-toggle {
-  display: inline-flex; align-items: center; gap: 4px;
-  font-size: 11px; color: var(--text-muted); user-select: none;
-}
+/* <Checkbox> in the test launcher: caption-size label, hugging its content. */
+.test-coverage-toggle { align-self: flex-start; font-size: var(--font-caption); }
+
 .test-group-header {
   display: flex; align-items: center; gap: 6px;
   padding: 3px 8px; cursor: pointer; font-size: 12px;
@@ -182,7 +181,9 @@
 /* ── NuGet manager modal (milestone #11) ── */
 .nuget-manager { width: min(680px, 92vw); max-height: 80vh; }
 .nuget-toolbar { display: flex; gap: 8px; align-items: center; padding: 0 12px 8px; }
-.nuget-toolbar .search-input { flex: 1; min-width: 0; }
+
+.nuget-toolbar .nuget-project-select { flex: 1; min-width: 0; }
+
 .nuget-tabs { display: flex; gap: 2px; flex-shrink: 0; }
 .nuget-tab {
   background: transparent; border: none; color: var(--text-muted);

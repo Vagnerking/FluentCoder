@@ -2,6 +2,7 @@ import { useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import type { ConfirmButton, ConfirmDialogProps } from "../types";
 import { useModalFocus } from "./useModalFocus";
+import { Button } from "./ui";
 
 /**
  * Reusable confirmation modal (Fluent 2). Purely presentational: it shows a
@@ -59,17 +60,15 @@ export function ConfirmDialog<T>({
             const defaultIndex = buttons.findIndex((b) => b.default);
             const focusIndex = defaultIndex >= 0 ? defaultIndex : 0;
             return buttons.map((btn: ConfirmButton<T>, i) => (
-              <button
+              <Button
                 key={i}
                 ref={i === focusIndex ? defaultBtnRef : undefined}
-                type="button"
-                className={`confirm-button confirm-${btn.variant}${
-                  btn.default ? " is-default" : ""
-                }`}
+                variant={btn.variant}
+                className={btn.default ? "confirm-default" : undefined}
                 onClick={() => onChoice(btn.value)}
               >
                 {btn.label}
-              </button>
+              </Button>
             ));
           })()}
         </div>
