@@ -113,14 +113,25 @@ export function ExtensionHostRuntime(props: ExtensionHostRuntimeProps) {
     const t = window.setTimeout(() => {
       void extHost
         .ensureStarted(rootPath)
-        .then((r) => {
-          const kbs = r.extensions.filter((e: InstalledExtension) => e.supported).flatMap((e) => e.keybindings ?? []);
-          keybindingsRef.current = kbs;
-          setContributedKeybindings(kbs);
-        })
+        .then((r) => applyInstalled(r.extensions))
         .catch((err) => extLog("prewarm falhou", err));
     }, extHost.running ? 0 : PREWARM_DELAY_MS);
-    return () => window.clearTimeout(t);
+    // Instalar/habilitar na view Extensões (ou reiniciar o host) muda a lista.
+    const off = extHost.on((ev) => {
+      if (ev.event === "installedChanged" || ev.event === "hostRestarted") applyInstalled(extHost.info?.extensions ?? []);
+    });
+    function applyInstalled(list: InstalledExtension[]) {
+      const runnable = list.filter((e) => e.supported);
+      const kbs = runnable.flatMap((e) => e.keybindings ?? []);
+      keybindingsRef.current = kbs;
+      setContributedKeybindings(kbs);
+      // `activationEvents: ["*"|"onStartupFinished"]` (não embutidas): ativam ao subir.
+      for (const e of runnable) if (e.activateOnStartup && !extHost.isActive(e.id)) void extHost.loadExtension(e.id).catch(() => {});
+    }
+    return () => {
+      window.clearTimeout(t);
+      off();
+    };
   }, [enabled, rootPath]);
 
   // ---- editor (eventos do Monaco) e terminais.

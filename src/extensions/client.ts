@@ -20,6 +20,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   HostEvent,
   InitializeResult,
+  InstalledExtension,
   LoadedExtension,
   WebviewInfo,
 } from "./protocol";
@@ -31,6 +32,8 @@ interface StartInfo {
   started: boolean;
   pid: number;
   dataDir: string;
+  /** Pasta de extensões gerenciada pelo app (`<app_data>/extensions`). */
+  extensionsDir?: string;
   script: string;
   node: string;
   secrets: string;
@@ -125,6 +128,7 @@ class ExtHostClient {
     const result = (await this.call("initialize", {
       workspaceFolders: workspace ? [workspace] : [],
       dataDir: info.dataDir,
+      extensionsDir: info.extensionsDir,
       language: "pt-br",
       secrets: info.secrets,
       debugWebviews: EXT_DEBUG,
@@ -280,6 +284,21 @@ class ExtHostClient {
       this.loaded.set(id, p);
     }
     return p;
+  }
+
+  /**
+   * Relê as extensões instaladas (após instalar/atualizar/habilitar na view
+   * Extensões) sem reiniciar o host. Extensões novas ficam carregáveis na
+   * hora; as que JÁ estavam ativas só trocam de versão com "Reiniciar Host
+   * de Extensões" (o Node não descarrega um módulo carregado).
+   */
+  async refreshInstalled(): Promise<InstalledExtension[]> {
+    if (!this.initPromise) return [];
+    await this.initPromise;
+    const list = (await this.call("listInstalled")) as InstalledExtension[];
+    if (this.lastInit) this.lastInit = { ...this.lastInit, extensions: list };
+    this.emit({ event: "installedChanged" });
+    return list;
   }
 
   /** Ativa em segundo plano (ex.: ponteiro sobre a aba) — o clique encontra pronto. */

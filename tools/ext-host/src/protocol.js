@@ -27,7 +27,7 @@ const isPersistedPanel = (r) =>
 
 /** method → (params) => true se válido. */
 const SCHEMAS = {
-  initialize: (p) => isObj(p) && optArr(p.workspaceFolders, (f) => f === null || isPath(f), 64) && isOptStr(p.dataDir, 4096) && isOptStr(p.secrets, 16),
+  initialize: (p) => isObj(p) && optArr(p.workspaceFolders, (f) => f === null || isPath(f), 64) && isOptStr(p.dataDir, 4096) && (p.extensionsDir === undefined || p.extensionsDir === null || isPath(p.extensionsDir)) && isOptStr(p.secrets, 16),
   listInstalled: () => true,
   loadExtension: (p) => isObj(p) && (isStr(p.id, 256) || isPath(p.path)),
   activate: (p) => isObj(p) && isStr(p.id, 256),

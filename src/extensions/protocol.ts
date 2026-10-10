@@ -24,7 +24,20 @@ export interface InstalledExtension {
   path: string;
   version: string;
   displayName: string;
+  publisher?: string;
+  /**
+   * Pode rodar neste host: habilitada E aprovada no portão de
+   * compatibilidade (Claude Code/Codex são embutidas e liberadas por padrão).
+   */
   supported: boolean;
+  /** "app" = pasta gerenciada; "vscode" = ~/.vscode/extensions (somente leitura). */
+  source?: "app" | "vscode";
+  builtin?: boolean;
+  enabled?: boolean;
+  /** Por que não roda: disabled | not-evaluated | incompatible | unknown. */
+  blockedReason?: string;
+  /** `activationEvents` com `*`/`onStartupFinished` (só não embutidas). */
+  activateOnStartup?: boolean;
   /** Rótulo curto exibido na UI ("Claude Code", "Codex"). */
   label: string;
   /** Views de webview preferidas (a primeira registrada é usada). */
@@ -150,6 +163,7 @@ export type HostEvent =
   | { event: "hostExit" }
   | { event: "hostRestarted" }
   | { event: "hostReady" }
+  | { event: "installedChanged" }
   | { event: "log"; message: string; level?: string }
   | { event: "extensionLoaded" | "extensionActivated"; extension: LoadedExtension; ms?: number }
   | { event: "viewProviderRegistered"; extensionId: string; viewId: string }

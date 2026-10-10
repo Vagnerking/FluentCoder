@@ -3,6 +3,7 @@ mod child_process;
 mod dap;
 mod dotnet_tools;
 mod ext_host;
+mod extensions;
 mod file_index;
 mod fs_commands;
 mod git;
@@ -132,6 +133,9 @@ pub fn run() {
             ext_host::ext_host_send,
             ext_host::ext_host_stop,
             ext_host::ext_host_open_external,
+            extensions::extensions_paths,
+            extensions::extensions_list,
+            extensions::extensions_set_enabled,
             ext_host::deep_link::deep_link_take_pending,
             ext_host::deep_link::deep_link_ack,
             fs_commands::write_file,

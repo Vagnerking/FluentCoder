@@ -83,6 +83,8 @@ pub struct ExtHostInfo {
     pub started: bool,
     pub pid: u32,
     pub data_dir: String,
+    /// Pasta de extensões gerenciada pelo app (`<app_data>/extensions`).
+    pub extensions_dir: String,
     pub script: String,
     /// Executável do Node usado (diagnóstico na saída "Extensões").
     pub node: String,
@@ -163,6 +165,7 @@ pub fn ext_host_start(app: AppHandle, state: State<'_, ExtHostState>) -> Result<
     std::fs::create_dir_all(&data_dir)
         .map_err(|e| format!("Falha ao criar {}: {e}", data_dir.display()))?;
     let script = find_script(&app)?;
+    let extensions_dir = crate::extensions::managed_dir(&app)?.to_string_lossy().into_owned();
 
     let mut guard = state
         .running
@@ -174,6 +177,7 @@ pub fn ext_host_start(app: AppHandle, state: State<'_, ExtHostState>) -> Result<
                 started: false,
                 pid: r.child.id(),
                 data_dir: data_dir.to_string_lossy().into_owned(),
+                extensions_dir: extensions_dir.clone(),
                 script: script.to_string_lossy().into_owned(),
                 node: r.node.clone(),
                 secrets: "keyring",
@@ -250,6 +254,7 @@ pub fn ext_host_start(app: AppHandle, state: State<'_, ExtHostState>) -> Result<
         started: true,
         pid,
         data_dir: data_dir.to_string_lossy().into_owned(),
+        extensions_dir,
         script: script.to_string_lossy().into_owned(),
         node: node_str,
         secrets: "keyring",

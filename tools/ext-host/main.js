@@ -55,6 +55,14 @@ function send(obj) {
 
 let host = null;
 let installed = [];
+/** Pasta de extensões gerenciada pelo app (`<app_data>/extensions`), vinda do `initialize`. */
+let managedExtensionsDir = null;
+/** `loadExtension({path})` só sem app (scripts headless/testes): no app vale o portão de compatibilidade. */
+let headless = false;
+
+function scanInstalled() {
+  return listInstalled({ managed: managedExtensionsDir });
+}
 
 /** Cache de compilação do V8 (Node 22.1+): `require` dos bundles grandes fica mais rápido da 2ª vez. */
 function enableCompileCache(dataDir) {
@@ -81,6 +89,8 @@ const handlers = {
     if (host) return { origin: host.server.origin, extensions: installed };
     const dataDir = p.dataDir || path.join(os.homedir(), '.fluent-coder', 'ext-host');
     fs.mkdirSync(dataDir, { recursive: true });
+    managedExtensionsDir = p.extensionsDir || null;
+    headless = p.appConnected === false;
     const compileCache = enableCompileCache(dataDir);
     host = new ExtensionHost({
       dataDir,
@@ -99,16 +109,24 @@ const handlers = {
     } catch {
       /* ignora */
     }
-    installed = listInstalled();
+    installed = scanInstalled();
     return { origin, port, dataDir, pid: process.pid, node: process.version, compileCache, extensions: installed };
   },
   listInstalled() {
-    installed = listInstalled();
+    installed = scanInstalled();
     return installed;
   },
   async loadExtension(p) {
-    const target = p.path || (installed.find((e) => e.id === String(p.id).toLowerCase()) || {}).path;
-    if (!target) throw new Error(`Extensão não encontrada: ${p.id || p.path}`);
+    if (p.path && !headless) throw new Error('loadExtension por caminho só é aceito sem app (headless).');
+    let target = p.path;
+    if (!target) {
+      const id = String(p.id).toLowerCase();
+      const found = installed.find((e) => e.id === id);
+      if (!found) throw new Error(`Extensão não encontrada: ${p.id}`);
+      // Portão de compatibilidade: desabilitada / não avaliada / incompatível não carrega.
+      if (!found.supported) throw new Error(`Extensão ${p.id} não liberada para este host (${found.blockedReason || 'bloqueada'}).`);
+      target = found.path;
+    }
     const ext = host.loadExtension(target);
     if (p.activate !== false) await host.activate(ext.id);
     return { ...host.describe(ext), activationMs: ext.activationMs };

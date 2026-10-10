@@ -87,7 +87,8 @@ export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab }
     setHostError(null);
     extHost
       .ensureStarted(rootPath)
-      .then((r) => setInstalled(r.extensions.filter((e) => e.supported)))
+      // Uma aba por extensão liberada que contribui view de webview.
+      .then((r) => setInstalled(r.extensions.filter((e) => e.supported && e.viewIds.length > 0)))
       .catch((err) => {
         extLog("host indisponível", err);
         setHostError(String(err instanceof Error ? err.message : err));
@@ -109,6 +110,9 @@ export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab }
           setHostError("O host de extensões foi encerrado. Reiniciando…");
           requestedRef.current.clear();
           setViews({});
+          break;
+        case "installedChanged":
+          setInstalled((extHost.info?.extensions ?? []).filter((e) => e.supported && e.viewIds.length > 0));
           break;
         case "hostRestarted":
           // As views voltam sozinhas (o efeito abaixo re-resolve a aba ativa).

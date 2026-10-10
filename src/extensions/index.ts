@@ -66,6 +66,16 @@ export function prewarmExtension(id: string): void {
   extHost.prewarm(id);
 }
 
+/** Relê as extensões instaladas no host em execução (sem reiniciar). */
+export function refreshHostedExtensions(): Promise<InstalledExtension[]> {
+  return extHost.refreshInstalled();
+}
+
+/** O host está rodando e esta extensão já foi carregada/ativada nesta sessão. */
+export function isExtensionActive(id: string): boolean {
+  return extHost.isActive(id);
+}
+
 export function restartExtensionHost(): Promise<void> {
   return extHost.restart();
 }
@@ -114,7 +124,7 @@ export function useHostedExtensions(): InstalledExtension[] {
   useEffect(() => {
     setList(read());
     return extHost.on((e) => {
-      if (e.event === "hostReady" || e.event === "hostExit") setList(read());
+      if (e.event === "hostReady" || e.event === "hostExit" || e.event === "installedChanged") setList(read());
     });
   }, []);
   return list;
