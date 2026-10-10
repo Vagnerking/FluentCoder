@@ -1,16 +1,34 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
+  dotnetBuild,
+  dotnetClean,
+  dotnetRebuild,
+  dotnetRestore,
+  dotnetTestDebug,
   dotnetTestList,
   dotnetTestRun,
   listProjectFiles,
   runConfigsDetect,
   runConfigsLoad,
   runConfigsSave,
+  type DotnetActionResult,
   type DotnetProcess,
   type DotnetTestResult,
 } from "../api";
 import type { RunConfig } from "../types";
-import { debugSession } from "../dap/debugSession";
+import {
+  debugSession,
+  type VariableView,
+  type WatchView,
+} from "../dap/debugSession";
+import { loadLaunchProfiles } from "../dap/loadLaunchProfiles";
+import type { LaunchProfile } from "../dap/launchSettings";
+import { groupTests } from "../testing/testTree";
+import {
+  applyCoverageDecorations,
+  clearCoverageDecorations,
+} from "../testing/coverageDecorations";
+import { Tooltip } from "./Tooltip";
 
 /** Loads the workspace's `.csproj` paths once per root (shared by the .NET sections). */
 function useCsprojs(rootPath: string, connId?: string): string[] {
@@ -31,7 +49,15 @@ function useCsprojs(rootPath: string, connId?: string): string[] {
   }, [connId, rootPath]);
   return csprojs;
 }
-import { Tooltip } from "./Tooltip";
+
+/** A test to run/debug, requested from a CodeLens click. A fresh object on every
+ *  request so re-clicking the same test re-triggers it. */
+export interface PendingTest {
+  csprojPath: string;
+  fullyQualifiedName: string;
+  /** "run" executes; "debug" launches under the debugger. */
+  mode: "run" | "debug";
+}
 
 export interface RunWorkspaceRoot {
   id: string;
@@ -49,6 +75,8 @@ interface RunPanelProps {
   workspaceRoots?: RunWorkspaceRoot[];
   /** Asks the app to run `command` in the integrated terminal. */
   onRun: (command: string, cwd: string, connId?: string) => void;
+  /** Latest test-run request from a CodeLens (App-level listener), or null. */
+  pendingTest?: PendingTest | null;
 }
 
 /** Empty draft used by the "new configuration" form. */
@@ -62,7 +90,7 @@ const EMPTY_DRAFT: RunConfig = { name: "", command: "", cwd: "" };
  * Debugging (breakpoints/step via DAP) is a planned next phase; for now this
  * covers the "Executar" half end-to-end.
  */
-export function RunPanel({ rootPath, workspaceRoots = [], onRun }: RunPanelProps) {
+export function RunPanel({ rootPath, workspaceRoots = [], onRun, pendingTest }: RunPanelProps) {
   const targets = useMemo(
     () =>
       workspaceRoots.length > 0
@@ -122,6 +150,7 @@ export function RunPanel({ rootPath, workspaceRoots = [], onRun }: RunPanelProps
             target={target}
             showRootHeader={targets.length > 1 || workspaceRoots.length > 0}
             onRun={onRun}
+            pendingTest={pendingTestForRoot(pendingTest ?? null, target)}
           />
         ))}
         {unavailableSshRoots.length > 0 && (
@@ -142,14 +171,32 @@ export function RunPanel({ rootPath, workspaceRoots = [], onRun }: RunPanelProps
   );
 }
 
+/**
+ * A CodeLens test request belongs to the local root that contains its `.csproj`.
+ * Single-root (or unmatched) requests fall back to the only local root so the
+ * classic one-folder flow keeps working exactly as before.
+ */
+function pendingTestForRoot(
+  pending: PendingTest | null,
+  target: RunWorkspaceRoot
+): PendingTest | null {
+  if (!pending || target.connId) return null;
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const root = norm(target.path);
+  const csproj = norm(pending.csprojPath);
+  return csproj === root || csproj.startsWith(`${root}/`) ? pending : null;
+}
+
 function RunRootSection({
   target,
   showRootHeader,
   onRun,
+  pendingTest,
 }: {
   target: RunWorkspaceRoot;
   showRootHeader: boolean;
   onRun: (command: string, cwd: string, connId?: string) => void;
+  pendingTest: PendingTest | null;
 }) {
   const [configs, setConfigs] = useState<RunConfig[]>([]);
   const [suggestions, setSuggestions] = useState<RunConfig[]>([]);
@@ -263,7 +310,8 @@ function RunRootSection({
 
       <div className="run-lists">
         {!target.connId && <DebugSection rootPath={target.path} />}
-        {!target.connId && <TestsSection rootPath={target.path} />}
+        {!target.connId && <TestsSection rootPath={target.path} pendingTest={pendingTest} />}
+        {!target.connId && <ProjectActionsSection rootPath={target.path} />}
 
         <div className="git-group">
           <div className="git-group-header">
@@ -361,16 +409,41 @@ function DebugSection({ rootPath }: { rootPath: string }) {
   const csprojs = useCsprojs(rootPath);
   const [selected, setSelected] = useState<string>("");
   const [procs, setProcs] = useState<DotnetProcess[] | null>(null);
+  const [profiles, setProfiles] = useState<LaunchProfile[]>([]);
+  const [profileName, setProfileName] = useState<string>("");
 
   useEffect(() => {
     setSelected((cur) => cur || csprojs[0] || "");
   }, [csprojs]);
+
+  // Load launchSettings.json profiles whenever the selected project changes.
+  useEffect(() => {
+    if (!selected) {
+      setProfiles([]);
+      return;
+    }
+    let cancelled = false;
+    void loadLaunchProfiles(selected).then((p) => {
+      if (cancelled) return;
+      setProfiles(p);
+      setProfileName(p[0]?.name ?? "");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected]);
 
   const busy = state.status === "starting";
   const active = state.status === "running" || state.status === "stopped";
 
   // Nothing to debug in this workspace — keep the panel clean.
   if (csprojs.length === 0 && !active) return null;
+
+  const launch = () => {
+    const cwd = selected.replace(/[\\/][^\\/]+$/, "");
+    const profile = profiles.find((p) => p.name === profileName);
+    void debugSession.launchProject(selected, cwd, profile);
+  };
 
   return (
     <div className="git-group debug-section">
@@ -399,15 +472,27 @@ function DebugSection({ rootPath }: { rootPath: string }) {
               </option>
             ))}
           </select>
+          {profiles.length > 0 && (
+            <select
+              className="search-input"
+              value={profileName}
+              onChange={(e) => setProfileName(e.target.value)}
+              disabled={busy}
+              title="Perfil do launchSettings.json (env, args, URL)"
+            >
+              {profiles.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          )}
           <div className="run-draft-actions">
             <button
               className="git-commit-btn"
               disabled={!selected || busy}
               title="Compila e inicia sob o depurador"
-              onClick={() => {
-                const cwd = selected.replace(/[\\/][^\\/]+$/, "");
-                void debugSession.launchProject(selected, cwd);
-              }}
+              onClick={launch}
             >
               ▶ Iniciar Depuração
             </button>
@@ -503,9 +588,13 @@ function DebugSection({ rootPath }: { rootPath: string }) {
               {state.frames.map((f) => (
                 <button
                   key={f.id}
-                  className="debug-frame-row"
+                  className={
+                    "debug-frame-row" +
+                    (f.id === state.selectedFrameId ? " selected" : "")
+                  }
                   title={f.path}
                   onClick={() => {
+                    void debugSession.selectFrame(f.id);
                     if (f.path && f.line) {
                       window.dispatchEvent(
                         new CustomEvent("fluent:debug-stopped", {
@@ -522,14 +611,18 @@ function DebugSection({ rootPath }: { rootPath: string }) {
             </div>
           )}
 
+          <WatchPanel watches={state.watches} />
+
           {state.scopes.map((s) => (
-            <div key={s.name} className="debug-block">
+            <div key={s.variablesReference} className="debug-block">
               <div className="debug-block-title">{s.name}</div>
-              {s.variables.map((v) => (
-                <div key={v.name} className="debug-var-row" title={v.type}>
-                  <span className="debug-var-name">{v.name}</span>
-                  <span className="debug-var-value">{v.value}</span>
-                </div>
+              {s.variables.map((v, i) => (
+                <VariableTree
+                  key={`${v.name}#${v.variablesReference}#${i}`}
+                  variable={v}
+                  depth={0}
+                  childrenByRef={state.children}
+                />
               ))}
             </div>
           ))}
@@ -548,17 +641,128 @@ function DebugSection({ rootPath }: { rootPath: string }) {
 }
 
 /**
+ * One node of the (lazily expanded) variables tree. Objects/collections carry a
+ * `variablesReference` > 0; clicking the chevron fetches their children once
+ * (cached in `childrenByRef`) and toggles visibility.
+ */
+function VariableTree({
+  variable,
+  depth,
+  childrenByRef,
+}: {
+  variable: VariableView;
+  depth: number;
+  childrenByRef: Record<number, VariableView[]>;
+}) {
+  const [open, setOpen] = useState(false);
+  const expandable = variable.variablesReference > 0;
+  const kids = childrenByRef[variable.variablesReference];
+
+  const toggle = () => {
+    if (!expandable) return;
+    if (!open && !kids) void debugSession.expand(variable.variablesReference);
+    setOpen((o) => !o);
+  };
+
+  return (
+    <>
+      <div
+        className="debug-var-row"
+        style={{ paddingLeft: 8 + depth * 12 }}
+        title={variable.type}
+        role={expandable ? "button" : undefined}
+        tabIndex={expandable ? 0 : undefined}
+        aria-expanded={expandable ? open : undefined}
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (expandable && (e.key === "Enter" || e.key === " ")) {
+            e.preventDefault();
+            toggle();
+          }
+        }}
+      >
+        <span className="debug-var-expander">
+          {expandable ? (open ? "▾" : "▸") : ""}
+        </span>
+        <span className="debug-var-name">{variable.name}</span>
+        <span className="debug-var-value">{variable.value}</span>
+      </div>
+      {open &&
+        kids?.map((child, i) => (
+          <VariableTree
+            key={`${child.name}#${child.variablesReference}#${i}`}
+            variable={child}
+            depth={depth + 1}
+            childrenByRef={childrenByRef}
+          />
+        ))}
+    </>
+  );
+}
+
+/** Watch expressions panel: add/remove and show the last evaluation. */
+function WatchPanel({ watches }: { watches: WatchView[] }) {
+  const [draft, setDraft] = useState("");
+  const submit = () => {
+    const e = draft.trim();
+    if (!e) return;
+    debugSession.addWatch(e);
+    setDraft("");
+  };
+  return (
+    <div className="debug-block">
+      <div className="debug-block-title">Watch</div>
+      <div className="debug-watch-input">
+        <input
+          className="search-input"
+          placeholder="Expressão (ex.: cliente.Nome)…"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+        />
+      </div>
+      {watches.map((w) => (
+        <div key={w.expression} className="debug-var-row" title={w.type ?? w.error}>
+          <span className="debug-var-name">{w.expression}</span>
+          <span className={"debug-var-value" + (w.error ? " debug-var-error" : "")}>
+            {w.error ?? w.value}
+          </span>
+          <button
+            className="debug-watch-remove"
+            title="Remover"
+            onClick={() => debugSession.removeWatch(w.expression)}
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
  * .NET tests section (roadmap csharp-ide-parity, Fase C): discover tests of a
  * `.csproj` (`dotnet test --list-tests`) and run all / one, with pass/fail and
  * duration inline (outcomes come from the locale-independent TRX report).
  */
-function TestsSection({ rootPath }: { rootPath: string }) {
+function TestsSection({
+  rootPath,
+  pendingTest,
+}: {
+  rootPath: string;
+  pendingTest: PendingTest | null;
+}) {
   const csprojs = useCsprojs(rootPath);
   const [selected, setSelected] = useState<string>("");
   const [tests, setTests] = useState<string[] | null>(null);
   const [results, setResults] = useState<Map<string, DotnetTestResult>>(new Map());
   const [busy, setBusy] = useState<"" | "discover" | "run">("");
+  const [coverage, setCoverage] = useState(false);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  // Last pendingTest object we already acted on, so recreating `run`/`debugTest`
+  // (e.g. toggling coverage) doesn't re-trigger the previous test.
+  const handledTest = useRef<PendingTest | null>(null);
 
   useEffect(() => {
     setSelected((cur) => cur || csprojs[0] || "");
@@ -571,6 +775,67 @@ function TestsSection({ rootPath }: { rootPath: string }) {
     setError(null);
   }, [selected]);
 
+  const run = useCallback(
+    async (filters: string[] = [], csprojOverride?: string) => {
+      const csproj = csprojOverride || selected;
+      if (!csproj) return;
+      setBusy("run");
+      setError(null);
+      try {
+        const out = await dotnetTestRun(csproj, filters, coverage);
+        setResults((prev) => {
+          const next = new Map(prev);
+          for (const r of out.results) next.set(r.name, r);
+          return next;
+        });
+        if (out.results.length === 0) setError(out.outputTail);
+        applyCoverageDecorations(out.coverage);
+      } catch (err) {
+        setError(String(err));
+      } finally {
+        setBusy("");
+      }
+    },
+    [selected, coverage]
+  );
+
+  /** Debug one test: launch it under VSTEST_HOST_DEBUG, attach the debugger. */
+  const debugTest = useCallback(
+    async (fqn: string, csprojOverride?: string) => {
+      const csproj = csprojOverride || selected;
+      if (!csproj) return;
+      setBusy("run");
+      setError(null);
+      try {
+        const pid = await dotnetTestDebug(csproj, fqn);
+        await debugSession.attach(pid);
+      } catch (err) {
+        setError(String(err));
+      } finally {
+        setBusy("");
+      }
+    },
+    [selected]
+  );
+
+  // Run/debug a single test when its CodeLens is clicked. The request arrives as
+  // a prop from the App (which listens app-wide and switches to this view first,
+  // so the panel is mounted to receive it). Each click is a fresh object; the ref
+  // guard ensures ONLY a new object triggers — recreating `run`/`debugTest` (e.g.
+  // toggling coverage) must not re-fire the previous test.
+  useEffect(() => {
+    if (!pendingTest || handledTest.current === pendingTest) return;
+    handledTest.current = pendingTest;
+    setSelected(pendingTest.csprojPath);
+    if (pendingTest.mode === "debug") {
+      void debugTest(pendingTest.fullyQualifiedName, pendingTest.csprojPath);
+    } else {
+      void run([pendingTest.fullyQualifiedName], pendingTest.csprojPath);
+    }
+  }, [pendingTest, run, debugTest]);
+
+  // All hooks are above this line — the early return must stay below them so the
+  // hook order is stable across renders (Rules of Hooks).
   if (csprojs.length === 0) return null;
 
   const discover = async () => {
@@ -586,28 +851,30 @@ function TestsSection({ rootPath }: { rootPath: string }) {
     }
   };
 
-  const run = async (filter?: string) => {
-    setBusy("run");
-    setError(null);
-    try {
-      const out = await dotnetTestRun(selected, filter);
-      setResults((prev) => {
-        const next = new Map(prev);
-        for (const r of out.results) next.set(r.name, r);
-        return next;
-      });
-      if (out.results.length === 0) setError(out.outputTail);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setBusy("");
-    }
-  };
-
-  /** TRX names can be `Ns.Class.Method` or carry args — match by prefix too. */
+  // Índice de resultados por FQN. TRX nomeia Theory como `Fqn(args)`, então além
+  // do lookup exato mantemos um índice pelo prefixo (parte antes do `(`). Montado
+  // UMA vez por render (linear) — antes o `resultFor` era O(n) por chamada, ×N
+  // testes ×cada render = O(n²).
+  const byPrefix = new Map<string, DotnetTestResult>();
+  for (const r of results.values()) {
+    const base = r.name.split("(")[0];
+    if (!byPrefix.has(base)) byPrefix.set(base, r);
+  }
   const resultFor = (fqn: string): DotnetTestResult | undefined =>
-    results.get(fqn) ??
-    [...results.values()].find((r) => r.name === fqn || r.name.startsWith(`${fqn}(`));
+    results.get(fqn) ?? byPrefix.get(fqn);
+
+  const groups = tests ? groupTests(tests) : [];
+  const failedFqns = tests
+    ? tests.filter((t) => resultFor(t)?.outcome === "Failed")
+    : [];
+
+  const toggleGroup = (container: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(container)) next.delete(container);
+      else next.add(container);
+      return next;
+    });
 
   return (
     <div className="git-group debug-section">
@@ -628,6 +895,19 @@ function TestsSection({ rootPath }: { rootPath: string }) {
             </option>
           ))}
         </select>
+        <label className="test-coverage-toggle">
+          <input
+            type="checkbox"
+            checked={coverage}
+            disabled={busy !== ""}
+            onChange={(e) => {
+              setCoverage(e.target.checked);
+              // Desligar limpa as faixas na hora (não esperam o próximo run).
+              if (!e.target.checked) clearCoverageDecorations();
+            }}
+          />
+          Cobertura
+        </label>
         <div className="run-draft-actions">
           <button
             className="git-commit-btn"
@@ -645,6 +925,16 @@ function TestsSection({ rootPath }: { rootPath: string }) {
               {busy === "run" ? "Executando…" : "Executar todos"}
             </button>
           )}
+          {failedFqns.length > 0 && (
+            <button
+              className="git-link-btn"
+              disabled={busy !== ""}
+              title="Reexecutar apenas os testes que falharam"
+              onClick={() => void run(failedFqns)}
+            >
+              Reexecutar falhas ({failedFqns.length})
+            </button>
+          )}
         </div>
         {error && <div className="git-error">{error}</div>}
       </div>
@@ -652,34 +942,157 @@ function TestsSection({ rootPath }: { rootPath: string }) {
       {tests && tests.length === 0 && (
         <div className="panel-empty">Nenhum teste neste projeto.</div>
       )}
-      {tests?.map((t) => {
-        const r = resultFor(t);
-        const icon =
-          r?.outcome === "Passed" ? "✓" : r?.outcome === "Failed" ? "✗" : "·";
-        const cls =
-          r?.outcome === "Passed"
-            ? "test-pass"
-            : r?.outcome === "Failed"
-              ? "test-fail"
-              : "";
+
+      {groups.map((g) => {
+        const isCollapsed = collapsed.has(g.container);
+        const groupFailed = g.leaves.some((l) => resultFor(l.fqn)?.outcome === "Failed");
         return (
-          <div key={t} className="test-row" title={r?.message ?? t}>
-            <button
-              className="run-play"
-              title={`Executar ${t}`}
-              disabled={busy !== ""}
-              onClick={() => void run(t)}
+          <div key={g.container} className="test-group">
+            <div
+              className="test-group-header"
+              role="button"
+              tabIndex={0}
+              onClick={() => toggleGroup(g.container)}
+              onKeyDown={(e) => e.key === "Enter" && toggleGroup(g.container)}
+              title={g.container}
             >
-              ▶
-            </button>
-            <span className={`test-icon ${cls}`}>{icon}</span>
-            <span className="test-name">{t.split(".").slice(-2).join(".")}</span>
-            {r?.durationMs != null && (
-              <span className="test-duration">{Math.round(r.durationMs)}ms</span>
-            )}
+              <span className="test-expander">{isCollapsed ? "▸" : "▾"}</span>
+              <span className={"test-class" + (groupFailed ? " test-fail" : "")}>
+                {g.className || g.container}
+              </span>
+              {g.namespace && <span className="test-namespace">{g.namespace}</span>}
+              <span className="git-count">{g.leaves.length}</span>
+            </div>
+            {!isCollapsed &&
+              g.leaves.map((leaf) => {
+                const r = resultFor(leaf.fqn);
+                const icon =
+                  r?.outcome === "Passed" ? "✓" : r?.outcome === "Failed" ? "✗" : "·";
+                const cls =
+                  r?.outcome === "Passed"
+                    ? "test-pass"
+                    : r?.outcome === "Failed"
+                      ? "test-fail"
+                      : "";
+                return (
+                  <div
+                    key={leaf.fqn}
+                    className="test-row test-leaf"
+                    title={r?.message ?? leaf.fqn}
+                  >
+                    <button
+                      className="run-play"
+                      title={`Executar ${leaf.method}`}
+                      disabled={busy !== ""}
+                      onClick={() => void run([leaf.fqn])}
+                    >
+                      ▶
+                    </button>
+                    <button
+                      className="run-play test-debug-btn"
+                      title={`Depurar ${leaf.method}`}
+                      disabled={busy !== ""}
+                      onClick={() => void debugTest(leaf.fqn)}
+                    >
+                      🐞
+                    </button>
+                    <span className={`test-icon ${cls}`}>{icon}</span>
+                    <span className="test-name">{leaf.method}</span>
+                    {r?.durationMs != null && (
+                      <span className="test-duration">{Math.round(r.durationMs)}ms</span>
+                    )}
+                  </div>
+                );
+              })}
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/** The four explicit project actions, in the order shown. */
+const PROJECT_ACTIONS = [
+  { key: "build", label: "Compilar", run: dotnetBuild },
+  { key: "rebuild", label: "Recompilar", run: dotnetRebuild },
+  { key: "clean", label: "Limpar", run: dotnetClean },
+  { key: "restore", label: "Restaurar", run: dotnetRestore },
+] as const;
+
+/**
+ * Explicit build/rebuild/clean/restore for a selected `.csproj` (or the whole
+ * workspace) — the actions the C# Dev Kit exposes on the Solution Explorer
+ * (milestone #11). Distinct from build-on-save diagnostics (that stays in the
+ * Problems panel); here the user triggers the action and sees success + output.
+ */
+function ProjectActionsSection({ rootPath }: { rootPath: string }) {
+  const csprojs = useCsprojs(rootPath);
+  // "" = whole workspace; otherwise a specific project path.
+  const [target, setTarget] = useState<string>("");
+  const [busy, setBusy] = useState<string>("");
+  const [result, setResult] = useState<DotnetActionResult | null>(null);
+
+  useEffect(() => {
+    setResult(null);
+  }, [target]);
+
+  if (csprojs.length === 0) return null;
+
+  const runAction = async (
+    key: string,
+    fn: (t: string) => Promise<DotnetActionResult>
+  ) => {
+    setBusy(key);
+    setResult(null);
+    try {
+      setResult(await fn(target));
+    } catch (err) {
+      setResult({ success: false, output: String(err) });
+    } finally {
+      setBusy("");
+    }
+  };
+
+  return (
+    <div className="git-group debug-section">
+      <div className="git-group-header">
+        <span>Ações do projeto (.NET)</span>
+      </div>
+      <div className="debug-launcher">
+        <select
+          className="search-input"
+          value={target}
+          onChange={(e) => setTarget(e.target.value)}
+          disabled={busy !== ""}
+        >
+          <option value="">Solução inteira</option>
+          {csprojs.map((p) => (
+            <option key={p} value={p}>
+              {p.split(/[\/]/).pop()}
+            </option>
+          ))}
+        </select>
+        <div className="run-draft-actions">
+          {PROJECT_ACTIONS.map((a) => (
+            <button
+              key={a.key}
+              className="git-link-btn"
+              disabled={busy !== ""}
+              onClick={() => void runAction(a.key, a.run)}
+            >
+              {busy === a.key ? `${a.label}…` : a.label}
+            </button>
+          ))}
+        </div>
+        {result && (
+          <div className={result.success ? "test-pass" : "git-error"}>
+            {result.success ? "✓ Concluído" : "✗ Falhou"}
+            {result.output.trim() && (
+              <pre className="run-action-output">{result.output.trim()}</pre>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

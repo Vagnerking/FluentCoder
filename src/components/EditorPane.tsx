@@ -33,6 +33,7 @@ import type {
   PackageManager,
   PackageOutdatedDependency,
 } from "../types";
+import { EDITOR_OPTIONS } from "./editorOptions.ts";
 import { palette } from "../theme/palette";
 
 // Console-only debug logging. (It used to mirror to a hardcoded path on another
@@ -1110,15 +1111,33 @@ export function EditorPane({
     const path = fromFileUri(model.uri.toString());
     const decs: editor.IModelDeltaDecoration[] = debugSession
       .breakpointsFor(path)
-      .filter((line) => line <= model.getLineCount())
-      .map((line) => ({
-        range: new monaco.Range(line, 1, line, 1),
-        options: {
-          glyphMarginClassName: "debug-breakpoint-glyph",
-          glyphMarginHoverMessage: { value: "Breakpoint" },
-          stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
-        },
-      }));
+      .filter((bp) => bp.line <= model.getLineCount())
+      .map((bp) => {
+        // Distinct glyph per kind so conditional/logpoint breakpoints read at a
+        // glance; the hover shows the condition/message.
+        const isLog = Boolean(bp.logMessage);
+        const isConditional = Boolean(bp.condition || bp.hitCondition);
+        const glyph = isLog
+          ? "debug-logpoint-glyph"
+          : isConditional
+            ? "debug-breakpoint-conditional-glyph"
+            : "debug-breakpoint-glyph";
+        const hover = isLog
+          ? `Logpoint: ${bp.logMessage}`
+          : bp.condition
+            ? `Breakpoint condicional: ${bp.condition}`
+            : bp.hitCondition
+              ? `Breakpoint (hit ${bp.hitCondition})`
+              : "Breakpoint";
+        return {
+          range: new monaco.Range(bp.line, 1, bp.line, 1),
+          options: {
+            glyphMarginClassName: glyph,
+            glyphMarginHoverMessage: { value: hover },
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+          },
+        };
+      });
     const stopped = debugSession.getState().stoppedAt;
     if (
       stopped &&
@@ -2109,6 +2128,39 @@ export function EditorPane({
       if (!line || !model || model.uri.scheme !== "file") return;
       debugSession.toggleBreakpoint(fromFileUri(model.uri.toString()), line);
     });
+    // Right-click on the glyph margin: edit the breakpoint's condition / logpoint
+    // (a conditional breakpoint or logpoint, VS Code-style). Prompt-based to match
+    // the app's lightweight input idiom (branch name, stash message, …).
+    editorInstance.onContextMenu((e) => {
+      if (e.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) return;
+      const line = e.target.position?.lineNumber;
+      const model = editorInstance.getModel();
+      if (!line || !model || model.uri.scheme !== "file") return;
+      e.event.preventDefault();
+      e.event.stopPropagation();
+      const path = fromFileUri(model.uri.toString());
+      const current = debugSession.breakpointsFor(path).find((b) => b.line === line);
+      const condition = window.prompt(
+        "Condição do breakpoint (vazio = incondicional):",
+        current?.condition ?? ""
+      );
+      if (condition === null) return; // cancelled
+      const logMessage = window.prompt(
+        "Logpoint (mensagem, {expr} interpolado; vazio = breakpoint normal):",
+        current?.logMessage ?? ""
+      );
+      if (logMessage === null) return;
+      const hitCondition = window.prompt(
+        'Contagem de hits (ex.: "5", ">3"; vazio = toda vez):',
+        current?.hitCondition ?? ""
+      );
+      if (hitCondition === null) return;
+      debugSession.setBreakpointSpec(path, line, {
+        condition: condition.trim() || undefined,
+        logMessage: logMessage.trim() || undefined,
+        hitCondition: hitCondition.trim() || undefined,
+      });
+    });
     editorInstance.onDidChangeModel(() => applyDebugDecorations());
     applyDebugDecorations();
     // v10 (#77): força a aplicação do tema custom. Na stack @codingame a prop
@@ -2378,57 +2430,14 @@ export function EditorPane({
       beforeMount={handleBeforeMount}
       onMount={handleMount}
       options={{
-        fontSize: 14,
+        ...EDITOR_OPTIONS,
+        // Revisões Git (HEAD/índice/commit) abrem como somente leitura.
         readOnly: Boolean(file.readOnly),
         readOnlyMessage: { value: file.sourceLabel ?? "Esta revisão é somente leitura." },
         codeLens: true,
         codeLensFontSize: 12,
         codeLensFontFamily: "Segoe UI Variable, Segoe UI, sans-serif",
         lineDecorationsWidth: 13,
-        minimap: { enabled: false },
-        scrollBeyondLastLine: false,
-        automaticLayout: true,
-        tabSize: 2,
-        // Debugger gutter: explicit so breakpoint glyphs always have a lane.
-        glyphMargin: true,
-        // Indentation: keep Monaco's smartest auto-indent on, detect the file's
-        // own tabs/spaces, and let the language server format on type/paste so
-        // code stays properly indented (VSCode-like) across languages.
-        autoIndent: "full",
-        detectIndentation: true,
-        formatOnType: true,
-        formatOnPaste: true,
-        padding: { top: 12 },
-        mouseWheelZoom: true,
-        // Suggest (IntelliSense) widget sizing. Monaco derives each row's
-        // height from `suggestLineHeight` or, when 0, the editor's computed
-        // `fontInfo.lineHeight`. Pinning both font size and line height keeps
-        // the virtual list rows tall enough for the label + 22px type icon, so
-        // entries don't overlap into an unreadable, doubled list.
-        suggestFontSize: 13,
-        suggestLineHeight: 22,
-        // Desliga as sugestões baseadas em palavras do documento (os itens com
-        // ícone `abc`). Na stack @codingame/v10 elas vêm LIGADAS por default e
-        // poluíam o autocomplete do `.cshtml`: ao digitar `@Model` apareciam
-        // palavras soltas do arquivo em vez (ou antes) dos membros C# do Roslyn,
-        // e enquanto a completion da projeção (mais lenta) ainda não respondia,
-        // só o lixo `abc` aparecia. Com isso off, só os providers reais
-        // (Roslyn via projeção + HTML) preenchem o widget.
-        wordBasedSuggestions: "off",
-        // Semantic highlighting NATIVO desligado na stack monaco-languageclient
-        // v10. Motivo (comprovado por experimento — ver docs/migration): a stack
-        // `@codingame/monaco-vscode-api` resolve as cores de semantic tokens
-        // pelo serviço de tema do VS Code (que exige theme/textmate
-        // service-overrides + `semanticTokenColors`), NÃO pelas `rules` do
-        // `defineTheme` standalone. Com o flag ligado, os semantic tokens do
-        // Roslyn sobrescreviam a camada Monarch e ficavam SEM cor — deixando o
-        // C# inteiro apagado. O Monarch (`csharpMonarch` em monacoSetup.ts)
-        // colore o léxico via `rules` do tema, e a classificação semântica fina
-        // do Roslyn (class vs struct vs enum, método vs variável) é aplicada
-        // por DECORATIONS pelo bridge de semantic tokens — ver
-        // src/lsp/semanticColorizer.ts. Este flag deve permanecer false: ligar
-        // o engine nativo reintroduziria a camada sem cor POR CIMA de tudo.
-        "semanticHighlighting.enabled": false,
       }}
     />
   );

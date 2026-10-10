@@ -5,6 +5,15 @@
   background: radial-gradient(circle at 50% 50%, #e5484d 0 42%, transparent 46%);
   cursor: pointer;
 }
+/* Conditional breakpoint: hollow red dot. Logpoint: diamond-ish amber. (#9) */
+.debug-breakpoint-conditional-glyph {
+  background: radial-gradient(circle at 50% 50%, transparent 0 26%, #e5484d 30% 42%, transparent 46%);
+  cursor: pointer;
+}
+.debug-logpoint-glyph {
+  background: radial-gradient(circle at 50% 50%, #f5a623 0 42%, transparent 46%);
+  cursor: pointer;
+}
 /* Yellow arrow-ish marker + line highlight where execution is stopped. */
 .debug-stopped-glyph {
   background: radial-gradient(circle at 50% 50%, #f5d90a 0 38%, transparent 44%);
@@ -95,6 +104,19 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Variables tree + watch (milestone #9). */
+.debug-var-row[role="button"] { cursor: pointer; }
+.debug-var-row[role="button"]:hover { background: rgba(127, 127, 127, 0.08); }
+.debug-var-expander { width: 12px; flex-shrink: 0; opacity: 0.7; font-size: 10px; }
+.debug-var-error { color: #e5484d; font-style: italic; }
+.debug-watch-input { padding: 2px 12px; }
+.debug-watch-input .search-input { width: 100%; font-size: 12px; }
+.debug-watch-remove {
+  margin-left: auto; background: none; border: none; color: var(--text-muted);
+  cursor: pointer; opacity: 0; flex-shrink: 0;
+}
+.debug-var-row:hover .debug-watch-remove { opacity: 0.7; }
+.debug-frame-row.selected { background: rgba(127, 127, 127, 0.16); font-weight: 500; }
 .debug-attach-list {
   display: flex;
   flex-direction: column;
@@ -134,6 +156,65 @@
   opacity: 0.5;
   font-size: 11px;
   flex-shrink: 0;
+}
+
+/* ── Test tree (milestone #10) ── */
+.test-coverage-toggle {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--text-muted); user-select: none;
+}
+.test-group-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 8px; cursor: pointer; font-size: 12px;
+}
+.test-group-header:hover { background: var(--bg-elevated, rgba(127,127,127,0.08)); }
+.test-expander { width: 12px; flex-shrink: 0; opacity: 0.7; font-size: 10px; }
+.test-class { color: var(--text); font-weight: 500; }
+.test-namespace { color: var(--text-muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.test-group-header .git-count { margin-left: auto; }
+.test-leaf { padding-left: 22px; }
+.test-debug-btn { font-size: 11px; }
+
+/* Coverage gutter bands (from the Cobertura report). */
+.coverage-covered { background: rgba(64, 191, 128, 0.55); width: 3px !important; margin-left: 3px; }
+.coverage-uncovered { background: rgba(229, 83, 75, 0.6); width: 3px !important; margin-left: 3px; }
+
+/* ── NuGet manager modal (milestone #11) ── */
+.nuget-manager { width: min(680px, 92vw); max-height: 80vh; }
+.nuget-toolbar { display: flex; gap: 8px; align-items: center; padding: 0 12px 8px; }
+.nuget-toolbar .search-input { flex: 1; min-width: 0; }
+.nuget-tabs { display: flex; gap: 2px; flex-shrink: 0; }
+.nuget-tab {
+  background: transparent; border: none; color: var(--text-muted);
+  padding: 4px 10px; font-size: 12px; cursor: pointer; border-radius: 4px;
+}
+.nuget-tab.active { color: var(--text); background: var(--bg-elevated, rgba(127,127,127,0.12)); }
+.nuget-error { margin: 0 12px 6px; max-height: 100px; overflow: auto; white-space: pre-wrap; font-size: 11px; }
+.nuget-list { max-height: 56vh; }
+.nuget-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px; border-bottom: 1px solid var(--border-subtle, rgba(127,127,127,0.12));
+}
+.nuget-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.nuget-id { font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nuget-version { font-size: 11px; color: var(--text-muted); }
+.nuget-update { color: var(--accent); font-weight: 600; }
+.nuget-owners, .nuget-downloads { opacity: 0.8; }
+.nuget-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.nuget-remove-btn { color: var(--danger, #e5534b); }
+
+/* Output tail of an explicit .NET project action (build/clean/restore). */
+.run-action-output {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  max-height: 160px;
+  overflow: auto;
+  font-size: 11px;
+  font-family: var(--mono-font, monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-elevated, rgba(127, 127, 127, 0.08));
+  border-radius: 4px;
 }
 
 /* ── Solution Explorer (roadmap csharp-ide-parity, Fase D) ────────────────── */

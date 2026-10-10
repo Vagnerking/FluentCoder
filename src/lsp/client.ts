@@ -13,6 +13,7 @@ import { installReferencesBridge } from "./references";
 import { installDiagnosticsBridge } from "./diagnostics";
 import { ensureVscodeServices } from "./vscodeServices";
 import { disableNativeClientFeature } from "./nativeFeatures";
+import { summarizeCapabilities } from "./capabilities";
 import type { DiagnosticMode } from "./diagnosticMode";
 import {
   applySemanticTokenDecorations,
@@ -169,6 +170,35 @@ export async function createLanguageClient(
           return { action: CloseAction.DoNotRestart };
         },
       },
+      middleware: {
+        // DIAG (Ctrl+. / quick fix): loga o textDocument/codeAction ANTES do
+        // funil extHost→Monaco, para separar "o Roslyn não devolveu a action"
+        // de "uma camada do editor descartou". A linha contém o serverId
+        // (ex.: "csharp"), então o espelho para razor-diag.log (PIPELINE_RE em
+        // debug.ts) captura mesmo em build empacotada.
+        provideCodeActions: async (document, range, context, token, next) => {
+          const startedAt = performance.now();
+          lspLog("codeAction request", config.serverId, {
+            uri: document.uri.toString().slice(-48),
+            range: `${range.start.line}:${range.start.character}-${range.end.line}:${range.end.character}`,
+            only: context.only?.value ?? null,
+            trigger: context.triggerKind,
+            ctxDiags: context.diagnostics.length,
+          });
+          const result = await next(document, range, context, token);
+          try {
+            const items = Array.isArray(result) ? result : [];
+            lspLog("codeAction result", config.serverId, {
+              ms: Math.round(performance.now() - startedAt),
+              cancelled: token.isCancellationRequested,
+              titles: items.map((a) => a.title),
+            });
+          } catch {
+            /* diagnóstico é best-effort; nunca quebrar o quick fix por log */
+          }
+          return result;
+        },
+      },
     },
     // ─── THE KEY v10 CHANGE ───
     // v1.x: connectionProvider: { get: () => Promise.resolve({ reader, writer }) }
@@ -216,6 +246,7 @@ export async function createLanguageClient(
     throw err;
   }
   lspLog("client.start() RESOLVED for", config.serverId, "state=", client.state);
+  logServerCapabilities(client, config.serverId);
 
   runningClientsById.set(config.serverId, client);
   serverIdByClient.set(client, config.serverId);
@@ -275,6 +306,31 @@ export async function createLanguageClient(
   }
 
   return client;
+}
+
+/**
+ * Logs the server's advertised capabilities once at startup. This turns the
+ * "what does Roslyn actually offer" question from a guess into a logged fact —
+ * the features in milestone #5 (inlay hints, implementation, type-definition,
+ * workspace symbols, range/on-type formatting) all rely on the native client
+ * feature auto-registering ONLY when the matching capability is present here.
+ */
+function logServerCapabilities(
+  client: MonacoLanguageClient,
+  serverId: string
+): void {
+  try {
+    const caps = client.initializeResult?.capabilities as
+      | Record<string, unknown>
+      | undefined;
+    const { present, absent } = summarizeCapabilities(caps);
+    lspLog("server capabilities", serverId, {
+      present: present.join(","),
+      absent: absent.join(","),
+    });
+  } catch (err) {
+    lspLog("could not read server capabilities", serverId, String(err));
+  }
 }
 
 /**
@@ -349,6 +405,19 @@ export function refreshLanguageClientSemanticTokens(
   client: MonacoLanguageClient
 ): void {
   clientContributions.get(client)?.refreshSemanticTokens?.();
+}
+
+/**
+ * Nudges a Roslyn client to re-pull `workspace/configuration`. Roslyn caches the
+ * settings it pulled at startup; a `didChangeConfiguration` notification makes it
+ * ask again (answered live in `csharpConfiguration.ts`). Used when a runtime
+ * preference that maps to a pulled setting changes — e.g. the inlay-hints toggle
+ * — so the change takes effect without a reload. Best-effort; never throws.
+ */
+export function nudgeClientConfiguration(client: MonacoLanguageClient): void {
+  void client
+    .sendNotification("workspace/didChangeConfiguration", { settings: {} })
+    .catch((err) => lspLog("didChangeConfiguration nudge failed", String(err)));
 }
 
 /**

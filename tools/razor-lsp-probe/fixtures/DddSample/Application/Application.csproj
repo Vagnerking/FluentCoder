@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Ddd.Application</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Camada Application REFERENCIA a camada Domain (cenário 1: add-using). -->
+    <ProjectReference Include="..\Domain\Domain.csproj" />
+  </ItemGroup>
+</Project>

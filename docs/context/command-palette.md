@@ -15,7 +15,15 @@ continua sendo a busca de **arquivos**).
   comando é `{ id, title, detail?, run }`. Adicionar um comando = um objeto novo
   nesse array.
 - **Atalho:** registrado no handler de teclado do `App.tsx` (ramo
-  `Ctrl+Shift+P`, antes do `Ctrl+P`).
+  `Ctrl+Shift+P`, antes do `Ctrl+P`). Esse handler escuta `keydown` no
+  `window` (fase de bubble); para o evento chegar até ele com o editor
+  focado, os keybindings padrão do VS Code para `Ctrl+Shift+P`, `Ctrl+P` e
+  `F1` são **desregistrados** do Monaco em
+  [`src/monaco-loader.ts`](../../src/monaco-loader.ts)
+  (`monaco.editor.addKeybindingRules` com `command: null`). Sem isso, o
+  editor `@codingame` abre o quick-input interno do VS Code (uma caixa vazia,
+  sem providers) e engole a tecla — a paleta do app nunca abre. Não remova
+  essas regras.
 
 ## Comando: "Resetar Servidores de Código"
 

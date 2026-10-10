@@ -1,6 +1,7 @@
 mod agents;
 mod child_process;
 mod dap;
+mod dotnet_tools;
 mod file_index;
 mod fs_commands;
 mod git;
@@ -49,10 +50,15 @@ pub fn run() {
             {
                 let icon =
                     tauri::image::Image::from_bytes(include_bytes!("../icons/128x128@2x.png")).ok();
-                if let Some(icon) = icon {
-                    for (_, win) in app.webview_windows() {
+                for (_, win) in app.webview_windows() {
+                    if let Some(icon) = &icon {
                         let _ = win.set_icon(icon.clone());
                     }
+                    // The static main window is declared decorated + opaque so it
+                    // renders on macOS (a transparent frameless window never
+                    // materializes there). On Windows this restores the frameless
+                    // Mica chrome the UI was designed for.
+                    window::apply_platform_chrome(&win);
                 }
             }
             window::restore_main_window(app.handle());
@@ -205,6 +211,19 @@ pub fn run() {
             dap::dap_resolve_dotnet_target,
             testrunner::dotnet_test_list,
             testrunner::dotnet_test_run,
+            testrunner::dotnet_test_debug,
+            dotnet_tools::dotnet_build,
+            dotnet_tools::dotnet_clean,
+            dotnet_tools::dotnet_restore,
+            dotnet_tools::dotnet_rebuild,
+            dotnet_tools::nuget_list,
+            dotnet_tools::nuget_search,
+            dotnet_tools::nuget_add,
+            dotnet_tools::nuget_remove,
+            dotnet_tools::dotnet_new_list,
+            dotnet_tools::dotnet_new_create,
+            dotnet_tools::dotnet_add_reference,
+            dotnet_tools::dotnet_find_type_project,
             razor::commands::razor_prepare,
             razor::commands::razor_emit_live,
             razor::commands::razor_commit_live_map,

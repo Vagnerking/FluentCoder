@@ -2095,9 +2095,20 @@ export interface DotnetTestResult {
   message: string | null;
 }
 
+/** Per-file line coverage from a run (milestone #10). */
+export interface FileCoverage {
+  path: string;
+  /** Fraction of lines covered, 0–1. */
+  lineRate: number;
+  coveredLines: number[];
+  uncoveredLines: number[];
+}
+
 export interface DotnetTestRun {
   results: DotnetTestResult[];
   outputTail: string;
+  /** Per-file coverage when the run collected it; empty otherwise. */
+  coverage: FileCoverage[];
 }
 
 /** Lists fully-qualified test names (builds the project as a side effect). */
@@ -2105,12 +2116,134 @@ export function dotnetTestList(csprojPath: string): Promise<string[]> {
   return invoke<string[]>("dotnet_test_list", { csprojPath });
 }
 
-/** Runs all tests (or only `filter` = one FullyQualifiedName). */
+/**
+ * Runs tests. `filters` empty ⇒ all; one FQN ⇒ single test; many ⇒ re-run those
+ * (OR-ed — used by "re-run failed"). `collectCoverage` adds line coverage.
+ */
 export function dotnetTestRun(
   csprojPath: string,
-  filter?: string
+  filters: string[] = [],
+  collectCoverage = false
 ): Promise<DotnetTestRun> {
-  return invoke<DotnetTestRun>("dotnet_test_run", { csprojPath, filter: filter ?? null });
+  return invoke<DotnetTestRun>("dotnet_test_run", {
+    csprojPath,
+    filters,
+    collectCoverage,
+  });
+}
+
+/**
+ * Launches a single test under `VSTEST_HOST_DEBUG=1` and returns the testhost
+ * PID so the debugger can attach to it (milestone #10). The test blocks until the
+ * attach happens, then runs under the debugger.
+ */
+export function dotnetTestDebug(csprojPath: string, fqn: string): Promise<number> {
+  return invoke<number>("dotnet_test_debug", { csprojPath, fqn });
+}
+
+/** Result of an explicit build/clean/restore/rebuild action (milestone #11). */
+export interface DotnetActionResult {
+  success: boolean;
+  /** Tail of the combined stdout+stderr. */
+  output: string;
+}
+
+/** `target` = a `.csproj`/`.sln` path, or "" to act on the whole workspace. */
+export function dotnetBuild(target: string): Promise<DotnetActionResult> {
+  return invoke<DotnetActionResult>("dotnet_build", { target });
+}
+export function dotnetClean(target: string): Promise<DotnetActionResult> {
+  return invoke<DotnetActionResult>("dotnet_clean", { target });
+}
+export function dotnetRestore(target: string): Promise<DotnetActionResult> {
+  return invoke<DotnetActionResult>("dotnet_restore", { target });
+}
+export function dotnetRebuild(target: string): Promise<DotnetActionResult> {
+  return invoke<DotnetActionResult>("dotnet_rebuild", { target });
+}
+
+/** An installed NuGet package (milestone #11). `latestVersion` is set when a
+ *  newer version is available (from `dotnet list package --outdated`). */
+export interface NugetPackage {
+  id: string;
+  requestedVersion: string;
+  resolvedVersion: string;
+  latestVersion: string | null;
+}
+
+/** A nuget.org search hit. */
+export interface NugetSearchHit {
+  id: string;
+  latestVersion: string;
+  totalDownloads: number | null;
+  owners: string | null;
+}
+
+export function nugetList(csprojPath: string): Promise<NugetPackage[]> {
+  return invoke<NugetPackage[]>("nuget_list", { csprojPath });
+}
+export function nugetSearch(query: string): Promise<NugetSearchHit[]> {
+  return invoke<NugetSearchHit[]>("nuget_search", { query });
+}
+export function nugetAdd(
+  csprojPath: string,
+  packageId: string,
+  version?: string
+): Promise<DotnetActionResult> {
+  return invoke<DotnetActionResult>("nuget_add", {
+    csprojPath,
+    packageId,
+    version: version ?? null,
+  });
+}
+export function nugetRemove(
+  csprojPath: string,
+  packageId: string
+): Promise<DotnetActionResult> {
+  return invoke<DotnetActionResult>("nuget_remove", { csprojPath, packageId });
+}
+
+/** A `dotnet new` template (milestone #11). */
+export interface DotnetTemplate {
+  name: string;
+  /** Short name passed to `dotnet new`, e.g. "mvc". */
+  shortName: string;
+  tags: string;
+}
+
+export function dotnetNewList(): Promise<DotnetTemplate[]> {
+  return invoke<DotnetTemplate[]>("dotnet_new_list");
+}
+export function dotnetNewCreate(
+  template: string,
+  name: string,
+  outputDir: string
+): Promise<DotnetActionResult> {
+  return invoke<DotnetActionResult>("dotnet_new_create", {
+    template,
+    name,
+    outputDir,
+  });
+}
+
+/** Adds a project reference: `dotnet add <from> reference <to>` (issue #95). */
+export function dotnetAddReference(
+  fromCsproj: string,
+  toCsproj: string
+): Promise<DotnetActionResult> {
+  return invoke<DotnetActionResult>("dotnet_add_reference", {
+    fromCsproj,
+    toCsproj,
+  });
+}
+
+/** The `.csproj` that owns the project defining `typeName` in workspace source,
+ *  or null when the type isn't found in any project (e.g. it's from a package). */
+export function dotnetFindTypeProject(
+  root: string,
+  typeName: string
+): Promise<string | null> {
+  return invoke<string | null>("dotnet_find_type_project", { root, typeName });
 }
 
 /**
