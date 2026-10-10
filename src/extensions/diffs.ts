@@ -22,6 +22,8 @@ export interface ExtPendingDiff {
   sourceLabel: string;
   extensionId?: string;
   readonly?: boolean;
+  /** Uri do lado direito no host (threads de comentário/decorações dele). */
+  rightUri: string;
 }
 
 let diffs: ExtPendingDiff[] = [];
@@ -44,6 +46,7 @@ export function diffFromEvent(e: ExtensionDiffEvent): ExtPendingDiff {
     sourceLabel: e.extensionName ?? "extensão",
     extensionId: e.extensionId,
     readonly: e.right.readonly,
+    rightUri: e.right.uri,
   };
 }
 

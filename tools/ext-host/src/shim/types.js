@@ -485,15 +485,55 @@ class NotebookEdit {
   }
 }
 class ShellExecution {
-  constructor(commandLine, args, options) {
-    Object.assign(this, { commandLine, args, options });
+  // new ShellExecution(commandLine, options?) ou (command, args, options?)
+  constructor(commandOrLine, argsOrOptions, options) {
+    if (Array.isArray(argsOrOptions)) Object.assign(this, { command: commandOrLine, args: argsOrOptions, options });
+    else Object.assign(this, { commandLine: commandOrLine, args: undefined, options: argsOrOptions });
+  }
+}
+class ProcessExecution {
+  // new ProcessExecution(process, options?) ou (process, args, options?)
+  constructor(process, argsOrOptions, options) {
+    if (Array.isArray(argsOrOptions)) Object.assign(this, { process, args: argsOrOptions, options });
+    else Object.assign(this, { process, args: [], options: argsOrOptions });
+  }
+}
+class CustomExecution {
+  constructor(callback) {
+    this.callback = callback;
   }
 }
 class Task {
-  constructor(definition, scope, name, source, execution, problemMatchers) {
-    Object.assign(this, { definition, scope, name, source, execution, problemMatchers });
+  // (definition, scope, name, source, execution?, problemMatchers?) ou o legado
+  // (definition, name, source, execution?, problemMatchers?).
+  constructor(definition, scopeOrName, nameOrSource, sourceOrExecution, executionOrMatchers, problemMatchers) {
+    const legacy = typeof scopeOrName === 'string';
+    if (legacy) Object.assign(this, { definition, scope: undefined, name: scopeOrName, source: nameOrSource, execution: sourceOrExecution, problemMatchers: executionOrMatchers });
+    else Object.assign(this, { definition, scope: scopeOrName, name: nameOrSource, source: sourceOrExecution, execution: executionOrMatchers, problemMatchers });
+    this.isBackground = false;
+    this.presentationOptions = {};
+    this.runOptions = {};
+    this.group = undefined;
+    this.detail = undefined;
   }
 }
+class TaskGroup {
+  constructor(id, label) {
+    this.id = id;
+    this.label = label;
+  }
+}
+TaskGroup.Clean = new TaskGroup('clean', 'Clean');
+TaskGroup.Build = new TaskGroup('build', 'Build');
+TaskGroup.Rebuild = new TaskGroup('rebuild', 'Rebuild');
+TaskGroup.Test = new TaskGroup('test', 'Test');
+class NotebookData {
+  constructor(cells) {
+    this.cells = cells || [];
+  }
+}
+/** QuickInputButtons.Back (botão "voltar" padrão do QuickPick/InputBox). */
+const QuickInputButtons = { Back: { iconPath: { id: 'arrow-left' }, tooltip: 'Voltar', __back: true } };
 class TreeItem {
   constructor(labelOrUri, collapsibleState) {
     this.label = labelOrUri;
@@ -544,6 +584,11 @@ const enums = {
   TextEditorSelectionChangeKind: { Keyboard: 1, Mouse: 2, Command: 3 },
   EnvironmentVariableMutatorType: { Replace: 1, Append: 2, Prepend: 3 },
   ShellExecutionKind: {},
+  TaskRevealKind: { Always: 1, Silent: 2, Never: 3 },
+  TaskPanelKind: { Shared: 1, Dedicated: 2, New: 3 },
+  ShellQuoting: { Escape: 1, Strong: 2, Weak: 3 },
+  InputBoxValidationSeverity: { Info: 1, Warning: 2, Error: 3 },
+  TerminalShellExecutionCommandLineConfidence: { Low: 0, Medium: 1, High: 2 },
   CompletionItemKind: enumOf(['Text', 'Method', 'Function', 'Constructor', 'Field', 'Variable', 'Class', 'Interface', 'Module', 'Property', 'Unit', 'Value', 'Enum', 'Keyword', 'Snippet', 'Color', 'File', 'Reference', 'Folder', 'EnumMember', 'Constant', 'Struct', 'Event', 'Operator', 'TypeParameter']),
 };
 
@@ -576,7 +621,12 @@ module.exports = {
   NotebookRange,
   NotebookEdit,
   ShellExecution,
+  ProcessExecution,
+  CustomExecution,
   Task,
+  TaskGroup,
+  NotebookData,
+  QuickInputButtons,
   TreeItem,
   ...enums,
 };

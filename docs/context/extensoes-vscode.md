@@ -30,7 +30,8 @@ src/extensions/client.ts ──invoke(ext_host_send)──▶ Rust src-tauri/src
 - **Sidecar Node** (`tools/ext-host/`, CommonJS puro, sem dependências):
   `main.js` (protocolo stdio), `src/host.js` (estado), `src/shim/*` (API
   `vscode`: `api.js`, `documents.js`, `terminal.js`, `watcher.js`,
-  `memento.js`, `webview.js`, `configuration.js`, `types.js`),
+  `memento.js`, `webview.js`, `configuration.js`, `types.js`, `comments.js`,
+  `quickinput.js`, `tasks.js`),
   `src/server.js` (HTTP), `src/preamble.js` (injeção no HTML),
   `src/protocol.js` (validação), `src/when.js` (cláusulas `when`),
   `src/contributions.js` (`contributes`). `require('vscode')` é interceptado em
@@ -59,14 +60,21 @@ respostas); respostas `{id, result|error}`; eventos `{event, …}`.
 | ciclo de vida | `initialize` (workspaceFolders, dataDir, language, `secrets: "keyring"`, debugWebviews), `listInstalled`, `loadExtension`, `activate`, `shutdown` |
 | webviews | `resolveView`, `webviewMessage`, `webviewState`, `webviewVisible`, `webviewUrl`, `disposeWebview`, `setTheme` |
 | editor | `documentOpened`, `documentChanged` (mudanças incrementais 0-based + versão + dirty + undo/redo), `documentClosed`, `documentSaved`, `editorsChanged` (ativo, visíveis, abas), `selectionChanged`, `visibleRangesChanged`, `diagnostics`, `windowState` |
-| ações | `executeCommand`, `listCommands`, `runKeybinding`, `diffAction` (accept/reject + texto final), `diffClosed`, `terminalOpened` (pid), `terminalClosed` (exitCode), `handleUri`, `provideCodeLenses`, `executeCodeLens`, `respond`, `setWorkspaceFolders` |
+| ações | `executeCommand`, `listCommands`, `runKeybinding`, `diffAction` (accept/reject + texto final), `diffEdited` (texto do lado direito editado na revisão), `diffClosed`, `terminalOpened` (pid, `shellIntegration` pedida), `terminalShell` (OSC 633: ready/cwd/start/data/end), `terminalClosed` (exitCode), `handleUri`, `provideCodeLenses`, `executeCodeLens`, `respond`, `setWorkspaceFolders` |
+| comentários | `commentAction` (botão de um thread: só comandos que o thread oferece), `commentReaction`, `commentingRanges`, `commentThreads` (snapshot) |
+| quick input | `quickInputEvent` (value/accept/hide/active/selection/button/itemButton) |
+| painéis | `webviewPanelState` (aba do painel na grade: active/visible/viewColumn) |
 
-Eventos host → app: `postMessage`, `webviewHtml`, `webviewPanelCreated`,
-`webviewTitle`, `webviewDisposed`, `revealWebview`, `revealView`, `context`,
-`request` (showMessage, quickPick, inputBox, openDialog, saveDialog, **applyEdit**,
-**saveDocument**, **clipboardRead** → o app responde com `respond`), `openFile`
-(com seleção), `openVirtualDocument`, `diff`/`closeDiff`, `setSelection`,
-`revealRange`, `decorationType`/`decorations`/`decorationTypeDisposed`,
+Eventos host → app: `postMessage`, `webviewHtml`, `webviewPanelCreated`
+(com `viewColumn`/`preserveFocus`), `webviewTitle`, `webviewDisposed`,
+`revealWebview` (com `viewColumn`), `revealView`, `context`,
+`request` (showMessage, openDialog, saveDialog, **applyEdit**,
+**saveDocument**, **clipboardRead** → o app responde com `respond`),
+`quickInput`/`quickInputHide`, `commentThread`/`commentThreadDisposed`,
+`openFile` (com seleção), `openVirtualDocument`, `diff`/`closeDiff`,
+`diffContent` (a extensão editou o lado direito), `setSelection`,
+`revealRange`, `decorationType`/`decorations` (com `path`, ou `uri`+`diffId`
+no lado virtual de um diff)/`decorationTypeDisposed`,
 `extDiagnostics`, `statusBarItem`, `statusMessage`, `output`/`outputShow`,
 `terminalCreate`/`terminalShow`/`terminalSendText`/`terminalDispose`,
 `closeEditor`, `appCommand`, `codeLensProviders`/`codeLensChanged`,
@@ -125,6 +133,19 @@ Eventos host → app: `postMessage`, `webviewHtml`, `webviewPanelCreated`,
 11. **Estilos de decoração** viram CSS no app: só propriedades conhecidas e
     valores sem `; { } < > \` (`sanitizeDecorationOptions` no sidecar e
     `renderDecorationType` no app).
+12. **Ações de comentário**: o app só pode executar (`commentAction`) os
+    comandos que o PRÓPRIO thread oferece (menus `comments/*` da extensão dona
+    com `when` válido, calculados no host); o argumento é o thread/comentário
+    real do host, nunca um objeto vindo do app. Codicons das ações só
+    `[\w-]+`; corpo de comentário vira texto (sem HTML).
+13. **Shell integration nunca altera dotfiles**: os scripts ficam em
+    `<app_data_dir>/shell-integration/` (embutidos no binário) e carregam a
+    configuração do usuário (bash `--init-file`, zsh `ZDOTDIR` próprio que
+    devolve o do usuário, fish `--init-command`). Só terminais de extensão
+    pedem a integração (tarefas e shells com `shellArgs` próprios não).
+14. **Painéis de webview** são abas sintéticas (`extwebview:<handle>`): fora
+    da sessão salva, do contexto dos agentes, da ponte IDE e do "Mover para
+    Nova Janela" (o relay vive nesta janela).
 
 ## Desempenho
 
@@ -170,10 +191,22 @@ Eventos host → app: `postMessage`, `webviewHtml`, `webviewPanelCreated`,
 
 - Abas no topo da sidebar secundária (o Fluent Chat): as abas nativas
   **Chat** e **Agentes** (prop `nativeTabs` do `ExtensionDock`; ver
-  [Fluent Chat](agentes-ia.md)) | uma aba por extensão suportada instalada |
-  painéis (`createWebviewPanel`) abertos pelas extensões, fecháveis. Aba
-  lembrada em `ui.agentsDockTab`; `requestedTab` foca uma aba de fora (Paleta).
-  Sem extensões/Node, só as abas nativas aparecem.
+  [Fluent Chat](agentes-ia.md)) | uma aba por extensão suportada instalada
+  (as views de sidebar dela). Aba lembrada em `ui.agentsDockTab`;
+  `requestedTab` foca uma aba de fora (Paleta). Sem extensões/Node, só as
+  abas nativas aparecem.
+- **Painéis** (`createWebviewPanel`, custom editors via `vscode.openWith`)
+  são **abas reais da grade de editores** (`webviewTabs.ts`,
+  `ExtensionWebviewTab`, `mode: "webview"` no `OpenFile`): `viewColumn` N =
+  grupo N, `Beside` = grupo à direita ou um split novo, `Active`/indefinido =
+  grupo ativo; `preserveFocus` mantém o grupo ativo. O iframe fica montado
+  enquanto a aba está no grupo (retainContextWhenHidden; mover de grupo
+  recarrega e o estado volta pelo preâmbulo). O app publica
+  `webviewPanelState` → `panel.active/visible/viewColumn` +
+  `onDidChangeViewState`; `reveal` foca/move a aba; fechar a aba (em todos os
+  grupos) = `disposeWebview` → `onDidDispose`; `panel.dispose()` fecha a aba.
+  `tabGroups` lista o painel como `TabInputWebview` (ou `TabInputCustom`) e
+  `activeWebviewPanelId` = viewType do painel ativo.
 - Em `npm run tauri dev` (DEV), cada webview mostra um rodapé
   `↑ N (tipo) · ↓ M (tipo)` com os contadores do relay, e o console do app
   registra `[ext-host] webview→ext …` / `ext→webview …`; o stderr do processo
@@ -202,6 +235,68 @@ Eventos host → app: `postMessage`, `webviewHtml`, `webviewPanelCreated`,
 - CodeLens das extensões (ex.: "Implement with Codex" em TODOs) no Monaco;
   clique executa o comando delas.
 
+## Comentários (`vscode.comments`)
+
+`shim/comments.js` + `src/extensions/comments.ts` (store) +
+`commentWidgets.tsx` (Monaco). Cada `CommentThread` vira `commentThread`
+(upsert em lote por microtask) com `uri`, faixa, rótulo, `contextValue`,
+`collapsibleState`, `canReply`, comentários (corpo em texto, autor, reações) e
+as ações já resolvidas: `actions` (`comments/commentThread/title`),
+`replyActions` (`…/context`, recebem `{thread, text}`), por comentário
+`comments/comment/title|context`. O `when` é avaliado com
+`commentController`, `commentThread`, `commentThreadIsEmpty`, `comment`.
+
+- **Render**: como o ZoneWidget do VS Code — view zone abaixo da última linha
+  da faixa (sem faixa = topo) + overlay widget com a UI React (botões
+  `.ui-button`/`.ui-icon-button`, codicons das ações, CSS em
+  `src/extensions/editorWidgets.css`, só tokens). Editores de arquivo
+  (`editorBridge`) e o lado direito de diffs de extensão (`diffBinding.ts`).
+- **Claude Code (hunks)**: o `open_diff` do chat abre o diff com o lado
+  direito `_claude_vscode_fs_right:` e cria um thread por hunk (controller
+  `claude-code-hunks`, `label " "`, sem comentários) → barra com **Accept this
+  change** / **Reject this change** acima de cada mudança. Aceitar =
+  `claude-vscode.acceptProposedHunkFromBar(thread)` (o thread some); rejeitar
+  = `…rejectProposedHunkFromBar(thread)` → `workspace.applyEdit` no lado
+  direito → `diffContent` → a revisão aplica como edição DESFAZÍVEL. A faixa
+  lateral dos hunks é a decoração da extensão no lado direito (`decorations`
+  com `uri`). Edições do usuário no lado direito vão ao host (`diffEdited`,
+  150 ms) e a extensão recalcula os hunks. Aceitar/Rejeitar o diff inteiro
+  continua no cabeçalho da revisão.
+- `commentingRanges(uri)` devolve as faixas do `commentingRangeProvider`;
+  `reactionHandler` é chamado por `commentReaction`.
+
+## QuickPick / InputBox
+
+`shim/quickinput.js` + `ExtQuickInput.tsx`. `createQuickPick`/
+`createInputBox` são objetos reais: cada mudança de propriedade (itens,
+`activeItems`, `selectedItems`, `buttons`, `busy`, `enabled`, `step`/
+`totalSteps`, `placeholder`, `value`, `validationMessage`…) emite `quickInput`;
+interações voltam por `quickInputEvent` e disparam `onDidChangeValue`,
+`onDidChangeActive`, `onDidChangeSelection`, `onDidAccept`,
+`onDidTriggerButton` (`QuickInputButtons.Back` incluso),
+`onDidTriggerItemButton`, `onDidHide`. Um por vez (mostrar outro esconde o
+anterior). `showQuickPick` (`canPickMany` com `picked`, separadores,
+`matchOnDescription/Detail`, `onDidSelectItem`, token) e `showInputBox`
+(`validateInput` síncrono/assíncrono com severidade — erro bloqueia o aceitar,
+aviso/info não) são montados sobre eles, como no VS Code. UI: visual do
+QuickPick do app (`quick-open*`), `Checkbox` dos primitivos na seleção
+múltipla (Ctrl+Espaço alterna o ativo; botão OK), barra de progresso no
+`busy`, mensagem de validação com ícone por severidade; Esc/clique fora fecham
+(clique fora não fecha com `ignoreFocusOut`).
+
+## Tarefas e notebooks
+
+- `tasks.registerTaskProvider`/`fetchTasks`; `executeTask` roda
+  `ShellExecution` (linha ou comando+args; `/bin/sh -c`, PowerShell no
+  Windows) e `ProcessExecution` num terminal de extensão "Tarefa: <nome>"
+  (sem shell integration); `onDidStartTask`, `onDidStartTaskProcess` (pid do
+  PTY), `onDidEndTaskProcess` (`exitCode` do PTY), `onDidEndTask`;
+  `execution.terminate()` fecha o terminal. `CustomExecution` rejeita.
+  Headless (sem app): `child_process`. Uso real: instalador WSL do Codex.
+- Notebooks: APIs presentes e inertes (`activeNotebookEditor` indefinido,
+  `notebookDocuments` vazio, controller sem execução); `openNotebookDocument`/
+  `showNotebookDocument` rejeitam; `notebook.cell.execute` é no-op.
+
 ## Diffs propostos (Claude Code)
 
 `vscode.diff(left, right, title)` → evento `diff` → a **mesma revisão** da
@@ -229,11 +324,24 @@ com `shellPath`/`shellArgs`/`env`/`strictEnv`; o `environmentVariableCollection`
 da extensão é aplicado — o `CLAUDE_CODE_SSE_PORT` dela tem precedência sobre o
 da ponte IDE). `show` abre o painel e foca; `sendText` (retido até o PTY
 existir); `dispose`/fechar a aba → `onDidCloseTerminal` com `exitStatus`;
-saída do processo → aba "(encerrado)". `processId` = pid do PTY. **Shell
-integration simulada**: ao criar o PTY o terminal ganha `shellIntegration`
-(`executeCommand` digita a linha e dispara `onDidStartTerminalShellExecution`;
-`onDidEnd…` nunca dispara). O "Abrir no terminal" do Claude sai na hora em vez
-de esperar 3 s.
+saída do processo → aba "(encerrado)". `processId` = pid do PTY.
+
+**Shell integration real (OSC 633, formato do VS Code)**: terminais de
+extensão sem `shellArgs` pedem a integração (`shellIntegration` no
+`terminalCreate`); se o shell é bash/zsh/fish, o Rust
+(`src-tauri/src/shell_integration.rs`) o inicia com os scripts de
+`src-tauri/shell-integration/` (regra 13), que emitem `A`/`B` (prompt), `E`
+(linha de comando escapada + nonce), `C` (início), `D;<código>` (fim) e
+`P;Cwd=`. O frontend (`shellIntegration.ts` + `terminalBridge.feedPtyData`)
+interpreta as sequências do `term-data` (inclusive partidas entre pedaços) e
+manda `terminalShell` ao host: `shellIntegration` real com `cwd` atualizado
+(`onDidChangeTerminalShellIntegration` a cada mudança),
+`onDidStartTerminalShellExecution`/`onDidEndTerminalShellExecution` com
+`exitCode` para comandos digitados e `executeCommand` (a execução devolvida é
+ligada ao início/fim reais), `execution.read()` com a saída do comando (teto
+4 MB). O Claude Code fecha o terminal do `claude` quando ele sai com 0, como
+no VS Code. Sem as sequências em 2,5 s (outro shell) → integração simulada
+(`executeCommand` digita a linha e só dispara o início).
 
 ## URI handler e deep links
 
@@ -300,6 +408,7 @@ de esperar 3 s.
   mínima 18 (checada com `--version`); erro em pt-BR com o que fazer.
 - `tools/ext-host` vai no bundle como recurso (`tauri.conf.json` →
   `bundle.resources`: `main.js`, `package.json`, `src/*.js`, `src/shim/*.js`);
+  os scripts de shell integration vão embutidos no binário (`include_str!`);
   `find_script` procura `FLUENT_EXT_HOST_SCRIPT` → recursos → árvore do repo
   (dev). O Node **não** é empacotado (usa o do usuário).
 
@@ -326,12 +435,18 @@ layout), `ExtensionHostRuntime`, `ExtensionStatusItems`, `useExtensionDiffs`,
 - Headless pelo protocolo real: `npm run ext-host:check` (ativa, resolve a
   view, HTML + assets 200, round trip).
 - **Fluxos com a extensão real do Claude Code**:
-  `node tools/ext-host/scripts/flows-check.js` (espera 19/19): editor
+  `node tools/ext-host/scripts/flows-check.js` (espera 25/25): editor
   espelhado visto pelas ferramentas MCP da extensão (`getOpenEditors`,
   `getCurrentSelection`, `getDiagnostics`, `checkDocumentDirty`), `openDiff` →
   aceitar com texto editado (FILE_SAVED) e rejeitar (DIFF_REJECTED) pelos
   comandos da extensão, `close_tab` → `closeDiff`, terminal com shell
-  integration, `fluent-coder://anthropic.claude-code/open`.
+  integration, `fluent-coder://anthropic.claude-code/open` e a **barra de
+  hunks** (`open_diff` do chat → um CommentThread por hunk, decoração do lado
+  direito, aceitar e rejeitar pelos botões → `diffContent`).
+- Lacunas fechadas: `tools/ext-host/test/gaps.test.js` (comments, tasks,
+  notebooks, quick input, painéis, shell integration), `src/extensions/
+  {comments,quickInputModel,webviewTabs,shellIntegration}.test.ts` e, no Rust,
+  `cargo test shell_integration` (bash real num PTY emitindo OSC 633).
 - Render em WebKitGTK: `python3 tools/ext-host/scripts/webkit-harness.py
   claude|codex --png out.png [--theme-file tema.json] [--data-dir dir]`.
 - Sempre com `CLAUDE_CONFIG_DIR`/`CODEX_HOME` temporários (a UI cai no login);

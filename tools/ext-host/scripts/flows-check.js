@@ -11,7 +11,9 @@
 //      extensão responde FILE_SAVED com o texto final; e `reject` → DIFF_REJECTED;
 //   3. terminal: `claude-vscode.terminal.open` → `terminalCreate` →
 //      `terminalOpened` → a shell integration digita a linha do `claude`;
-//   4. URI handler: `fluent-coder://anthropic.claude-code/open` → painel.
+//   4. URI handler: `fluent-coder://anthropic.claude-code/open` → painel;
+//   5. diff do chat (`open_diff` da UI): barra de hunks por CommentThread
+//      (comments API) — aceitar/rejeitar cada mudança pelos botões.
 //
 // NÃO envia prompts a modelos e não executa o `claude` (o terminal é simulado).
 // Use CLAUDE_CONFIG_DIR temporário (o script cria um se não houver).
@@ -259,11 +261,87 @@ async function main() {
   const after = host.events.filter((e) => e.event === 'webviewPanelCreated').length;
   check('…que abre o painel do Claude Code', after > before, `${after - before} painel(is)`);
 
+  // ---- 5. diff do CHAT (claude-vscode): barra de hunks por CommentThread
+  try {
+    await hunkFlow(host);
+  } catch (err) {
+    check('fluxo de hunks (comments API)', false, err.message);
+  }
+
   await host.call('shutdown').catch(() => {});
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${results.length - failed.length}/${results.length} verificações ok`);
   if (failed.length && !process.env.VERBOSE) console.error('--- stderr do host (cauda) ---\n' + host.stderr.split('\n').slice(-30).join('\n'));
   setTimeout(() => process.exit(failed.length ? 1 : 0), 300);
+}
+
+/**
+ * A UI do chat pede `open_diff` (como quando o Claude propõe uma edição): a
+ * extensão abre `vscode.diff` com o lado direito `_claude_vscode_fs_right:` e
+ * cria um CommentThread por hunk (controller `claude-code-hunks`) com os botões
+ * Aceitar/Rejeitar do menu `comments/commentThread/title`. O "app" clica nos
+ * botões (`commentAction`), como o widget do Monaco faz.
+ */
+async function hunkFlow(host) {
+  const file = path.join(workspace, 'hunks.ts');
+  fs.writeFileSync(file, 'const um = 1;\nconst dois = 2;\nconst tres = 3;\nconst quatro = 4;\nconst cinco = 5;\nconst seis = 6;\nconst sete = 7;\nconst oito = 8;\n');
+  const view = await host.call('resolveView', { viewId: 'claudeVSCodeSidebar' });
+  const before = host.events.length;
+  host.notify('webviewMessage', {
+    handle: view.handle,
+    message: {
+      type: 'request',
+      requestId: 'flows-hunk-1',
+      channelId: 'flows',
+      request: {
+        type: 'open_diff',
+        originalFilePath: file,
+        newFilePath: file,
+        edits: [
+          { oldString: 'const um = 1;', newString: 'const um = 100;' },
+          { oldString: 'const oito = 8;', newString: 'const oito = 800;' },
+        ],
+        supportMultiEdits: true,
+        channelId: 'flows',
+        diffToken: 'flows-token',
+      },
+    },
+  });
+  const diff = await host.waitEvent((e) => e.event === 'diff' && /_claude_vscode_fs_right/.test(e.right.uri), 15000);
+  check('open_diff do chat → revisão com lado direito virtual', !!diff, diff.right.uri.split(':')[0]);
+  const threadsOf = () => {
+    const alive = new Map();
+    for (const e of host.events.slice(before)) {
+      if (e.event === 'commentThread' && e.uri === diff.right.uri) alive.set(e.handle, e);
+      if (e.event === 'commentThreadDisposed') alive.delete(e.handle);
+    }
+    return [...alive.values()];
+  };
+  const t0 = Date.now();
+  while (threadsOf().length < 2 && Date.now() - t0 < 5000) await new Promise((r) => setTimeout(r, 50));
+  const threads = threadsOf().sort((a, b) => a.range.start.line - b.range.start.line);
+  check(
+    'um CommentThread por hunk (claude-code-hunks)',
+    threads.length === 2 && threads.every((t) => t.controllerId === 'claude-code-hunks' && t.actions.some((a) => a.command === 'claude-vscode.acceptProposedHunkFromBar')),
+    threads.map((t) => `${t.contextValue} [${t.actions.map((a) => a.icon).join(',')}]`).join(' · '),
+  );
+  const deco = host.events.slice(before).find((e) => e.event === 'decorations' && e.uri === diff.right.uri);
+  check('barra lateral dos hunks (decoração no lado direito)', !!deco && deco.items.length >= 1, deco ? `${deco.items.length} faixa(s)` : 'nenhuma');
+  // Aceitar o 1º hunk pela barra: o thread some.
+  const acc = await host.call('commentAction', { handle: threads[0].handle, command: 'claude-vscode.acceptProposedHunkFromBar' });
+  await new Promise((r) => setTimeout(r, 200));
+  check('Aceitar na barra → claude-vscode.acceptProposedHunkFromBar(thread)', acc.ok && !threadsOf().some((t) => t.handle === threads[0].handle), JSON.stringify(acc));
+  // Rejeitar o 2º: a extensão desfaz o hunk no lado direito (applyEdit) → diffContent.
+  const rej = await host.call('commentAction', { handle: threads[1].handle, command: 'claude-vscode.rejectProposedHunkFromBar' });
+  const content = await host.waitEvent((e) => e.event === 'diffContent' && e.diffId === diff.diffId, 5000).catch(() => null);
+  check(
+    'Rejeitar na barra → hunk desfeito no lado direito (diffContent)',
+    rej.ok && !!content && content.text.includes('const oito = 8;') && content.text.includes('const um = 100;'),
+    content ? content.text.split('\n')[7] : JSON.stringify(rej),
+  );
+  await new Promise((r) => setTimeout(r, 200));
+  check('sem hunks pendentes → nenhum thread', threadsOf().length === 0, `${threadsOf().length} restante(s)`);
+  host.notify('diffClosed', { diffId: diff.diffId });
 }
 
 main().catch((err) => {

@@ -18,6 +18,9 @@ const { WebviewView } = require('./shim/webview');
 const { TextDocument, TextEditor, toRange } = require('./shim/documents');
 const { Terminal } = require('./shim/terminal');
 const { WatchService } = require('./shim/watcher');
+const { CommentService } = require('./shim/comments');
+const { TaskService } = require('./shim/tasks');
+const { QuickInputService } = require('./shim/quickinput');
 const { createVscodeApi, toUri } = require('./shim/api');
 const { ResourceServer } = require('./server');
 const { buildPreamble, injectPreamble } = require('./preamble');
@@ -117,6 +120,9 @@ class ExtensionHost {
     this.nextRequest = 1;
     this.appConnected = !!opts.appConnected;
     this.watchers = new WatchService((m) => this.log(m));
+    this.comments = new CommentService(this);
+    this.tasks = new TaskService(this);
+    this.quickInputs = new QuickInputService(this);
     this._activeEditor = undefined;
     this._visibleEditors = [];
     this._appTabs = []; // [{path, dirty, active, preview}]
@@ -163,7 +169,7 @@ class ExtensionHost {
       onHtml: (wv) => this._onWebviewHtml(wv),
       post: (handle, message) => this._postToWebview(handle, message),
       allowRoots: (roots) => roots.forEach((r) => this.server.allowRoot(toUri(r).fsPath)),
-      reveal: (handle, preserveFocus) => this.emit({ event: 'revealWebview', handle, preserveFocus }),
+      reveal: (handle, preserveFocus, viewColumn) => this.emit({ event: 'revealWebview', handle, preserveFocus, viewColumn: typeof viewColumn === 'number' ? viewColumn : undefined }),
       retitle: (handle, title) => this.emit({ event: 'webviewTitle', handle, title }),
       disposeWebview: (handle) => this._disposeWebview(handle, false),
     };
@@ -490,6 +496,9 @@ class ExtensionHost {
       'workbench.action.openWalkthrough': noop,
       'markdown.showPreview': (uri) => this.showTextDocument(toUri(uri)),
       'git.openChange': noop,
+      // Sem notebooks: executar célula é no-op (o Claude só chama com um notebook ativo).
+      'notebook.cell.execute': noop,
+      'notebook.execute': noop,
       'default:type': noop,
       cursorMove: noop,
       'editor.action.revealDefinition': noop,
@@ -529,6 +538,10 @@ class ExtensionHost {
         return this._activeDiff ? 'workbench.editors.textDiffEditor' : this._activeEditor ? 'workbench.editors.files.textFileEditor' : undefined;
       case 'isInDiffEditor':
         return !!this._activeDiff;
+      case 'activeWebviewPanelId': {
+        const e = this._activePanel && !this._activeDiff ? this.webviews.get(this._activePanel) : null;
+        return e ? e.webview.viewType : undefined;
+      }
       case 'resourceScheme': {
         const d = this._diffById(this._activeDiff);
         if (d) return d.right.scheme;
@@ -650,9 +663,14 @@ class ExtensionHost {
   }
 
   createWebviewPanel(ext, panel) {
-    const entry = { webview: panel.webview, panel, ext, title: panel.title };
+    const entry = { webview: panel.webview, panel, ext, title: panel.title, customUri: panel._customUri };
     this.webviews.set(panel.webview.handle, entry);
+    if (panel.active) {
+      this._activePanel = panel.webview.handle;
+      this._activeDiff = null;
+    }
     this.emit({ event: 'webviewPanelCreated', ...this._webviewInfo(entry) });
+    this.events.tabs.fire({ opened: [], closed: [], changed: [] });
     return panel;
   }
 
@@ -660,7 +678,8 @@ class ExtensionHost {
     const reg = this.customEditors.get(viewType);
     if (!reg) return this.showTextDocument(uri, opts);
     const { WebviewPanel } = require('./shim/webview');
-    const panel = new WebviewPanel(this.webviewBridge, viewType, path.basename(uri.path) || viewType, 1, (reg.options && reg.options.webviewOptions) || {}, reg.ext);
+    const panel = new WebviewPanel(this.webviewBridge, viewType, path.basename(uri.path) || viewType, (opts && opts.viewColumn) || -1, (reg.options && reg.options.webviewOptions) || {}, reg.ext);
+    panel._customUri = uri;
     this.createWebviewPanel(reg.ext, panel);
     const cts = new types.CancellationTokenSource();
     if (typeof reg.provider.resolveCustomTextEditor === 'function') {
@@ -683,6 +702,9 @@ class ExtensionHost {
       url: entry.webview.html ? this.server.webviewUrl(entry.webview.handle, entry.webview._htmlVersion) : null,
       // Flags de sandbox que o iframe precisa (só o necessário; ver docs).
       enableForms: entry.webview.options.enableForms !== false,
+      // Painel = aba na grade de editores: onde abrir e se rouba o foco.
+      viewColumn: entry.panel ? entry.panel.viewColumn : undefined,
+      preserveFocus: entry.panel ? !!entry.panel._preserveFocus : undefined,
     };
   }
 
@@ -734,16 +756,27 @@ class ExtensionHost {
     const entry = this.webviews.get(handle);
     if (!entry) return;
     if (entry.view) entry.view._setVisible(!!visible);
-    if (entry.panel) {
-      entry.panel.visible = !!visible;
-      entry.panel._onDidChangeViewState.fire({ webviewPanel: entry.panel });
-    }
+    if (entry.panel) entry.panel._setViewState({ active: entry.panel.active && !!visible, visible: !!visible, viewColumn: entry.panel.viewColumn });
+  }
+
+  /** Aba do painel na grade do app: ativa/visível/coluna → onDidChangeViewState. */
+  setWebviewPanelState({ handle, active, visible, viewColumn }) {
+    const entry = this.webviews.get(handle);
+    if (!entry || !entry.panel) return;
+    entry.panel._setViewState({ active, visible, viewColumn });
+    if (active) {
+      this._activePanel = handle;
+      this._activeDiff = null;
+    } else if (this._activePanel === handle) this._activePanel = null;
+    this.events.tabs.fire({ opened: [], closed: [], changed: [] });
   }
 
   _disposeWebview(handle, fromApp) {
     const entry = this.webviews.get(handle);
     if (!entry) return;
     this.webviews.delete(handle);
+    if (this._activePanel === handle) this._activePanel = null;
+    if (entry.panel) this.events.tabs.fire({ opened: [], closed: [], changed: [] });
     if (fromApp) {
       if (entry.view) entry.view._dispose();
       if (entry.panel) entry.panel.dispose();
@@ -970,7 +1003,10 @@ class ExtensionHost {
         }
       }
       this._replaceText(doc, text);
-      if (uri.scheme !== 'file') doc.isDirty = true;
+      if (uri.scheme !== 'file') {
+        doc.isDirty = true;
+        this._emitDiffContent(uri, text);
+      }
     }
     if (!appEdits.length) return true;
     const r = await this.request('applyEdit', { edits: appEdits, undoStopBefore: opts.undoStopBefore !== false, undoStopAfter: opts.undoStopAfter !== false });
@@ -1091,8 +1127,12 @@ class ExtensionHost {
     // Editores dos diffs abertos continuam visíveis (o Claude depende disso).
     for (const d of this._diffTabs) for (const e of d.editors) if (!visible.includes(e)) visible.push(e);
     if (Array.isArray(state.tabs)) this._appTabs = state.tabs.filter((t) => t && typeof t.path === 'string');
-    // O usuário voltou para um arquivo: o diff deixa de ser a aba ativa.
+    // O usuário voltou para um arquivo: o diff/painel deixa de ser a aba ativa.
     if (active) this._activeDiff = null;
+    if (active && this._activePanel) {
+      const e = this.webviews.get(this._activePanel);
+      if (!e || !e.panel || !e.panel.active) this._activePanel = null;
+    }
     this._setVisibleEditors(visible);
     if (active !== this._activeEditor) {
       this._activeEditor = active;
@@ -1147,7 +1187,11 @@ class ExtensionHost {
   }
 
   setDecorations(editor, type, rangesOrOptions) {
-    if (!type || !this.decorationTypes.has(type.key) || editor.document.uri.scheme !== 'file') return;
+    if (!type || !this.decorationTypes.has(type.key)) return;
+    const uri = editor.document.uri;
+    // Documento virtual só se for um lado de um diff aberto (a revisão do app o mostra).
+    const diff = uri.scheme === 'file' ? null : this._diffTabs.find((d) => d.right.toString() === uri.toString() || d.left.toString() === uri.toString());
+    if (uri.scheme !== 'file' && !diff) return;
     const items = (rangesOrOptions || []).slice(0, 5000).map((r) => {
       if (r instanceof Range || (r && r.start && r.end && !r.range)) return { range: plainRange(toRange(r)) };
       const o = { range: plainRange(toRange(r.range)) };
@@ -1155,7 +1199,8 @@ class ExtensionHost {
       if (r.renderOptions) o.renderOptions = sanitizeDecorationOptions(r.renderOptions);
       return o;
     });
-    this.emit({ event: 'decorations', path: editor.document.uri.fsPath, key: type.key, items });
+    if (diff) this.emit({ event: 'decorations', uri: uri.toString(), diffId: diff.id, key: type.key, items });
+    else this.emit({ event: 'decorations', path: uri.fsPath, key: type.key, items });
   }
 
   // ---------------------------------------------------------- diagnósticos
@@ -1316,6 +1361,27 @@ class ExtensionHost {
     return { ok: true, via: 'close' };
   }
 
+  /** Extensão editou o lado direito de um diff aberto (ex.: rejeitar um hunk): o app atualiza a revisão. */
+  _emitDiffContent(uri, text) {
+    for (const d of this._diffTabs) {
+      if (d.right.toString() === uri.toString()) this.emit({ event: 'diffContent', diffId: d.id, side: 'right', text });
+    }
+  }
+
+  /**
+   * Usuário editou o lado direito na revisão do app: o documento do host segue
+   * (onDidChangeTextDocument), como no VS Code — o Claude recalcula os hunks.
+   */
+  diffEdited(diffId, text) {
+    const diff = this._diffById(diffId);
+    if (!diff) return false;
+    const doc = this.documents.get(diff.right.toString());
+    if (!doc || doc.getText() === text) return false;
+    this._replaceText(doc, text);
+    doc.isDirty = true;
+    return true;
+  }
+
   /** Usuário fechou o diff no app (Esc/fechar): como fechar a aba no VS Code. */
   diffClosed(diffId) {
     const diff = this._diffById(diffId);
@@ -1335,6 +1401,14 @@ class ExtensionHost {
     for (const d of this._diffTabs) {
       tabs.push({ label: d.title || 'diff', input: new types.TabInputTextDiff(d.left, d.right), isActive: host._activeDiff === d.id, isDirty: false, isPinned: false, isPreview: false, _diffId: d.id });
     }
+    // Painéis de webview = abas da grade de editores (TabInputWebview / TabInputCustom).
+    for (const entry of this.webviews.values()) {
+      if (!entry.panel) continue;
+      const active = !host._activeDiff && host._activePanel === entry.webview.handle;
+      const input = entry.customUri ? new types.TabInputCustom(entry.customUri, entry.webview.viewType) : new types.TabInputWebview(entry.webview.viewType);
+      tabs.push({ label: entry.panel.title || entry.webview.viewType, input, isActive: active, isDirty: false, isPinned: false, isPreview: false, _webviewHandle: entry.webview.handle });
+    }
+    if (this._activePanel && !this._activeDiff) for (const t of tabs) if (t.input instanceof types.TabInputText) t.isActive = false;
     const group = { isActive: true, viewColumn: 1, tabs, activeTab: tabs.find((t) => t.isActive) };
     for (const t of tabs) t.group = group;
     return {
@@ -1348,6 +1422,9 @@ class ExtensionHost {
           if (t.input instanceof types.TabInputTextDiff) {
             const d = host._diffTabs.find((x) => x.left.toString() === t.input.original.toString() && x.right.toString() === t.input.modified.toString());
             if (d) host._closeDiff(d, false);
+          } else if (t._webviewHandle) {
+            const entry = host.webviews.get(t._webviewHandle);
+            if (entry && entry.panel) entry.panel.dispose();
           } else if (t.input instanceof types.TabInputText && t.input.uri.scheme === 'file') {
             host.emit({ event: 'closeEditor', path: t.input.uri.fsPath });
           } else if (t.group && Array.isArray(t.tabs)) {
@@ -1385,9 +1462,15 @@ class ExtensionHost {
   }
 
   /** App criou o PTY do terminal. */
-  terminalOpened(id, pid) {
+  terminalOpened(id, pid, shellIntegration) {
     const t = this._terminal(id);
-    if (t) t._onOpened(pid);
+    if (t) t._onOpened(pid, !!shellIntegration);
+  }
+
+  /** Sequência OSC 633 do PTY interpretada pelo app (shell integration real). */
+  terminalShell(p) {
+    const t = this._terminal(p.id);
+    if (t) t._shellEvent(p);
   }
 
   /** PTY encerrou (processo saiu ou o usuário fechou a aba). */
@@ -1396,6 +1479,7 @@ class ExtensionHost {
     if (!t) return;
     this.terminals = this.terminals.filter((x) => x !== t);
     t.exitStatus = { code: typeof exitCode === 'number' ? exitCode : undefined, reason: reason || (typeof exitCode === 'number' ? types.TerminalExitReason.Process : types.TerminalExitReason.User) };
+    t._onClosed();
     t._disposed = true;
     if (this._activeTerminal === t) this._setActiveTerminal(this.terminals[this.terminals.length - 1]);
     this.events.closeTerminal.fire(t);

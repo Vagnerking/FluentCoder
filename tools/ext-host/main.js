@@ -129,6 +129,9 @@ const handlers = {
   webviewVisible(p) {
     host.setWebviewVisible(p.handle, p.visible);
   },
+  webviewPanelState(p) {
+    host.setWebviewPanelState(p);
+  },
   webviewLog(p) {
     const text = String(p && p.text).slice(0, 4000);
     logErr(`[ext-host] [webview ${p && p.handle}] ${p && p.level === 'warn' ? 'aviso' : 'erro'}: ${text}\n`);
@@ -190,7 +193,10 @@ const handlers = {
   },
   // ---- terminais / diffs / URIs
   terminalOpened(p) {
-    host.terminalOpened(p.id, p.pid);
+    host.terminalOpened(p.id, p.pid, p.shellIntegration);
+  },
+  terminalShell(p) {
+    host.terminalShell(p);
   },
   terminalClosed(p) {
     host.terminalClosed(p.id, p.exitCode);
@@ -203,6 +209,24 @@ const handlers = {
   },
   handleUri(p) {
     return host.handleUri(p.uri);
+  },
+  quickInputEvent(p) {
+    return host.quickInputs.event(p);
+  },
+  commentAction(p) {
+    return host.comments.action(p);
+  },
+  commentReaction(p) {
+    return host.comments.reaction(p);
+  },
+  commentingRanges(p) {
+    return host.comments.commentingRanges(p.uri);
+  },
+  commentThreads() {
+    return host.comments.snapshot();
+  },
+  diffEdited(p) {
+    return host.diffEdited(p.diffId, p.text);
   },
   provideCodeLenses(p) {
     return host.provideCodeLenses(p.path);

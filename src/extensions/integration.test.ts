@@ -118,7 +118,7 @@ test("terminais de extensão: criar/mostrar, texto retido até o PTY, fechar avi
   assert.equal(writes.length, 0, "retido até o PTY existir");
   ptyReady(ptyIdFor("t1"), 77);
   assert.deepEqual(writes, [["ext-t1", "claude\r"]]);
-  assert.deepEqual(notes[0], ["terminalOpened", { id: "t1", pid: 77 }]);
+  assert.deepEqual(notes[0], ["terminalOpened", { id: "t1", pid: 77, shellIntegration: false }]);
   handleTerminalEvent({ event: "terminalSendText", id: "t1", text: "ls\r" } as HostEvent, () => {});
   assert.equal(writes.length, 2);
   ptyClosed(ptyIdFor("t1"), 0);

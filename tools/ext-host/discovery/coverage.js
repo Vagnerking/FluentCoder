@@ -14,22 +14,22 @@ const { createVscodeApi } = require('../src/shim/api');
 /** Estado de cada caminho que NÃO é "implementado" (o padrão quando existe). */
 const STATUS = {
   'commands.getCommands': ['parcial', 'só comandos registrados por extensões (sem os internos do VS Code)'],
-  'comments.createCommentController': ['stub', 'threads de comentário não aparecem no editor'],
+  'comments.createCommentController': ['implementado', 'threads no Monaco (view zone + overlay Fluent) com as ações dos menus comments/*; barra de hunks do Claude no diff'],
   'languages.registerCodeLensProvider': ['implementado', 'lentes no Monaco; clique executa o comando da extensão'],
-  'tasks.executeTask': ['stub', 'rejeita: tarefas não suportadas'],
-  'tasks.onDidEndTaskProcess': ['stub', 'nunca dispara'],
-  'window.activeNotebookEditor': ['stub', 'sem notebooks'],
-  'window.onDidEndTerminalShellExecution': ['parcial', 'nunca dispara (sem integração real de shell)'],
-  'window.onDidChangeTerminalShellIntegration': ['parcial', 'integração simulada ao criar o PTY (executeCommand = digitar a linha)'],
-  'window.onDidStartTerminalShellExecution': ['parcial', 'dispara ao executeCommand da integração simulada'],
+  'tasks.executeTask': ['implementado', 'Shell/ProcessExecution num terminal integrado ("Tarefa: …"); CustomExecution rejeita'],
+  'tasks.onDidEndTaskProcess': ['implementado', 'exitCode do PTY'],
+  'window.activeNotebookEditor': ['stub', 'sem notebooks (APIs presentes e inertes; abrir rejeita)'],
+  'window.onDidEndTerminalShellExecution': ['implementado', 'OSC 633 real (bash/zsh/fish) com exitCode; outros shells: integração simulada'],
+  'window.onDidChangeTerminalShellIntegration': ['implementado', 'ao ver as sequências OSC 633 e a cada mudança de cwd; fallback simulado em 2,5 s'],
+  'window.onDidStartTerminalShellExecution': ['implementado', 'OSC 633 real (comandos digitados e executeCommand); execution.read() com a saída'],
   'window.registerWebviewPanelSerializer': ['parcial', 'registrado; painéis não são restaurados ao reiniciar o app'],
-  'window.registerCustomEditorProvider': ['parcial', 'abre como painel na sidebar de agentes'],
-  'window.createWebviewPanel': ['parcial', 'aba na sidebar de agentes (não no grid de editores)'],
-  'window.showQuickPick': ['parcial', 'sem canPickMany/botões'],
-  'window.showInputBox': ['parcial', 'sem validateInput'],
+  'window.registerCustomEditorProvider': ['implementado', 'abre como aba da grade de editores (TabInputCustom)'],
+  'window.createWebviewPanel': ['implementado', 'aba da grade de editores (viewColumn/Beside/preserveFocus, onDidChangeViewState, dispose)'],
+  'window.showQuickPick': ['implementado', 'canPickMany, separadores, onDidSelectItem, token (sobre createQuickPick)'],
+  'window.showInputBox': ['implementado', 'validateInput ao vivo (síncrono/assíncrono, severidade)'],
   'window.createTextEditorDecorationType': ['parcial', 'cores/bordas/texto antes-depois; sem ícones de gutter'],
   'window.withProgress': ['parcial', 'texto na barra de status; sem cancelamento'],
-  'window.tabGroups': ['parcial', 'um grupo: abas de arquivo do app + abas de diff'],
+  'window.tabGroups': ['parcial', 'um grupo lógico: abas de arquivo do app + diffs + painéis de webview'],
   'window.terminals': ['parcial', 'só os terminais criados por extensões'],
   'window.activeTerminal': ['parcial', 'só os terminais criados por extensões'],
   'window.createStatusBarItem': ['implementado', ''],
@@ -37,7 +37,7 @@ const STATUS = {
 
 // Tipos de valor/enums (Task, ShellExecution, Notebook*) contam como implementados:
 // os construtores se comportam como os do VS Code; o que é stub é o recurso que
-// os consome (tasks.executeTask, notebooks).
+// os consome (notebooks).
 const PROPOSED = /^(chat|lm|languageModels|interactive)\./;
 
 function main() {

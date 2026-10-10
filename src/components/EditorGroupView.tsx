@@ -16,6 +16,7 @@ import { ImagePreview } from "./ImagePreview";
 import { MediaPreview } from "./MediaPreview";
 import { GraphView } from "./GraphView";
 import type { GitRevisionDiffTarget } from "../api";
+import { ExtensionWebviewTab, handleOfWebviewTab } from "../extensions";
 
 export interface EditorGroupViewProps {
   group: EditorGroup;
@@ -74,6 +75,8 @@ export interface EditorGroupViewProps {
   graphConnId?: string | null;
   /** Explicit SSH origin for graph node opens. */
   graphWorkspaceRemote?: OpenFile["workspaceRemote"];
+  /** 1-based column of this group in the grid (`WebviewPanel.viewColumn`). */
+  viewColumn?: number;
   /** True while ANY tab is being dragged — shields this group's editor with a
    *  capture overlay so Monaco doesn't move its cursor/scroll under the drag. */
   tabDragging: boolean;
@@ -164,7 +167,7 @@ export function EditorGroupView(props: EditorGroupViewProps) {
       className={`editor-group${isActive ? " active" : ""}`}
       onMouseDownCapture={props.onFocusGroup}
     >
-      {mode !== "graph" && (
+      {mode !== "graph" && mode !== "webview" && (
         <Breadcrumbs filePath={group.activePath} rootPath={props.rootPath} />
       )}
       <TabBar
@@ -205,7 +208,7 @@ export function EditorGroupView(props: EditorGroupViewProps) {
             kind={mode}
             connId={active.workspaceRemote?.connId}
           />
-        ) : active && mode === "graph" ? (
+        ) : active && mode === "webview" ? null : active && mode === "graph" ? (
           <GraphView
             rootPath={props.graphRootPath ?? props.rootPath}
             connId={props.graphConnId ?? null}
@@ -233,6 +236,20 @@ export function EditorGroupView(props: EditorGroupViewProps) {
             onCurrentBlameChange={props.onCurrentBlameChange}
           />
         )}
+        {/* Painéis de webview de extensões: ficam montados enquanto a aba está
+            no grupo (retainContextWhenHidden) e só o ativo aparece. */}
+        {group.files
+          .filter((f) => f.mode === "webview")
+          .map((f) => {
+            const handle = handleOfWebviewTab(f.path);
+            if (!handle) return null;
+            const shown = f.path === group.activePath;
+            return (
+              <div key={f.path} className="editor-webview-pane" hidden={!shown}>
+                <ExtensionWebviewTab handle={handle} visible={shown} active={shown && isActive} viewColumn={props.viewColumn ?? 1} />
+              </div>
+            );
+          })}
         {/* While a tab is in flight, an opaque-to-events overlay sits over the
             editor: it captures the drag (so Monaco never sees it and can't move
             its cursor/scroll) and computes the drop edge. The visual highlight

@@ -33,6 +33,17 @@ import {
   vscodeSeverityToMarker,
 } from "./editorModel";
 import { readFluentThemeVars } from "./theme";
+import { attachCommentWidgets } from "./commentWidgets";
+
+/**
+ * Tipos de decoração das extensões (CSS gerado), compartilhados com a revisão
+ * de diff (`diffBinding.ts` decora o lado direito virtual com eles).
+ */
+const decoTypes = new Map<string, ReturnType<typeof renderDecorationType>>();
+
+export function extDecorationType(key: string): ReturnType<typeof renderDecorationType> | undefined {
+  return decoTypes.get(key);
+}
 
 export interface EditorBridgeHost {
   /** Abas abertas no app (todas as grupos), com dirty e a ativa. */
@@ -93,13 +104,13 @@ export function startEditorBridge(hostRef: { current: EditorBridgeHost }): { dis
   const modelSubs = new Map<monaco.editor.ITextModel, monaco.IDisposable[]>();
   const savedAlt = new Map<string, number>();
   const editorSubs = new Map<monaco.editor.ICodeEditor, monaco.IDisposable[]>();
+  const sameFile = (a: string, b: string) => (/^[a-zA-Z]:/.test(a) ? a.toLowerCase() === b.toLowerCase() : a === b);
   let editorsTimer: number | undefined;
   let selTimer: number | undefined;
   let scrollTimer: number | undefined;
   let diagTimer: number | undefined;
   const dirtyDiagUris = new Set<string>();
-  // Decorações: tipo → render; (path,key) → ids no modelo.
-  const decoTypes = new Map<string, ReturnType<typeof renderDecorationType>>();
+  // Decorações: (path,key) → ids no modelo (os tipos ficam em `decoTypes`).
   const decoIds = new Map<string, string[]>();
   const pendingDecos = new Map<string, Map<string, { range: PlainRange; hoverMessage?: string }[]>>();
   const pendingMarkers = new Map<string, Map<string, monaco.editor.IMarkerData[]>>();
@@ -210,6 +221,11 @@ export function startEditorBridge(hostRef: { current: EditorBridgeHost }): { dis
   const trackEditor = (ed: monaco.editor.ICodeEditor) => {
     if (editorSubs.has(ed)) return;
     editorSubs.set(ed, [
+      // Threads de comentário das extensões no arquivo deste editor.
+      attachCommentWidgets(ed, (t) => {
+        const m = ed.getModel();
+        return !!t.path && isFileModel(m) && sameFile(t.path, pathOf(m));
+      }),
       ed.onDidFocusEditorText(() => {
         lastFocused = ed;
         pushEditors();
@@ -461,13 +477,14 @@ export function startEditorBridge(hostRef: { current: EditorBridgeHost }): { dis
         break;
       }
       case "decorations": {
-        const e = ev as { path: string; key: string; items: { range: PlainRange; hoverMessage?: string }[] };
+        const e = ev as { path?: string; uri?: string; key: string; items: { range: PlainRange; hoverMessage?: string }[] };
+        if (!e.path) break; // lado virtual de um diff: diffBinding.ts
         const m = modelFor(e.path);
         if (m) applyDecorations(m, e.key, e.items);
         else {
           const map = pendingDecos.get(e.path) ?? new Map();
           map.set(e.key, e.items);
-          pendingDecos.set(e.path, map);
+          pendingDecos.set(e.path!, map);
         }
         break;
       }

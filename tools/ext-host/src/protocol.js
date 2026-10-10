@@ -24,6 +24,7 @@ const SCHEMAS = {
   webviewMessage: (p) => isObj(p) && isStr(p.handle, 64),
   webviewState: (p) => isObj(p) && isStr(p.handle, 64),
   webviewVisible: (p) => isObj(p) && isStr(p.handle, 64),
+  webviewPanelState: (p) => isObj(p) && isStr(p.handle, 64) && typeof p.visible === 'boolean' && typeof p.active === 'boolean' && (p.viewColumn === undefined || (isNum(p.viewColumn) && p.viewColumn >= 1 && p.viewColumn <= 64)),
   webviewLog: (p) => isObj(p) && isStr(p.handle, 64) && (p.level === 'error' || p.level === 'warn') && isStr(p.text, 4000),
   webviewUrl: (p) => isObj(p) && isStr(p.handle, 64),
   disposeWebview: (p) => isObj(p) && isStr(p.handle, 64),
@@ -52,9 +53,32 @@ const SCHEMAS = {
   // Terminais
   terminalOpened: (p) => isObj(p) && isStr(p.id, 64),
   terminalClosed: (p) => isObj(p) && isStr(p.id, 64),
+  terminalShell: (p) =>
+    isObj(p) &&
+    isStr(p.id, 64) &&
+    ['ready', 'cwd', 'start', 'data', 'end'].includes(p.type) &&
+    isOptStr(p.cwd, 4096) &&
+    isOptStr(p.commandLine, 64 * 1024) &&
+    isOptStr(p.data, 4 << 20) &&
+    (p.exitCode === undefined || p.exitCode === null || isNum(p.exitCode)),
   // Diffs / URIs
   diffAction: (p) => isObj(p) && isStr(p.diffId, 64) && (p.action === 'accept' || p.action === 'reject') && (p.text === undefined || isStr(p.text, 64 << 20)),
   diffClosed: (p) => isObj(p) && isStr(p.diffId, 64),
+  diffEdited: (p) => isObj(p) && isStr(p.diffId, 64) && isStr(p.text, 64 << 20),
+  // QuickPick/InputBox (interações da UI)
+  quickInputEvent: (p) =>
+    isObj(p) &&
+    isStr(p.id, 64) &&
+    ['value', 'accept', 'hide', 'active', 'selection', 'button', 'itemButton'].includes(p.type) &&
+    isOptStr(p.value, 1 << 20) &&
+    optArr(p.indexes, (i) => isNum(i) && i >= 0, 5000) &&
+    (p.button === undefined || (isNum(p.button) && p.button >= 0)) &&
+    (p.item === undefined || (isNum(p.item) && p.item >= 0)),
+  // Comentários (threads no editor)
+  commentAction: (p) => isObj(p) && isStr(p.handle, 64) && isStr(p.command, 512) && (p.commentIndex === undefined || (isNum(p.commentIndex) && p.commentIndex >= 0)) && isOptStr(p.text, 1 << 20),
+  commentReaction: (p) => isObj(p) && isStr(p.handle, 64) && isNum(p.commentIndex) && p.commentIndex >= 0 && isStr(p.reaction, 256),
+  commentingRanges: (p) => isObj(p) && isStr(p.uri, 8192) && !p.uri.includes('\0'),
+  commentThreads: () => true,
   provideCodeLenses: (p) => isObj(p) && isPath(p.path),
   executeCodeLens: (p) => isObj(p) && isStr(p.id, 64),
   handleUri: (p) => isObj(p) && isStr(p.uri, 8192) && /^(fluent-coder|vscode):\/\//i.test(p.uri),

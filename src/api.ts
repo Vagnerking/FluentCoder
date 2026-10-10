@@ -1775,6 +1775,8 @@ export interface TermSpawnOptions {
   shellArgs?: string[];
   env?: Record<string, string>;
   strictEnv?: boolean;
+  /** Shell integration (OSC 633) para bash/zsh/fish — ver src-tauri/src/shell_integration.rs. */
+  shellIntegration?: boolean;
 }
 
 /** Cria o PTY; resolve com o pid do processo (null se o SO não informar / remoto). */

@@ -23,6 +23,7 @@
  */
 import { useEffect, useState } from "react";
 import { extHost } from "./client";
+import { removeWebviewPanel } from "./webviewTabs";
 import type { HostEvent, InstalledExtension, WebviewInfo } from "./protocol";
 
 export { ExtensionDock } from "./ExtensionDock";
@@ -30,6 +31,18 @@ export { ExtensionWebview } from "./ExtensionWebview";
 export { ExtensionHostRuntime, type ExtensionHostRuntimeProps } from "./ExtensionHostRuntime";
 export { ExtensionStatusItems } from "./ExtensionStatusItems";
 export { useExtensionDiffs } from "./useExtensionDiffs";
+export { bindExtDiffEditor } from "./diffBinding";
+export { ExtensionWebviewTab } from "./ExtensionWebviewTab";
+export { isWebviewTabPath, handleOfWebviewTab, webviewTabPath, targetForViewColumn } from "./webviewTabs";
+
+/**
+ * A aba de um painel de webview sumiu da grade (fechada em todos os grupos):
+ * descarta o painel no host (`WebviewPanel.onDidDispose` da extensão).
+ */
+export function disposeWebviewTab(handle: string): void {
+  if (!removeWebviewPanel(handle)) return; // a extensão já descartou
+  void extHost.notify("disposeWebview", { handle });
+}
 export { OUTPUT_CHANNEL as EXTENSIONS_OUTPUT_CHANNEL } from "./client";
 export type { HostEvent, InstalledExtension, WebviewInfo } from "./protocol";
 

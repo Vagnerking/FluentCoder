@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { termCreate, termWrite, termResize, termClose, type TermSpawnOptions } from "../api";
 import { terminalTheme } from "../theme/palette";
 import "@xterm/xterm/css/xterm.css";
@@ -15,6 +16,12 @@ interface TerminalViewProps {
   command?: string | null;
   /** Shell/env of a terminal requested by a hosted VS Code extension. */
   spawn?: TermSpawnOptions | null;
+  /**
+   * The PTY already exists in the backend (an ACP agent's `terminal/create`):
+   * attach to it — replay what it printed so far, then stream — instead of
+   * spawning a shell.
+   */
+  attach?: boolean;
   /** The PTY exists (pid when known). */
   onReady?: (pid: number | null) => void;
   /** The PTY process exited (exit code when known). */
@@ -24,14 +31,17 @@ interface TerminalViewProps {
 interface TermDataPayload {
   id: string;
   data: string;
+  /** Bytes emitted so far (attached PTYs only), to skip what the replay covered. */
+  seq?: number;
 }
 
-export function TerminalView({ id, cwd, connId, command, spawn, onReady, onExit }: TerminalViewProps) {
+export function TerminalView({ id, cwd, connId, command, spawn, attach, onReady, onExit }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   // Callbacks lidos por ref: não recriam o PTY quando o pai re-renderiza.
   const cbRef = useRef({ onReady, onExit });
   cbRef.current = { onReady, onExit };
   const spawnRef = useRef(spawn);
+  const attachRef = useRef(attach);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -71,8 +81,30 @@ export function TerminalView({ id, cwd, connId, command, spawn, onReady, onExit 
     // with correct cols/rows. The FIRST terminal opens while the panel is still
     // laying out — fitting too early gives a tiny size and the shell prints a
     // garbled, truncated prompt that a later resize can't fix.
+    // Attached PTY: replay its captured output, then live events past it.
+    let replayedSeq = -1;
+    const early: TermDataPayload[] = [];
+    const attachToPty = () => {
+      created = true;
+      void invoke<{ text: string; seq: number } | null>("acp_terminal_snapshot", { id })
+        .then((snap) => {
+          if (disposed) return;
+          if (snap) term.write(snap.text);
+          replayedSeq = snap?.seq ?? 0;
+          for (const ev of early.splice(0)) if ((ev.seq ?? Infinity) > replayedSeq) term.write(ev.data);
+          if (safeFit() && term.cols > 0 && term.rows > 0) termResize(id, term.cols, term.rows).catch(() => {});
+        })
+        .catch(() => {
+          replayedSeq = 0;
+        });
+    };
+
     const startWhenSized = () => {
       if (disposed || created) return;
+      if (attachRef.current) {
+        attachToPty();
+        return;
+      }
       if (!safeFit()) {
         requestAnimationFrame(startWhenSized);
         return;
@@ -94,6 +126,13 @@ export function TerminalView({ id, cwd, connId, command, spawn, onReady, onExit 
     // (the initial prompt) are missed.
     listen<TermDataPayload>("term-data", (event) => {
       if (event.payload.id === id) {
+        if (attachRef.current) {
+          if (replayedSeq < 0) {
+            early.push(event.payload);
+            return;
+          }
+          if (event.payload.seq !== undefined && event.payload.seq <= replayedSeq) return;
+        }
         term.write(event.payload.data);
       }
     }).then((fn) => {

@@ -31,25 +31,49 @@ Limitação do gravador: os bundles usam o `__toESM` do esbuild, que copia só a
 - **Claude Code:** HTML gerado em `getHtmlForWebview` com CSP `default-src 'none'; style-src ${cspSource} 'unsafe-inline'; font-src ${cspSource}; img-src ${cspSource} data:; script-src 'nonce-…'; worker-src ${cspSource}` e assets `webview/index.js` + `webview/index.css` via `asWebviewUri`. Mensagens: webview → extensão `{type:"request", requestId, channelId, request:{type:"init"|…}}`, `launch_claude`, `io_message`…; extensão → webview **embrulhadas** em `{type:"from-extension", message:{…}}`. Lê `--vscode-editor-font-*` e `--vscode-chat-font-*` (a própria extensão injeta) e as cores `--vscode-*` do tema. `getState/setState` via `acquireVsCodeApi()`.
 - **Codex:** lê `webview/index.html` com `workspace.fs.readFile`, troca `<!-- PROD_BASE_TAG_HERE -->` por `<base href="${asWebviewUri(webview)}/">` e injeta um CSP próprio (`cspSource` + origem do Sentry). Módulos ES (`type="module" crossorigin`) relativos ao `<base>` — o servidor responde com `Access-Control-Allow-Origin: *`. Handshake: webview → `{type:"ready"}`; extensão → `chat-font-settings`, estado do app-server, prompts, estado persistido. RPC "capn" por `{type:"vscode-capn-rpc-connect"|"vscode-capn-rpc-message", sessionId, message}` e mensagens grandes em pedaços (`chunked-message-ack`).
 
-## Estado do shim (hardening, 10/10/2026)
+## Estado do shim (hardening + lacunas, 10/10/2026)
 
 Re-descoberta dinâmica (`run.js`) após o hardening: **nenhum caminho ausente**
-tocado na ativação + resolve + handshake das duas extensões.
+tocado na ativação + resolve + handshake das duas extensões. Lacunas fechadas
+depois (branch `feat/ext-gaps`): Comments API, Tasks mínima, QuickPick/InputBox
+completos, painéis de webview como abas do editor e shell integration real.
+
+Uso real confirmado nos bundles (grep em `~/.vscode/extensions`, somente leitura):
+
+- **Comments (Claude Code):** controller `claude-code-hunks`; um thread por hunk
+  no lado direito (`_claude_vscode_fs_right:`) do diff aberto pelo `open_diff`
+  do chat, `label = " "`, `canReply = false`, `contextValue = hunk:<linha>:<n>`;
+  botões do menu `comments/commentThread/title` (`when: commentController ==
+  claude-code-hunks`) → `claude-vscode.acceptProposedHunkFromBar(thread)` /
+  `rejectProposedHunkFromBar(thread)` (rejeitar = `workspace.applyEdit` no lado
+  direito). Decoração `editorGutter.modifiedBackground` marca os hunks.
+- **Tasks (Codex):** só o instalador WSL (Windows): `new Task(…, new
+  ShellExecution("wsl.exe", [...]))` + `executeTask` + `onDidEndTaskProcess`.
+- **Shell integration (Claude Code):** `onDidChangeTerminalShellIntegration` →
+  `executeCommand(claude…)`; `onDidEndTerminalShellExecution` com `exitCode 0`
+  fecha o terminal do `claude`. Codex: espera `shellIntegration` ao criar.
+- **Webview panels:** `claudeVSCodePanel` (sessão em aba, `ViewColumn.Beside`
+  ou Active, `retainContextWhenHidden`) e `claudePlanPreview` (`preserveFocus`).
+- **InputBox:** `validateInput` no "Rename session tab" do Claude Code.
+- **Notebooks:** só `window.activeNotebookEditor` + `notebook.cell.execute`
+  (ferramenta de Jupyter do Claude, tratada como indisponível).
 
 | Área | Estado | Detalhe |
 |---|---|---|
 | Editor (`TextDocument`/`TextEditor`) | implementado | espelho dos modelos do Monaco por eventos (texto incremental, versão, dirty, undo/redo), `edit`/`insertSnippet`/`applyEdit` no modelo com undo, seleção/reveal, decorações (subconjunto de estilos) |
 | `vscode.diff` + aceitar/rejeitar | implementado | revisão do Monaco (`ClaudeDiffReview`); comandos `editor/title` da extensão com `when`; fallback "salvar"/fechar aba. Validado com o Claude Code real (`flows-check.js`) |
-| `window.createTerminal` | implementado | terminal integrado real (PTY), env/`environmentVariableCollection`, `processId`, `onDidCloseTerminal`/`exitStatus`; shell integration simulada (sem `onDidEndTerminalShellExecution`) |
+| `window.createTerminal` | implementado | terminal integrado real (PTY), env/`environmentVariableCollection`, `processId`, `onDidCloseTerminal`/`exitStatus`; **shell integration real** (OSC 633 em bash/zsh/fish: `cwd`, `onDidStart/EndTerminalShellExecution` com `exitCode`, `execution.read()`), simulada nos outros shells |
 | `registerUriHandler` / `env.uriScheme` | implementado | `fluent-coder://<extensão>/…` via `tauri-plugin-deep-link` + repasse à instância aberta |
 | `context.secrets` | implementado | cofre do SO (`keyring`), migração do JSON, fallback 0600 |
 | `createFileSystemWatcher` | implementado | `fs.watch` sem polling, glob, pastas pesadas puladas |
 | `languages.getDiagnostics` | implementado | markers do Monaco + coleções das extensões (viram markers) |
 | `languages.registerCodeLensProvider` | implementado | lentes no Monaco |
 | status bar / `withProgress` / output channels | implementado / parcial | itens na barra do app; progresso como texto; canais na aba Saída |
-| diálogos (`showMessage`/`QuickPick`/`InputBox`/arquivo) | parcial | sem `canPickMany`/`validateInput`/botões |
-| `createWebviewPanel` / custom editor | parcial | abas na sidebar de agentes (não no grid de editores) |
-| `tasks`, notebooks, `comments` | stub | tarefas rejeitam (só o instalador WSL do Codex no Windows usa); sem notebooks; hunks inline do Claude (comments) não aparecem |
+| diálogos (`showMessage`/`QuickPick`/`InputBox`/arquivo) | implementado | `createQuickPick`/`createInputBox` completos (itens, ativos, selecionados, botões, `busy`, passos, `validationMessage`), `canPickMany`, `validateInput` ao vivo |
+| `createWebviewPanel` / custom editor | implementado | abas reais da grade de editores (`viewColumn`/Beside/`preserveFocus`, `reveal`, `onDidChangeViewState`, `dispose`, `TabInputWebview`/`TabInputCustom`); views de sidebar seguem no Fluent Chat |
+| `comments` | implementado | threads no Monaco (view zone + overlay com primitivos Fluent), ações dos menus `comments/*` com `when`, reações, `commentingRangeProvider`; a barra Aceitar/Rejeitar por hunk do Claude Code funciona no diff do chat |
+| `tasks` | implementado (mínimo) | `registerTaskProvider`/`fetchTasks`, `executeTask` (Shell/ProcessExecution) num terminal integrado, `onDidStart/EndTask(Process)` com pid/`exitCode`; `CustomExecution` rejeita |
+| notebooks | stub | APIs presentes e inertes (`activeNotebookEditor` indefinido, abrir/mostrar rejeitam, `notebook.cell.execute` no-op) |
 | propostas `chat.*`, `lm.*` | ausentes de propósito | `enabledApiProposals` não é honrado |
 
 ## Validação (10/10/2026, config. temporária = usuário deslogado)
@@ -61,7 +85,7 @@ tocado na ativação + resolve + handshake das duas extensões.
 | `webkit-harness.py` (WebKitGTK offscreen, iframe real + relay igual ao do app) | renderiza a tela de login; 14 ↑ / 27 ↓ (init, get_claude_state, list_sessions, `launch_claude`, io_message…) | renderiza "Sign in with ChatGPT"; 151 ↑ / 124 ↓ (capn-rpc, persisted-atom, mcp-request/response, fetch) |
 | Tema | `body.vscode-dark`, `--vscode-foreground`/`--vscode-focusBorder` = tokens Fluent | idem |
 | **Hardening:** tempo até interativo após o "clique" (host + página quentes, cache de compilação quente; `webkit-harness.py` → `timings`) | ativada 181 ms, iframe pronto 514 ms, **interativo 608 ms** (antes: 247 / 1178 / 1253 ms com a página fria; 666 ms com a página quente) | ativada 213 ms, iframe pronto 940 ms; botões do login após a animação de abertura da própria UI (~5,4 s) |
-| **Hardening:** `flows-check.js` (extensão real, CLI simulado no WebSocket MCP dela) | **19/19**: editor espelhado visto pelas ferramentas MCP, diff aceito (texto editado) e rejeitado pelos comandos da extensão, `close_tab`, terminal com shell integration, URI handler | — (o Codex não usa `vscode.diff`) |
+| **Hardening + lacunas:** `flows-check.js` (extensão real, CLI simulado no WebSocket MCP dela) | **25/25** (inclui a barra de hunks: `open_diff` do chat → 1 CommentThread por hunk, aceitar/rejeitar pelos botões, decoração do lado direito) — antes 19/19: editor espelhado visto pelas ferramentas MCP, diff aceito (texto editado) e rejeitado pelos comandos da extensão, `close_tab`, terminal com shell integration, URI handler | — (o Codex não usa `vscode.diff`) |
 
 Não validado aqui (fica para o teste no app): estado logado/conversa real (exigiria a configuração real do usuário e chamadas pagas) e o diff vindo do CHAT do Claude (fluxo `claude-vscode`, aceito via "salvar" o lado direito — coberto por teste unitário com extensão falsa). Login: o Claude **não** usa `vscode://` para login (o URI handler dele só trata `/open` e `/install-plugin`; o `claude` faz o OAuth com callback local/código); o Codex monta o callback dos conectores com `env.uriScheme` (`fluent-coder://openai.chatgpt/connector/oauth_callback`, roteado pelo deep link) e o login do ChatGPT usa callback em localhost do app-server.
 
@@ -74,8 +98,8 @@ Estados: **implementado** · **parcial** (funciona com limitação) · **stub**
 e enums (Task, Notebook*) contam como implementados — o stub é o recurso que os
 consome.
 
-Caminhos: 123 (119 não propostos) · implementado 101 · parcial 14 · stub 4 · ausente 0 · proposta 4
-Cobertura funcional (implementado+parcial / não propostos): 96.6% · presentes no shim: 100.0%
+Caminhos: 123 (119 não propostos) · implementado 111 · parcial 7 · stub 1 · ausente 0 · proposta 4
+Cobertura funcional (implementado+parcial / não propostos): 99.2% · presentes no shim: 100.0%
 
 | API | anthropic.claude-code | openai.chatgpt | estado | observação |
 |---|---:|---:|---|---|
@@ -84,7 +108,7 @@ Cobertura funcional (implementado+parcial / não propostos): 96.6% · presentes 
 | `commands.executeCommand` | 54 | 26 | implementado |  |
 | `commands.getCommands` | 1 | – | parcial | só comandos registrados por extensões (sem os internos do VS Code) |
 | `commands.registerCommand` | 32 | 10 | implementado |  |
-| `comments.createCommentController` | 1 | – | stub | threads de comentário não aparecem no editor |
+| `comments.createCommentController` | 1 | – | implementado | threads no Monaco (view zone + overlay Fluent) com as ações dos menus comments/*; barra de hunks do Claude no diff |
 | `CommentThreadCollapsibleState` | 2 | – | implementado |  |
 | `CommentThreadState` | 1 | – | implementado |  |
 | `ConfigurationTarget` | 5 | 3 | implementado |  |
@@ -135,8 +159,8 @@ Cobertura funcional (implementado+parcial / não propostos): 96.6% · presentes 
 | `TabInputTextDiff` | 8 | – | implementado |  |
 | `TabInputWebview` | 2 | – | implementado |  |
 | `Task` | – | 1 | implementado |  |
-| `tasks.executeTask` | – | 1 | stub | rejeita: tarefas não suportadas |
-| `tasks.onDidEndTaskProcess` | – | 1 | stub | nunca dispara |
+| `tasks.executeTask` | – | 1 | implementado | Shell/ProcessExecution num terminal integrado ("Tarefa: …"); CustomExecution rejeita |
+| `tasks.onDidEndTaskProcess` | – | 1 | implementado | exitCode do PTY |
 | `TaskScope` | – | 1 | implementado |  |
 | `TextDocumentChangeReason` | 4 | – | implementado |  |
 | `TextEditorRevealType` | 6 | 1 | implementado |  |
@@ -145,36 +169,36 @@ Cobertura funcional (implementado+parcial / não propostos): 96.6% · presentes 
 | `Uri` | 43 | 32 | implementado |  |
 | `version` | 2 | 4 | implementado |  |
 | `ViewColumn` | 8 | 6 | implementado |  |
-| `window.activeNotebookEditor` | 1 | – | stub | sem notebooks |
+| `window.activeNotebookEditor` | 1 | – | stub | sem notebooks (APIs presentes e inertes; abrir rejeita) |
 | `window.activeTerminal` | 1 | – | parcial | só os terminais criados por extensões |
 | `window.activeTextEditor` | 11 | 6 | implementado |  |
 | `window.createOutputChannel` | 1 | 1 | implementado |  |
 | `window.createStatusBarItem` | 1 | – | implementado |  |
 | `window.createTerminal` | 2 | 1 | implementado |  |
 | `window.createTextEditorDecorationType` | 1 | 2 | parcial | cores/bordas/texto antes-depois; sem ícones de gutter |
-| `window.createWebviewPanel` | 2 | 1 | parcial | aba na sidebar de agentes (não no grid de editores) |
+| `window.createWebviewPanel` | 2 | 1 | implementado | aba da grade de editores (viewColumn/Beside/preserveFocus, onDidChangeViewState, dispose) |
 | `window.onDidChangeActiveTextEditor` | 1 | 1 | implementado |  |
-| `window.onDidChangeTerminalShellIntegration` | 2 | 1 | parcial | integração simulada ao criar o PTY (executeCommand = digitar a linha) |
+| `window.onDidChangeTerminalShellIntegration` | 2 | 1 | implementado | ao ver as sequências OSC 633 e a cada mudança de cwd; fallback simulado em 2,5 s |
 | `window.onDidChangeTextEditorSelection` | 2 | 1 | implementado |  |
 | `window.onDidChangeVisibleTextEditors` | 3 | – | implementado |  |
 | `window.onDidChangeWindowState` | – | 1 | implementado |  |
-| `window.onDidEndTerminalShellExecution` | 1 | – | parcial | nunca dispara (sem integração real de shell) |
-| `window.onDidStartTerminalShellExecution` | 1 | – | parcial | dispara ao executeCommand da integração simulada |
-| `window.registerCustomEditorProvider` | – | 1 | parcial | abre como painel na sidebar de agentes |
+| `window.onDidEndTerminalShellExecution` | 1 | – | implementado | OSC 633 real (bash/zsh/fish) com exitCode; outros shells: integração simulada |
+| `window.onDidStartTerminalShellExecution` | 1 | – | implementado | OSC 633 real (comandos digitados e executeCommand); execution.read() com a saída |
+| `window.registerCustomEditorProvider` | – | 1 | implementado | abre como aba da grade de editores (TabInputCustom) |
 | `window.registerUriHandler` | 1 | 1 | implementado |  |
 | `window.registerWebviewPanelSerializer` | 1 | – | parcial | registrado; painéis não são restaurados ao reiniciar o app |
 | `window.registerWebviewViewProvider` | 3 | 2 | implementado |  |
 | `window.setStatusBarMessage` | 6 | – | implementado |  |
 | `window.showErrorMessage` | 12 | 2 | implementado |  |
 | `window.showInformationMessage` | 19 | 5 | implementado |  |
-| `window.showInputBox` | 3 | – | parcial | sem validateInput |
+| `window.showInputBox` | 3 | – | implementado | validateInput ao vivo (síncrono/assíncrono, severidade) |
 | `window.showOpenDialog` | – | 1 | implementado |  |
-| `window.showQuickPick` | 2 | – | parcial | sem canPickMany/botões |
+| `window.showQuickPick` | 2 | – | implementado | canPickMany, separadores, onDidSelectItem, token (sobre createQuickPick) |
 | `window.showSaveDialog` | – | 1 | implementado |  |
 | `window.showTextDocument` | 6 | 1 | implementado |  |
 | `window.showWarningMessage` | 4 | 1 | implementado |  |
 | `window.state` | 1 | 1 | implementado |  |
-| `window.tabGroups` | 27 | 2 | parcial | um grupo: abas de arquivo do app + abas de diff |
+| `window.tabGroups` | 27 | 2 | parcial | um grupo lógico: abas de arquivo do app + diffs + painéis de webview |
 | `window.terminals` | 2 | – | parcial | só os terminais criados por extensões |
 | `window.visibleTextEditors` | 6 | 1 | implementado |  |
 | `window.withProgress` | 1 | – | parcial | texto na barra de status; sem cancelamento |

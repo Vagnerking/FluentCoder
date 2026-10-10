@@ -241,8 +241,33 @@ Agent (`cursor-agent acp`). Comandos conferidos no registro oficial do ACP em
   `session/load` (quando o agente anuncia `loadSession`) com o id salvo em
   `nativeSessionId`; o replay do histórico em `session/update` é ignorado (a UI
   já tem a conversa). Falhou ⇒ sessão nova com o `contextPrompt`.
-- `initialize` declara `fs`/`terminal` como **não suportados**: o agente lê,
-  escreve e executa por conta própria; nós exibimos as chamadas.
+- `initialize` declara as **capacidades de cliente** `fs.readTextFile`,
+  `fs.writeTextFile` e `terminal` (`agents/acp_client.rs`). Os pedidos do
+  agente chegam no meio do `session/prompt` e são atendidos em tarefas
+  próprias (respostas pelo loop da chamada) — `terminal/wait_for_exit` não
+  trava o streaming:
+  - `fs/read_text_file` (`path` absoluto, `line` 1-based, `limit` em linhas):
+    arquivo com modelo aberto no Monaco ⇒ o texto do **buffer** (edições não
+    salvas incluídas); senão o disco. As janelas respondem pelo evento
+    `acp-client://request` → `acp_client_respond` (`src/agents/
+    acpClientServices.ts`, montado no App; cada janela se registra com
+    `acp_client_register` para o backend saber quantas respostas esperar,
+    teto 1,5 s).
+  - `fs/write_text_file`: **só dentro do workspace** da sessão (fora ⇒ erro
+    `-32000`); arquivo aberto ⇒ UMA edição desfazível no modelo (Ctrl+Z volta)
+    + salvar do app; fechado ⇒ grava no disco (cria pastas) e atualiza o
+    Explorer.
+  - `terminal/create|output|wait_for_exit|kill|release`: PTY real
+    (portable-pty) com `command`+`args` (linha de shell num só `command` roda
+    por `/bin/sh -c`), `env` `[{name,value}]`, `cwd` absoluto (padrão: o
+    workspace) e `outputByteLimit` (padrão 1 MiB; corta do começo em
+    fronteira de caractere, `truncated: true`). `output` vai ao agente sem
+    sequências ANSI/OSC; `exitStatus`/`wait_for_exit` = `{exitCode, signal}`.
+    Com o app, o PTY aparece como aba **"Agente: <comando>"** no painel de
+    terminais (`acp-terminal://created`; a aba conecta ao PTY existente —
+    replay de `acp_terminal_snapshot` + `term-data` com `seq`) e continua
+    visível depois do `release`; fechar a aba encerra o processo. Conexão
+    encerrada ⇒ terminais mortos.
 - Streaming: `agent_message_chunk` → `text`, `agent_thought_chunk` →
   `thought`, `tool_call`/`tool_call_update` → `toolCall` (diffs `oldText`/
   `newText`), `plan` → cartão "Plano", `usage_update` → `usage`. Variantes
@@ -262,7 +287,9 @@ Agent (`cursor-agent acp`). Comandos conferidos no registro oficial do ACP em
   terminal para autenticar").
 - **Não usar ACP para o Claude** (o adaptador `npx` continua proibido) nem
   para o Codex: os caminhos nativos acima prevalecem.
-- Teste sem custo: `tools/acp-fixture/fake-agent.mjs` (agente falso);
+- Teste sem custo: `tools/acp-fixture/fake-agent.mjs` (agente falso; um
+  prompt com "cliente" exercita fs/* e terminal/* do cliente — escrita fora
+  do workspace precisa ser recusada e o `node -e` do terminal sai com 5);
   `cargo test fake_agent_end_to_end` dirige o cliente real contra ele e
   `FLUENT_ACP_FAKE=1 npm run tauri dev` o mostra no seletor como "Agente ACP
   de teste".

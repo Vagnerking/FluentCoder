@@ -27,9 +27,10 @@ export interface RawDirEntry {
  * How a file is rendered when open. `"text"` is the Monaco editor (the default
  * for every file); `"image"` is the read-only image preview. The "Open With…"
  * selector (ISSUE-70) lets the user pick which one, and `OpenFile.mode` records
- * the choice so the App can route the buffer to the right view.
+ * the choice so the App can route the buffer to the right view. `"webview"` is
+ * a VS Code extension's webview panel (`createWebviewPanel`) as an editor tab.
  */
-export type OpenMode = "text" | "image" | "video" | "audio" | "graph" | "diff";
+export type OpenMode = "text" | "image" | "video" | "audio" | "graph" | "diff" | "webview";
 
 /** One file in the workspace "context graph" (Obsidian-style map). */
 export interface GraphNode {

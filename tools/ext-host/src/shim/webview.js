@@ -92,8 +92,11 @@ class WebviewPanel {
     this.webview = new Webview(bridge, { viewType, extension, kind: 'panel' });
     this.webview.options = options || {};
     this.options = options || {};
+    // Coluna pedida (pode ser Active=-1/Beside=-2); o app devolve a real
+    // (`webviewPanelState`) depois de abrir a aba na grade de editores.
     this.viewColumn = typeof showOptions === 'number' ? showOptions : (showOptions && showOptions.viewColumn) || 1;
-    this.active = true;
+    this._preserveFocus = !!(showOptions && typeof showOptions === 'object' && showOptions.preserveFocus);
+    this.active = !this._preserveFocus;
     this.visible = true;
     this.iconPath = undefined;
     this._disposed = false;
@@ -111,8 +114,14 @@ class WebviewPanel {
     this._bridge.retitle && this._bridge.retitle(this.webview.handle, v);
   }
   reveal(viewColumn, preserveFocus) {
-    if (viewColumn) this.viewColumn = viewColumn;
-    this._bridge.reveal && this._bridge.reveal(this.webview.handle, !!preserveFocus);
+    this._bridge.reveal && this._bridge.reveal(this.webview.handle, !!preserveFocus, viewColumn);
+  }
+  /** Estado de visualização publicado pelo app (aba na grade de editores). */
+  _setViewState({ active, visible, viewColumn }) {
+    const next = { active: !!active, visible: !!visible, viewColumn: typeof viewColumn === 'number' && viewColumn > 0 ? viewColumn : this.viewColumn };
+    if (next.active === this.active && next.visible === this.visible && next.viewColumn === this.viewColumn) return;
+    Object.assign(this, next);
+    this._onDidChangeViewState.fire({ webviewPanel: this });
   }
   dispose() {
     if (this._disposed) return;

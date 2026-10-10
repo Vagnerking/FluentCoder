@@ -36,10 +36,9 @@ interface Props {
 interface Tab {
   key: string;
   label: string;
-  /** Extensão instalada (aba de view) ou painel criado pela extensão. */
+  /** Extensão instalada (aba da view de sidebar dela). */
   extensionId: string;
   viewIds?: string[];
-  panel?: WebviewInfo;
 }
 
 function readTab(): string {
@@ -66,7 +65,6 @@ export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab }
   const [installed, setInstalled] = useState<InstalledExtension[]>([]);
   const [hostError, setHostError] = useState<string | null>(null);
   const [views, setViews] = useState<Record<string, WebviewInfo | { error: string } | "loading">>({});
-  const [panels, setPanels] = useState<WebviewInfo[]>([]);
   // Dedupe síncrono (ref): o StrictMode roda os efeitos 2× antes do setState valer.
   const requestedRef = useRef(new Set<string>());
 
@@ -100,35 +98,6 @@ export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab }
   useEffect(() => {
     return extHost.on((ev: HostEvent) => {
       switch (ev.event) {
-        case "webviewPanelCreated": {
-          const info = ev as unknown as WebviewInfo;
-          setPanels((p) => (p.some((x) => x.handle === info.handle) ? p : [...p, info]));
-          selectTab(`panel:${info.handle}`);
-          break;
-        }
-        case "webviewHtml": {
-          const info = ev as unknown as WebviewInfo;
-          setPanels((p) => p.map((x) => (x.handle === info.handle ? { ...x, url: info.url } : x)));
-          break;
-        }
-        case "webviewTitle": {
-          const e = ev as { handle: string; title: string };
-          setPanels((p) => p.map((x) => (x.handle === e.handle ? { ...x, title: e.title } : x)));
-          break;
-        }
-        case "webviewDisposed": {
-          const h = (ev as { handle: string }).handle;
-          setPanels((p) => p.filter((x) => x.handle !== h));
-          break;
-        }
-        case "revealWebview": {
-          const h = (ev as { handle: string }).handle;
-          setPanels((p) => {
-            if (p.some((x) => x.handle === h)) selectTab(`panel:${h}`);
-            return p;
-          });
-          break;
-        }
         case "revealView": {
           const viewId = (ev as { viewId?: string }).viewId;
           const owner = viewId && installed.find((e) => e.viewIds.includes(viewId));
@@ -139,7 +108,6 @@ export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab }
           setHostError("O host de extensões foi encerrado. Reiniciando…");
           requestedRef.current.clear();
           setViews({});
-          setPanels([]);
           break;
         case "hostRestarted":
           // As views voltam sozinhas (o efeito abaixo re-resolve a aba ativa).
@@ -174,10 +142,9 @@ export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab }
     });
   }, [tab, installed]);
 
-  const tabs: Tab[] = [
-    ...installed.map((e) => ({ key: e.id, label: e.label, extensionId: e.id, viewIds: e.viewIds })),
-    ...panels.map((p) => ({ key: `panel:${p.handle}`, label: p.title || p.viewType, extensionId: p.extensionId, panel: p })),
-  ];
+  // Painéis (`createWebviewPanel`/custom editors) abrem como abas da grade de
+  // editores (webviewTabs.ts); aqui ficam só as views de sidebar.
+  const tabs: Tab[] = installed.map((e) => ({ key: e.id, label: e.label, extensionId: e.id, viewIds: e.viewIds }));
   const isNative = (key: string) => natives.some((n) => n.key === key);
   const activeTab = isNative(tab) || tabs.some((t) => t.key === tab) ? tab : defaultTab;
 
@@ -202,27 +169,14 @@ export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab }
                 role="tab"
                 aria-selected={activeTab === t.key}
                 className={`ext-dock-tab${activeTab === t.key ? " active" : ""}`}
-                title={t.panel ? t.label : `${t.label} — extensão do VS Code instalada`}
+                title={`${t.label} — extensão do VS Code instalada`}
                 // Ponteiro sobre a aba: ativa em segundo plano (o clique já encontra pronto).
-                onPointerEnter={t.panel ? undefined : () => extHost.prewarm(t.extensionId)}
-                onFocus={t.panel ? undefined : () => extHost.prewarm(t.extensionId)}
+                onPointerEnter={() => extHost.prewarm(t.extensionId)}
+                onFocus={() => extHost.prewarm(t.extensionId)}
                 onClick={() => selectTab(t.key)}
               >
                 {t.label}
               </button>
-              {t.panel && (
-                <button
-                  className="ext-dock-tab-close"
-                  aria-label={`Fechar ${t.label}`}
-                  onClick={() => {
-                    void extHost.notify("disposeWebview", { handle: t.panel!.handle });
-                    setPanels((p) => p.filter((x) => x.handle !== t.panel!.handle));
-                    if (activeTab === t.key) selectTab(t.extensionId);
-                  }}
-                >
-                  ×
-                </button>
-              )}
             </span>
           ))}
         </div>
@@ -236,7 +190,7 @@ export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab }
         ))}
         {tabs.map((t) => {
           const isActive = activeTab === t.key;
-          const state = t.panel ?? views[t.extensionId];
+          const state = views[t.extensionId];
           // Só monta depois de aberta (e mantém montada: retainContextWhenHidden).
           if (!state) return null;
           return (

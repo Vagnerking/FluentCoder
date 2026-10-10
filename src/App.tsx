@@ -78,10 +78,16 @@ import {
   extensionPaletteCommands,
   restartExtensionHost,
   useExtensionDiffs,
+  bindExtDiffEditor,
+  isWebviewTabPath,
+  handleOfWebviewTab,
+  targetForViewColumn,
+  disposeWebviewTab,
   useHostedExtensions,
 } from "./extensions";
 import type { EditorStatePayload } from "./extensions/protocol";
 import { BranchPicker } from "./components/BranchPicker";
+import { useAcpClientServices } from "./agents/acpClientServices";
 import { SshConnectDialog } from "./components/SshConnectDialog";
 import { RemoteFolderBrowser } from "./components/RemoteFolderBrowser";
 import { RemoteConnectionMenu } from "./components/RemoteConnectionMenu";
@@ -299,8 +305,11 @@ function isGitRevisionTab(path: string): boolean {
 function isGitDiffTab(path: string): boolean {
   return path.startsWith(GIT_DIFF_URI_PREFIX);
 }
+/** Abas sintéticas (grafo, revisões/diffs do Git, painéis de webview de
+ *  extensões): sem arquivo no disco — fora do salvar, da sessão e do contexto
+ *  de editor dos agentes. */
 function isVirtualTab(path: string): boolean {
-  return isGraphTab(path) || isGitRevisionTab(path) || isGitDiffTab(path);
+  return isGraphTab(path) || isGitRevisionTab(path) || isGitDiffTab(path) || isWebviewTabPath(path);
 }
 
 type ActiveWorkspace = NormalizedWorkspace & {
@@ -1596,8 +1605,28 @@ export default function App() {
   // diagnósticos e atende openDiff/openFile/saveDocument do CLI. Os callbacks
   // leem refs/handlers declarados mais abaixo — só rodam depois do render.
   const ideFiles = useMemo(
-    () => Object.values(layout.groups).flatMap((g) => g.files),
+    () => Object.values(layout.groups).flatMap((g) => g.files).filter((f) => !isVirtualTab(f.path)),
     [layout.groups]
+  );
+  // Agentes ACP: fs/read_text_file e fs/write_text_file servidos dos buffers
+  // abertos (edições não salvas visíveis; escritas desfazíveis + salvar).
+  useAcpClientServices(
+    {
+      bufferChanged: (path, content) =>
+        setLayout((l) => patchFileEverywhere(l, path, { content, dirty: true })),
+      saveFile: async (path, content) => {
+        const file = Object.values(layoutRef.current.groups)
+          .flatMap((g) => g.files)
+          .find((f) => samePath(f.path, path));
+        if (!file) return false;
+        await saveFile({ ...file, content });
+        return true;
+      },
+      filesChanged: () => {
+        void refreshExplorerRoot();
+      },
+    },
+    remoteSession == null
   );
   const ideBridge = useIdeBridge({
     enabled: remoteSession == null,
@@ -2873,8 +2902,8 @@ export default function App() {
    * sujo — limpo, o host lê do disco.
    */
   function readExtEditorState(): EditorStatePayload {
-    const files = openFiles.map((file) => file.path).filter((p) => !isGraphTab(p));
-    if (!activePath || isGraphTab(activePath)) return { path: null, openFiles: files };
+    const files = openFiles.map((file) => file.path).filter((p) => !isVirtualTab(p));
+    if (!activePath || isVirtualTab(activePath)) return { path: null, openFiles: files };
     const cursor = editorActionsRef.current?.getCursorState?.() ?? null;
     const file = openFiles.find((f) => f.path === activePath);
     return {
@@ -2886,7 +2915,7 @@ export default function App() {
   }
 
   function readEditorContext(): AgentEditorContext | null {
-    if (!activePath || isGraphTab(activePath)) return null;
+    if (!activePath || isVirtualTab(activePath)) return null;
     const selection = editorActionsRef.current?.getSelection() ?? null;
     return {
       path: activePath,
@@ -3541,6 +3570,12 @@ export default function App() {
     }
     for (const path of openFilePathsRef.current) {
       if (openNow.has(path)) continue;
+      // Aba de painel de webview fechada (em todos os grupos) = dispose do painel.
+      const webviewHandle = handleOfWebviewTab(path);
+      if (webviewHandle) {
+        disposeWebviewTab(webviewHandle);
+        continue;
+      }
       // Mirror EditorPane's `modelPath`: untitled buffers keep their synthetic
       // `untitled:` URI; on-disk files go through the `file://` scheme.
       const uri = isUntitled(path) ? path : toFileUri(path);
@@ -3569,6 +3604,8 @@ export default function App() {
         (f) => f.path === path
       );
       if (!file) return;
+      // Painel de webview de extensão vive nesta janela (relay + host): não sai dela.
+      if (isWebviewTabPath(path)) return;
 
       // The HTML5 dragend coords freeze when the cursor is over another app, so
       // read the real OS cursor for the true drop position.
@@ -3767,13 +3804,13 @@ export default function App() {
       // Synthetic tabs (graph, Git revisions) have no file on disk, so they're
       // never persisted.
       const tabs: OpenTab[] = openFiles
-        .filter((f) => !isGraphTab(f.path))
+        .filter((f) => !isVirtualTab(f.path))
         .map((f) => ({ path: f.path, mode: f.mode }));
       const sl = serializeLayout(layout);
       sl.groups = sl.groups.map((g) => ({
         ...g,
-        tabs: g.tabs.filter((t) => !isGraphTab(t.path)),
-        activePath: isGraphTab(g.activePath ?? "") ? null : g.activePath,
+        tabs: g.tabs.filter((t) => !isVirtualTab(t.path)),
+        activePath: isVirtualTab(g.activePath ?? "") ? null : g.activePath,
       }));
       const serialized = JSON.stringify(sl);
       sessionSetOpenFiles(
@@ -3802,7 +3839,7 @@ export default function App() {
   // Remember the last real file the user focused (ignoring virtual tabs), so the
   // graph can highlight it even when the graph/revision tab itself is active.
   useEffect(() => {
-    if (activePath && !isGraphTab(activePath)) setLastRealFile(activePath);
+    if (activePath && !isVirtualTab(activePath)) setLastRealFile(activePath);
   }, [activePath]);
 
   /**
@@ -4063,6 +4100,45 @@ export default function App() {
       });
     });
   }, []);
+
+  /**
+   * Painel de webview de extensão (`createWebviewPanel`) como aba da grade:
+   * `viewColumn` 1…N = grupo N, Beside = grupo à direita (ou um novo ao lado),
+   * Active/indefinido = grupo ativo. `preserveFocus` mantém o grupo ativo.
+   */
+  const placeWebviewTab = useCallback(
+    (l: EditorLayout, file: OpenFile, viewColumn: number | undefined, preserveFocus: boolean | undefined): EditorLayout => {
+      const order = groupOrder(l.root);
+      const target = targetForViewColumn(viewColumn, order.length, Math.max(0, order.indexOf(l.activeGroup)));
+      // Já aberta em algum grupo: reveal sem coluna só ativa lá.
+      const owner = order.find((id) => l.groups[id]?.files.some((f) => f.path === file.path));
+      let next: EditorLayout;
+      if (owner && target.kind === "active") next = activateFile(l, owner, file.path);
+      else if (target.kind === "beside") next = splitGroupWith(l, l.activeGroup, file, "right", nextGroupId());
+      else {
+        const groupId = target.kind === "group" ? order[target.index] : l.activeGroup;
+        next = owner && owner !== groupId ? openInGroup(closeFile(l, owner, file.path), groupId, file) : openInGroup(l, groupId, file);
+      }
+      // preserveFocus: a aba abre/ativa no grupo dela, mas o foco fica onde estava.
+      return preserveFocus && next.groups[l.activeGroup] ? { ...next, activeGroup: l.activeGroup } : next;
+    },
+    [nextGroupId]
+  );
+  const openWebviewTab = useCallback(
+    (tab: { path: string; title: string; viewColumn?: number; preserveFocus?: boolean }) =>
+      setLayout((l) =>
+        placeWebviewTab(l, { path: tab.path, name: tab.title, content: "", dirty: false, mode: "webview" }, tab.viewColumn, tab.preserveFocus)
+      ),
+    [placeWebviewTab]
+  );
+  const revealWebviewTab = useCallback(
+    (path: string, opts: { viewColumn?: number; preserveFocus?: boolean }) =>
+      setLayout((l) => {
+        const file = Object.values(l.groups).flatMap((g) => g.files).find((f) => f.path === path);
+        return file ? placeWebviewTab(l, file, opts.viewColumn, opts.preserveFocus) : l;
+      }),
+    [placeWebviewTab]
+  );
 
   /** "Split Editor": copies a group's active file into a new group on `edge`. */
   const splitGroupOnEdge = useCallback(
@@ -6029,6 +6105,7 @@ export default function App() {
         graphRootPath={activeContextTarget?.rootPath ?? rootPath}
         graphConnId={activeContextTarget?.connId ?? null}
         graphWorkspaceRemote={activeContextTarget?.workspaceRemote}
+        viewColumn={groupOrder(layout.root).indexOf(groupId) + 1}
         tabDragging={tabDragging}
         dragSource={
           activeTabDrag
@@ -6184,6 +6261,9 @@ export default function App() {
                     sourceLabel={extensionDiffs.diffs[0].sourceLabel}
                     onAccept={extensionDiffs.accept}
                     onReject={extensionDiffs.reject}
+                    onEditorReady={(editor) =>
+                      bindExtDiffEditor(extensionDiffs.diffs[0].id, extensionDiffs.diffs[0].rightUri, editor)
+                    }
                   />
                 )
               )}
@@ -6354,6 +6434,20 @@ export default function App() {
           invalidateIndex();
         }}
         revealAgentsSidebar={() => setAgentsSidebarOpen(true)}
+        openWebviewTab={openWebviewTab}
+        revealWebviewTab={revealWebviewTab}
+        retitleWebviewTab={(path, title) =>
+          setLayout((l) => patchFileEverywhere(l, path, { name: title }))
+        }
+        closeWebviewTab={(path) =>
+          setLayout((l) => {
+            let next = l;
+            for (const g of Object.values(l.groups)) {
+              if (g.files.some((f) => f.path === path)) next = closeFile(next, g.id, path);
+            }
+            return next;
+          })
+        }
         appCommand={(command) => {
           if (command === "terminal.focus" || command === "terminal.new") setPanelOpen(true);
           else if (command === "workbench.action.showCommands") setCommandPaletteOpen(true);

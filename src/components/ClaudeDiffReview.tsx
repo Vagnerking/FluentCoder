@@ -21,6 +21,11 @@ interface Props {
   onReject: (id: string) => void;
   /** Quem propôs (padrão: a ponte IDE do Claude Code; extensões passam o nome delas). */
   sourceLabel?: string;
+  /**
+   * Chamado quando o diff editor existe (ex.: extensões ligam os threads de
+   * comentário por hunk e as edições do lado direito ao host). Devolve a limpeza.
+   */
+  onEditorReady?: (editor: monaco.editor.IStandaloneDiffEditor) => (() => void) | void;
 }
 
 function baseName(path: string): string {
@@ -36,12 +41,14 @@ function displayPath(path: string, root: string | null): string {
   return p.startsWith(`${r}/`) ? p.slice(r.length + 1) : path;
 }
 
-export function ClaudeDiffReview({ diff, queued, rootPath, onAccept, onReject, sourceLabel = "Claude Code" }: Props) {
+export function ClaudeDiffReview({ diff, queued, rootPath, onAccept, onReject, sourceLabel = "Claude Code", onEditorReady }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
   const acceptRef = useRef<HTMLButtonElement>(null);
   const [saving, setSaving] = useState(false);
   const titleId = useId();
+  const readyRef = useRef(onEditorReady);
+  readyRef.current = onEditorReady;
 
   // Último callback/estado lidos pelos atalhos registrados no Monaco.
   const actionsRef = useRef({ accept: () => {}, reject: () => {} });
@@ -90,6 +97,8 @@ export function ClaudeDiffReview({ diff, queued, rootPath, onAccept, onReject, s
         () => actionsRef.current.accept()
       );
       editorRef.current = editor;
+      const cleanup = readyRef.current?.(editor);
+      if (cleanup) created.push({ dispose: cleanup });
       created.push(editor, original, modified);
       acceptRef.current?.focus();
     });

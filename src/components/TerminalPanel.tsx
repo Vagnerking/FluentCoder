@@ -13,6 +13,7 @@ import { Codicon } from "../icons/codicons/Codicon";
 import type { Problem } from "../types";
 import type { TermSpawnOptions } from "../api";
 import { ptyClosed, ptyReady, subscribeExtTerminals } from "../extensions/terminalBridge";
+import { listen } from "@tauri-apps/api/event";
 
 interface TerminalPanelProps {
   open: boolean;
@@ -85,6 +86,8 @@ interface TermInstance {
   spawn?: TermSpawnOptions;
   /** Processo saiu (o terminal fica aberto mostrando a saída, como no VS Code). */
   exited?: boolean;
+  /** PTY criado pelo backend (terminal/* de um agente ACP): só se conecta a ele. */
+  attach?: boolean;
 }
 
 export function TerminalPanel({
@@ -199,7 +202,7 @@ export function TerminalPanel({
                     title: spec.name,
                     cwd: dir,
                     command: null,
-                    spawn: { shellPath: spec.shellPath, shellArgs: spec.shellArgs, env: spec.env, strictEnv: spec.strictEnv },
+                    spawn: { shellPath: spec.shellPath, shellArgs: spec.shellArgs, env: spec.env, strictEnv: spec.strictEnv, shellIntegration: spec.shellIntegration },
                   },
                 ]
           );
@@ -212,6 +215,22 @@ export function TerminalPanel({
       }),
     [cwd, closeTerminal]
   );
+
+  // Terminais dos agentes ACP (`terminal/create`): o PTY já existe no backend
+  // (src-tauri/src/agents/acp_client.rs); a aba só se conecta a ele, sem roubar
+  // o foco, e continua mostrando a saída depois do `release`.
+  useEffect(() => {
+    const un = listen<{ id: string; name: string; cwd: string }>("acp-terminal://created", (e) => {
+      const { id, name } = e.payload;
+      setTerminals((prev) =>
+        prev.some((t) => t.id === id)
+          ? prev
+          : [...prev, { id, title: `Agente: ${name}`, cwd: e.payload.cwd || cwd || "", command: null, attach: true }]
+      );
+      setActiveTermId((cur) => cur ?? id);
+    });
+    return () => void un.then((f) => f());
+  }, [cwd]);
 
   // "Run ▶" → a fresh terminal that runs the command.
   useEffect(() => {
@@ -469,9 +488,10 @@ export function TerminalPanel({
                       connId={t.connId}
                       command={t.command}
                       spawn={t.spawn}
+                      attach={t.attach}
                       onReady={t.spawn ? (pid) => ptyReady(t.id, pid) : undefined}
                       onExit={
-                        t.spawn
+                        t.spawn || t.attach
                           ? (code) => {
                               ptyClosed(t.id, code);
                               setTerminals((prev) => prev.map((x) => (x.id === t.id ? { ...x, exited: true } : x)));

@@ -8,12 +8,14 @@
 //! aprovação no chat. Um processo por provedor+workspace atende todas as
 //! conversas (o ACP multiplexa sessões numa conexão).
 //!
-//! O cliente declara `fs`/`terminal` como NÃO suportados: o agente lê/escreve
-//! arquivos e roda comandos por conta própria e nós só exibimos as chamadas de
-//! ferramenta. Os modos do Fluent Chat são aplicados pelos mecanismos nativos
+//! O cliente oferece `fs/read_text_file`/`fs/write_text_file` (dos buffers do
+//! Monaco, com edições desfazíveis) e `terminal/*` (PTY real, visível no painel
+//! de terminais) — ver `acp_client.rs`; os pedidos são atendidos em tarefas
+//! próprias, sem travar a conexão. Os modos do Fluent Chat são aplicados pelos mecanismos nativos
 //! do agente (`configOptions` de categoria `mode` ou `session/set_mode`) e pela
 //! política de aprovação — nunca por texto injetado no prompt.
 
+use super::acp_client::ClientServices;
 use super::registry::ProviderDescriptor;
 use super::{
     approval_label, cap_text, knowledge_mcp_server, new_request_id, prompt_for_session,
@@ -58,6 +60,17 @@ struct AcpConnection {
     load_session: bool,
     sessions: HashMap<String, SessionState>,
     stderr_tail: Arc<Mutex<Vec<String>>>,
+    /// fs/* e terminal/* atendidos para o agente.
+    services: ClientServices,
+    /// Respostas das tarefas que atendem pedidos do agente (enviadas pelo loop).
+    out_tx: mpsc::UnboundedSender<Value>,
+    out_rx: Option<mpsc::UnboundedReceiver<Value>>,
+}
+
+impl Drop for AcpConnection {
+    fn drop(&mut self) {
+        self.services.shutdown();
+    }
 }
 
 /// Contexto de uma chamada: para onde vão os eventos, como responder pedidos
@@ -494,6 +507,7 @@ impl AcpConnection {
             });
         }
 
+        let (out_tx, out_rx) = mpsc::unbounded_channel();
         let mut connection = Self {
             child,
             stdin,
@@ -502,16 +516,16 @@ impl AcpConnection {
             load_session: false,
             sessions: HashMap::new(),
             stderr_tail,
+            services: ClientServices::new(root),
+            out_tx,
+            out_rx: Some(out_rx),
         };
         let mut ctx = CallCtx::new(None, &desc.id);
         let init = connection.call(
             "initialize",
             json!({
                 "protocolVersion": PROTOCOL_VERSION,
-                "clientCapabilities": {
-                    "fs": { "readTextFile": false, "writeTextFile": false },
-                    "terminal": false
-                },
+                "clientCapabilities": ClientServices::capabilities(),
                 "clientInfo": {
                     "name": "fluent-coder",
                     "title": "Fluent Coder",
@@ -606,12 +620,30 @@ impl AcpConnection {
     }
 
     /// Faz uma chamada JSON-RPC e, enquanto espera a resposta, atende as
-    /// notificações e pedidos do agente (streaming, permissões).
+    /// notificações e pedidos do agente (streaming, permissões, fs/terminal).
     async fn call(
         &mut self,
         method: &str,
         params: Value,
         ctx: &mut CallCtx<'_>,
+    ) -> Result<Value, CallError> {
+        // O receptor das respostas de fs/terminal sai do `self` durante a
+        // chamada (o `select!` não aceita dois empréstimos mutáveis de `self`).
+        let mut out_rx = match self.out_rx.take() {
+            Some(rx) => rx,
+            None => return Err(CallError::Fatal("chamada ACP reentrante".into())),
+        };
+        let result = self.call_inner(method, params, ctx, &mut out_rx).await;
+        self.out_rx = Some(out_rx);
+        result
+    }
+
+    async fn call_inner(
+        &mut self,
+        method: &str,
+        params: Value,
+        ctx: &mut CallCtx<'_>,
+        out_rx: &mut mpsc::UnboundedReceiver<Value>,
     ) -> Result<Value, CallError> {
         let id = self.next_id;
         self.next_id += 1;
@@ -650,6 +682,10 @@ impl AcpConnection {
                     self.answer_permission(ctx, reply).await.map_err(CallError::Fatal)?;
                     continue;
                 }
+                Some(response) = out_rx.recv() => {
+                    self.send(response).await.map_err(CallError::Fatal)?;
+                    continue;
+                }
                 message = self.next_message() => message.map_err(CallError::Fatal)?,
             };
 
@@ -669,9 +705,22 @@ impl AcpConnection {
                         self.handle_permission(ctx, request_id, &message["params"])
                             .await
                             .map_err(CallError::Fatal)?;
+                    } else if ClientServices::handles(method) {
+                        // fs/* e terminal/*: atendidos numa tarefa (ex.:
+                        // wait_for_exit não pode travar o streaming).
+                        let services = self.services.clone();
+                        let out = self.out_tx.clone();
+                        let method = method.to_owned();
+                        let params = message.get("params").cloned().unwrap_or(Value::Null);
+                        tokio::spawn(async move {
+                            let reply = match services.handle(&method, &params).await {
+                                Ok(result) => json!({ "jsonrpc": "2.0", "id": request_id, "result": result }),
+                                Err(e) => json!({ "jsonrpc": "2.0", "id": request_id, "error": { "code": e.code, "message": e.message } }),
+                            };
+                            let _ = out.send(reply);
+                        });
                     } else {
-                        // fs/* e terminal/* não foram declarados — o agente
-                        // não deveria chamá-los; responde "não suportado".
+                        // Método que o cliente não oferece: "não suportado".
                         self.send(json!({
                             "jsonrpc": "2.0",
                             "id": request_id,
@@ -1298,9 +1347,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn fake_agent_end_to_end() {
         let Some(desc) = fixture() else { return };
-        let root = std::env::temp_dir();
+        let root = std::env::temp_dir().join(format!("fluent-acp-e2e-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
         let (jobs_tx, jobs_rx) = mpsc::unbounded_channel();
-        let worker = tokio::spawn(run_worker(desc, root, jobs_rx));
+        let worker = tokio::spawn(run_worker(desc, root.clone(), jobs_rx));
         let cancel = Arc::new(Notify::new());
         let broker = Arc::new(ApprovalBroker::default());
 
@@ -1371,7 +1421,18 @@ mod tests {
         assert!(!text_of(&events).contains("HISTÓRICO"), "replay vazou: {events:?}");
         assert!(text_of(&events).contains("Recebido: retomar"));
 
+        // 7) Capacidades de cliente: o agente escreve/lê pelo fs/* (escrita fora
+        //    do workspace recusada) e roda um comando pelo terminal/* (PTY real,
+        //    código de saída e saída capturada).
+        let turn = send_job(&jobs_tx, "c1", "testar cliente", AgentMode::Auto, Some(session.clone()), &cancel, &broker, None);
+        turn.done.await.unwrap().unwrap();
+        let events = turn.events.lock().unwrap().clone();
+        let text = text_of(&events);
+        assert!(text.contains(r#"cliente: fs=ok:"linha 2\n":fora=recusado"#), "{text}");
+        assert!(text.contains(r#"terminal=exit:5:"do terminal ok""#), "{text}");
+
         drop(jobs_tx);
         worker.await.unwrap().unwrap();
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

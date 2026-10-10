@@ -56,6 +56,10 @@ export interface WebviewInfo {
   /** `webview.options.enableForms` (sandbox `allow-forms`). */
   enableForms?: boolean;
   resolveMs?: number;
+  /** Painel: `ViewColumn` pedida (1…9, -1 = ativa, -2 = ao lado). */
+  viewColumn?: number;
+  /** Painel: abrir sem roubar o foco. */
+  preserveFocus?: boolean;
 }
 
 export interface InitializeResult {
@@ -151,7 +155,7 @@ export type HostEvent =
   | { event: "viewProviderRegistered"; extensionId: string; viewId: string }
   | ({ event: "webviewHtml" | "webviewPanelCreated" } & WebviewInfo)
   | { event: "postMessage"; handle: string; message: unknown }
-  | { event: "revealWebview"; handle: string; preserveFocus: boolean }
+  | { event: "revealWebview"; handle: string; preserveFocus: boolean; viewColumn?: number }
   | { event: "revealView"; viewId?: string; container?: string }
   | { event: "webviewTitle"; handle: string; title: string }
   | { event: "webviewDisposed"; handle: string }
@@ -185,7 +189,18 @@ export type HostEvent =
   | { event: "revealRange"; path: string; range: PlainRange; revealType: number }
   | { event: "decorationType"; key: string; options: Record<string, unknown> }
   | { event: "decorationTypeDisposed"; key: string }
-  | { event: "decorations"; path: string; key: string; items: { range: PlainRange; hoverMessage?: string; renderOptions?: Record<string, unknown> }[] }
+  | {
+      event: "decorations";
+      /** Arquivo; ou `uri` + `diffId` para o lado virtual de um diff aberto. */
+      path?: string;
+      uri?: string;
+      diffId?: string;
+      key: string;
+      items: { range: PlainRange; hoverMessage?: string; renderOptions?: Record<string, unknown> }[];
+    }
+  | { event: "diffContent"; diffId: string; side: "right"; text: string }
+  | { event: "commentThreadDisposed"; handle: string }
+  | { event: "quickInputHide"; id: string }
   | { event: "extDiagnostics"; owner: string; path: string; diagnostics: { range: PlainRange; message: string; severity: number; source?: string }[] }
   | StatusBarItemEvent
   | { event: "statusMessage"; id: string; extensionId: string; text: string | null; progress?: boolean }
@@ -203,6 +218,7 @@ export type HostEvent =
       hideFromUser?: boolean;
       isTransient?: boolean;
       extensionId?: string;
+      shellIntegration?: boolean;
     }
   | { event: "terminalShow"; id: string; preserveFocus: boolean }
   | { event: "terminalSendText"; id: string; text: string }

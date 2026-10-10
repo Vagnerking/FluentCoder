@@ -58,9 +58,13 @@ agentclientprotocol.com): JSON-RPC por stdio com `initialize` →
 - Adicionar um CLI que fala ACP = uma linha em `ACP_AGENTS` (+ entrada no
   catálogo do frontend para rótulo/ícone). Um protocolo novo = um novo
   `impl AgentProvider`.
-- O cliente ACP declara `fs`/`terminal` como **não suportados**: o agente lê,
-  escreve e executa por conta própria (exibimos as chamadas). Servir fs/terminal
-  pelo app fica para depois (exigiria sandbox próprio).
+- O cliente ACP **serve** `fs/read_text_file`/`fs/write_text_file` (dos
+  buffers abertos no Monaco — edições não salvas visíveis, escrita desfazível;
+  escrita só dentro do workspace) e `terminal/*` (PTY real, visível no painel)
+  — `agents/acp_client.rs`, detalhes em `docs/context/agentes-ia.md`.
+  (Atualização de 10/10/2026; antes declarava ambos como não suportados.) O
+  "sandbox" é o mesmo do agente: as aprovações por modo continuam valendo para
+  as ferramentas dele.
 - Modos no ACP usam o mecanismo nativo do agente quando existe
   (`configOptions` de categoria `mode` ou `session/set_mode`, casando por
   vocabulário conhecido) **e** uma política de aprovação por modo; nenhum texto

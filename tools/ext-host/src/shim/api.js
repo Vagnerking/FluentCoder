@@ -401,6 +401,8 @@ function createVscodeApi(host, ext) {
     onDidChangeActiveNotebookEditor: host.events.never.event,
     onDidChangeVisibleNotebookEditors: host.events.never.event,
     onDidChangeNotebookEditorSelection: host.events.never.event,
+    onDidChangeNotebookEditorVisibleRanges: host.events.never.event,
+    showNotebookDocument: () => Promise.reject(new Error('Notebooks não são suportados pelo Fluent Coder.')),
 
     registerWebviewViewProvider(viewId, provider, options) {
       return host.registerWebviewViewProvider(ext, viewId, provider, options);
@@ -433,21 +435,11 @@ function createVscodeApi(host, ext) {
     showInformationMessage: showMessage('Information'),
     showWarningMessage: showMessage('Warning'),
     showErrorMessage: showMessage('Error'),
-    showQuickPick(items, options) {
-      return Promise.resolve(items).then((list) => {
-        const arr = list || [];
-        const labels = arr.map((i) => (typeof i === 'string' ? { label: i } : { label: i.label, description: i.description, detail: i.detail, kind: i.kind }));
-        return host.request('quickPick', { items: labels, placeHolder: options && options.placeHolder, title: options && options.title, canPickMany: !!(options && options.canPickMany), extensionId: ext.id }).then((r) => {
-          if (!r) return undefined;
-          if (Array.isArray(r.indexes)) return r.indexes.map((i) => arr[i]);
-          return typeof r.index === 'number' && r.index >= 0 ? arr[r.index] : undefined;
-        });
-      });
+    showQuickPick(items, options, token) {
+      return host.quickInputs.showQuickPick(ext, items, options || {}, token);
     },
-    showInputBox(options = {}) {
-      return host
-        .request('inputBox', { prompt: options.prompt, placeHolder: options.placeHolder, value: options.value, password: !!options.password, title: options.title, extensionId: ext.id })
-        .then((r) => (r && typeof r.value === 'string' ? r.value : undefined));
+    showInputBox(options, token) {
+      return host.quickInputs.showInputBox(ext, options || {}, token);
     },
     showOpenDialog(options = {}) {
       return host.request('openDialog', { canSelectFiles: options.canSelectFiles !== false, canSelectFolders: !!options.canSelectFolders, canSelectMany: !!options.canSelectMany, title: options.title }).then((r) => (r && Array.isArray(r.paths) && r.paths.length ? r.paths.map((p) => Uri.file(p)) : undefined));
@@ -506,12 +498,10 @@ function createVscodeApi(host, ext) {
       return host.createTerminal(ext, opts);
     },
     createInputBox() {
-      const em = new EventEmitter();
-      return { value: '', placeholder: '', prompt: '', show() {}, hide() {}, dispose() {}, onDidAccept: em.event, onDidHide: em.event, onDidChangeValue: em.event, onDidTriggerButton: em.event, buttons: [] };
+      return host.quickInputs.createInputBox(ext);
     },
     createQuickPick() {
-      const em = new EventEmitter();
-      return { items: [], selectedItems: [], activeItems: [], value: '', show() {}, hide() {}, dispose() {}, onDidAccept: em.event, onDidHide: em.event, onDidChangeValue: em.event, onDidChangeSelection: em.event, onDidChangeActive: em.event, onDidTriggerButton: em.event, onDidTriggerItemButton: em.event, buttons: [] };
+      return host.quickInputs.createQuickPick(ext);
     },
   };
 
@@ -733,8 +723,9 @@ function createVscodeApi(host, ext) {
       const doc = host.documents.get(toUri(uri).toString());
       return doc ? doc.save().then((ok) => (ok ? doc.uri : undefined)) : Promise.resolve(undefined);
     },
-    registerTaskProvider: () => noopDisposable(),
+    registerTaskProvider: (type, provider) => host.tasks.registerTaskProvider(ext, type, provider),
     registerNotebookSerializer: () => noopDisposable(),
+    openNotebookDocument: () => Promise.reject(new Error('Notebooks não são suportados pelo Fluent Coder.')),
   };
 
   // ------------------------------------------------------------------ env
@@ -817,17 +808,7 @@ function createVscodeApi(host, ext) {
   // --------------------------------------------------------- misc / stubs
   const comments = {
     createCommentController(id, label) {
-      return {
-        id,
-        label,
-        options: undefined,
-        commentingRangeProvider: undefined,
-        reactionHandler: undefined,
-        createCommentThread(uri, range, comments) {
-          return { uri, range, comments, collapsibleState: 0, canReply: true, contextValue: undefined, label: undefined, state: 0, dispose() {} };
-        },
-        dispose() {},
-      };
+      return host.comments.createController(ext, String(id), String(label || id));
     },
   };
 
@@ -848,15 +829,18 @@ function createVscodeApi(host, ext) {
     uri: undefined,
   };
 
+  // Tarefas: providers + executeTask no terminal integrado (shim/tasks.js).
   const tasks = {
-    executeTask: () => Promise.reject(new Error('Tarefas não são suportadas pelo host de extensões do Fluent Coder.')),
-    fetchTasks: () => Promise.resolve([]),
-    taskExecutions: [],
-    onDidStartTask: host.events.never.event,
-    onDidEndTask: host.events.never.event,
-    onDidStartTaskProcess: host.events.never.event,
-    onDidEndTaskProcess: host.events.never.event,
-    registerTaskProvider: () => noopDisposable(),
+    executeTask: (task) => host.tasks.executeTask(ext, task),
+    fetchTasks: (filter) => host.tasks.fetchTasks(filter),
+    get taskExecutions() {
+      return [...host.tasks.executions];
+    },
+    onDidStartTask: host.tasks.onDidStartTask.event,
+    onDidEndTask: host.tasks.onDidEndTask.event,
+    onDidStartTaskProcess: host.tasks.onDidStartTaskProcess.event,
+    onDidEndTaskProcess: host.tasks.onDidEndTaskProcess.event,
+    registerTaskProvider: (type, provider) => host.tasks.registerTaskProvider(ext, type, provider),
   };
 
   const debug = {
@@ -871,9 +855,28 @@ function createVscodeApi(host, ext) {
     startDebugging: () => Promise.resolve(false),
   };
 
+  // Sem notebooks no Fluent Coder: APIs presentes e inertes (nunca lançam no
+  // acesso); abrir/mostrar um notebook rejeita com mensagem clara.
   const notebooks = {
-    createNotebookController: () => ({ dispose() {} }),
+    createNotebookController(id, notebookType, label) {
+      return {
+        id,
+        notebookType,
+        label,
+        supportedLanguages: [],
+        supportsExecutionOrder: false,
+        executeHandler: undefined,
+        interruptHandler: undefined,
+        onDidChangeSelectedNotebooks: host.events.never.event,
+        createNotebookCellExecution() {
+          throw new Error('Notebooks não são suportados pelo Fluent Coder.');
+        },
+        updateNotebookAffinity() {},
+        dispose() {},
+      };
+    },
     registerNotebookCellStatusBarItemProvider: () => noopDisposable(),
+    createRendererMessaging: () => ({ onDidReceiveMessage: host.events.never.event, postMessage: () => Promise.resolve(false) }),
   };
 
   const scm = { createSourceControl: () => ({ createResourceGroup: () => ({ resourceStates: [], dispose() {} }), inputBox: { value: '' }, dispose() {} }) };

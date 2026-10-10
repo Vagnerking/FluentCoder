@@ -8,7 +8,10 @@
  * - **editor**: espelho Monaco ↔ `TextDocument`/`TextEditor` (editorBridge);
  * - **terminais**: `window.createTerminal` → terminal integrado (terminalBridge);
  * - **diffs**: `vscode.diff` → revisão do Monaco (ClaudeDiffReview, via diffs.ts);
- * - **pedidos de UI**: mensagens/quick pick/input/diálogos de arquivo;
+ * - **comentários**: `vscode.comments` → widgets no Monaco (comments.ts +
+ *   commentWidgets.tsx; ex.: barra Aceitar/Rejeitar por hunk do Claude Code);
+ * - **pedidos de UI**: mensagens/diálogos de arquivo; QuickPick/InputBox
+ *   completos pelo evento `quickInput` (ExtQuickInput.tsx);
  * - **saída**: output channels das extensões e log do host na aba "Saída";
  * - **barra de status**: `createStatusBarItem`/`setStatusBarMessage`/`withProgress`;
  * - **deep links** `fluent-coder://<extensão>/…` → `registerUriHandler`;
@@ -19,20 +22,30 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { QuickPick } from "../components/QuickPick";
-import { QuickInput } from "../components/QuickInput";
 import { termWrite } from "../api";
 import { appendOutput } from "../output/outputStore";
 import { extHost, extLog, hostOutput } from "./client";
 import { ExtensionDiffDialog, type ExtDocumentView } from "./ExtensionDiffDialog";
 import { startEditorBridge, type EditorBridgeHost } from "./editorBridge";
-import { configureTerminalBridge, handleTerminalEvent } from "./terminalBridge";
+import { configureTerminalBridge, feedPtyData, handleTerminalEvent } from "./terminalBridge";
 import { addExtDiff, clearExtDiffs, removeExtDiff } from "./diffs";
+import { ExtQuickInput } from "./ExtQuickInput";
+import {
+  clearWebviewPanels,
+  hasWebviewPanel,
+  isWebviewTabPath,
+  patchWebviewPanel,
+  removeWebviewPanel,
+  upsertWebviewPanel,
+  webviewTabPath,
+} from "./webviewTabs";
+import { hideQuickInput, setQuickInput, type QuickInputState } from "./quickInputModel";
+import { clearCommentThreads, removeCommentThread, upsertCommentThread, type CommentThreadInfo } from "./comments";
 import { applyStatusBarItem, applyStatusMessage, clearStatusItems } from "./statusBar";
 import { editorKeybindingListener, setContributedKeybindings } from "./keys";
 import { themeColorVar } from "./editorModel";
 import { readFluentThemeVars } from "./theme";
-import type { ContributedKeybinding, ExtensionDiffEvent, HostEvent, InstalledExtension, PlainRange, StatusBarItemEvent } from "./protocol";
+import type { ContributedKeybinding, ExtensionDiffEvent, HostEvent, InstalledExtension, PlainRange, StatusBarItemEvent, WebviewInfo } from "./protocol";
 
 export interface ExtensionHostRuntimeProps {
   rootPath: string | null;
@@ -53,6 +66,15 @@ export interface ExtensionHostRuntimeProps {
   revealAgentsSidebar?(): void;
   /** Comandos do workbench pedidos pela extensão (`workbench.action.*`, terminal, formatar…). */
   appCommand?(command: string, args: unknown[]): void;
+  /**
+   * Painéis de webview (`createWebviewPanel`/custom editors) como abas da
+   * grade de editores: abrir (na coluna pedida), focar, renomear e fechar a
+   * aba `extwebview:<handle>` (ver webviewTabs.ts).
+   */
+  openWebviewTab?(tab: { path: string; title: string; viewColumn?: number; preserveFocus?: boolean }): void;
+  revealWebviewTab?(path: string, opts: { viewColumn?: number; preserveFocus?: boolean }): void;
+  retitleWebviewTab?(path: string, title: string): void;
+  closeWebviewTab?(path: string): void;
 }
 
 interface PendingRequest {
@@ -61,7 +83,7 @@ interface PendingRequest {
   params: Record<string, unknown>;
 }
 
-const UI_REQUESTS = new Set(["showMessage", "quickPick", "inputBox", "openDialog", "saveDialog"]);
+const UI_REQUESTS = new Set(["showMessage", "openDialog", "saveDialog"]);
 /** Extensão que traz a própria ponte IDE do `claude` (lock em ~/.claude/ide). */
 const CLAUDE_CODE_EXTENSION = "anthropic.claude-code";
 /** Espera após o startup antes de subir o Node (não disputa CPU com a UI). */
@@ -106,7 +128,11 @@ export function ExtensionHostRuntime(props: ExtensionHostRuntimeProps) {
       get current(): EditorBridgeHost {
         const p = propsRef.current;
         return {
-          getTabs: () => p.files.map((f) => ({ path: f.path, dirty: f.dirty, active: f.path === p.activePath })),
+          // Só arquivos: abas sintéticas (painéis de webview, grafo) não são documentos.
+          getTabs: () =>
+            p.files
+              .filter((f) => !isWebviewTabPath(f.path) && !/^[a-z][\w+.-]*:\/\//i.test(f.path))
+              .map((f) => ({ path: f.path, dirty: f.dirty, active: f.path === p.activePath })),
           openFile: (path, opts) => p.openFile(path, opts),
           bufferChanged: (path, content) => p.bufferChanged(path, content),
           saveFile: (path) => p.saveFile(path),
@@ -120,9 +146,14 @@ export function ExtensionHostRuntime(props: ExtensionHostRuntimeProps) {
       write: (ptyId, data) => void termWrite(ptyId, data).catch((err) => extLog("termWrite falhou", err)),
       notify: (method, params) => void extHost.notify(method, params),
     });
+    // Saída dos PTYs das extensões → shell integration (OSC 633).
+    const unData = listen<{ id: string; data: string }>("term-data", (e) => {
+      if (e.payload.id.startsWith("ext-")) feedPtyData(e.payload.id, e.payload.data);
+    });
     return () => {
       bridge.dispose();
       bridgeRef.current = null;
+      void unData.then((f) => f());
     };
   }, [enabled]);
 
@@ -167,6 +198,18 @@ export function ExtensionHostRuntime(props: ExtensionHostRuntimeProps) {
         case "closeDiff":
           removeExtDiff((ev as { diffId: string }).diffId);
           break;
+        case "quickInput":
+          setQuickInput(ev as unknown as QuickInputState);
+          break;
+        case "quickInputHide":
+          hideQuickInput((ev as { id: string }).id);
+          break;
+        case "commentThread":
+          upsertCommentThread(ev as unknown as CommentThreadInfo);
+          break;
+        case "commentThreadDisposed":
+          removeCommentThread((ev as { handle: string }).handle);
+          break;
         case "openExternal":
           void invoke("ext_host_open_external", { url: (ev as { url: string }).url }).catch((err) =>
             setToast({ severity: "error", message: String(err) }),
@@ -209,9 +252,35 @@ export function ExtensionHostRuntime(props: ExtensionHostRuntimeProps) {
           p.revealAgentsSidebar?.();
           break;
         }
-        case "revealWebview":
-          p.revealAgentsSidebar?.();
+        case "webviewPanelCreated": {
+          const info = ev as unknown as WebviewInfo;
+          upsertWebviewPanel(info);
+          p.openWebviewTab?.({ path: webviewTabPath(info.handle), title: info.title || info.viewType, viewColumn: info.viewColumn, preserveFocus: info.preserveFocus });
           break;
+        }
+        case "webviewHtml": {
+          const info = ev as unknown as WebviewInfo;
+          patchWebviewPanel(info.handle, { url: info.url });
+          break;
+        }
+        case "webviewTitle": {
+          const e = ev as { handle: string; title: string };
+          patchWebviewPanel(e.handle, { title: e.title });
+          if (hasWebviewPanel(e.handle)) p.retitleWebviewTab?.(webviewTabPath(e.handle), e.title);
+          break;
+        }
+        case "webviewDisposed": {
+          const h = (ev as { handle: string }).handle;
+          if (removeWebviewPanel(h)) p.closeWebviewTab?.(webviewTabPath(h));
+          break;
+        }
+        case "revealWebview": {
+          const e = ev as { handle: string; preserveFocus: boolean; viewColumn?: number };
+          // Painel = aba do editor; view de sidebar = abre o Fluent Chat.
+          if (hasWebviewPanel(e.handle)) p.revealWebviewTab?.(webviewTabPath(e.handle), { viewColumn: e.viewColumn, preserveFocus: e.preserveFocus });
+          else p.revealAgentsSidebar?.();
+          break;
+        }
         case "appCommand": {
           const e = ev as { command: string; args: unknown[] };
           p.appCommand?.(e.command, e.args ?? []);
@@ -236,6 +305,10 @@ export function ExtensionHostRuntime(props: ExtensionHostRuntimeProps) {
         case "hostExit":
           void invoke("ide_bridge_set_advertised", { advertised: true }).catch(() => {});
           clearExtDiffs();
+          clearCommentThreads();
+          setQuickInput(null);
+          // O host caiu: os painéis morreram com ele (as abas fecham).
+          for (const h of clearWebviewPanels()) p.closeWebviewTab?.(webviewTabPath(h));
           clearStatusItems();
           setRequest(null);
           break;
@@ -343,30 +416,7 @@ export function ExtensionHostRuntime(props: ExtensionHostRuntimeProps) {
           onChoice={(v) => respond({ index: v ?? -1 })}
         />
       )}
-      {request?.kind === "quickPick" && (
-        <QuickPick
-          title={(request.params.title as string) || undefined}
-          placeholder={(request.params.placeHolder as string) || "Selecione uma opção"}
-          items={((request.params.items as { label: string; description?: string; detail?: string }[]) ?? []).map((it, i) => ({
-            id: String(i),
-            label: it.label,
-            description: it.description,
-            detail: it.detail,
-          }))}
-          onPick={(item) => respond({ index: Number(item.id) })}
-          onClose={() => respond(null)}
-        />
-      )}
-      {request?.kind === "inputBox" && (
-        <QuickInput
-          title={(request.params.title as string) || undefined}
-          placeholder={(request.params.placeHolder as string) || undefined}
-          prompt={(request.params.prompt as string) || undefined}
-          password={!!request.params.password}
-          onSubmit={(value) => respond({ value })}
-          onClose={() => respond(null)}
-        />
-      )}
+      <ExtQuickInput />
       {docView && <ExtensionDiffDialog view={docView} onClose={() => setDocView(null)} />}
     </>
   );

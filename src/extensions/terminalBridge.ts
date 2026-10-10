@@ -8,6 +8,7 @@
  * retido e sai quando o TerminalView avisa que criou o PTY (`ptyReady`).
  */
 import type { HostEvent } from "./protocol";
+import { ShellIntegrationParser } from "./shellIntegration.ts";
 
 export interface ExtTerminalSpec {
   /** Id do terminal no host (o PTY usa `ext-<id>`). */
@@ -21,6 +22,8 @@ export interface ExtTerminalSpec {
   shellArgs?: string[];
   extensionId?: string;
   hideFromUser?: boolean;
+  /** Pedir a shell integration (OSC 633) ao PTY (bash/zsh/fish). */
+  shellIntegration?: boolean;
 }
 
 type Action =
@@ -36,6 +39,18 @@ const ready = new Set<string>();
 const listeners = new Set<Listener>();
 let writer: (ptyId: string, data: string) => void = () => {};
 let notifyHost: (method: string, params: unknown) => void = () => {};
+/** Estado da shell integration por PTY (parser OSC 633 + execução corrente). */
+interface ShellState {
+  parser: ShellIntegrationParser;
+  ready: boolean;
+  commandLine?: string;
+  executing: boolean;
+}
+const shells = new Map<string, ShellState>();
+/** Teto de saída repassada ao host por execução (`execution.read()`). */
+const MAX_EXEC_OUTPUT = 4 * 1024 * 1024;
+const execBytes = new Map<string, number>();
+
 /** Ações que chegaram antes de o painel assinar (ex.: painel ainda não montado). */
 const backlog: Action[] = [];
 
@@ -74,7 +89,7 @@ export function ptyReady(ptyId: string, pid: number | null): void {
   const spec = specs.get(ptyId);
   if (!spec) return;
   ready.add(ptyId);
-  notifyHost("terminalOpened", { id: spec.hostId, pid: pid ?? undefined });
+  notifyHost("terminalOpened", { id: spec.hostId, pid: pid ?? undefined, shellIntegration: !!spec.shellIntegration });
   const queued = pendingWrites.get(ptyId);
   pendingWrites.delete(ptyId);
   queued?.forEach((d) => writer(ptyId, d));
@@ -87,7 +102,62 @@ export function ptyClosed(ptyId: string, exitCode: number | null): void {
   specs.delete(ptyId);
   ready.delete(ptyId);
   pendingWrites.delete(ptyId);
+  shells.delete(ptyId);
+  execBytes.delete(ptyId);
   notifyHost("terminalClosed", { id: spec.hostId, exitCode: exitCode ?? undefined });
+}
+
+/**
+ * Saída do PTY (evento `term-data`): nos terminais de extensão com shell
+ * integration, as sequências OSC 633 viram eventos do host —
+ * `terminalShell` (ready/cwd/start/data/end) → onDidStart/EndTerminalShellExecution,
+ * `execution.read()` e `shellIntegration.cwd`.
+ */
+export function feedPtyData(ptyId: string, data: string): void {
+  const spec = specs.get(ptyId);
+  if (!spec?.shellIntegration) return;
+  let st = shells.get(ptyId);
+  if (!st) {
+    st = { parser: new ShellIntegrationParser(), ready: false, executing: false };
+    shells.set(ptyId, st);
+  }
+  const id = spec.hostId;
+  for (const item of st.parser.feed(data)) {
+    if (item.kind === "data") {
+      if (!st.executing) continue;
+      const used = execBytes.get(ptyId) ?? 0;
+      if (used >= MAX_EXEC_OUTPUT) continue;
+      const text = item.text.slice(0, MAX_EXEC_OUTPUT - used);
+      execBytes.set(ptyId, used + text.length);
+      notifyHost("terminalShell", { id, type: "data", data: text });
+      continue;
+    }
+    const ev = item.event;
+    if (!st.ready) {
+      st.ready = true;
+      notifyHost("terminalShell", { id, type: "ready" });
+    }
+    switch (ev.type) {
+      case "cwd":
+        notifyHost("terminalShell", { id, type: "cwd", cwd: ev.value });
+        break;
+      case "commandLine":
+        st.commandLine = ev.value;
+        break;
+      case "executed":
+        st.executing = true;
+        execBytes.set(ptyId, 0);
+        notifyHost("terminalShell", { id, type: "start", commandLine: st.commandLine ?? "" });
+        st.commandLine = undefined;
+        break;
+      case "finished":
+        if (st.executing) notifyHost("terminalShell", { id, type: "end", exitCode: ev.exitCode });
+        st.executing = false;
+        break;
+      default:
+        break;
+    }
+  }
 }
 
 /** Eventos de terminal vindos do host. Devolve `true` se tratou. */
@@ -106,6 +176,7 @@ export function handleTerminalEvent(ev: HostEvent, onShowPanel: () => void): boo
         shellArgs: e.shellArgs,
         extensionId: e.extensionId,
         hideFromUser: e.hideFromUser,
+        shellIntegration: e.shellIntegration,
       };
       specs.set(spec.ptyId, spec);
       emit({ type: "create", spec });
@@ -136,6 +207,8 @@ export function handleTerminalEvent(ev: HostEvent, onShowPanel: () => void): boo
       specs.clear();
       ready.clear();
       pendingWrites.clear();
+      shells.clear();
+      execBytes.clear();
       return false;
     default:
       return false;
@@ -147,6 +220,8 @@ export function __resetTerminalBridge(): void {
   specs.clear();
   pendingWrites.clear();
   ready.clear();
+  shells.clear();
+  execBytes.clear();
   listeners.clear();
   backlog.length = 0;
   writer = () => {};

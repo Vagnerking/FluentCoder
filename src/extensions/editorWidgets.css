@@ -1,0 +1,279 @@
+/*
+ * Widgets das extensões dentro do Monaco (threads de comentário — ex.: a barra
+ * Aceitar/Rejeitar por hunk do Claude Code). Só tokens do :root (ver
+ * docs/design/fluent-design.md); os botões usam os primitivos `.ui-button` /
+ * `.ui-icon-button` de src/styles.css.
+ */
+.ext-comment-widget {
+  position: absolute;
+  z-index: 5;
+  box-sizing: border-box;
+  padding: var(--space-xxs) 0;
+  font-family: inherit;
+  font-size: var(--font-base);
+  line-height: var(--line-height-base);
+  color: var(--text);
+}
+
+.ext-comment-thread {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--acrylic-border);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-overlay);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.24);
+}
+
+.ext-comment-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-height: var(--control-h-sm);
+}
+
+.ext-comment-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: var(--font-caption);
+  line-height: var(--line-height-caption);
+}
+
+.ext-comment-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-left: auto;
+}
+
+.ext-comment-actions .codicon {
+  font-size: var(--icon-md);
+}
+
+.ext-comment {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xxs);
+  padding-top: var(--space-xs);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ext-comment-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: var(--font-caption);
+  line-height: var(--line-height-caption);
+}
+
+.ext-comment-author {
+  font-weight: 600;
+}
+
+.ext-comment-label {
+  color: var(--text-muted);
+}
+
+.ext-comment-spacer {
+  flex: 1 1 auto;
+}
+
+.ext-comment-text-action {
+  padding: 0 var(--space-xs);
+  font-size: var(--font-caption);
+}
+
+.ext-comment-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.ext-comment-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.ext-comment-reaction {
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-sm);
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-control);
+  background: var(--acrylic-control);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ext-comment-reaction:hover:not(:disabled) {
+  background: var(--acrylic-control-hover);
+}
+
+.ext-comment-reaction.reacted {
+  border-color: var(--accent);
+  background: var(--fill-selected);
+}
+
+.ext-comment-reaction:focus-visible,
+.ext-comment-input:focus-visible {
+  outline: 2px solid var(--stroke-focus);
+  outline-offset: 1px;
+}
+
+.ext-comment-reply {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.ext-comment-input {
+  box-sizing: border-box;
+  width: 100%;
+  resize: vertical;
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-control);
+  background: var(--acrylic-control);
+  color: var(--text);
+  font: inherit;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ext-comment-thread {
+    animation: ext-comment-in 120ms ease-out;
+  }
+}
+
+/* ---- Painel de webview de extensão como aba da grade (EditorGroupView). */
+.editor-webview-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--editor-bg);
+}
+
+.editor-webview-pane[hidden] {
+  display: none;
+}
+
+/* ---- QuickPick/InputBox das extensões (ExtQuickInput.tsx) — complementa o
+   visual `.quick-open`/`.quick-pick` do app. */
+.ext-quick-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding-right: var(--space-sm);
+}
+
+.ext-quick-header .quick-pick-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ext-quick-buttons {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  margin-left: auto;
+}
+
+.ext-quick-input-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.ext-quick-input-row .quick-open-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ext-quick-input-row .ui-button {
+  margin-right: var(--space-sm);
+}
+
+.ext-quick-progress {
+  position: relative;
+  height: 2px;
+  margin: 0 var(--space-sm);
+  overflow: hidden;
+}
+
+.ext-quick-progress.busy::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 30%;
+  border-radius: 1px;
+  background: var(--accent);
+  animation: ext-quick-progress 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ext-quick-progress.busy::after {
+    left: 0;
+    width: 100%;
+    opacity: 0.6;
+    animation: none;
+  }
+}
+
+@keyframes ext-quick-progress {
+  from {
+    left: -30%;
+  }
+  to {
+    left: 100%;
+  }
+}
+
+.ext-quick-msg.warning {
+  color: var(--color-status-warning);
+}
+
+.ext-quick-msg.info {
+  color: var(--text-secondary);
+}
+
+.ext-quick-separator {
+  padding: var(--space-xs) var(--space-sm) var(--space-xxs);
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: var(--font-caption);
+  line-height: var(--line-height-caption);
+}
+
+.ext-quick-separator:first-child {
+  border-top: none;
+}
+
+.ext-quick-item-buttons {
+  margin-left: auto;
+  opacity: 0;
+}
+
+.quick-pick-item:hover .ext-quick-item-buttons,
+.quick-pick-item.selected .ext-quick-item-buttons,
+.ext-quick-item-buttons:focus-within {
+  opacity: 1;
+}
+
+@keyframes ext-comment-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

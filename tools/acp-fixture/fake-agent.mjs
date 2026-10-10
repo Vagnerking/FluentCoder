@@ -16,14 +16,21 @@
 //       * se o texto contém "editar": propõe uma edição (tool_call edit com
 //         diff) e pede permissão; responde "permissão: <optionId|cancelled>";
 //     ecoa "Recebido: <texto>", informa modo/mcp, reporta uso e encerra;
+//       * se o texto contém "cliente": exercita as capacidades de CLIENTE
+//         anunciadas no initialize — fs/write_text_file + fs/read_text_file
+//         (com line/limit) num arquivo da pasta da sessão, e terminal/create →
+//         wait_for_exit → output → release com um `node -e` que sai com 5;
+//         responde "cliente: fs=<…> terminal=<…>";
 //   - session/cancel: encerra o turno com stopReason "cancelled".
 import readline from "node:readline";
+import path from "node:path";
 
 const sessions = new Map(); // sessionId -> { mode, model, mcp }
 let nextSession = 1;
 let nextRequest = 1000;
 const pendingClientRequests = new Map(); // id -> resolve
 let active = null; // { sessionId, cancelled, resolveCancel }
+let clientCapabilities = {};
 
 function send(message) {
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
@@ -39,6 +46,50 @@ function requestClient(method, params) {
     pendingClientRequests.set(id, resolve);
     send({ id, method, params });
   });
+}
+
+/** Pedido ao cliente que pode falhar: devolve { result } ou { error }. */
+function requestClientRaw(method, params) {
+  const id = nextRequest++;
+  return new Promise((resolve) => {
+    pendingClientRequests.set(id, (result, error) => resolve(error ? { error } : { result }));
+    send({ id, method, params });
+  });
+}
+
+/** Exercita fs/* e terminal/* do cliente (só o que ele anunciou). */
+async function exerciseClient(sessionId, cwd) {
+  const parts = [];
+  if (clientCapabilities.fs?.readTextFile && clientCapabilities.fs?.writeTextFile) {
+    const file = path.join(cwd, `fluent-acp-cliente-${process.pid}`, "notas.txt");
+    const w = await requestClientRaw("fs/write_text_file", { sessionId, path: file, content: "linha 1\nlinha 2\nlinha 3\n" });
+    const r = await requestClientRaw("fs/read_text_file", { sessionId, path: file, line: 2, limit: 1 });
+    const outside = await requestClientRaw("fs/write_text_file", { sessionId, path: path.join(path.parse(cwd).root, "fluent-fora.txt"), content: "x" });
+    parts.push(`fs=${w.error ? "erro" : "ok"}:${JSON.stringify(r.result?.content ?? r.error?.message)}:fora=${outside.error ? "recusado" : "aceito"}`);
+  } else parts.push("fs=sem-capacidade");
+  if (clientCapabilities.terminal) {
+    const created = await requestClientRaw("terminal/create", {
+      sessionId,
+      command: process.execPath,
+      args: ["-e", "console.log('do terminal ' + process.env.FLUENT_FAKE); process.exit(5)"],
+      env: [{ name: "FLUENT_FAKE", value: "ok" }],
+      cwd,
+      outputByteLimit: 4096,
+    });
+    const terminalId = created.result?.terminalId;
+    if (!terminalId) parts.push(`terminal=erro:${created.error?.message}`);
+    else {
+      const exit = await requestClientRaw("terminal/wait_for_exit", { sessionId, terminalId });
+      let output = "";
+      for (let i = 0; i < 50 && !output.includes("do terminal"); i++) {
+        output = (await requestClientRaw("terminal/output", { sessionId, terminalId })).result?.output ?? "";
+        if (!output.includes("do terminal")) await sleep(20);
+      }
+      await requestClientRaw("terminal/release", { sessionId, terminalId });
+      parts.push(`terminal=exit:${exit.result?.exitCode}:${JSON.stringify(output.trim())}`);
+    }
+  } else parts.push("terminal=sem-capacidade");
+  return `cliente: ${parts.join(" ")}`;
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -139,6 +190,8 @@ async function prompt(id, params) {
     });
   }
 
+  const clientReport = text.includes("cliente") ? await exerciseClient(sessionId, state.cwd) : null;
+
   if (active?.cancelled || permission === "cancelled") {
     finish("cancelled");
     return;
@@ -146,6 +199,7 @@ async function prompt(id, params) {
 
   const parts = [`Recebido: ${text}`];
   if (permission) parts.push(`permissão: ${permission}`);
+  if (clientReport) parts.push(clientReport);
   parts.push(`modo=${state.mode}`);
   parts.push(`mcp=${state.mcp.join(",") || "nenhum"}`);
   update(sessionId, {
@@ -161,12 +215,13 @@ function handle(message) {
   if (message.id !== undefined && !message.method) {
     const resolve = pendingClientRequests.get(message.id);
     pendingClientRequests.delete(message.id);
-    resolve?.(message.result ?? null);
+    resolve?.(message.result ?? null, message.error);
     return;
   }
   const { id, method, params = {} } = message;
   switch (method) {
     case "initialize":
+      clientCapabilities = params.clientCapabilities ?? {};
       send({
         id,
         result: {
@@ -183,6 +238,7 @@ function handle(message) {
         mode: "default",
         model: "fake-large",
         mcp: (params.mcpServers ?? []).map((server) => server.name),
+        cwd: params.cwd ?? process.cwd(),
       };
       sessions.set(sessionId, state);
       send({ id, result: { sessionId, configOptions: configOptions(state) } });
@@ -193,6 +249,7 @@ function handle(message) {
         mode: "default",
         model: "fake-large",
         mcp: (params.mcpServers ?? []).map((server) => server.name),
+        cwd: params.cwd ?? process.cwd(),
       };
       sessions.set(params.sessionId, state);
       update(params.sessionId, {

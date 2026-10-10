@@ -1,6 +1,7 @@
 // Lê o `contributes` do package.json de uma extensão e normaliza o que o
 // Fluent Coder honra: comandos (Paleta), keybindings (best effort), menus
-// `editor/title` (aceitar/rejeitar diff), views/viewsContainers (metadados).
+// `editor/title` (aceitar/rejeitar diff), `comments/*` (botões dos threads),
+// views/viewsContainers (metadados).
 // Títulos `%chave%` são resolvidos pelo package.nls(.pt-br).json.
 'use strict';
 const fs = require('fs');
@@ -56,6 +57,7 @@ function readContributions(packageJSON, extensionPath, language) {
         title: String(localize(x.title, nls) || x.command),
         category: x.category ? String(localize(x.category, nls)) : undefined,
         enablement: x.enablement,
+        icon: typeof x.icon === 'string' ? x.icon : undefined,
         // `"when": "false"` no commandPalette = escondido da Paleta.
         paletteWhen: when,
         hidden: when === 'false',
@@ -67,6 +69,11 @@ function readContributions(packageJSON, extensionPath, language) {
   const editorTitle = ((c.menus && c.menus['editor/title']) || [])
     .filter((m) => m && typeof m.command === 'string')
     .map((m) => ({ command: m.command, when: m.when, group: m.group }));
+  // Menus de comentários (botões dos threads no editor) — ver shim/comments.js.
+  const menus = {};
+  for (const key of ['comments/commentThread/title', 'comments/commentThread/context', 'comments/comment/title', 'comments/comment/context']) {
+    menus[key] = ((c.menus && c.menus[key]) || []).filter((m) => m && typeof m.command === 'string').map((m) => ({ command: m.command, when: m.when, group: m.group }));
+  }
   const viewsContainers = {};
   for (const [loc, list] of Object.entries(c.viewsContainers || {})) {
     viewsContainers[loc] = (list || []).map((v) => ({ id: v.id, title: String(localize(v.title, nls) || v.id), icon: v.icon }));
@@ -75,7 +82,7 @@ function readContributions(packageJSON, extensionPath, language) {
   for (const [container, list] of Object.entries(c.views || {})) {
     for (const v of list || []) views.push({ id: v.id, name: String(localize(v.name, nls) || v.id), type: v.type || 'tree', container, when: v.when });
   }
-  return { commands, keybindings, editorTitle, viewsContainers, views };
+  return { commands, keybindings, editorTitle, menus, viewsContainers, views };
 }
 
 module.exports = { readContributions, localize, loadNls, platformKey };

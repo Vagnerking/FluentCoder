@@ -14,6 +14,7 @@ mod razor;
 mod runner;
 mod search;
 mod session;
+mod shell_integration;
 mod snap;
 mod ssh;
 mod terminal;
@@ -82,6 +83,8 @@ pub fn run() {
             // (ou em qualquer terminal na pasta do workspace) enxerga o editor.
             app.state::<agents::ide_bridge::IdeBridgeState>()
                 .start(app.handle());
+            // Cliente ACP: fs/* dos buffers abertos e terminal/* no painel.
+            agents::acp_client::set_app(app.handle().clone());
             setup_deep_links(app);
             Ok(())
         })
@@ -113,6 +116,9 @@ pub fn run() {
             agents::chat_providers,
             agents::chat_global_agents_load,
             agents::chat_global_agents_save,
+            agents::acp_client::acp_client_register,
+            agents::acp_client::acp_client_respond,
+            agents::acp_client::acp_terminal_snapshot,
             agents::ide_bridge::ide_bridge_update,
             agents::ide_bridge::ide_bridge_respond,
             agents::ide_bridge::ide_bridge_status,

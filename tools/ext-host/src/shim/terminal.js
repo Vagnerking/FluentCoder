@@ -3,16 +3,74 @@
 // terminal; o app cria o PTY e devolve o pid (`terminalOpened`) e o código de
 // saída (`terminalClosed`).
 //
-// Shell integration (best effort): assim que o PTY existe, o terminal ganha um
-// `shellIntegration` cujo `executeCommand` digita a linha no PTY e dispara
-// `onDidStartTerminalShellExecution`. Não sabemos quando o comando termina,
-// então `onDidEndTerminalShellExecution` nunca dispara (as extensões tratam
-// isso como "ainda rodando"). O Claude Code e o Codex esperam a integração
-// por ~3 s antes de cair no `sendText`; com ela, o comando sai na hora.
+// Shell integration REAL: o PTY de bash/zsh/fish sobe com os scripts OSC 633
+// do app (src-tauri/shell-integration/); o frontend lê as sequências e manda
+// `terminalShell` (ready/cwd/start/data/end) → `shellIntegration` com `cwd`
+// atualizado, `onDidStartTerminalShellExecution`/`onDidEndTerminalShellExecution`
+// com o código de saída e `execution.read()` com a saída do comando.
+// Sem as sequências (outro shell, app sem suporte) em ~2,5 s, cai na
+// integração SIMULADA: `executeCommand` digita a linha e só dispara o início
+// (o Claude Code e o Codex esperam a integração por ~3 s antes do sendText).
 'use strict';
 const { EventEmitter, Uri } = require('./types');
 
 let nextTerminal = 1;
+/** Espera pelas sequências OSC 633 antes de cair na integração simulada. */
+const REAL_INTEGRATION_WAIT_MS = 2500;
+/** Teto da saída guardada por execução (`execution.read()`). */
+const MAX_OUTPUT = 4 * 1024 * 1024;
+
+/**
+ * Execução de comando (`TerminalShellExecution`): `read()` devolve um
+ * AsyncIterable com toda a saída (o que já chegou + o que vier até o fim).
+ */
+function createExecution(commandLine, confidence, cwd) {
+  const chunks = [];
+  let size = 0;
+  let done = false;
+  const waiters = new Set();
+  const wake = () => {
+    for (const w of [...waiters]) w();
+  };
+  return {
+    commandLine: { value: commandLine, isTrusted: confidence === 2, confidence },
+    cwd,
+    read() {
+      let i = 0;
+      return {
+        [Symbol.asyncIterator]() {
+          return {
+            next: async () => {
+              for (;;) {
+                if (i < chunks.length) return { value: chunks[i++], done: false };
+                if (done) return { value: undefined, done: true };
+                await new Promise((r) => {
+                  const w = () => {
+                    waiters.delete(w);
+                    r();
+                  };
+                  waiters.add(w);
+                });
+              }
+            },
+            return: async () => ({ value: undefined, done: true }),
+          };
+        },
+      };
+    },
+    _push(data) {
+      if (done || size >= MAX_OUTPUT) return;
+      const text = String(data).slice(0, MAX_OUTPUT - size);
+      size += text.length;
+      chunks.push(text);
+      wake();
+    },
+    _end() {
+      done = true;
+      wake();
+    },
+  };
+}
 
 function safeEnv(env) {
   const out = {};
@@ -76,6 +134,8 @@ class Terminal {
       hideFromUser: !!options.hideFromUser,
       isTransient: !!options.isTransient,
       extensionId: options._extensionId,
+      // Tarefas e shells com argumentos próprios não ganham a integração.
+      shellIntegration: !options._task && !(Array.isArray(options.shellArgs) ? options.shellArgs.length : options.shellArgs),
     });
   }
   sendText(text, shouldExecute = true) {
@@ -99,26 +159,34 @@ class Terminal {
     // conectado, fecha já.
     if (!this._host.appConnected) this._host.terminalClosed(this.id, undefined, 4);
   }
-  /** App criou o PTY. */
-  _onOpened(pid) {
+  /**
+   * App criou o PTY. `integrationRequested` = o PTY subiu com os scripts OSC
+   * 633 (bash/zsh/fish): espera as sequências; sem elas, integração simulada.
+   */
+  _onOpened(pid, integrationRequested) {
     if (this._opened) return;
     this._opened = true;
     this._pid = pid;
     this._resolvePid(pid);
+    if (integrationRequested && this._host.appConnected) {
+      this._fallbackTimer = setTimeout(() => {
+        if (!this._real && !this._disposed) this._installSimulated();
+      }, REAL_INTEGRATION_WAIT_MS);
+      if (this._fallbackTimer.unref) this._fallbackTimer.unref();
+      return;
+    }
+    this._installSimulated();
+  }
+
+  _installSimulated() {
     const term = this;
     const cwdUri = this._cwd ? Uri.file(this._cwd) : undefined;
     this.shellIntegration = {
       cwd: cwdUri,
       executeCommand(commandLine, args) {
-        const line = args && args.length ? [commandLine, ...args.map(quoteArg)].join(' ') : String(commandLine);
+        const line = commandLineOf(commandLine, args);
         term.sendText(line, true);
-        const execution = {
-          commandLine: { value: line, isTrusted: true, confidence: 2 },
-          cwd: cwdUri,
-          read() {
-            return (async function* () {})();
-          },
-        };
+        const execution = createExecution(line, 2, cwdUri);
         // Assíncrono, como no VS Code (o listener costuma ser registrado logo após).
         setTimeout(() => term._host.events.startShellExecution.fire({ terminal: term, shellIntegration: term.shellIntegration, execution }), 0);
         return execution;
@@ -126,6 +194,84 @@ class Terminal {
     };
     this._host.events.terminalShellIntegration.fire({ terminal: this, shellIntegration: this.shellIntegration });
   }
+
+  _installReal() {
+    if (this._real) return;
+    this._real = true;
+    clearTimeout(this._fallbackTimer);
+    const term = this;
+    this._pendingExecs = [];
+    this._currentExec = null;
+    this.shellIntegration = {
+      cwd: this._cwd ? Uri.file(this._cwd) : undefined,
+      executeCommand(commandLine, args) {
+        const line = commandLineOf(commandLine, args);
+        // A execução "nasce" agora; o início/fim reais vêm das sequências do shell.
+        const execution = createExecution(line, 2, term.shellIntegration.cwd);
+        term._pendingExecs.push(execution);
+        term.sendText(line, true);
+        return execution;
+      },
+    };
+    this._host.events.terminalShellIntegration.fire({ terminal: this, shellIntegration: this.shellIntegration });
+  }
+
+  /** Evento OSC 633 já interpretado pelo app (`terminalShell`). */
+  _shellEvent(p) {
+    if (this._disposed) return;
+    if (!this._real) this._installReal();
+    const si = this.shellIntegration;
+    switch (p.type) {
+      case 'ready':
+        break;
+      case 'cwd': {
+        if (typeof p.cwd !== 'string' || !p.cwd) break;
+        const prev = si.cwd ? si.cwd.fsPath : undefined;
+        this._cwd = p.cwd;
+        si.cwd = Uri.file(p.cwd);
+        if (prev !== p.cwd) this._host.events.terminalShellIntegration.fire({ terminal: this, shellIntegration: si });
+        break;
+      }
+      case 'start': {
+        if (this._currentExec) this._finishExec(undefined);
+        // Execução pedida por executeCommand (FIFO) ou digitada pelo usuário.
+        const typed = typeof p.commandLine === 'string' ? p.commandLine : '';
+        let exec = this._pendingExecs.shift();
+        if (!exec) exec = createExecution(typed, typed ? 2 : 0, si.cwd);
+        else exec.cwd = si.cwd;
+        this._currentExec = exec;
+        this.state = { ...this.state, isInteractedWith: true };
+        this._host.events.startShellExecution.fire({ terminal: this, shellIntegration: si, execution: exec });
+        break;
+      }
+      case 'data':
+        if (this._currentExec && typeof p.data === 'string') this._currentExec._push(p.data);
+        break;
+      case 'end':
+        this._finishExec(typeof p.exitCode === 'number' ? p.exitCode : undefined);
+        break;
+      default:
+        break;
+    }
+  }
+
+  _finishExec(exitCode) {
+    const exec = this._currentExec;
+    if (!exec) return;
+    this._currentExec = null;
+    exec._end();
+    this._host.events.endShellExecution.fire({ terminal: this, shellIntegration: this.shellIntegration, execution: exec, exitCode });
+  }
+
+  /** PTY encerrou: execução em andamento termina sem código. */
+  _onClosed() {
+    clearTimeout(this._fallbackTimer);
+    if (this._currentExec) this._finishExec(undefined);
+  }
+}
+
+function commandLineOf(commandLine, args) {
+  return args && args.length ? [commandLine, ...args.map(quoteArg)].join(' ') : String(commandLine);
 }
 
 function quoteArg(a) {
@@ -133,4 +279,4 @@ function quoteArg(a) {
   return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
-module.exports = { Terminal, applyEnvCollections, safeEnv, quoteArg };
+module.exports = { Terminal, applyEnvCollections, safeEnv, quoteArg, createExecution, REAL_INTEGRATION_WAIT_MS };

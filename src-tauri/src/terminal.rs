@@ -7,10 +7,14 @@ use tauri::{AppHandle, Emitter, Manager, State};
 pub struct PtySession {
     writer: Box<dyn Write + Send>,
     master: Box<dyn portable_pty::MasterPty + Send>,
-    // The spawned shell. Kept so we can kill it on teardown — `portable-pty` does
-    // NOT kill the child on drop, so without this the PowerShell process (and the
-    // blocking reader thread) outlive the window and hang the app on close.
-    child: Box<dyn portable_pty::Child + Send + Sync>,
+    // The spawned shell. Kept so we can read its exit code — `portable-pty` does
+    // NOT kill the child on drop, so the killer below tears it down on close.
+    // `None` when another owner waits on the child (ACP terminals, see
+    // `agents::acp_client`), which only lend the PTY to the panel.
+    child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
+    // Kills the process on teardown — without this the PowerShell process (and
+    // the blocking reader thread) outlive the window and hang the app on close.
+    killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
 }
 
 pub struct TerminalState {
@@ -29,8 +33,22 @@ impl TerminalState {
     pub fn shutdown_all(&self) {
         if let Ok(mut sessions) = self.sessions.lock() {
             for (_id, mut session) in sessions.drain() {
-                let _ = session.child.kill();
+                let _ = session.killer.kill();
             }
+        }
+    }
+
+    /// Registra um PTY criado fora do `term_create` (terminais do cliente ACP):
+    /// o painel escreve/redimensiona/fecha pelo mesmo id.
+    pub fn insert_external(
+        &self,
+        id: String,
+        writer: Box<dyn Write + Send>,
+        master: Box<dyn portable_pty::MasterPty + Send>,
+        killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
+    ) {
+        if let Ok(mut sessions) = self.sessions.lock() {
+            sessions.insert(id, PtySession { writer, master, child: None, killer });
         }
     }
 }
@@ -56,11 +74,17 @@ pub struct TermSpawnOptions {
     pub env: Option<std::collections::HashMap<String, String>>,
     /// `strictEnv`: o ambiente é exatamente `env` (sem herdar o do app).
     pub strict_env: Option<bool>,
+    /// Ligar a shell integration (OSC 633) quando o shell é bash/zsh/fish sem
+    /// argumentos próprios — ver `shell_integration.rs`.
+    pub shell_integration: Option<bool>,
 }
 
 /// Monta o comando de um terminal de extensão: `shellPath`/`shellArgs` quando
 /// informados (executável que precisa existir), senão o shell padrão.
-fn extension_command(opts: &TermSpawnOptions) -> Result<CommandBuilder, String> {
+fn extension_command(opts: &TermSpawnOptions, si_dir: Option<&std::path::Path>) -> Result<CommandBuilder, String> {
+    if let Some(cmd) = si_dir.and_then(|dir| integrated_shell_command(opts, dir)) {
+        return Ok(cmd);
+    }
     let mut cmd = match opts.shell_path.as_deref().filter(|s| !s.trim().is_empty()) {
         Some(shell) => {
             let resolved = which::which(shell)
@@ -89,6 +113,51 @@ fn extension_command(opts: &TermSpawnOptions) -> Result<CommandBuilder, String> 
         cmd.env("COLORTERM", "truecolor");
     }
     Ok(cmd)
+}
+
+/// Shell da extensão com a shell integration (OSC 633) ligada, quando é
+/// bash/zsh/fish sem `shellArgs` próprios. `None` = segue o caminho normal.
+fn integrated_shell_command(opts: &TermSpawnOptions, dir: &std::path::Path) -> Option<CommandBuilder> {
+    if !opts.shell_integration.unwrap_or(false) || opts.shell_args.as_ref().is_some_and(|a| !a.is_empty()) {
+        return None;
+    }
+    let program = match opts.shell_path.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(shell) => which::which(shell).ok()?,
+        None => std::path::PathBuf::from(
+            std::env::var("SHELL")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "/bin/bash".to_string()),
+        ),
+    };
+    let kind = crate::shell_integration::shell_kind(&program.to_string_lossy())?;
+    if let Err(e) = crate::shell_integration::install_scripts(dir) {
+        eprintln!("[terminal] shell integration indisponível: {e}");
+        return None;
+    }
+    let user_zdotdir = opts
+        .env
+        .as_ref()
+        .and_then(|e| e.get("ZDOTDIR").cloned())
+        .or_else(|| std::env::var("ZDOTDIR").ok());
+    let inj = crate::shell_integration::injection(kind, dir, user_zdotdir.as_deref());
+    let mut cmd = CommandBuilder::new(program);
+    cmd.args(&inj.args);
+    if opts.strict_env.unwrap_or(false) {
+        cmd.env_clear();
+    }
+    for (k, v) in opts.env.iter().flatten() {
+        if k.is_empty() || k.contains('=') || k.contains('\0') || v.contains('\0') {
+            continue;
+        }
+        cmd.env(k, v);
+    }
+    for (k, v) in &inj.env {
+        cmd.env(k, v);
+    }
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    Some(cmd)
 }
 
 fn shell_command_inner(line: Option<&str>) -> CommandBuilder {
@@ -152,8 +221,13 @@ pub fn term_create(
         .map_err(|e| e.to_string())?;
 
     let strict = spawn.as_ref().and_then(|s| s.strict_env).unwrap_or(false);
+    let si_dir = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|d| crate::shell_integration::scripts_dir(&d));
     let mut cmd = match &spawn {
-        Some(opts) => extension_command(opts)?,
+        Some(opts) => extension_command(opts, si_dir.as_deref())?,
         None => shell_command(command.as_deref()),
     };
     cmd.cwd(&cwd);
@@ -171,6 +245,7 @@ pub fn term_create(
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
     let pid = child.process_id();
+    let killer = child.clone_killer();
 
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
@@ -200,7 +275,7 @@ pub fn term_create(
             for _ in 0..20 {
                 let status = match st.sessions.lock() {
                     Ok(mut sessions) => match sessions.get_mut(&session_id) {
-                        Some(s) => s.child.try_wait().ok().flatten(),
+                        Some(s) => s.child.as_mut().and_then(|c| c.try_wait().ok().flatten()),
                         None => break,
                     },
                     Err(_) => break,
@@ -224,7 +299,8 @@ pub fn term_create(
         PtySession {
             writer,
             master: pair.master,
-            child,
+            child: Some(child),
+            killer,
         },
     );
 
@@ -270,7 +346,7 @@ pub fn term_resize(
 pub fn term_close(id: String, state: State<'_, TerminalState>) -> Result<(), String> {
     let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
     if let Some(mut session) = sessions.remove(&id) {
-        let _ = session.child.kill();
+        let _ = session.killer.kill();
     }
     Ok(())
 }

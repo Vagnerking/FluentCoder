@@ -15,6 +15,7 @@
 //! reenvia o transcript inteiro — o provedor recarrega o próprio histórico.
 
 mod acp;
+pub mod acp_client;
 mod claude;
 mod codex;
 mod events;
