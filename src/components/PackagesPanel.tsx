@@ -1,4 +1,4 @@
-import { SearchBox } from "./ui";
+import { Button, SearchBox } from "./ui";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { packageIntelAudit, packageIntelOutdated, packageIntelScan } from "../api";
 import {
@@ -385,20 +385,24 @@ function PackageProjectCard({
       )}
 
       <div className="packages-actions">
-        <button
-          className="git-link-btn"
+        <Button
+          size="sm"
+          variant="subtle"
+          icon="refresh"
           disabled={busy || !choice.manager}
           onClick={onCheckOutdated}
         >
           {busy ? "Verificando…" : "Checar versões"}
-        </button>
-        <button
-          className="git-link-btn"
+        </Button>
+        <Button
+          size="sm"
+          variant="subtle"
+          icon="warning"
           disabled={busy || !choice.manager}
           onClick={onAudit}
         >
           {busy ? "Aguarde…" : "Audit segurança"}
-        </button>
+        </Button>
       </div>
 
       {outdatedReport && (

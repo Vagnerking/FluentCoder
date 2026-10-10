@@ -70,6 +70,89 @@ portar.
   (`~/.local/share/com.fluentcoder.app/lsp/roslyn/` inexistente). O ramo não
   altera nada do pipeline C#/LSP do frontend (a `main` vence nesses arquivos).
 
+## Etapa 2 — `integracao/git-fluent` (Etapa 1 + `preview/integracao`)
+
+`preview/integracao` = `main` + 56 commits (Fluent Chat, host de extensões VS
+Code, ponte IDE do Claude, janela frameless no Linux, primitivos de UI e fase
+visual 2). Base do merge: `main` (c965a78). 21 conflitos textuais.
+
+### Conflitos de código
+
+| Arquivo | Ramo (Rafael) | Preview | Resolução |
+|---|---|---|---|
+| `src/App.tsx` — chat | `AgentSidebar` + store de agentes por raiz ativa (código da `main`, não do Rafael) e `handleGitAssist` (mensagem de commit pelo agente) | Fluent Chat (`useFluentChat`, abas Chat/Agentes) | **Fluent Chat vence.** O `useFluentChat` passa a receber `agentWorkspaceRoot`/`agentWorkspaceRootRef` do Rafael (o chat segue a raiz LOCAL em foco num Fluent Workspace). `handleGitAssist` portado: turno único `ask` com o alvo/modelo atual do Fluent Chat (`chat.target`, `chat.model`, `agentRunOptions`), id de conversa descartável (não entra no histórico), só raízes locais. ⚠ revisar: antes usava “o primeiro agente do workspace”; agora usa o alvo selecionado no composer do chat. |
+| `src/App.tsx` — `isVirtualTab` | grafo + revisões/diffs Git | grafo + painéis webview | União (as duas definições viraram uma). |
+| `src/App.tsx` — sidebar | `SIDEBAR_MIN_HORIZONTAL_ACTIVITY = 396` (activity bar topo/base) | `SIDEBAR_MIN_TOP = 280` | Mantido o do Rafael (a activity bar dele tem mais ícones: Pacotes, Grafo). |
+| `src/App.tsx` — demais | sessão do workspace, `activeContextTarget`, backlinks multi-raiz, props do grafo | `viewColumn` dos webviews | União. |
+| `src/api.ts` `termCreate` | parâmetro `connId` (terminal SSH por raiz de workspace) | parâmetro `spawn` (terminais de extensão) e retorno do pid | Assinatura `termCreate(id, cwd, cols, rows, command, spawn, connId)`; `connId` explícito tem precedência sobre a sessão remota da janela. |
+| `TerminalView.tsx` / `TerminalPanel.tsx` | `connId` | `spawn`/`attach`/`onReady`/`onExit` | União das props. |
+| `EditorGroupView.tsx` | props do grafo por raiz; `MediaPreview` com `connId` | `viewColumn`; modo `webview` | União. |
+| `src/types.ts` `OpenMode` | `"diff"` | `"webview"` | União. |
+| `codicon-map.ts` | ícones Git Fluent/pacotes/lock | ícones do chat, primitivos e workbench | União. |
+| `DetachedEditor.tsx` | `writeSshTextFile` | `Tooltip` | União dos imports. |
+| `TreeNode.tsx` | expandir/recolher animado por `max-height` medido (`childrenHeight`) | guia de indentação (`--tree-guide`) | Estrutura animada do Rafael + variável `--tree-guide` no mesmo `style`. |
+| `FileExplorer.tsx` | cabeçalho de workspace (título, “adicionar pasta/pasta SSH”, ações só em pasta única) | `IconButton` + `explorer-actions-reveal` | Lógica do Rafael com os botões migrados para `IconButton`. |
+| `SearchPanel.tsx` | `hasSearchTarget` (busca multi-raiz) | `SearchBox` com toggles em `IconButton` | Markup do preview com `disabled={!hasSearchTarget}`. |
+| `StatusBar.tsx` | menu LSP em portal + menu rico de blame da linha | menu LSP no primitivo `Menu` | Menu LSP do preview + menu de blame do Rafael (portal, mantido como está). |
+| `RunPanel.tsx` | seções por raiz | `Input`/`IconButton` | Seções por raiz do Rafael com `IconButton` (adicionar/executar) e `Input` do preview. |
+| `GraphView.tsx` | toggles “Aglomerar”/“Setas”, copiar resumo p/ agente, menu de contexto de organização | `Checkbox`/`IconButton`/`SearchBox` | Funções do Rafael com os primitivos (toggles → `Checkbox`, botões → `IconButton`, zoom → `IconButton`). |
+| `GitPanel.tsx` | reescrito (Git Fluent) | só migrou botões da versão antiga para primitivos | **Versão do Rafael**, com os botões só-ícone (`Tooltip`+`<button><Codicon/></button>`) convertidos para `IconButton` também em `src/components/git/*` (24 botões); o `aria-label` específico (ex.: “Checkout <branch>”) virou o `label`. |
+| `PackagesPanel.tsx` | `<input class="search-input">` | `.search-input` deixou de ter CSS | Migrado para `SearchBox`. |
+| `src-tauri/src/lib.rs` | `workspace_open::workspace_files_from_args` | deep link `fluent-coder://` | União. |
+| `src-tauri/tauri.conf.json` | `fileAssociations` `.fluent-workspace` | recursos do ext-host | União. |
+| `src-tauri/src/agents/claude.rs` | rustfmt | `permission_title`, `options` no `spawn_session` | Preview. |
+| `docs/context/agentes-ia.md` | parágrafo `get_graph_overview` | seção da ponte IDE | União. |
+| `src-tauri/gen/schemas/linux-schema.json` | gerado | gerado | Preview (arquivo gerado pelo build). |
+
+### CSS (regra: o design system do preview vence)
+
+Gerado por script (determinístico) a partir de: `styles.css` do preview,
+`styles.css` da `main` e a divisão `src/styles/*.css` do Rafael. Cada regra
+do Rafael foi classificada comparando o **conjunto de declarações** com a `main`:
+
+- **Igual à `main`** (973): fica a versão do preview (tokens/fase 2). Quando o
+  preview apagou a regra (CSS morto: sidebar de agentes antiga, menus que
+  viraram `Menu`, campos que viraram `Input`…), ela sai (292). Exceção
+  (restauradas): `.git-message:hover`, `.git-message:focus` e o anel
+  `:focus-visible` do `.git-message` — o commit box do Rafael segue com
+  `<textarea>` próprio (Ctrl+Enter, botão de assistente sobreposto).
+- **Seletor novo do Rafael** (818): entra, com `font-size`/`border-radius` em px
+  trocados pelos tokens (`10px→--font-caption-xs`, `11px→--font-caption-sm`,
+  `12px→--font-caption`, `13px→--font-base`, `14px→--font-body`,
+  `18px→--font-subtitle`; raios `2→--radius-xs`, `4/5→--radius-sm`,
+  `6/7→--radius-control`, `8→--radius-card`, `999→--radius-pill`).
+  Frações (9.5px, 11.25px…) foram para o token mais próximo. ⚠ revisar
+  visualmente densidade do Git Fluent.
+- **Regra da `main` alterada pelo Rafael** (25): versão do preview + só o
+  delta de declarações do Rafael (ex.: `.tree-children` passa a animar por
+  `max-height`, que o `TreeNode` mede; `.git-commit-row` em grid;
+  `.explorer-tree` com `scrollbar-gutter`; `.graph-node-option` em grid).
+  Token novo no `:root`: `--duration-tree: 110ms`.
+- **Regras só do preview** (307): entram logo após a regra do preview que as
+  precede. As famílias exclusivas do preview `claude-diff*`/`ext-diff*`,
+  `ext-dock*`/`ext-webview*`/`ext-runtime-toast` e `status-claude`/`status-ext`
+  foram para `editor-diff.css`, `panels-shared.css` e `status-base.css`.
+
+O commit de merge traz o `src/styles.css` monolítico já ordenado pelas seções
+da divisão do Rafael (marcadores `/* ==== styles/<arquivo> ==== */`), e o
+commit seguinte apenas recorta essas seções em `src/styles/*.css` — sem mudar a
+ordem da cascata.
+
+### Commit de re-divisão do CSS
+
+- `src/styles.css` volta a ser o entry de comentário do Rafael; o conteúdo vai
+  para os mesmos 58 arquivos de `src/styles/` (50 folhas + 8 agregadores com
+  `@import`, idênticos aos do Rafael), importados em `src/main.tsx` na mesma
+  ordem. Verificado por script: a concatenação na ordem de import (com os
+  `@import` resolvidos) tem exatamente as mesmas 1833 regras, na mesma ordem,
+  que o `styles.css` monolítico do commit de merge.
+- Testes que liam `src/styles.css` (`src/components/ui/tokens.test.ts`,
+  `src/styles.test.ts`) passam a ler a folha global montada a partir dos
+  imports de `src/main.tsx` (`readGlobalStylesheet`), então os contratos de
+  tokens (sem px de fonte/raio fora do `:root`, `:root` com a escala etc.)
+  valem para todos os arquivos divididos. `editorOptions.test.ts` lê
+  `src/styles/editor-monaco-hover.css`. Novo teste: o entry `src/styles.css`
+  continua sem regras.
 ### Correções pós-merge (achadas no render headless do `dist/`)
 
 - **Build de produção não montava o app.** O `manualChunks` do `vite.config.ts`
@@ -85,3 +168,4 @@ portar.
   de TEXTO que usam a mesma classe fora do Git (“Cancelar” do RunPanel, ações
   do NugetManager, “Checar versões”/“Audit segurança” do PackagesPanel). Agora
   `min-width: 22px; padding: 0 3px` — os botões só-ícone continuam com 22px.
+- Na `integracao/git-fluent`, os botões de texto do PackagesPanel também migraram para o `Button` (subtle, sm) dos primitivos.
