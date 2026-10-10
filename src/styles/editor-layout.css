@@ -208,6 +208,34 @@
   padding: 0 var(--space-xs);
 }
 
+/* ---- Editor title actions (src/components/editor/EditorActions.tsx) ----
+   Discreet icon row at the right of the tabs: muted at rest so the code stays
+   the focus; full contrast on hover/focus/pressed. */
+.editor-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xxs);
+}
+
+.editor-actions .editor-action-btn {
+  color: var(--text-muted);
+}
+
+.editor-actions .editor-action-btn:hover:not(:disabled),
+.editor-actions .editor-action-btn:focus-visible,
+.editor-actions .editor-action-btn[aria-expanded="true"] {
+  color: var(--text);
+}
+
+.editor-actions .editor-action-btn[aria-expanded="true"] {
+  background: var(--fill-subtle-active);
+}
+
+/* An annotation is on in this editor: the Git button stays lit. */
+.editor-actions .editor-action-btn[aria-pressed="true"] {
+  color: var(--accent);
+}
+
 /* ---- Editor + bottom panel area (panel docks bottom / right / left) ---- */
 .editor-area { display: flex; flex: 1; min-height: 0; min-width: 0; }
 

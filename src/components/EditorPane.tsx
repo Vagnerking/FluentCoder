@@ -6,6 +6,7 @@ import type {
   BlameHunk,
   EditorActionsApi,
   FileDecoration,
+  GitAnnotationMode,
   GitCommit,
   MatchSelection,
   OpenFile,
@@ -13,6 +14,11 @@ import type {
 } from "../types";
 import { languageForFile } from "../language";
 import { gitBlame, gitDiffFile, gitLogFile, type GitRevisionDiffTarget } from "../api";
+import {
+  cachedBlameForLine,
+  forgetCachedBlame,
+  useGitAnnotations,
+} from "../editor/git/useGitAnnotations";
 import { toFileUri, fromFileUri, canonicalFileUriKey } from "../lsp/uri";
 import { setupMonacoForLsp } from "../lsp/monacoSetup";
 import { debugSession } from "../dap/debugSession";
@@ -90,6 +96,13 @@ interface EditorPaneProps {
   fileDecoration?: FileDecoration;
   /** Emits the blame hunk for the current cursor line, used by the status bar. */
   onCurrentBlameChange?: (hunk: BlameHunk | null, filePath: string | null) => void;
+  /**
+   * Anotação de arquivo deste editor (autoria por linha / mapa de recência).
+   * Toggle explícito vindo das ações do editor; padrão "off", nunca persistido.
+   */
+  gitAnnotationMode?: GitAnnotationMode;
+  /** Informa se este arquivo tem blame (está rastreado num repositório). */
+  onGitAnnotationsAvailable?: (path: string, available: boolean) => void;
 }
 
 /** Maps a Monaco marker severity (1/2/4/8) to our Problem severity. */
@@ -189,9 +202,7 @@ function parseDirtyDiffDecorations(
 const BLAME_ACTIVE_CLASS = "git-fluent-inline-active";
 const PACKAGE_OUTDATED_CLASS = "package-inline-outdated";
 const PACKAGE_SECURITY_CLASS = "package-inline-security";
-type GitFileAnnotationMode = "off" | "blame" | "heatmap";
 type DirtyDiffKind = "added" | "modified" | "deleted";
-const GIT_FILE_ANNOTATION_MODE_STORAGE_KEY = "fluent.git.fileAnnotationMode";
 
 const COMMAND_COPY_COMMIT = "fluent.git.copyCommitHash";
 const COMMAND_FILE_HISTORY = "fluent.git.showFileHistory";
@@ -240,16 +251,6 @@ const GIT_CODELENS_LANGUAGES = [
 // intelligence is enabled by default, like the user requested. When Settings
 // exists, this constant should read the user's preference instead.
 const PACKAGE_INLINE_INTEL_DEFAULT_ENABLED = true;
-
-function initialGitFileAnnotationMode(): GitFileAnnotationMode {
-  try {
-    const value = window.localStorage.getItem(GIT_FILE_ANNOTATION_MODE_STORAGE_KEY);
-    if (value === "blame" || value === "heatmap" || value === "off") return value;
-  } catch {
-    // localStorage can be unavailable in tests or hardened webviews.
-  }
-  return "off";
-}
 
 function isPackageManifest(path: string): boolean {
   return baseName(path) === "package.json";
@@ -615,23 +616,6 @@ function gitCodeLensTitles(summary: GitCodeLensSummary): string[] {
   return titles;
 }
 
-function blameAgeBucket(date: string): "hot" | "warm" | "cool" | "cold" {
-  const normalized = date.toLowerCase();
-  const amount = Number(normalized.match(/(\d+)/)?.[1] ?? "0");
-  if (
-    normalized.includes("agora") ||
-    normalized.includes("min") ||
-    normalized.includes("hora") ||
-    /\bh\b/.test(normalized)
-  ) {
-    return "hot";
-  }
-  if (normalized.includes("dia")) return amount <= 14 ? "warm" : "cool";
-  if (normalized.includes("semana")) return amount <= 4 ? "warm" : "cool";
-  if (normalized.includes("mês") || normalized.includes("mes")) return "cool";
-  return "cold";
-}
-
 function blameHoverMarkdown(hunk: BlameHunk, filePath?: string) {
   const displayName = escapeHtml(blameDisplayName(hunk));
   const authorName = escapeHtml(hunk.author);
@@ -949,21 +933,6 @@ const gitCodeLensContextRef: {
   connId: undefined,
 };
 const gitCodeLensCache = new Map<string, Promise<GitCodeLensSummary | null>>();
-const gitBlameCacheByFile = new Map<string, Map<number, BlameHunk>>();
-
-function gitBlameCacheKey(filePath: string, root?: string | null, connId?: string): string {
-  return `${connId ?? "local"}::${normalizePathForCompare(root ?? "")}::${normalizePathForCompare(filePath)}`;
-}
-
-function cachedBlameForLine(
-  filePath: string,
-  line: number,
-  root?: string | null,
-  connId?: string
-): BlameHunk | undefined {
-  return gitBlameCacheByFile.get(gitBlameCacheKey(filePath, root, connId))?.get(line);
-}
-
 export function EditorPane({
   file,
   rootPath,
@@ -979,6 +948,8 @@ export function EditorPane({
   onOpenRevisionDiff,
   fileDecoration,
   onCurrentBlameChange,
+  gitAnnotationMode = "off",
+  onGitAnnotationsAvailable,
 }: EditorPaneProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
@@ -1055,19 +1026,38 @@ export function EditorPane({
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
-  // Blame data keyed by line number (1-based).
-  const blameRef = useRef<Map<number, BlameHunk>>(new Map());
   // IDs of active decorations so we can replace them atomically.
   const decorationIdsRef = useRef<string[]>([]);
-  const fileAnnotationDecorationIdsRef = useRef<string[]>([]);
   const packageDecorationIdsRef = useRef<string[]>([]);
   const diffDecorationIdsRef = useRef<string[]>([]);
   const dirtyDiffDecorationIdsRef = useRef<string[]>([]);
   // Current cursor line to highlight a specific blame.
   const cursorLineRef = useRef<number>(1);
-  const [gitFileAnnotationMode, setGitFileAnnotationMode] =
-    useState<GitFileAnnotationMode>(() => initialGitFileAnnotationMode());
-  const [hasGitFileAnnotations, setHasGitFileAnnotations] = useState(false);
+  // Blame (por linha) + anotações de arquivo: src/editor/git/useGitAnnotations.
+  const gitAnnotations = useGitAnnotations({
+    editorRef,
+    monacoRef,
+    filePath: file?.path ?? null,
+    gitRootPath,
+    gitConnId,
+    mode: gitAnnotationMode,
+    hoverFor: (hunk) => blameHoverMarkdown(hunk, file?.path),
+    onLoaded: () => {
+      publishCurrentBlame();
+      applyBlameDecorations();
+    },
+    onFailed: () => {
+      onCurrentBlameChange?.(null, file?.path ?? null);
+      decorationIdsRef.current =
+        editorRef.current?.deltaDecorations(decorationIdsRef.current, []) ?? [];
+    },
+  });
+  const blameRef = gitAnnotations.blameRef;
+  const loadBlame = gitAnnotations.loadBlame;
+  useEffect(() => {
+    if (file?.path) onGitAnnotationsAvailable?.(file.path, gitAnnotations.hasBlame);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [file?.path, gitAnnotations.hasBlame]);
   const packageIntelVersion = useSyncExternalStore(
     packageIntelSubscribe,
     packageIntelSnapshot,
@@ -1326,56 +1316,6 @@ export function EditorPane({
     glLog("ids após deltaDecorations:", decorationIdsRef.current.length);
   }
 
-  function applyFileAnnotationDecorations() {
-    const ed = editorRef.current;
-    const monaco = monacoRef.current;
-    const model = ed?.getModel();
-    const blame = blameRef.current;
-    if (!ed || !monaco || !model || !file || gitFileAnnotationMode === "off" || blame.size === 0) {
-      fileAnnotationDecorationIdsRef.current =
-        ed?.deltaDecorations(fileAnnotationDecorationIdsRef.current, []) ?? [];
-      return;
-    }
-
-    const lineCount = model.getLineCount();
-    const decorations: editor.IModelDeltaDecoration[] = [];
-    for (let line = 1; line <= lineCount; line++) {
-      const hunk = blame.get(line);
-      if (!hunk) continue;
-      const bucket = blameAgeBucket(hunk.date || "");
-      const isBlameMode = gitFileAnnotationMode === "blame";
-      const className = isBlameMode
-        ? "git-file-annotation-blame"
-        : `git-file-annotation-heatmap git-file-annotation-${bucket}`;
-      const overviewColor =
-        bucket === "hot"
-          ? "#60CDFF"
-          : bucket === "warm"
-            ? "#8FE0AD"
-            : bucket === "cool"
-              ? "#E2C08D"
-              : "#7D8795";
-
-      decorations.push({
-        range: new monaco.Range(line, 1, line, 1),
-        options: {
-          linesDecorationsClassName: className,
-          overviewRuler: {
-            color: isBlameMode ? "rgba(96, 205, 255, 0.42)" : overviewColor,
-            position: monaco.editor.OverviewRulerLane.Right,
-          },
-          hoverMessage: blameHoverMarkdown(hunk, file.path),
-          stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
-        },
-      });
-    }
-
-    fileAnnotationDecorationIdsRef.current = ed.deltaDecorations(
-      fileAnnotationDecorationIdsRef.current,
-      decorations
-    );
-  }
-
   function applyDiffDecorations() {
     const ed = editorRef.current;
     const monaco = monacoRef.current;
@@ -1604,61 +1544,21 @@ export function EditorPane({
     );
   }
 
-  async function loadBlame() {
-    const ed = editorRef.current;
-    glLog("loadBlame", {
-      hasEditor: !!ed,
-      rootPath: gitRootPath,
-      connId: gitConnId,
-      filePath: file?.path,
-    });
-    if (!ed || !gitRootPath || !file) return;
-    // Untitled buffers aren't on disk — no git blame to fetch.
-    if (file.path.startsWith("untitled:")) return;
-
-    try {
-      const hunks = await gitBlame(gitRootPath, file.path, gitConnId);
-      glLog("hunks recebidos:", hunks.length, "amostra:", hunks.slice(0, 2));
-      const map = new Map<number, BlameHunk>();
-      hunks.forEach((h) => map.set(h.line, h));
-      blameRef.current = map;
-      setHasGitFileAnnotations(map.size > 0);
-      gitBlameCacheByFile.set(gitBlameCacheKey(file.path, gitRootPath, gitConnId), map);
-      publishCurrentBlame();
-      applyBlameDecorations();
-      applyFileAnnotationDecorations();
-    } catch (err) {
-      // Not a git repo or file not tracked — silently skip blame.
-      glLog("ERRO no gitBlame:", String(err));
-      blameRef.current = new Map();
-      setHasGitFileAnnotations(false);
-      onCurrentBlameChange?.(null, file.path);
-      gitBlameCacheByFile.delete(gitBlameCacheKey(file.path, gitRootPath, gitConnId));
-      decorationIdsRef.current =
-        editorRef.current?.deltaDecorations(decorationIdsRef.current, []) ?? [];
-      fileAnnotationDecorationIdsRef.current =
-        editorRef.current?.deltaDecorations(fileAnnotationDecorationIdsRef.current, []) ?? [];
-    }
-  }
-
   // -------------------------------------------------------------------------
   // Reload blame when the active file changes
   // -------------------------------------------------------------------------
   useEffect(() => {
-    blameRef.current = new Map();
-    setHasGitFileAnnotations(false);
+    gitAnnotations.reset();
     onCurrentBlameChange?.(null, file?.path ?? null);
     decorationIdsRef.current =
       editorRef.current?.deltaDecorations(decorationIdsRef.current, []) ?? [];
-    fileAnnotationDecorationIdsRef.current =
-      editorRef.current?.deltaDecorations(fileAnnotationDecorationIdsRef.current, []) ?? [];
     diffDecorationIdsRef.current =
       editorRef.current?.deltaDecorations(diffDecorationIdsRef.current, []) ?? [];
     dirtyDiffDecorationIdsRef.current =
       editorRef.current?.deltaDecorations(dirtyDiffDecorationIdsRef.current, []) ?? [];
     if (gitRootPath && file?.path) {
       gitCodeLensCache.delete(gitCodeLensCacheKey(gitRootPath, file.path, gitConnId));
-      gitBlameCacheByFile.delete(gitBlameCacheKey(file.path, gitRootPath, gitConnId));
+      forgetCachedBlame(file.path, gitRootPath, gitConnId);
     }
 
     if (file && gitRootPath) {
@@ -1750,22 +1650,6 @@ export function EditorPane({
     fileDecoration?.kind,
     fileDecoration?.badge,
   ]);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        GIT_FILE_ANNOTATION_MODE_STORAGE_KEY,
-        gitFileAnnotationMode
-      );
-    } catch {
-      // Non-fatal: the mode still works for this session.
-    }
-  }, [gitFileAnnotationMode]);
-
-  useEffect(() => {
-    applyFileAnnotationDecorations();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gitFileAnnotationMode, file?.path, hasGitFileAnnotations]);
 
   useEffect(() => {
     applyPackageDecorations();
@@ -2245,10 +2129,7 @@ export function EditorPane({
     // Reload blame when the model is replaced (file switch handled by useEffect,
     // but this also catches reloads triggered by model events).
     editorInstance.onDidChangeModel(() => {
-      fileAnnotationDecorationIdsRef.current = editorInstance.deltaDecorations(
-        fileAnnotationDecorationIdsRef.current,
-        []
-      );
+      gitAnnotations.clearDecorations();
       diffDecorationIdsRef.current = editorInstance.deltaDecorations(
         diffDecorationIdsRef.current,
         []
@@ -2451,18 +2332,6 @@ export function EditorPane({
       }}
     />
   );
-  const supportsGitAnnotations = Boolean(
-    gitRootPath &&
-      file &&
-      !file.path.startsWith("untitled:") &&
-      !file.readOnly &&
-      !isDiffViewFile(file)
-  );
-  const showGitAnnotationsToolbar = Boolean(
-    gitRootPath && file && !file.readOnly && !isDiffViewFile(file)
-  );
-  const gitAnnotationsUnavailable =
-    supportsGitAnnotations && !hasGitFileAnnotations && gitFileAnnotationMode !== "off";
   const editorFrame = (
     <div className="editor-pane-shell">
       {file.readOnly && (
@@ -2529,42 +2398,6 @@ export function EditorPane({
               </button>
             </div>
           )}
-        </div>
-      )}
-      {showGitAnnotationsToolbar && (
-        <div
-          className={`git-file-annotations-toolbar ${
-            gitAnnotationsUnavailable ? "is-unavailable" : ""
-          }`}
-          aria-label="Anotações Git do arquivo"
-          role="group"
-        >
-          <span className="git-file-annotations-label">Git</span>
-          <div className="git-file-annotations-segment" role="radiogroup">
-            {(["off", "blame", "heatmap"] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                role="radio"
-                className={`git-file-annotation-button ${
-                  gitFileAnnotationMode === mode ? "active" : ""
-                }`}
-                aria-checked={gitFileAnnotationMode === mode}
-                aria-pressed={gitFileAnnotationMode === mode}
-                disabled={!supportsGitAnnotations && mode !== "off"}
-                title={
-                  mode === "off"
-                    ? "Ocultar anotações Git do arquivo"
-                    : mode === "blame"
-                      ? "Mostrar autoria por linha na gutter"
-                      : "Mostrar heatmap de recência por linha"
-                }
-                onClick={() => setGitFileAnnotationMode(mode)}
-              >
-                {mode === "off" ? "Off" : mode === "blame" ? "Blame" : "Heatmap"}
-              </button>
-            ))}
-          </div>
         </div>
       )}
       {editor}

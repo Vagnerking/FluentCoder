@@ -1,10 +1,8 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, type ReactNode } from "react";
 import type { OpenFile, FileDecoration } from "../types";
-import type { Edge } from "../editorGroups";
 import { FileIcon } from "../icon-theme/material/FileIcon";
 import { Codicon } from "../icons/codicons/Codicon";
 import { Tooltip } from "./Tooltip";
-import { IconButton } from "./ui/IconButton";
 import { Menu } from "./ui/Menu";
 import { setDragPreview } from "../workbench/workbenchDrag";
 
@@ -80,9 +78,8 @@ interface TabBarProps {
   /** Throttled live screen position during a tab drag — used to hint which
    *  window the tab would drop on (cross-window drag feedback). */
   onDragMove?: (screenX: number, screenY: number) => void;
-  /** Splits the editor: copies the active tab into a new group on `edge`
-   *  (the "Split Editor" button). When set, a split button shows at the right. */
-  onSplit?: (edge: Edge) => void;
+  /** Editor-title actions rendered at the right of the strip (EditorActions). */
+  actions?: ReactNode;
   /** Resolves the git/diagnostic decoration for a path; default = none. */
   decorationFor?: (path: string) => FileDecoration | undefined;
 }
@@ -105,7 +102,7 @@ export function TabBar({
   onTabStripDrop,
   onDragStateChange,
   onDragMove,
-  onSplit,
+  actions,
   decorationFor = () => undefined,
 }: TabBarProps) {
   const [contextMenu, setContextMenu] = useState<TabContextMenu | null>(null);
@@ -463,18 +460,7 @@ export function TabBar({
           {dropAtEnd && <div className="tab-drop-end" aria-hidden="true" />}
         </div>
       </div>
-        {onSplit && (
-          <div className="tab-bar-actions">
-            <IconButton
-              icon="splitEditor"
-              size="sm"
-              className="tab-action-btn"
-              label="Dividir editor para a direita"
-              tooltipPlacement="bottom"
-              onClick={() => onSplit("right")}
-            />
-          </div>
-        )}
+        {actions && <div className="tab-bar-actions">{actions}</div>}
       </div>
 
       {contextMenu && (

@@ -195,7 +195,31 @@ export type IconAction =
   | "zoomFit"
   | "list"
   | "pin"
-  | "pinned";
+  | "pinned"
+  | "annotationBlame"
+  | "annotationHeatmap"
+  | "symbolFile"
+  | "symbolModule"
+  | "symbolNamespace"
+  | "symbolClass"
+  | "symbolMethod"
+  | "symbolProperty"
+  | "symbolField"
+  | "symbolConstructor"
+  | "symbolEnum"
+  | "symbolInterface"
+  | "symbolFunction"
+  | "symbolVariable"
+  | "symbolConstant"
+  | "symbolString"
+  | "symbolKey"
+  | "symbolEnumMember"
+  | "symbolStruct"
+  | "symbolEvent"
+  | "symbolOperator"
+  | "symbolTypeParameter"
+  | "symbolMisc"
+  | "workspaceRoot";
 
 /** action → codicon name (without the `codicon-` prefix). */
 export const CODICON_MAP: Record<IconAction, string> = {
@@ -399,6 +423,31 @@ export const CODICON_MAP: Record<IconAction, string> = {
   list: "list-unordered",
   pin: "pin",
   pinned: "pinned",
+  // Anotações Git do editor e ícones de símbolo (breadcrumbs)
+  annotationBlame: "person",
+  annotationHeatmap: "flame",
+  symbolFile: "symbol-file",
+  symbolModule: "symbol-module",
+  symbolNamespace: "symbol-namespace",
+  symbolClass: "symbol-class",
+  symbolMethod: "symbol-method",
+  symbolProperty: "symbol-property",
+  symbolField: "symbol-field",
+  symbolConstructor: "symbol-constructor",
+  symbolEnum: "symbol-enum",
+  symbolInterface: "symbol-interface",
+  symbolFunction: "symbol-function",
+  symbolVariable: "symbol-variable",
+  symbolConstant: "symbol-constant",
+  symbolString: "symbol-string",
+  symbolKey: "symbol-key",
+  symbolEnumMember: "symbol-enum-member",
+  symbolStruct: "symbol-structure",
+  symbolEvent: "symbol-event",
+  symbolOperator: "symbol-operator",
+  symbolTypeParameter: "symbol-parameter",
+  symbolMisc: "symbol-misc",
+  workspaceRoot: "root-folder",
 };
 
 /** Codicon names that should spin (loading/sync feedback). */

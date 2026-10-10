@@ -185,3 +185,22 @@ O Roslyn usado pelo app aceita `textDocument/diagnostic`, mas pode omitir
 - ao associar diagnósticos de `dotnet build` a modelos Monaco no Windows,
   comparar URIs com drive canônico, pois `file:///C:/...` e `file:///c:/...`
   representam o mesmo arquivo.
+
+## Ações do editor, origem da abertura e anotações Git
+
+- A barra de ações do título do editor (`src/components/editor/EditorActions.tsx`)
+  fica à direita das abas. Outras frentes contribuem itens com
+  `registerEditorAction({ id, icon, label, run | menu, when?, group?, order? })`
+  (`editorActionRegistry.ts`); o excedente vai para "Mais ações".
+- Não existe barra Git permanente. O menu Git (`GitEditorActions.tsx`) oferece
+  Comparar alterações, Histórico do arquivo e os toggles Autoria por linha
+  (blame) e Mapa de recência (heatmap).
+- Anotações são **por editor** (grupo + arquivo), começam em `off`, nunca são
+  persistidas e nunca ligam sozinhas — nem ao abrir pelo SCM. Carregamento e
+  decorações vivem em `src/editor/git/useGitAnnotations.ts`.
+- `OpenFile.openedFrom` registra a origem (`explorer`, `scm`, …) e
+  `OpenFile.diff` os lados da comparação. Clicar num item do Controle de
+  Código abre o **diff** com os lados de `scmOpenTarget` (`src/editor/openRouting.ts`):
+  preparado = HEAD ↔ Index; não preparado = Index ↔ Working tree quando também
+  há stage, senão HEAD ↔ Working tree; conflito/não rastreado abre o arquivo.
+  Abrir pelo Explorer mostra o editor normal.

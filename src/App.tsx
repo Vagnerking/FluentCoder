@@ -185,6 +185,7 @@ import {
   maxGroupSeq,
   moveFileToGroup,
   openInGroup,
+  upsertInGroup,
   patchFileEverywhere,
   removeGroup,
   reorderInGroup,
@@ -219,6 +220,9 @@ import type {
   GitStatus,
   MatchSelection,
   MenuDef,
+  EditorDiffPresentation,
+  EditorOpenOrigin,
+  GitDiffSide,
   OpenFile,
   OpenMode,
   OpenTab,
@@ -251,6 +255,7 @@ import {
   type NormalizedWorkspace,
 } from "./workspace/workspaceFile";
 import { useWorkbenchDrag } from "./workbench/useWorkbenchDrag";
+import { diffSideLabel, diffTabName } from "./editor/openRouting";
 
 /** Abas nativas do Fluent Chat na sidebar secundária. */
 const FLUENT_CHAT_TAB = "fluent-chat";
@@ -3026,7 +3031,7 @@ export default function App() {
       line?: number,
       mode?: OpenMode,
       selection?: MatchSelection,
-      opts?: { silent?: boolean }
+      opts?: { silent?: boolean; origin?: EditorOpenOrigin }
     ): Promise<boolean> => {
       if (node.isDir) return false;
 
@@ -3116,6 +3121,7 @@ export default function App() {
               encoding: decoded?.encoding,
               bom: decoded?.bom,
               eol: decoded?.eol,
+              openedFrom: opts?.origin,
             },
           ];
         });
@@ -3133,6 +3139,13 @@ export default function App() {
       }
     },
     [openFiles, workspaceRemoteForPath]
+  );
+
+  /** Explorer opens show the plain editor (no Git chrome, see openRouting). */
+  const handleOpenFromExplorer = useCallback(
+    (node: FileNode) =>
+      handleOpenFile(node, undefined, undefined, undefined, { origin: "explorer" }),
+    [handleOpenFile]
   );
 
   /**
@@ -3263,45 +3276,67 @@ export default function App() {
       filePath: string,
       repoRootPath?: string,
       connId?: string,
-      view: GitChangeView = "working"
+      view: GitChangeView = "working",
+      presentation?: EditorDiffPresentation,
+      origin: EditorOpenOrigin = "scm"
     ) => {
       const target = repoRootPath
         ? { rootPath: repoRootPath, connId }
         : gitTargetForPath(filePath);
       if (!target) return;
+      const staged = view === "staged";
+      // Lados explícitos (o SCM decide HEAD/Index/Working tree por item); sem
+      // eles, o padrão histórico: HEAD ↔ Index (staged) / HEAD ↔ Working tree.
+      const sides: EditorDiffPresentation =
+        presentation ??
+        (staged
+          ? { original: "HEAD", modified: "index" }
+          : { original: "HEAD", modified: "workingTree" });
+      const readSide = (side: GitDiffSide): Promise<string> => {
+        switch (side) {
+          case "HEAD":
+            return readGitFileAtCommitOrEmpty(target.rootPath, filePath, "HEAD", target.connId);
+          case "index":
+            return gitShowFileStaged(target.rootPath, filePath, target.connId).catch(() => "");
+          case "workingTree":
+            return readWorkingFileOrEmpty(filePath, target.connId);
+          case "empty":
+            return Promise.resolve("");
+        }
+      };
       try {
         const [diff, originalContent, modifiedContent] = await Promise.all([
-          view === "staged"
+          staged
             ? gitDiffFileStaged(target.rootPath, filePath, target.connId).catch(() => "")
             : gitDiffFile(target.rootPath, filePath, target.connId).catch(() => ""),
-          readGitFileAtCommitOrEmpty(target.rootPath, filePath, "HEAD", target.connId),
-          view === "staged"
-            ? gitShowFileStaged(target.rootPath, filePath, target.connId).catch(() => "")
-            : readWorkingFileOrEmpty(filePath, target.connId),
+          readSide(sides.original),
+          readSide(sides.modified),
         ]);
-        const staged = view === "staged";
+        const originalLabel = diffSideLabel(sides.original);
+        const modifiedLabel = diffSideLabel(sides.modified);
         const content =
           diff.trim().length > 0
             ? diff
-            : `# Sem diferenças ${staged ? "preparadas" : "rastreadas"} para ${baseName(filePath)} contra HEAD.\n`;
-        setLayout((l) =>
-          openInGroup(l, l.activeGroup, {
-            path: staged ? gitStagedDiffUri(filePath) : gitWorkingDiffUri(filePath),
-            name: staged ? `${baseName(filePath)} ↔ Index` : `${baseName(filePath)} ↔ HEAD`,
-            content,
-            originalContent,
-            modifiedContent,
-            originalLabel: "HEAD",
-            modifiedLabel: staged ? "Index" : "Working tree",
-            dirty: false,
-            readOnly: true,
-            sourceLabel: staged
-              ? `Alterações preparadas de ${baseName(filePath)}`
-              : `Alterações Git de ${baseName(filePath)} contra HEAD`,
-            sourcePath: filePath,
-            mode: "diff",
-          })
-        );
+            : `# Sem diferenças entre ${originalLabel} e ${modifiedLabel} para ${baseName(filePath)}.\n`;
+        const diffTab: OpenFile = {
+          path: staged ? gitStagedDiffUri(filePath) : gitWorkingDiffUri(filePath),
+          name: diffTabName(baseName(filePath), sides),
+          content,
+          originalContent,
+          modifiedContent,
+          originalLabel,
+          modifiedLabel,
+          dirty: false,
+          readOnly: true,
+          sourceLabel: `Alterações de ${baseName(filePath)}: ${originalLabel} ↔ ${modifiedLabel}`,
+          sourcePath: filePath,
+          mode: "diff",
+          openedFrom: origin,
+          diff: sides,
+        };
+        // Reabrir a mesma comparação atualiza o conteúdo (a aba antiga podia
+        // estar desatualizada depois de novos stages/edições).
+        setLayout((l) => upsertInGroup(l, l.activeGroup, diffTab));
       } catch (err) {
         console.error(err);
         alert(`Não foi possível abrir as alterações Git:\n${err}`);
@@ -5886,7 +5921,7 @@ export default function App() {
             workspaceRoots={explorerWorkspaceRoots}
             isWorkspace={explorerIsWorkspace}
             activePath={activePath}
-            onOpenFile={handleOpenFile}
+            onOpenFile={handleOpenFromExplorer}
             onRefreshRoot={refreshExplorerRoot}
             decorationFor={decorationFor}
             onPathRenamed={handlePathRenamed}
@@ -5909,7 +5944,9 @@ export default function App() {
             rootPath={rootPath}
             workspaceRoots={explorerWorkspaceRoots}
             onOpenFile={(path, name) =>
-              handleOpenFile({ name, path, isDir: false })
+              handleOpenFile({ name, path, isDir: false }, undefined, undefined, undefined, {
+                origin: "scm",
+              })
             }
             onOpenChanges={handleOpenGitFileChanges}
             onOpenRevision={(filePath, commitHash, shortHash, repoRootPath, connId) =>
@@ -5971,7 +6008,7 @@ export default function App() {
             workspaceRoots={explorerWorkspaceRoots}
             isWorkspace={explorerIsWorkspace}
             activePath={activePath}
-            onOpenFile={handleOpenFile}
+            onOpenFile={handleOpenFromExplorer}
             onRefreshRoot={refreshExplorerRoot}
             decorationFor={decorationFor}
             onPathRenamed={handlePathRenamed}
@@ -6092,6 +6129,9 @@ export default function App() {
           handleOpenFile({ name: baseName(path), path, isDir: false, workspaceRemote }, line);
         }}
         onShowFileHistory={handleFileHistory}
+        onCompareChanges={(path) =>
+          void handleOpenGitFileChanges(path, undefined, undefined, "working", undefined, "other")
+        }
         onOpenRevision={(filePath, commitHash, shortHash) =>
           void handleOpenGitRevision(filePath, commitHash, shortHash)
         }

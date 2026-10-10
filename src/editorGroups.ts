@@ -165,6 +165,25 @@ export function openInGroup(
   return { ...next, activeGroup: groupId };
 }
 
+/** Like {@link openInGroup}, but if the path is already open in the group its
+ *  tab is REPLACED by `file` (fresh content for a re-opened comparison). */
+export function upsertInGroup(
+  layout: EditorLayout,
+  groupId: GroupId,
+  file: OpenFile
+): EditorLayout {
+  const next = withGroup(layout, groupId, (g) =>
+    g.files.some((f) => f.path === file.path)
+      ? {
+          ...g,
+          files: g.files.map((f) => (f.path === file.path ? file : f)),
+          activePath: file.path,
+        }
+      : { ...g, files: [...g.files, file], activePath: file.path }
+  );
+  return { ...next, activeGroup: groupId };
+}
+
 /** Focuses a file within a group (and makes that group active). */
 export function activateFile(
   layout: EditorLayout,

@@ -97,6 +97,31 @@ export interface McpConfig {
 }
 
 /** A file currently open in the editor. */
+/** Origem da abertura de um editor (ver `OpenFile.openedFrom`). */
+export type EditorOpenOrigin =
+  | "explorer"
+  | "scm"
+  | "quickOpen"
+  | "search"
+  | "breadcrumb"
+  | "definition"
+  | "history"
+  | "agent"
+  | "session"
+  | "other";
+
+/** Um lado de uma comparação Git. `empty` = arquivo inexistente nesse lado. */
+export type GitDiffSide = "HEAD" | "index" | "workingTree" | "empty";
+
+/** Apresentação de uma aba de comparação: qual lado está à esquerda/direita. */
+export interface EditorDiffPresentation {
+  original: GitDiffSide;
+  modified: GitDiffSide;
+}
+
+/** Anotação Git de um editor (toggle explícito, por editor, nunca persistido). */
+export type GitAnnotationMode = "off" | "blame" | "heatmap";
+
 export interface OpenFile {
   path: string;
   name: string;
@@ -132,6 +157,14 @@ export interface OpenFile {
   /** Labels shown above a side-by-side diff tab. */
   originalLabel?: string;
   modifiedLabel?: string;
+  /**
+   * De onde o editor foi aberto (apresentação, não documento). Abrir pelo
+   * Explorer mostra o editor normal, sem chrome Git; pelo Controle de Código
+   * abre a comparação. Nunca liga anotações (blame/heatmap) sozinho.
+   */
+  openedFrom?: EditorOpenOrigin;
+  /** Lados de uma comparação Git (só em abas `mode: "diff"`). */
+  diff?: EditorDiffPresentation;
   /**
    * Which view renders this file. Defaults to `"text"` when omitted (every
    * pre-Open-With caller). Image files opened by double-click default to

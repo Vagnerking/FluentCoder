@@ -61,6 +61,7 @@ import type {
   GitBranchInfo,
   GitCommit,
   GitFileStatus,
+  EditorDiffPresentation,
   GitGraphCommit,
   GitHistoryTarget,
   GitRemoteInfo,
@@ -107,6 +108,7 @@ import { GitFluentWorktreesView } from "./git/GitFluentWorktreesView";
 import { TreeContextMenu } from "./TreeContextMenu";
 import { Tooltip } from "./Tooltip";
 import { startPointerDrag } from "../workbench/workbenchDrag";
+import { scmOpenTarget, type ScmGroup } from "../editor/openRouting";
 
 interface GitPanelProps {
   /** Open folder; the repo is resolved from here. Null when nothing is open. */
@@ -119,7 +121,8 @@ interface GitPanelProps {
     path: string,
     rootPath?: string,
     connId?: string,
-    view?: GitChangeView
+    view?: GitChangeView,
+    presentation?: EditorDiffPresentation
   ) => void;
   /** Opens the selected file as it existed at a commit, read-only. */
   onOpenRevision?: (
@@ -1740,10 +1743,16 @@ function GitRepositoryPanel({
       await gitDiscardFile(rootPath, f.path, f.untracked, connId);
     });
 
-  const openSourceControlItem = (f: GitFileStatus, view: GitChangeView = "working") => {
+  // Clicar num item do SCM abre a COMPARAÇÃO com os lados certos (HEAD/Index/
+  // Working tree); conflitos e não rastreados abrem o arquivo. Nunca liga blame.
+  const openSourceControlItem = (f: GitFileStatus, group: ScmGroup) => {
     const absolutePath = `${rootPath}/${f.path}`;
-    if (onOpenChanges) onOpenChanges(absolutePath, rootPath, connId, view);
-    else onOpenFile(absolutePath, fileName(f.path));
+    const target = scmOpenTarget(f, group);
+    if (target.kind === "diff" && onOpenChanges) {
+      onOpenChanges(absolutePath, rootPath, connId, target.view, target.diff);
+    } else {
+      onOpenFile(absolutePath, fileName(f.path));
+    }
   };
 
   const openStashFile = (stash: GitStashEntry, file: GitStashFile) => {
@@ -2400,12 +2409,16 @@ function GitRepositoryPanel({
       title: onOpenChanges ? undefined : "Visualização de diff indisponível.",
       run: onOpenChanges
         ? () =>
-            onOpenChanges(
-              `${rootPath}/${f.path}`,
-              rootPath,
-              connId,
-              group === "staged" ? "staged" : "working"
-            )
+            (() => {
+              const target = scmOpenTarget(f, group === "conflict" ? "changes" : group);
+              onOpenChanges(
+                `${rootPath}/${f.path}`,
+                rootPath,
+                connId,
+                group === "staged" ? "staged" : "working",
+                target.kind === "diff" ? target.diff : undefined
+              );
+            })()
         : undefined,
     };
     const sep: ContextMenuItem = { id: "sep", label: "", separator: true };
@@ -2728,7 +2741,7 @@ function GitRepositoryPanel({
         actionIcon="success"
         actionTitle="Marcar como resolvido (stage)"
         onAction={() => act(() => gitStage(repoRootPath, f.path, connId))}
-        onOpen={() => openSourceControlItem(f, "working")}
+        onOpen={() => openSourceControlItem(f, "conflict")}
         onContextMenu={(e) => openFileMenu(e, fileMenu(f, "conflict"))}
         disabled={busy}
       />
@@ -2751,7 +2764,7 @@ function GitRepositoryPanel({
         actionTitle="Preparar (stage)"
         onAction={() => act(() => gitStage(repoRootPath, f.path, connId))}
         onDiscard={() => discardFile(f)}
-        onOpen={() => openSourceControlItem(f, "working")}
+        onOpen={() => openSourceControlItem(f, "changes")}
         onContextMenu={(e) => openFileMenu(e, fileMenu(f, "changes"))}
         disabled={busy}
       />
