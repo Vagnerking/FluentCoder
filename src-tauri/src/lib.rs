@@ -2,6 +2,7 @@ mod agents;
 mod child_process;
 mod dap;
 mod dotnet_tools;
+mod ext_host;
 mod file_index;
 mod fs_commands;
 mod git;
@@ -79,6 +80,7 @@ pub fn run() {
         .manage(search::SearchState::new())
         .manage(agents::AcpState::new())
         .manage(agents::ide_bridge::IdeBridgeState::new())
+        .manage(ext_host::ExtHostState::new())
         .manage(razor::commands::RazorState::new())
         .manage(ssh::SshState::new())
         .manage(window::WindowPlacementState::new())
@@ -102,6 +104,10 @@ pub fn run() {
             fs_commands::read_file,
             fs_commands::read_file_with_encoding,
             fs_commands::read_file_base64,
+            ext_host::ext_host_start,
+            ext_host::ext_host_send,
+            ext_host::ext_host_stop,
+            ext_host::ext_host_open_external,
             fs_commands::write_file,
             fs_commands::create_file,
             fs_commands::create_folder,
@@ -362,6 +368,7 @@ pub fn run() {
                     app.state::<terminal::TerminalState>().shutdown_all();
                     app.state::<agents::AcpState>().shutdown_all();
                     app.state::<agents::ide_bridge::IdeBridgeState>().shutdown();
+                    app.state::<ext_host::ExtHostState>().shutdown_all();
                     app.state::<lsp::LspState>().shutdown_all();
                     app.state::<dap::DapState>().shutdown_all();
                     app.state::<razor::commands::RazorState>()
@@ -376,6 +383,7 @@ pub fn run() {
                     app.state::<terminal::TerminalState>().shutdown_all();
                     app.state::<agents::AcpState>().shutdown_all();
                     app.state::<agents::ide_bridge::IdeBridgeState>().shutdown();
+                    app.state::<ext_host::ExtHostState>().shutdown_all();
                     app.state::<lsp::LspState>().shutdown_all();
                     app.state::<dap::DapState>().shutdown_all();
                     app.state::<razor::commands::RazorState>()

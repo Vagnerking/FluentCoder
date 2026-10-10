@@ -28,3 +28,190 @@
 
 .output-lines { flex: 1; min-height: 0; overflow: auto; padding: 4px 8px; font-family: var(--font-mono, ui-monospace, "Cascadia Code", "Consolas", monospace); font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
 .output-line { white-space: pre-wrap; overflow-wrap: break-word; }
+
+/* ---- Extensões VS Code hospedadas (PoC: tools/ext-host) ----
+   Abas no topo da sidebar secundária: "Agentes" (chat nativo) + a UI real das
+   extensões instaladas (Claude Code, Codex) num iframe. */
+.ext-dock {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ext-dock-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex-shrink: 0;
+}
+
+.ext-dock-tab-wrap {
+  display: inline-flex;
+  align-items: center;
+}
+
+.ext-dock-tab {
+  height: 30px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: var(--radius-control) var(--radius-control) 0 0;
+  cursor: pointer;
+  white-space: nowrap;
+  outline: none;
+  transition: background var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard);
+}
+
+.ext-dock-tab:hover {
+  color: var(--text);
+  background: var(--fill-subtle-hover);
+}
+
+.ext-dock-tab.active {
+  color: var(--text);
+  font-weight: 600;
+  border-bottom-color: var(--accent);
+}
+
+.ext-dock-tab:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+.ext-dock-tab-close {
+  width: 20px;
+  height: 20px;
+  margin-left: -4px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+
+.ext-dock-tab-close:hover {
+  color: var(--text);
+  background: var(--fill-subtle-hover);
+}
+
+.ext-dock-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ext-dock-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ext-dock-pane[hidden] {
+  display: none;
+}
+
+.ext-webview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ext-webview-frame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: none;
+  background: transparent;
+  color-scheme: dark;
+}
+
+.ext-webview-status {
+  padding: 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.ext-webview-status.error {
+  color: var(--error);
+}
+
+.ext-webview-debug {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  color: var(--text-muted);
+  border-top: 1px dashed var(--border-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ext-dock-retry {
+  margin-left: 8px;
+  height: 26px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+
+.ext-dock-retry:hover {
+  background: var(--acrylic-control-hover);
+}
+
+.ext-dock-toast {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--color-surface-overlay);
+  border: 1px solid var(--color-surface-overlay-border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-dialog);
+  cursor: pointer;
+}
+
+.ext-dock-toast.error {
+  border-left-color: var(--color-status-error);
+}
+
+.ext-dock-toast.warning {
+  border-left-color: var(--color-status-warning);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ext-dock-tab {
+    transition: none;
+  }
+
+}
+
+/* O chat nativo dentro da aba "Agentes": ocupa a aba inteira sem depender de
+   height:100% num item flex (WebKitGTK resolve mal). */
+.ext-dock-pane > .agents-panel {
+  flex: 1;
+  height: auto;
+}

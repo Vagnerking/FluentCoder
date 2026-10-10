@@ -2223,6 +2223,16 @@ export function EditorPane({
           endLine: sel.endLineNumber,
         };
       },
+      getCursorState: () => {
+        const sel = editorInstance.getSelection();
+        if (!editorInstance.getModel() || !sel) return null;
+        // Monaco é 1-based; vscode.Selection é 0-based. Âncora → posição ativa.
+        return {
+          start: { line: sel.selectionStartLineNumber - 1, character: sel.selectionStartColumn - 1 },
+          end: { line: sel.positionLineNumber - 1, character: sel.positionColumn - 1 },
+          dirty: false,
+        };
+      },
     };
     internalApi.current = api;
     if (actionsRef) actionsRef.current = api;

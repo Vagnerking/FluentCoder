@@ -712,4 +712,14 @@ export interface EditorActionsApi {
     startLine: number;
     endLine: number;
   } | null;
+  /**
+   * Seleção/cursor atual em coordenadas 0-based (formato `vscode.Selection`),
+   * mesmo vazia. Publicada ao host de extensões VS Code como
+   * `activeTextEditor.selection`. Opcional: editores sem modelo de texto omitem.
+   */
+  getCursorState?: () => {
+    start: { line: number; character: number };
+    end: { line: number; character: number };
+    dirty: boolean;
+  } | null;
 }

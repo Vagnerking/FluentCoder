@@ -68,6 +68,8 @@ import { findNearestEditorConfig } from "./lsp/editorConfig";
 import { AboutDialog } from "./components/AboutDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { AgentSidebar } from "./components/AgentSidebar";
+import { ExtensionDock } from "./extensions/ExtensionDock";
+import type { EditorStatePayload } from "./extensions/protocol";
 import { BranchPicker } from "./components/BranchPicker";
 import { SshConnectDialog } from "./components/SshConnectDialog";
 import { RemoteFolderBrowser } from "./components/RemoteFolderBrowser";
@@ -3020,6 +3022,24 @@ export default function App() {
    * Lê o arquivo ativo e a seleção atual do editor, para anexar ao envio do
    * chat (como o Claude Code faz). `null` quando não há arquivo aberto.
    */
+  /**
+   * Estado do editor ativo publicado ao host de extensões VS Code (PoC) como
+   * `window.activeTextEditor`/seleção/abas. O texto só vai quando o buffer está
+   * sujo — limpo, o host lê do disco.
+   */
+  function readExtEditorState(): EditorStatePayload {
+    const files = openFiles.map((file) => file.path).filter((p) => !isGraphTab(p));
+    if (!activePath || isGraphTab(activePath)) return { path: null, openFiles: files };
+    const cursor = editorActionsRef.current?.getCursorState?.() ?? null;
+    const file = openFiles.find((f) => f.path === activePath);
+    return {
+      path: activePath,
+      openFiles: files,
+      ...(cursor ? { selection: { start: cursor.start, end: cursor.end } } : {}),
+      ...(file?.dirty ? { dirty: true, text: file.content } : {}),
+    };
+  }
+
   function readEditorContext(): AgentEditorContext | null {
     if (!activePath || isGraphTab(activePath)) return null;
     const selection = editorActionsRef.current?.getSelection() ?? null;
@@ -6810,7 +6830,12 @@ export default function App() {
             className={`agents-dock agents-dock-${agentsSide}`}
             style={{ width: Math.max(agentsSidebarWidth, AGENTS_SIDEBAR_MIN) }}
           >
-            {agentsSidebarNode}
+            <ExtensionDock
+              rootPath={rootPath}
+              agentsNode={agentsSidebarNode}
+              onOpenFile={(path, line) => void handleOpenAgentFile(path, line)}
+              readEditorState={readExtEditorState}
+            />
           </aside>
         )}
       </div>

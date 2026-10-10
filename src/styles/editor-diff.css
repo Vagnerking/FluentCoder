@@ -150,3 +150,34 @@
 }
 
 .claude-diff-editor { flex: 1; min-height: 0; }
+
+.ext-diff-dialog {
+  width: min(1100px, calc(100vw - 48px));
+  height: min(720px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  background: var(--acrylic-tint-strong);
+  border: 1px solid var(--acrylic-border-strong);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-dialog);
+  backdrop-filter: blur(40px) saturate(140%);
+  -webkit-backdrop-filter: blur(40px) saturate(140%);
+  outline: none;
+}
+
+.ext-diff-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ext-diff-body {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  overflow: hidden;
+}

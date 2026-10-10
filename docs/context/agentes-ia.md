@@ -209,6 +209,11 @@ não criam snapshot de reversão no envio (`READ_ONLY_MODES`).
   botão de **anexar contexto** do editor. O modelo também aparece no
   formulário de criação/edição do agente e é persistido em
   `AgentDefinition.model`.
+- A sidebar secundária tem abas: **Agentes** (este chat) e, quando instaladas
+  no VS Code do usuário, a UI **real** das extensões Claude Code/Codex
+  hospedada pelo mini extension host (PoC) — contratos em
+  [Extensões VS Code hospedadas](extensoes-vscode.md). As abas de extensão não
+  mudam nada deste chat.
 - O chat é uma **sidebar secundária**, ancorada na borda **oposta** à barra
   lateral principal (nunca na principal). Largura redimensionável, padrão
   500px, persistida em `ui.agentsSidebarWidth`. O lado é derivado:
