@@ -601,6 +601,7 @@ fn scan_into(src: &str, acc: &mut ScanAcc) {
     }
 }
 
+#[cfg(test)]
 pub fn scan_source(src: &str) -> (usize, Vec<(String, u32)>) {
     let mut acc = ScanAcc::default();
     scan_into(src, &mut acc);
