@@ -41,6 +41,10 @@ const BOTTOM_VIEWS: { id: string; label: string; icon: IconAction }[] = [
   { id: 'settings', label: 'Gerenciar', icon: 'settings' },
 ];
 
+/** Length (px) of the active-view indicator pill — keep in sync with
+ *  `.activity-indicator` in styles.css. */
+const INDICATOR_SIZE = 16;
+
 const ORDER_KEY = 'ui.activityBarOrder';
 const DEFAULT_ORDER = VIEWS.map((v) => v.id);
 
@@ -168,11 +172,11 @@ export function ActivityBar({
         return;
       }
 
-      // Center the 20px indicator along the active item's main axis.
+      // Center the 16px indicator along the active item's main axis.
       setIndicatorOffset(
         horizontal
-          ? activeItem.offsetLeft + (activeItem.offsetWidth - 20) / 2
-          : activeItem.offsetTop + (activeItem.offsetHeight - 20) / 2,
+          ? activeItem.offsetLeft + (activeItem.offsetWidth - INDICATOR_SIZE) / 2
+          : activeItem.offsetTop + (activeItem.offsetHeight - INDICATOR_SIZE) / 2,
       );
     };
 
@@ -265,7 +269,7 @@ export function ActivityBar({
               reorder(v.id, after);
             }}
           >
-            <Codicon name={v.icon} size={24} />
+            <Codicon name={v.icon} size={20} />
           </button>
           </Tooltip>
         ))}
@@ -280,7 +284,7 @@ export function ActivityBar({
             style={horizontalItemStyle}
             onClick={() => onViewChange(v.id)}
           >
-            <Codicon name={v.icon} size={24} />
+            <Codicon name={v.icon} size={20} />
           </button>
           </Tooltip>
         ))}

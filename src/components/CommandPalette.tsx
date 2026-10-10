@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { SearchBox } from "./ui/Input";
 import { fuzzyMatch } from "../quickOpen/fuzzy";
 
 /**
@@ -131,10 +132,9 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
     <div className="quick-open-backdrop" onMouseDown={onClose}>
       <div className="quick-open" onMouseDown={(e) => e.stopPropagation()}>
         <div className="quick-pick-title">Paleta de comandos</div>
-        <input
+        <SearchBox
           ref={inputRef}
-          className="quick-open-input"
-          type="text"
+          wrapperClassName="quick-open-field"
           placeholder="Digite o nome de um comando…"
           value={query}
           aria-label="Paleta de Comandos: pesquisar comandos"

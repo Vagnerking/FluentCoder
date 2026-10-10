@@ -1,3 +1,4 @@
+import { IconButton } from "../ui/IconButton";
 import { useMemo, useState, type MouseEvent } from "react";
 import {
   filterGitFluentBranchGroups,
@@ -8,7 +9,6 @@ import {
 import type { GitBranchInfo } from "../../types";
 import { Codicon } from "../../icons/codicons/Codicon";
 import type { IconAction } from "../../icons/codicons/codicon-map";
-import { Tooltip } from "../Tooltip";
 import { GitFluentFilterInput } from "./GitFluentFilterInput";
 
 interface GitFluentBranchesViewProps {
@@ -121,25 +121,21 @@ export function GitFluentBranchesView({
                         </span>
                       )}
                       <span className="git-ref-actions">
-                        <Tooltip label={branch.current ? "Branch atual" : "Checkout"}>
-                          <button
-                            className="git-file-action"
-                            aria-label={branch.current ? "Branch atual" : `Checkout ${branch.name}`}
-                            disabled={busy || branch.current}
-                            onClick={() => onCheckoutBranch(branch)}
-                          >
-                            <Codicon name="arrowLeft" size={13} />
-                          </button>
-                        </Tooltip>
-                        <Tooltip label="Mais ações">
-                          <button
-                            className="git-file-action"
-                            aria-label={`Mais ações para ${branch.name}`}
-                            onClick={(event) => onOpenBranchMenu(event, branch)}
-                          >
-                            <Codicon name="filterFiles" size={13} />
-                          </button>
-                        </Tooltip>
+                        <IconButton
+                          icon="arrowLeft"
+                          size="sm"
+                          label={branch.current ? "Branch atual" : `Checkout ${branch.name}`}
+                          className="git-file-action"
+                          disabled={busy || branch.current}
+                          onClick={() => onCheckoutBranch(branch)}
+                        />
+                        <IconButton
+                          icon="filterFiles"
+                          size="sm"
+                          label={`Mais ações para ${branch.name}`}
+                          className="git-file-action"
+                          onClick={(event) => onOpenBranchMenu(event, branch)}
+                        />
                       </span>
                     </div>
                   );
@@ -187,25 +183,21 @@ export function GitFluentBranchesView({
                         </span>
                       </div>
                       <span className="git-ref-actions">
-                        <Tooltip label="Criar branch local rastreada">
-                          <button
-                            className="git-file-action"
-                            aria-label={`Criar branch local para ${branch.name}`}
-                            disabled={busy}
-                            onClick={() => onCheckoutRemoteBranch(branch)}
-                          >
-                            <Codicon name="arrowLeft" size={13} />
-                          </button>
-                        </Tooltip>
-                        <Tooltip label="Mais ações">
-                          <button
-                            className="git-file-action"
-                            aria-label={`Mais ações para ${branch.name}`}
-                            onClick={(event) => onOpenRemoteBranchMenu(event, branch)}
-                          >
-                            <Codicon name="filterFiles" size={13} />
-                          </button>
-                        </Tooltip>
+                        <IconButton
+                          icon="arrowLeft"
+                          size="sm"
+                          label={`Criar branch local para ${branch.name}`}
+                          className="git-file-action"
+                          disabled={busy}
+                          onClick={() => onCheckoutRemoteBranch(branch)}
+                        />
+                        <IconButton
+                          icon="filterFiles"
+                          size="sm"
+                          label={`Mais ações para ${branch.name}`}
+                          className="git-file-action"
+                          onClick={(event) => onOpenRemoteBranchMenu(event, branch)}
+                        />
                       </span>
                     </div>
                   );

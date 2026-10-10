@@ -3,13 +3,14 @@ import {
   useEffect,
   useRef,
   useState,
-  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent,
 } from "react";
 import { TerminalView } from "./TerminalView";
 import { ProblemsPanel } from "./ProblemsPanel";
 import { OutputPanel } from "./OutputPanel";
 import { Codicon } from "../icons/codicons/Codicon";
+import { Tabs, type TabsItem } from "./ui/Tabs";
+import { IconButton } from "./ui/IconButton";
 import type { Problem } from "../types";
 import type { TermSpawnOptions } from "../api";
 import { ptyClosed, ptyReady, subscribeExtTerminals } from "../extensions/terminalBridge";
@@ -116,9 +117,6 @@ export function TerminalPanel({
   const [tabOrder, setTabOrder] = useState<PanelTab[]>(readTabOrder);
   const dragTabRef = useRef<PanelTab | null>(null);
   const [dropTab, setDropTab] = useState<{ tab: PanelTab; after: boolean } | null>(null);
-  // DOM nodes of the panel tabs, so arrow-key navigation can move focus (roving
-  // tabIndex), keyed by tab id and kept in sync as the order changes.
-  const tabRefs = useRef<Partial<Record<PanelTab, HTMLButtonElement | null>>>({});
 
   // Drag-reorderable terminal list. Terminals are live sessions (not persisted
   // across app restarts), so this order is session-scoped by nature.
@@ -268,44 +266,12 @@ export function TerminalPanel({
     if (focusNonce > 0 && focusTab) setActiveTab(focusTab);
   }, [focusNonce, focusTab]);
 
-  /** Label for a panel tab (Problemas shows the diagnostic count). */
-  function tabLabel(tab: PanelTab): string {
-    if (tab === "problems") {
-      return `Problemas${problems.length ? ` (${problems.length})` : ""}`;
-    }
-    return tab === "output" ? "Saída" : "Terminal";
-  }
-
-  /**
-   * Arrow-key navigation for the panel tablist (WAI-ARIA tabs pattern): Left/Right
-   * move to the adjacent tab, Home/End jump to the ends, all with wrap. Selection
-   * follows focus (the tab under focus becomes active), matching the click behavior.
-   */
-  function onTabsKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
-    const idx = tabOrder.indexOf(activeTab);
-    if (idx < 0) return;
-    let next = idx;
-    switch (e.key) {
-      case "ArrowLeft":
-        next = (idx - 1 + tabOrder.length) % tabOrder.length;
-        break;
-      case "ArrowRight":
-        next = (idx + 1) % tabOrder.length;
-        break;
-      case "Home":
-        next = 0;
-        break;
-      case "End":
-        next = tabOrder.length - 1;
-        break;
-      default:
-        return;
-    }
-    e.preventDefault();
-    const target = tabOrder[next];
-    setActiveTab(target);
-    tabRefs.current[target]?.focus();
-  }
+  /** Panel tabs in their (reorderable) order; Problemas carries a count badge. */
+  const tabItems: TabsItem<PanelTab>[] = tabOrder.map((tab) => ({
+    value: tab,
+    label: tab === "problems" ? "Problemas" : tab === "output" ? "Saída" : "Terminal",
+    badge: tab === "problems" && problems.length ? problems.length : undefined,
+  }));
 
   /** Drops the dragged tab before/after `target`, reordering the bar. */
   function reorderTabs(target: PanelTab, after: boolean) {
@@ -368,44 +334,33 @@ export function TerminalPanel({
         }}
       >
         {/*
-          Panel tabs follow the WAI-ARIA tablist pattern (not aria-pressed buttons):
-          role="tablist" on the container, role="tab" + aria-selected per tab, with a
-          roving tabIndex (only the active tab is tabbable) and arrow/Home/End keys
-          driving focus + selection. Drag-and-drop reordering is preserved untouched.
+          Panel tabs: the shared <Tabs> primitive (WAI-ARIA tablist, roving
+          tabIndex, ←/→/Home/End with selection following focus). The tabs stay
+          drag-reorderable through per-tab props; `.terminal-tab` keeps the
+          header's "drag the panel from empty space" check working.
         */}
-        <div
+        <Tabs
           className="terminal-tabs"
-          role="tablist"
-          aria-label="Painel inferior"
-          onKeyDown={onTabsKeyDown}
-        >
-          {tabOrder.map((tab) => (
-            <button
-              key={tab}
-              ref={(el) => {
-                tabRefs.current[tab] = el;
-              }}
-              type="button"
-              role="tab"
-              draggable
-              className={`terminal-tab${activeTab === tab ? " active" : ""}${
-                dropTab?.tab === tab
-                  ? dropTab.after
-                    ? " drop-after"
-                    : " drop-before"
-                  : ""
-              }`}
-              onClick={() => setActiveTab(tab)}
-              aria-selected={activeTab === tab}
-              tabIndex={activeTab === tab ? 0 : -1}
-              onDragStart={() => {
+          ariaLabel="Painel inferior"
+          size="sm"
+          items={tabItems}
+          value={activeTab}
+          onChange={setActiveTab}
+          tabProps={(item) => {
+            const tab = item.value;
+            return {
+              draggable: true,
+              className: `terminal-tab${
+                dropTab?.tab === tab ? (dropTab.after ? " drop-after" : " drop-before") : ""
+              }`,
+              onDragStart: () => {
                 dragTabRef.current = tab;
-              }}
-              onDragEnd={() => {
+              },
+              onDragEnd: () => {
                 dragTabRef.current = null;
                 setDropTab(null);
-              }}
-              onDragOver={(e) => {
+              },
+              onDragOver: (e) => {
                 if (!dragTabRef.current || dragTabRef.current === tab) return;
                 e.preventDefault();
                 const rect = e.currentTarget.getBoundingClientRect();
@@ -413,52 +368,36 @@ export function TerminalPanel({
                 if (dropTab?.tab !== tab || dropTab.after !== after) {
                   setDropTab({ tab, after });
                 }
-              }}
-              onDrop={(e) => {
+              },
+              onDrop: (e) => {
                 e.preventDefault();
                 const rect = e.currentTarget.getBoundingClientRect();
                 reorderTabs(tab, e.clientX > rect.left + rect.width / 2);
-              }}
-            >
-              {tabLabel(tab)}
-            </button>
-          ))}
-        </div>
+              },
+            };
+          }}
+        />
         <div className="terminal-actions">
           {activeTab === "terminal" && (
             <>
-              <button
-                type="button"
-                className="terminal-action"
+              <IconButton
+                icon="add"
+                size="sm"
+                label="Novo terminal"
                 onClick={() => createTerminal()}
                 disabled={!cwd}
-                title="Novo terminal"
-                aria-label="Novo terminal"
-              >
-                <Codicon name="add" size={16} />
-              </button>
+              />
               {activeTermId && (
-                <button
-                  type="button"
-                  className="terminal-action"
+                <IconButton
+                  icon="trash"
+                  size="sm"
+                  label="Encerrar terminal"
                   onClick={() => closeTerminal(activeTermId)}
-                  title="Encerrar terminal"
-                  aria-label="Encerrar terminal"
-                >
-                  <Codicon name="trash" size={16} />
-                </button>
+                />
               )}
             </>
           )}
-          <button
-            type="button"
-            className="terminal-close"
-            onClick={onClose}
-            title="Fechar painel"
-            aria-label="Fechar painel"
-          >
-            <Codicon name="close" size={16} />
-          </button>
+          <IconButton icon="close" size="sm" label="Fechar painel" onClick={onClose} />
         </div>
       </div>
       <div className="terminal-body">
@@ -567,18 +506,16 @@ export function TerminalPanel({
                         {t.title}
                         {t.exited ? " (encerrado)" : ""}
                       </span>
-                      <button
-                        type="button"
+                      <IconButton
+                        icon="close"
+                        size="sm"
+                        label="Encerrar terminal"
                         className="terminal-list-close"
-                        title="Encerrar terminal"
-                        aria-label="Encerrar terminal"
                         onClick={(e) => {
                           e.stopPropagation();
                           closeTerminal(t.id);
                         }}
-                      >
-                        <Codicon name="close" size={12} />
-                      </button>
+                      />
                     </div>
                   ))}
                 </div>

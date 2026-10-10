@@ -6144,6 +6144,8 @@ export default function App() {
         agentsOpen={agentsSidebarOpen}
         onToggleAgents={() => setAgentsSidebarOpen((v) => !v)}
         menus={menus}
+        onOpenQuickOpen={() => setQuickOpenOpen(true)}
+        onOpenCommandPalette={() => setCommandPaletteOpen(true)}
       />
 
       <div

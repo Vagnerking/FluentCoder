@@ -1,9 +1,10 @@
 import { useRef, useState } from "react";
+import { IconButton } from "./ui/IconButton";
 import { Codicon } from "../icons/codicons/Codicon";
 import type { SshConnectInput } from "../api";
 import { useModalDismiss } from "./useModalDismiss";
 import { useModalFocus } from "./useModalFocus";
-import { Button } from "./ui";
+import { Button, Input, Tabs } from "./ui";
 
 interface SshConnectDialogProps {
   /** Prefill (e.g. from a saved host without a user, or a key host). */
@@ -112,15 +113,13 @@ export function SshConnectDialog({
       >
         <header className="ssh-head">
           {onBack && (
-            <button
-              type="button"
+            <IconButton
+              icon="arrowLeft"
+              size="sm"
+              label="Voltar"
               className="ssh-head-back"
-              title="Voltar"
-              aria-label="Voltar"
               onClick={onBack}
-            >
-              <Codicon name="arrowLeft" />
-            </button>
+            />
           )}
           <span className="ssh-head-badge">
             <Codicon name="remote" />
@@ -138,7 +137,7 @@ export function SshConnectDialog({
         <div className="ssh-dialog-row ssh-dialog-host">
           <label className="ssh-dialog-field ssh-dialog-grow">
             <span>Host</span>
-            <input
+            <Input
               ref={hostRef}
               type="text"
               value={host}
@@ -148,7 +147,7 @@ export function SshConnectDialog({
           </label>
           <label className="ssh-dialog-field ssh-dialog-port">
             <span>Porta</span>
-            <input
+            <Input
               type="number"
               value={port}
               min={1}
@@ -160,7 +159,7 @@ export function SshConnectDialog({
 
         <label className="ssh-dialog-field">
           <span>Usuário</span>
-          <input
+          <Input
             type="text"
             value={user}
             placeholder="root"
@@ -168,29 +167,19 @@ export function SshConnectDialog({
           />
         </label>
 
-        <div
+        <Tabs
           className="ssh-dialog-auth-toggle"
-          role="tablist"
-          aria-label="Método de autenticação"
-        >
-          {authTabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={authMode === tab.id}
-              className={authMode === tab.id ? "active" : ""}
-              onClick={() => setAuthMode(tab.id)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
+          variant="pill"
+          ariaLabel="Método de autenticação"
+          value={authMode}
+          onChange={setAuthMode}
+          items={authTabs.map((t) => ({ value: t.id, label: t.label }))}
+        />
 
         {authMode === "password" ? (
           <label className="ssh-dialog-field">
             <span>Senha</span>
-            <input
+            <Input
               type="password"
               value={password}
               autoComplete="off"
@@ -201,7 +190,7 @@ export function SshConnectDialog({
           <>
             <label className="ssh-dialog-field">
               <span>Caminho da chave privada</span>
-              <input
+              <Input
                 type="text"
                 value={keyPath}
                 placeholder="C:\Users\voce\.ssh\id_ed25519"
@@ -210,7 +199,7 @@ export function SshConnectDialog({
             </label>
             <label className="ssh-dialog-field">
               <span>Senha da chave (opcional)</span>
-              <input
+              <Input
                 type="password"
                 value={keyPassphrase}
                 autoComplete="off"

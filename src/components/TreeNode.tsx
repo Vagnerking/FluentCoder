@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { FileNode, FileDecoration } from "../types";
 import { readDir } from "../api";
 import { FileIcon } from "../icon-theme/material/FileIcon";
@@ -359,7 +359,14 @@ export function TreeNode({
           className={`tree-children${expanded ? " expanded" : ""}`}
           role="group"
           aria-hidden={!expanded}
-          style={{ maxHeight: expanded ? childrenHeight : 0 }}
+          // Animated height (expand/collapse) + indent guide under this folder's
+          // chevron (see `.tree-children::before`).
+          style={
+            {
+              maxHeight: expanded ? childrenHeight : 0,
+              "--tree-guide": `${depth * 12 + 12}px`,
+            } as CSSProperties
+          }
         >
           <div className="tree-children-inner" ref={childrenInnerRef}>
             {loading && (

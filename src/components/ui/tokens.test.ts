@@ -83,3 +83,37 @@ test("a altura da opção do Select no CSS bate com OPTION_HEIGHT do componente"
   assert.ok(rule && gap, "regras .ui-select-option/.ui-select-popup presentes");
   assert.equal(Number(rule[1]) + Number(gap[1]), optionHeight);
 });
+
+// Fase 2: varredura de tokens. Fora do `:root` (e do body, que fixa a densidade
+// global em 13px), tamanhos de fonte e raios vêm da escala, não de px soltos.
+const outsideRoot = css
+  .replace(/:root\s*\{[\s\S]*?\n\}/, "")
+  .replace(/\nbody\s*\{[^}]*\}/, "");
+
+test("fontes fora do :root usam a type ramp (sem px avulso)", () => {
+  const raw = outsideRoot.match(/font-size:\s*\d+(\.\d+)?px/g) ?? [];
+  assert.deepEqual(raw, []);
+});
+
+test("raios usam os tokens (só 1px fica literal)", () => {
+  const raw = (outsideRoot.match(/border-radius:\s*[^;]+;/g) ?? []).filter(
+    (d) => /\d+px/.test(d) && !/^border-radius:\s*1px;$/.test(d),
+  );
+  assert.deepEqual(raw, []);
+});
+
+test("tokens novos da fase 2 existem", () => {
+  for (const name of [
+    "--font-caption-xs",
+    "--font-caption-sm",
+    "--font-title",
+    "--radius-xs",
+    "--radius-pill",
+    "--shell-bg",
+    "--color-surface-flyout",
+    "--color-scrim",
+    "--fill-recessed",
+  ]) {
+    assert.ok(token(name), `${name} definido`);
+  }
+});

@@ -54,7 +54,7 @@
   align-items: center;
   justify-content: center;
   color: #fff;
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   font-weight: 800;
   box-shadow: 0 0 0 1px rgba(210, 228, 242, 0.12);
 }
@@ -74,12 +74,12 @@
 
 .status-blame-menu-identity strong {
   color: var(--accent);
-  font-size: 13px;
+  font-size: var(--font-base);
 }
 
 .status-blame-menu-identity span {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-caption);
   font-style: italic;
 }
 
@@ -90,7 +90,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--font-caption);
 }
 
 .status-blame-menu-actions {
@@ -110,11 +110,11 @@
   height: 22px;
   padding: 0 6px;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   cursor: pointer;
 }
 
@@ -156,7 +156,7 @@
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-caption);
   text-align: left;
   cursor: pointer;
 }

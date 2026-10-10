@@ -11,7 +11,7 @@ import {
 import { applySpatialRepulsion } from "../graph/physics";
 import { invalidateIndex } from "../knowledge/knowledgeCache";
 import type { GraphData, GraphEdge, GraphNode, OpenFile } from "../types";
-import { Checkbox } from "./ui";
+import { Checkbox, IconButton, SearchBox } from "./ui";
 
 interface GraphViewProps {
   /** Workspace root to scan; null ⇒ empty state ("open a folder"). */
@@ -1324,9 +1324,10 @@ export function GraphView({
           {filtered.nodes.length} nós · {filtered.edges.length} conexões
           {graphUpdating ? " · atualizando…" : ""}
         </span>
-        <input
-          className="graph-search"
-          type="text"
+        <SearchBox
+          size="sm"
+          wrapperClassName="graph-search"
+          aria-label="Buscar nó no grafo"
           placeholder="Buscar nó…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -1360,52 +1361,32 @@ export function GraphView({
           checked={showArrows}
           onChange={(e) => setShowArrows(e.target.checked)}
         />
-        <button
-          type="button"
-          className="graph-icon-btn"
-          aria-label="Copiar resumo do grafo para agente"
-          title="Copiar resumo do grafo — módulos, hubs e conexões para colar no agente"
+        <IconButton
+          icon="copy"
+          size="sm"
+          label="Copiar resumo do grafo (módulos, hubs e conexões) para colar no agente"
+          tooltipPlacement="bottom"
           onClick={copyAgentDigest}
-        >
-          <span className="codicon codicon-copy" aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          className="graph-icon-btn"
-          aria-label={showList ? "Ocultar lista de nós" : "Mostrar lista de nós"}
-          aria-pressed={showList}
-          title="Lista de nós — navegação por teclado (alternativa textual ao grafo)"
+        />
+        <IconButton
+          icon="list"
+          size="sm"
+          label={
+            showList
+              ? "Ocultar lista de nós"
+              : "Mostrar lista de nós (navegação por teclado, alternativa textual ao grafo)"
+          }
+          tooltipPlacement="bottom"
+          pressed={showList}
           onClick={() => setShowList((v) => !v)}
-        >
-          <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
-            <path
-              d="M5.5 4h7M5.5 8h7M5.5 12h7M2.5 4h.01M2.5 8h.01M2.5 12h.01"
-              stroke="currentColor"
-              strokeWidth="1.3"
-              fill="none"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
-        <button
-          type="button"
-          className="graph-icon-btn"
-          aria-label="Atualizar grafo"
-          title="Atualizar — reanalisa o workspace e reorganiza"
+        />
+        <IconButton
+          icon="refresh"
+          size="sm"
+          label="Atualizar grafo (reanalisa o workspace e reorganiza)"
+          tooltipPlacement="bottom"
           onClick={refresh}
-        >
-          <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
-            <path
-              d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2v3h-3"
-              stroke="currentColor"
-              strokeWidth="1.3"
-              fill="none"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
+        />
       </div>
 
       {/* role="group" (not "application"): the canvas is aria-hidden and the
@@ -1505,31 +1486,25 @@ export function GraphView({
           </div>
         )}
 
-        <div className="graph-zoom">
-          <button
-            type="button"
-            aria-label="Aproximar"
-            title="Aproximar"
+        <div className="graph-zoom" role="toolbar" aria-label="Zoom do grafo">
+          <IconButton
+            icon="zoomIn"
+            label="Aproximar"
+            tooltipPlacement="left"
             onClick={() => zoomRef.current(1.3)}
-          >
-            +
-          </button>
-          <button
-            type="button"
-            aria-label="Enquadrar tudo"
-            title="Enquadrar tudo"
+          />
+          <IconButton
+            icon="zoomFit"
+            label="Enquadrar tudo"
+            tooltipPlacement="left"
             onClick={() => fitRef.current()}
-          >
-            ⤢
-          </button>
-          <button
-            type="button"
-            aria-label="Afastar"
-            title="Afastar"
+          />
+          <IconButton
+            icon="zoomOut"
+            label="Afastar"
+            tooltipPlacement="left"
             onClick={() => zoomRef.current(1 / 1.3)}
-          >
-            −
-          </button>
+          />
         </div>
 
         {focusName && (

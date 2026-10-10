@@ -1,3 +1,4 @@
+import { IconButton } from "../ui/IconButton";
 import {
   memo,
   useCallback,
@@ -11,7 +12,6 @@ import {
 } from "react";
 import type { GitCommit } from "../../types";
 import { Codicon } from "../../icons/codicons/Codicon";
-import { Tooltip } from "../Tooltip";
 import { GitFluentFilterInput } from "./GitFluentFilterInput";
 
 interface GitFluentHistoryViewProps {
@@ -292,16 +292,13 @@ const GitFluentTimelineRow = memo(function GitFluentTimelineRow({
       )}
       <code>{commit.short}</code>
       <span className="git-fluent-timeline-actions">
-        <Tooltip label="Mais ações do commit">
-          <button
-            type="button"
-            className="git-file-action"
-            aria-label={`Mais ações para ${commit.short}`}
-            onClick={handleActionClick}
-          >
-            <Codicon name="filterFiles" size={13} />
-          </button>
-        </Tooltip>
+        <IconButton
+          icon="filterFiles"
+          size="sm"
+          label={`Mais ações para ${commit.short}`}
+          className="git-file-action"
+          onClick={handleActionClick}
+        />
       </span>
     </div>
   );

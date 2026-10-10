@@ -5,25 +5,27 @@
   height: 100%;
 }
 
+/* Section header shared by the side bar views (Explorer, Git, Run, …): an
+   uppercase overline title + a toolbar of 24px icon buttons. */
 .explorer-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 10px 12px 8px;
-  font-size: 11px;
+  gap: var(--space-sm);
+  min-height: 40px;
+  padding: var(--space-xs) var(--space-sm) var(--space-xs) var(--space-md);
+  font-size: var(--font-caption-sm);
 }
 
 .explorer-title {
   font-weight: 600;
   color: var(--text-muted);
   /* Real sidebar section headers (Explorer, Git, Search…) stay uppercase by VS
-     Code convention; the heavy tracking is softened to a subtle 0.3px so the
-     label reads as a label, not spaced-out. The PlaceholderPanel reuses this
-     class but its title is panel *content* (e.g. "Contas"), so it opts out of
-     the uppercase below (F2-AUD-009). */
+     Code convention; the tracking is a subtle 0.06em so the label reads as an
+     overline. The PlaceholderPanel reuses this class but its title is panel
+     *content* (e.g. "Contas"), so it opts out of the uppercase (F2-AUD-009). */
   text-transform: uppercase;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.06em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -48,7 +50,7 @@
 .explorer-subtitle {
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   line-height: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -57,23 +59,43 @@
 .explorer-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-xxs);
   flex-shrink: 0;
 }
 
+/* Title actions appear while the side bar is hovered or holds focus (VS Code
+   convention) — a pressed toggle stays visible so its state is never hidden. */
+.explorer-actions-reveal {
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+.sidebar:hover .explorer-actions-reveal,
+.explorer-actions-reveal:focus-within,
+.explorer-actions-reveal:has([aria-pressed="true"]) {
+  opacity: 1;
+}
+
+/* Legacy header action (Git/Run/Backlinks panels): same metrics and states
+   as <IconButton size="sm">. */
 .explorer-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
   padding: 0;
   border: none;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
 }
+
+.explorer-action .codicon { font-size: var(--icon-md); }
 
 .explorer-action:hover:not(:disabled) {
   background: var(--fill-subtle-hover);
@@ -85,19 +107,18 @@
 }
 
 .explorer-action:disabled {
-  color: var(--text-disabled);
   cursor: default;
-  opacity: 0.55;
+  opacity: var(--opacity-disabled);
 }
 
 .explorer-status {
   min-height: 0;
   max-height: 32px;
-  padding: 0 12px;
+  padding: 0 var(--space-md);
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 11px;
-  line-height: 16px;
+  font-size: var(--font-caption-sm);
+  line-height: var(--line-height-caption);
 }
 
 .explorer-status:empty {
@@ -107,11 +128,12 @@
 .explorer-tree {
   flex: 1;
   overflow-y: scroll;
-  overflow-x: hidden;
-  scrollbar-gutter: stable;
-  padding: 2px 6px 12px;
+  padding: var(--space-xxs) var(--space-sm) var(--space-md);
   contain: layout paint;
   overscroll-behavior: contain;
+  outline: none;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
 }
 
 .explorer-tree::-webkit-scrollbar {
@@ -125,7 +147,7 @@
 .explorer-tree::-webkit-scrollbar-thumb {
   background: transparent;
   border: 3px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background-clip: content-box;
 }
 
@@ -135,9 +157,9 @@
 }
 
 .explorer-empty {
-  padding: 16px 12px;
+  padding: var(--space-md) var(--space-sm);
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-caption);
   line-height: 1.9;
 }
 
@@ -146,6 +168,7 @@
   background: var(--fill-selected);
   color: var(--accent);
 }
+
 .explorer-action.active:hover:not(:disabled) {
   background: var(--fill-selected-hover);
   color: var(--accent);
@@ -153,35 +176,42 @@
 
 /* Flat "only changed files" list (issue #19) — a focused, hierarchy-free view. */
 .explorer-flat-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
   height: 28px;
-  padding: 0 8px;
-  border-radius: var(--radius-control);
+  padding: 0 var(--space-sm);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--font-base);
+  transition: background-color var(--duration-fast) var(--ease-standard);
 }
+
 .explorer-flat-row:hover {
   background: var(--fill-subtle-hover);
 }
+
 .explorer-flat-row.active {
   background: var(--fill-selected);
   color: var(--text);
 }
+
 .explorer-flat-icon {
   flex-shrink: 0;
 }
+
 .explorer-flat-name {
   flex-shrink: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
 .explorer-flat-dir {
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -193,7 +223,7 @@
   border: none;
   color: var(--accent);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--font-caption);
   padding: 0;
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -210,28 +240,33 @@
   contain: layout paint style;
 }
 
+/* ---- Tree rows ---- */
+/* 28px rows on the 4px grid, 13px body text. Selection is a soft accent fill
+   plus the Fluent leading pill (::before) — the same language as the activity
+   bar and the select popup. */
 .tree-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 32px;
-  padding-right: 8px;
-  border-radius: var(--radius-control);
+  height: 28px;
+  padding-right: var(--space-sm);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   color: var(--text-secondary);
-  /* Align to the primary typography stack (same as `body`) — no "Inter". */
-  font-family: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI",
-    system-ui, sans-serif;
-  font-size: 14px;
-  font-weight: 450;
-  line-height: 20px;
+  font-size: var(--font-base);
+  line-height: var(--line-height-base);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
   contain: layout paint style;
 }
 
 .tree-row:hover {
   background: var(--fill-subtle-hover);
+  color: var(--text);
 }
 
 .tree-row.active {
@@ -239,13 +274,34 @@
   color: var(--text);
 }
 
+.tree-row.active::before,
+.explorer-flat-row.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 14px;
+  margin-top: -7px;
+  border-radius: var(--radius-xs);
+  background: var(--accent);
+}
+
 .tree-row.active:hover {
   background: var(--fill-selected-hover);
 }
 
 .tree-row.directory-selected:not(.active) {
-  background: var(--fill-subtle-active);
+  background: var(--acrylic-control);
   color: var(--text);
+}
+
+/* Keyboard-focused row (issue 64): the ring only shows while the tree itself
+   has keyboard focus, so a mouse click doesn't leave a box behind. */
+.explorer-tree:focus-visible .tree-row.focused,
+.explorer-tree:focus-visible .explorer-flat-row[data-tree-path].focused {
+  outline: 1px solid var(--stroke-focus);
+  outline-offset: -1px;
 }
 
 .tree-row.workspace-root-row {
@@ -353,59 +409,36 @@
   cursor: text;
 }
 
+.explorer-inline-row:hover {
+  background: transparent;
+}
+
+/* Inline-creation confirm (IconButton): the accent check. */
+.ui-icon-button.explorer-inline-confirm:not(:disabled) {
+  color: var(--accent);
+}
+
 .explorer-inline-input {
   min-width: 0;
-  width: 100%;
-  height: 24px;
-  padding: 1px 5px;
-  border: 1px solid var(--accent);
-  border-radius: 2px;
-  outline: none;
-  background: var(--editor-bg);
-  color: var(--text);
-  font: inherit;
-}
-
-.explorer-inline-input:disabled {
-  color: var(--text-disabled);
-}
-
-.explorer-inline-confirm {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  flex-shrink: 0;
-  border: none;
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: var(--accent);
-  cursor: pointer;
-}
-
-.explorer-inline-confirm:hover:not(:disabled) {
-  background: var(--fill-subtle-hover);
-}
-
-.explorer-inline-confirm:disabled {
-  color: var(--text-disabled);
-  cursor: default;
+  flex: 1 1 auto;
 }
 
 .explorer-inline-error {
-  padding-top: 2px;
-  padding-right: 8px;
-  padding-bottom: 4px;
+  padding-top: var(--space-xxs);
+  padding-right: var(--space-sm);
+  padding-bottom: var(--space-xs);
   color: var(--error);
-  font-size: 11px;
-  line-height: 15px;
+  font-size: var(--font-caption-sm);
+  line-height: var(--line-height-caption-sm);
   white-space: normal;
 }
 
 .tree-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 12px;
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   color: var(--text-muted);
   flex-shrink: 0;
 }
@@ -420,14 +453,32 @@
   transform: rotate(90deg);
 }
 
+/* Children block. The ::before draws the indent guide under the parent's
+   chevron (x = --tree-guide, set per depth in TreeNode.tsx): faint at rest,
+   clearer while the tree is hovered — like VS Code's "onHover" guides. */
 .tree-children {
-  overflow: hidden;
+  position: relative;
   opacity: 0;
+  transition: max-height var(--duration-tree) var(--ease-decelerate), opacity 70ms ease;
+  overflow: hidden;
   pointer-events: none;
   contain: layout paint style;
-  transition:
-    max-height var(--duration-tree) var(--ease-decelerate),
-    opacity 70ms ease;
+}
+
+.tree-children::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--tree-guide);
+  width: 1px;
+  background: var(--border-subtle);
+  pointer-events: none;
+  transition: background-color var(--duration-medium) var(--ease-standard);
+}
+
+.explorer-tree:hover .tree-children::before {
+  background: var(--acrylic-border);
 }
 
 .tree-children.expanded {
@@ -446,14 +497,14 @@
 }
 
 .tree-icon {
-  margin-right: 4px;
+  margin-right: var(--space-xxs);
 }
 
 /* Trailing git/diagnostic letter badge in an explorer row. */
 .tree-badge {
   margin-left: auto;
   padding-left: 6px;
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   font-weight: 600;
   flex-shrink: 0;
 }
@@ -461,7 +512,6 @@
 .tree-label {
   overflow: hidden;
   text-overflow: ellipsis;
-  letter-spacing: 0.01em;
 }
 
 .tree-label-stack {
@@ -475,7 +525,7 @@
 .tree-root-subtitle {
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   font-weight: 400;
   line-height: 14px;
   text-overflow: ellipsis;

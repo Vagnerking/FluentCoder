@@ -1,35 +1,47 @@
 /* ---- Tooltip (F2-AUD-005) ---- */
+/* The Tooltip wrapper anchors hover/focus events even when the child control is
+   disabled. `display: contents` keeps it invisible to layout. */
 .tooltip-anchor {
   display: contents;
 }
 
+/* Accessible tooltip bubble for icon-only command buttons. Rendered with
+   `position: fixed` so it escapes the sidebar/activity-bar `overflow: hidden`;
+   the trigger keeps its own aria-label, this is just the visual hint. */
 .tooltip {
   position: fixed;
   z-index: 10001;
   max-width: 260px;
   padding: 4px 8px;
-  border: 1px solid var(--color-surface-overlay-border);
-  border-radius: var(--radius-control);
+  font-size: var(--font-caption);
+  line-height: 16px;
   color: var(--text);
   background: var(--color-surface-overlay);
+  border: 1px solid var(--color-surface-overlay-border);
+  border-radius: var(--radius-control);
   box-shadow: var(--shadow-flyout);
-  font-size: 12px;
-  line-height: 16px;
+  /* Wrap long/localized labels instead of overflowing the bubble/viewport. */
   white-space: normal;
   overflow-wrap: anywhere;
   pointer-events: none;
+  /* Centre horizontally on the trigger; the vertical offset is per-placement. */
   transform: translateX(-50%);
   animation: tooltip-in var(--duration-fast) var(--ease-standard);
 }
 
 .tooltip-top {
+  /* Sit just above the trigger (top edge is the anchor). */
   transform: translate(-50%, calc(-100% - 6px));
 }
 
 .tooltip-bottom {
+  /* Sit just below the trigger (bottom edge is the anchor). */
   transform: translate(-50%, 6px);
 }
 
+/* Sit just to the right of the trigger (right edge is the anchor), vertically
+   centred. `white-space: nowrap` keeps single-line labels on one line beside a
+   narrow bar (e.g. the activity bar) instead of wrapping. */
 .tooltip-right {
   transform: translate(6px, -50%);
   white-space: nowrap;

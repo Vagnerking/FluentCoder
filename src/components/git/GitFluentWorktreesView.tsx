@@ -1,7 +1,7 @@
+import { IconButton } from "../ui/IconButton";
 import type { MouseEvent } from "react";
 import type { GitWorktreeInfo } from "../../types";
 import { Codicon } from "../../icons/codicons/Codicon";
-import { Tooltip } from "../Tooltip";
 
 interface GitFluentWorktreesViewProps {
   worktrees: GitWorktreeInfo[];
@@ -59,27 +59,21 @@ export function GitFluentWorktreesView({
                   {worktree.bare && <span className="git-worktree-flag">Bare</span>}
                 </div>
                 <span className="git-worktree-actions">
-                  <Tooltip label={canOpenWorktreeInCurrentWindow ? "Abrir nesta janela" : "Abrir indisponível em SSH"}>
-                    <button
-                      type="button"
-                      className="git-file-action"
-                      aria-label="Abrir worktree nesta janela"
-                      disabled={busy || !canOpenWorktreeInCurrentWindow}
-                      onClick={() => onOpenWorktreeInCurrentWindow(worktree)}
-                    >
-                      <Codicon name="openWith" size={13} />
-                    </button>
-                  </Tooltip>
-                  <Tooltip label="Mais ações">
-                    <button
-                      type="button"
-                      className="git-file-action"
-                      aria-label={`Mais ações para ${branchLabel}`}
-                      onClick={(event) => onOpenWorktreeMenu(event, worktree)}
-                    >
-                      <Codicon name="filterFiles" size={13} />
-                    </button>
-                  </Tooltip>
+                  <IconButton
+                    icon="openWith"
+                    size="sm"
+                    label="Abrir worktree nesta janela"
+                    className="git-file-action"
+                    disabled={busy || !canOpenWorktreeInCurrentWindow}
+                    onClick={() => onOpenWorktreeInCurrentWindow(worktree)}
+                  />
+                  <IconButton
+                    icon="filterFiles"
+                    size="sm"
+                    label={`Mais ações para ${branchLabel}`}
+                    className="git-file-action"
+                    onClick={(event) => onOpenWorktreeMenu(event, worktree)}
+                  />
                 </span>
               </div>
             );

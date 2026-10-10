@@ -1,3 +1,4 @@
+import { IconButton } from "./ui/IconButton";
 import { useEffect, useState } from "react";
 import {
   getCachedIndex,
@@ -126,16 +127,16 @@ export function BacklinksPanel({
     <div className="backlinks-panel">
       <div className="explorer-header">
         <span className="explorer-title">BACKLINKS</span>
-        <button
-          className="git-icon-btn"
-          title="Reanalisar o workspace"
+        <IconButton
+          icon="refresh"
+          size="sm"
+          label="Reanalisar o workspace"
+          tooltipPlacement="bottom"
           onClick={() => {
             invalidateIndex();
             setReloadKey((k) => k + 1);
           }}
-        >
-          ⟳
-        </button>
+        />
       </div>
 
       {!rootPath ? (

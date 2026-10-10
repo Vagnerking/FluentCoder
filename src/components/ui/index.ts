@@ -8,3 +8,6 @@ export { IconButton, type IconButtonProps } from "./IconButton";
 export { Select, type SelectOption, type SelectProps } from "./Select";
 export { Checkbox, type CheckboxProps } from "./Checkbox";
 export { Switch, type SwitchProps } from "./Switch";
+export { Tabs, type TabsItem, type TabsProps } from "./Tabs";
+export { Menu, type MenuItemSpec, type MenuProps, type MenuAnchor, type MenuCloseReason } from "./Menu";
+export { Input, SearchBox, Textarea, type InputProps, type SearchBoxProps, type TextareaProps } from "./Input";

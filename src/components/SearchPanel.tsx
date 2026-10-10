@@ -11,7 +11,8 @@ import { cancelSearch, searchInDir } from "../api";
 import type { FileMatches, FileNode, LineMatch, OpenFile, SearchOptions } from "../types";
 import { Codicon } from "../icons/codicons/Codicon";
 import { FileIcon } from "../icon-theme/material/FileIcon";
-import { Tooltip } from "./Tooltip";
+import { IconButton } from "./ui/IconButton";
+import { Input, SearchBox } from "./ui/Input";
 
 interface SearchPanelProps {
   /** Root folder to search within, or null when no folder is open. */
@@ -481,13 +482,13 @@ export function SearchPanel({
       </div>
 
       <div className="search-input-row">
-        <Codicon name="search" className="search-input-icon" />
-        <input
+        <SearchBox
           ref={inputRef}
-          className={`search-input${regexInvalid ? " search-input-invalid" : ""}`}
-          type="text"
+          wrapperClassName="search-field"
           placeholder="Pesquisar"
+          aria-label="Pesquisar no projeto"
           value={query}
+          invalid={regexInvalid}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") searchNow();
@@ -498,75 +499,65 @@ export function SearchPanel({
             }
           }}
           disabled={!hasSearchTarget}
+          contentAfter={
+            <>
+              <IconButton
+                icon="caseSensitive"
+                size="sm"
+                label="Diferenciar maiúsculas de minúsculas"
+                pressed={caseSensitive}
+                disabled={!hasSearchTarget}
+                onClick={() => setCaseSensitive((v) => !v)}
+              />
+              <IconButton
+                icon="wholeWord"
+                size="sm"
+                label="Palavra inteira"
+                pressed={wholeWord}
+                disabled={!hasSearchTarget}
+                onClick={() => setWholeWord((v) => !v)}
+              />
+              <IconButton
+                icon="regex"
+                size="sm"
+                label="Usar expressão regular"
+                pressed={regex}
+                disabled={!hasSearchTarget}
+                onClick={() => setRegex((v) => !v)}
+              />
+            </>
+          }
         />
-        <div className="search-controls">
-          <Tooltip label="Diferenciar maiúsculas de minúsculas">
-            <button
-              type="button"
-              className={`search-toggle${caseSensitive ? " active" : ""}`}
-              aria-label="Diferenciar maiúsculas de minúsculas"
-              aria-pressed={caseSensitive}
-              disabled={!hasSearchTarget}
-              onClick={() => setCaseSensitive((v) => !v)}
-            >
-              <Codicon name="caseSensitive" size={16} />
-            </button>
-          </Tooltip>
-          <Tooltip label="Palavra inteira">
-            <button
-              type="button"
-              className={`search-toggle${wholeWord ? " active" : ""}`}
-              aria-label="Palavra inteira"
-              aria-pressed={wholeWord}
-              disabled={!hasSearchTarget}
-              onClick={() => setWholeWord((v) => !v)}
-            >
-              <Codicon name="wholeWord" size={16} />
-            </button>
-          </Tooltip>
-          <Tooltip label="Usar expressão regular">
-            <button
-              type="button"
-              className={`search-toggle${regex ? " active" : ""}`}
-              aria-label="Usar expressão regular"
-              aria-pressed={regex}
-              disabled={!hasSearchTarget}
-              onClick={() => setRegex((v) => !v)}
-            >
-              <Codicon name="regex" size={16} />
-            </button>
-          </Tooltip>
-          <span className="search-controls-sep" aria-hidden="true" />
-          <Tooltip label="Alternar arquivos a incluir/excluir">
-            <button
-              type="button"
-              className={`search-toggle${showFilters ? " active" : ""}`}
-              aria-label="Alternar arquivos a incluir/excluir"
-              aria-pressed={showFilters}
-              disabled={!hasSearchTarget}
-              onClick={() => setShowFilters((v) => !v)}
-            >
-              <Codicon name="filterFiles" size={14} />
-            </button>
-          </Tooltip>
-        </div>
+        <IconButton
+          icon="filter"
+          size="sm"
+          className="search-filters-toggle"
+          label="Alternar arquivos a incluir/excluir"
+          pressed={showFilters}
+          disabled={!hasSearchTarget}
+          onClick={() => setShowFilters((v) => !v)}
+        />
       </div>
 
       {showFilters && (
         <div className="search-filters">
-          <label className="search-filter-label">arquivos a incluir</label>
-          <input
-            className="search-glob-input"
-            type="text"
+          <label className="search-filter-label" htmlFor="search-include">
+            arquivos a incluir
+          </label>
+          <Input
+            id="search-include"
+            size="sm"
             placeholder="ex.: *.ts, src/**"
             value={includeText}
             onChange={(e) => setIncludeText(e.target.value)}
             disabled={!hasSearchTarget}
           />
-          <label className="search-filter-label">arquivos a excluir</label>
-          <input
-            className="search-glob-input"
-            type="text"
+          <label className="search-filter-label" htmlFor="search-exclude">
+            arquivos a excluir
+          </label>
+          <Input
+            id="search-exclude"
+            size="sm"
             placeholder="ex.: **/test/**, *.min.js"
             value={excludeText}
             onChange={(e) => setExcludeText(e.target.value)}
@@ -580,15 +571,13 @@ export function SearchPanel({
           <span className="search-scope-chip" title={searchRoot}>
             <Codicon name="folder" size={12} />
             <span className="search-scope-name">{baseName(searchRoot)}</span>
-            <Tooltip label="Limpar escopo da pasta">
-              <button
-                className="search-scope-clear"
-                aria-label="Limpar escopo da pasta"
-                onClick={() => onClearScope?.()}
-              >
-                <Codicon name="close" size={12} />
-              </button>
-            </Tooltip>
+            <IconButton
+              icon="close"
+              size="sm"
+              label="Limpar escopo da pasta"
+              className="search-scope-clear"
+              onClick={() => onClearScope?.()}
+            />
           </span>
         </div>
       )}

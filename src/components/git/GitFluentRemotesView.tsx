@@ -1,3 +1,4 @@
+import { IconButton } from "../ui/IconButton";
 import { useMemo, useState, type MouseEvent } from "react";
 import {
   buildGitFluentRemoteTree,
@@ -114,16 +115,14 @@ export function GitFluentRemotesView({
                         <Codicon name="refresh" size={13} />
                       </button>
                     </Tooltip>
-                    <Tooltip label={remote ? "Mais ações" : "Remote não configurado"}>
-                      <button
-                        className="git-file-action"
-                        disabled={busy || !remote}
-                        aria-label={remote ? `Mais ações para ${remote.name}` : "Remote não configurado"}
-                        onClick={(event) => remote && onOpenRemoteMenu(event, remote)}
-                      >
-                        <Codicon name="filterFiles" size={13} />
-                      </button>
-                    </Tooltip>
+                    <IconButton
+                      icon="filterFiles"
+                      size="sm"
+                      label={remote ? `Mais ações para ${remote.name}` : "Remote não configurado"}
+                      className="git-file-action"
+                      disabled={busy || !remote}
+                      onClick={(event) => remote && onOpenRemoteMenu(event, remote)}
+                    />
                   </div>
                 </div>
                 {!collapsed && remoteNode.branches.length === 0 && (
@@ -215,25 +214,21 @@ function renderRemoteBranches({
               </span>
             </div>
             <span className="git-ref-actions">
-              <Tooltip label="Criar branch local rastreada">
-                <button
-                  className="git-file-action"
-                  aria-label={`Criar branch local para ${branch.name}`}
-                  disabled={busy}
-                  onClick={() => onCheckoutRemoteBranch(branch)}
-                >
-                  <Codicon name="gitPull" size={13} />
-                </button>
-              </Tooltip>
-              <Tooltip label="Mais ações">
-                <button
-                  className="git-file-action"
-                  aria-label={`Mais ações para ${branch.name}`}
-                  onClick={(event) => onOpenRemoteBranchMenu(event, branch)}
-                >
-                  <Codicon name="filterFiles" size={13} />
-                </button>
-              </Tooltip>
+              <IconButton
+                icon="gitPull"
+                size="sm"
+                label={`Criar branch local para ${branch.name}`}
+                className="git-file-action"
+                disabled={busy}
+                onClick={() => onCheckoutRemoteBranch(branch)}
+              />
+              <IconButton
+                icon="filterFiles"
+                size="sm"
+                label={`Mais ações para ${branch.name}`}
+                className="git-file-action"
+                onClick={(event) => onOpenRemoteBranchMenu(event, branch)}
+              />
             </span>
           </div>
         );

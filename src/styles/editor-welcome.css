@@ -7,17 +7,19 @@
   justify-content: center;
   overflow: auto;
   background:
-    radial-gradient(circle at 50% 36%, rgba(96, 205, 255, 0.06), transparent 38%),
+    radial-gradient(circle at 50% 36%, color-mix(in srgb, var(--accent) 6%, transparent), transparent 38%),
     var(--editor-bg);
 }
 
 /* Project-open state: calm, non-interactive hints filling the empty editor —
    discreet, no cards, no highlights. */
 .welcome-home { background: var(--editor-bg); }
+
 .welcome-home-inner {
   width: min(360px, 80%);
   user-select: none;
 }
+
 .welcome-home-brand {
   display: flex;
   align-items: center;
@@ -25,109 +27,129 @@
   margin-bottom: 24px;
   min-width: 0;
 }
+
 .welcome-home-logo {
   height: 36px;
   width: auto;
   flex-shrink: 0;
-  filter: drop-shadow(0 3px 9px rgba(96, 205, 255, 0.22));
+  filter: drop-shadow(0 3px 9px color-mix(in srgb, var(--accent) 22%, transparent));
 }
+
 .welcome-home .welcome-wordmark {
-  font-size: 15px;
+  font-size: var(--font-body);
   font-weight: 600;
   letter-spacing: 0.005em;
   color: var(--text-secondary);
 }
+
 .welcome-home .welcome-context {
-  font-size: 12px;
+  font-size: var(--font-caption);
   color: var(--text-disabled);
   margin-top: 1px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .welcome-home .welcome-context-detail {
   margin-top: 2px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .welcome-hints {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
+
 .welcome-hint {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 32px;
-  font-size: 13px;
+  font-size: var(--font-base);
 }
+
 .welcome-hint-label { color: var(--text-muted); }
+
 .welcome-hint-keys { display: inline-flex; align-items: center; gap: 4px; }
+
 .welcome-hint-keys kbd {
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   min-width: 17px;
   text-align: center;
   color: var(--text-disabled);
   background: transparent;
   border: 1px solid var(--acrylic-border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 1px 5px;
   font-family: inherit;
 }
+
 .welcome-inner {
   width: min(680px, 86%);
   padding: 32px 0;
 }
+
 .welcome-hero {
   display: flex;
   align-items: center;
   gap: 18px;
   margin-bottom: 34px;
 }
+
 .welcome-logo-img {
   height: 58px;
   width: auto;
   flex-shrink: 0;
-  filter: drop-shadow(0 6px 18px rgba(96, 205, 255, 0.28));
+  filter: drop-shadow(0 6px 18px color-mix(in srgb, var(--accent) 28%, transparent));
 }
+
 .welcome-title {
-  font-size: 27px;
+  font-size: var(--font-title);
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--text);
   margin: 0 0 4px;
 }
+
 .welcome-subtitle {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--font-base);
   color: var(--text-muted);
   max-width: 44ch;
 }
+
 .welcome-columns {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 28px;
 }
+
 @media (max-width: 560px) {
   .welcome-columns { grid-template-columns: 1fr; }
+
 }
+
 .welcome-col-title {
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-muted);
   margin: 0 0 12px;
 }
+
 .welcome-actions {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
+
 .welcome-action {
   appearance: none;
   -webkit-appearance: none;
@@ -138,18 +160,20 @@
   padding: 9px 11px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-surface);
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-base);
   text-align: left;
   cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  transition: background var(--duration-fast) var(--ease-standard), border-color var(--duration-fast) var(--ease-standard);
 }
+
 .welcome-action:hover {
   background: var(--acrylic-control);
   border-color: var(--acrylic-border);
 }
+
 .welcome-action-icon {
   display: flex;
   align-items: center;
@@ -157,25 +181,29 @@
   width: 30px;
   height: 30px;
   flex-shrink: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-surface);
   color: var(--accent);
-  background: rgba(96, 205, 255, 0.1);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
+
 .welcome-action-label { flex: 1; }
+
 .welcome-action-hint {
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   color: var(--text-muted);
   background: var(--acrylic-control);
   border: 1px solid var(--acrylic-border);
-  border-radius: 5px;
+  border-radius: var(--radius-control);
   padding: 1px 6px;
   font-family: inherit;
 }
+
 .welcome-recents {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
+
 .welcome-recent {
   appearance: none;
   -webkit-appearance: none;
@@ -186,33 +214,39 @@
   padding: 7px 10px;
   background: transparent;
   border: none;
-  border-radius: 7px;
+  border-radius: var(--radius-control);
   color: var(--text-secondary);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-base);
   text-align: left;
   cursor: pointer;
   min-width: 0;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: background var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard);
 }
+
 .welcome-recent:hover { background: var(--acrylic-control); color: var(--text); }
+
 .welcome-recent .codicon { color: var(--accent); flex-shrink: 0; }
+
 .welcome-recent-name { flex-shrink: 0; font-weight: 500; }
+
 .welcome-recent-path {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   color: var(--text-muted);
 }
+
 .welcome-empty {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--font-caption);
   color: var(--text-muted);
   padding: 7px 10px;
 }
+
 .welcome-tip {
   display: flex;
   align-items: center;
@@ -220,16 +254,30 @@
   margin-top: 34px;
   padding-top: 18px;
   border-top: 1px solid var(--acrylic-border);
-  font-size: 12px;
+  font-size: var(--font-caption);
   color: var(--text-muted);
 }
+
 .welcome-tip .codicon { color: var(--text-secondary); }
+
 .welcome-tip kbd {
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   background: var(--acrylic-control);
   border: 1px solid var(--acrylic-border);
-  border-radius: 5px;
+  border-radius: var(--radius-control);
   padding: 1px 6px;
   font-family: inherit;
   color: var(--text-secondary);
+}
+
+/* ---- Git Lens inline blame annotations ---- */
+/* Monaco injects `after` content into a span with this class. We raise
+   specificity (.monaco-editor prefix + !important) so the editor's own
+   token colors don't override the muted blame color. */
+.monaco-editor .git-lens-inline-active {
+  color: var(--text-muted) !important;
+  font-style: italic !important;
+  opacity: 1;
+  pointer-events: none;
+  user-select: none;
 }

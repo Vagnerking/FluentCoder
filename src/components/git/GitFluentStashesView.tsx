@@ -1,8 +1,8 @@
+import { IconButton } from "../ui/IconButton";
 import type { MouseEvent } from "react";
 import type { GitStashEntry, GitStashFile } from "../../types";
 import { Codicon } from "../../icons/codicons/Codicon";
 import { commitFileStatusClass } from "../../git/gitUi";
-import { Tooltip } from "../Tooltip";
 
 interface GitFluentStashesViewProps {
   stashes: GitStashEntry[];
@@ -64,27 +64,21 @@ export function GitFluentStashesView({
                 <code className="git-stash-ref">{`stash@{${stash.index}}`}</code>
                 {fileCountLabel && <span className="git-stash-count">{fileCountLabel}</span>}
                 <span className="git-file-spacer" />
-                <Tooltip label="Aplicar (mantém o stash)">
-                  <button
-                    type="button"
-                    className="git-file-action"
-                    aria-label="Aplicar (mantém o stash)"
-                    disabled={busy}
-                    onClick={() => onApplyStash(stash)}
-                  >
-                    <Codicon name="add" size={14} />
-                  </button>
-                </Tooltip>
-                <Tooltip label="Mais ações">
-                  <button
-                    type="button"
-                    className="git-file-action"
-                    aria-label={`Mais ações para stash@{${stash.index}}`}
-                    onClick={(event) => onOpenStashMenu(event, stash)}
-                  >
-                    <Codicon name="filterFiles" size={14} />
-                  </button>
-                </Tooltip>
+                <IconButton
+                  icon="add"
+                  size="sm"
+                  label="Aplicar (mantém o stash)"
+                  className="git-file-action"
+                  disabled={busy}
+                  onClick={() => onApplyStash(stash)}
+                />
+                <IconButton
+                  icon="filterFiles"
+                  size="sm"
+                  label={`Mais ações para stash@{${stash.index}}`}
+                  className="git-file-action"
+                  onClick={(event) => onOpenStashMenu(event, stash)}
+                />
               </div>
               {expanded && (
                 <div className="git-stash-files">

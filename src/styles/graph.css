@@ -6,9 +6,10 @@
   height: 100%;
   min-height: 0;
   background:
-    radial-gradient(120% 120% at 50% 0%, rgba(96, 205, 255, 0.05), transparent 60%),
+    radial-gradient(120% 120% at 50% 0%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 60%),
     var(--editor-bg);
 }
+
 .graph-toolbar {
   display: flex;
   align-items: center;
@@ -17,97 +18,46 @@
   flex: 0 0 auto;
   padding: 0 12px;
   border-bottom: 1px solid var(--acrylic-border);
-  background: rgba(34, 42, 53, 0.55);
+  background: var(--acrylic-tint);
   backdrop-filter: blur(20px) saturate(120%);
   -webkit-backdrop-filter: blur(20px) saturate(120%);
-  font-size: 12px;
+  font-size: var(--font-caption);
   user-select: none;
 }
+
 .graph-title {
   font-weight: 600;
   color: var(--text);
 }
+
 .graph-stat {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
+
 .graph-toolbar-spacer {
   flex: 1;
 }
+
 .graph-search {
-  appearance: none;
-  background: var(--acrylic-control, rgba(20, 26, 34, 0.5));
-  border: 1px solid var(--acrylic-border);
-  border-radius: var(--radius-control);
-  color: var(--text);
-  font-size: 12px;
-  padding: 3px 9px;
-  width: 150px;
-  outline: none;
-}
-.graph-search:focus {
-  border-color: var(--accent);
-}
-.graph-search::placeholder {
-  color: var(--text-disabled);
+  width: 180px;
+  flex: 0 0 auto;
 }
 
-.graph-refresh,
-.graph-icon-btn {
-  appearance: none;
-  background: transparent;
-  border: 1px solid var(--acrylic-border);
-  border-radius: var(--radius-control);
-  color: var(--text-secondary);
-  font-size: 12px;
-  padding: 3px 10px;
-  cursor: pointer;
-  transition: background-color 120ms ease, color 120ms ease;
-}
-.graph-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px 7px;
-}
-.graph-refresh:hover,
-.graph-icon-btn:hover {
-  background: var(--fill-subtle-hover);
-  color: var(--text);
-}
-
-/* Zoom control cluster (bottom-right of the canvas). */
+/* Zoom control cluster (bottom-right of the canvas): a floating flyout-style
+   toolbar of icon buttons. */
 .graph-zoom {
   position: absolute;
-  right: 12px;
-  bottom: 12px;
+  right: var(--space-md);
+  bottom: var(--space-md);
   display: flex;
   flex-direction: column;
-  border-radius: var(--radius-control);
-  overflow: hidden;
+  gap: var(--space-xxs);
+  padding: var(--space-xxs);
+  border-radius: var(--radius-surface);
   border: 1px solid var(--acrylic-border);
-  background: rgba(20, 26, 34, 0.6);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-}
-.graph-zoom button {
-  appearance: none;
-  background: transparent;
-  border: none;
-  color: var(--text-secondary);
-  width: 30px;
-  height: 28px;
-  font-size: 15px;
-  line-height: 1;
-  cursor: pointer;
-  transition: background-color 120ms ease, color 120ms ease;
-}
-.graph-zoom button:not(:last-child) {
-  border-bottom: 1px solid var(--acrylic-border);
-}
-.graph-zoom button:hover {
-  background: var(--fill-subtle-hover);
-  color: var(--text);
+  background: var(--color-surface-flyout);
+  box-shadow: var(--shadow-flyout);
 }
 
 /* "Focus mode" pill (top-centre) — click to exit. */
@@ -122,11 +72,11 @@
   gap: 6px;
   max-width: 70%;
   padding: 4px 12px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--accent);
-  background: var(--fill-selected, rgba(96, 205, 255, 0.16));
+  background: var(--fill-selected);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--font-caption);
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
@@ -134,16 +84,19 @@
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
 }
+
 .graph-focus-pill:hover {
   background: var(--accent);
-  color: #06121d;
+  color: var(--text-on-accent);
 }
+
 .graph-canvas-wrap {
   position: relative;
   flex: 1;
   min-height: 0;
   overflow: hidden;
 }
+
 .graph-canvas {
   display: block;
   width: 100%;
@@ -179,7 +132,7 @@
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-caption);
   text-align: left;
   cursor: pointer;
 }
@@ -200,6 +153,7 @@
 .graph-context-menu .codicon {
   color: var(--text-secondary);
 }
+
 .graph-legend {
   position: absolute;
   left: 12px;
@@ -208,31 +162,36 @@
   gap: 14px;
   padding: 6px 10px;
   border-radius: var(--radius-control);
-  background: rgba(20, 26, 34, 0.6);
+  background: var(--acrylic-tint);
   border: 1px solid var(--acrylic-border);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   color: var(--text-muted);
   pointer-events: none;
 }
+
 .graph-legend span {
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
+
 .graph-dot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
   display: inline-block;
 }
+
 .graph-dot-md {
   background: var(--accent);
 }
+
 .graph-dot-code {
-  background: #3ec9a7;
+  background: var(--color-graph-code);
 }
+
 .graph-empty {
   position: absolute;
   inset: 0;
@@ -242,11 +201,12 @@
   text-align: center;
   padding: 24px;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--font-base);
   pointer-events: none;
 }
+
 .graph-error {
-  color: var(--danger, #e06c75);
+  color: var(--danger);
 }
 
 /* ---- Backlinks panel (linked mentions) ---- */
@@ -256,49 +216,56 @@
   height: 100%;
   min-height: 0;
 }
+
 .backlinks-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   padding-bottom: 8px;
 }
+
 .backlinks-current {
   display: flex;
   align-items: center;
   gap: 7px;
   padding: 6px 12px 8px;
-  font-size: 12px;
+  font-size: var(--font-caption);
   color: var(--text);
   font-weight: 600;
   border-bottom: 1px solid var(--acrylic-border);
   margin-bottom: 4px;
 }
+
 .backlinks-section {
   margin-top: 4px;
 }
+
 .backlinks-section-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 4px 12px;
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-muted);
 }
+
 .backlinks-count {
   font-variant-numeric: tabular-nums;
-  background: var(--fill-subtle, rgba(160, 180, 200, 0.12));
-  border-radius: 9px;
+  background: var(--fill-subtle);
+  border-radius: var(--radius-surface);
   padding: 0 7px;
-  font-size: 10px;
+  font-size: var(--font-caption-xs);
   line-height: 16px;
 }
+
 .backlinks-none {
   padding: 2px 12px 6px;
-  font-size: 12px;
+  font-size: var(--font-caption);
   color: var(--text-disabled);
 }
+
 .backlinks-row {
   display: flex;
   flex-direction: column;
@@ -311,53 +278,61 @@
   padding: 5px 12px;
   cursor: pointer;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--font-base);
 }
+
 .backlinks-row:hover {
   background: var(--fill-subtle-hover);
   color: var(--text);
 }
+
 .backlinks-row-head {
   display: flex;
   align-items: center;
   gap: 7px;
 }
+
 .backlinks-snippet {
   margin-left: 23px;
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   color: var(--text-muted);
   font-family: "Cascadia Code", "Consolas", monospace;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .backlinks-icon {
   width: 16px;
   height: 16px;
   flex: 0 0 auto;
 }
+
 .backlinks-name {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .backlinks-rel {
   flex: 0 0 auto;
-  font-size: 10px;
+  font-size: var(--font-caption-xs);
   color: var(--text-disabled);
   border: 1px solid var(--acrylic-border);
   border-radius: var(--radius-control);
   padding: 0 5px;
   line-height: 15px;
 }
+
 .backlinks-rel.rel-import {
-  color: #3ec9a7;
-  border-color: rgba(62, 201, 167, 0.4);
+  color: var(--color-graph-code);
+  border-color: color-mix(in srgb, var(--color-graph-code) 40%, transparent);
 }
+
 .backlinks-rel.rel-wikilink {
   color: var(--accent);
-  border-color: rgba(96, 205, 255, 0.4);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 /* ---- Graph a11y (F2-AUD-015) ---- */
@@ -391,71 +366,79 @@
   max-height: calc(100% - 24px);
   border-radius: var(--radius-control);
   border: 1px solid var(--acrylic-border);
-  background: rgba(20, 26, 34, 0.72);
+  background: var(--acrylic-tint-strong);
   backdrop-filter: blur(20px) saturate(120%);
   -webkit-backdrop-filter: blur(20px) saturate(120%);
-  box-shadow: var(--shadow-flyout, 0 8px 24px rgba(0, 0, 0, 0.32));
+  box-shadow: var(--shadow-flyout);
   overflow: hidden;
 }
+
 .graph-node-list-box {
   overflow-y: auto;
   padding: 4px;
   outline: none;
 }
+
 .graph-node-list-empty {
   margin: 0;
   padding: 10px 8px;
-  font-size: 12px;
+  font-size: var(--font-caption);
   color: var(--text-muted);
 }
+
 .graph-node-option {
   display: grid;
-  grid-template-columns: 9px minmax(0, auto) minmax(0, 1fr);
-  grid-template-rows: 16px 14px;
   align-items: center;
   gap: 8px;
   padding: 5px 8px;
   border-radius: var(--radius-control);
-  font-size: 12px;
+  font-size: var(--font-caption);
   color: var(--text-secondary);
   cursor: pointer;
   user-select: none;
-  transition: background-color 120ms ease, color 120ms ease;
+  transition: background-color var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard);
+  grid-template-columns: 9px minmax(0, auto) minmax(0, 1fr);
+  grid-template-rows: 16px 14px;
 }
+
 .graph-node-option .graph-dot {
   grid-row: 1 / span 2;
   grid-column: 1;
 }
+
 .graph-node-option:hover {
   background: var(--fill-subtle-hover);
   color: var(--text);
 }
+
 .graph-node-option.is-active {
-  background: var(--fill-selected, rgba(96, 205, 255, 0.16));
+  background: var(--fill-selected);
   color: var(--text);
 }
+
 .graph-node-option.is-current .graph-node-option-name {
   color: var(--accent);
   font-weight: 600;
 }
+
 /* Roving-tabindex focus: the active option is the single tab stop and shows the
    shared focus ring (the global :focus-visible rule covers role="option"). */
 .graph-node-option:focus-visible {
   outline: var(--focus-ring-width) solid var(--stroke-focus);
   outline-offset: calc(-1 * var(--focus-ring-width));
 }
+
 .graph-node-option-name {
-  grid-column: 2;
-  grid-row: 1;
-  min-width: 0;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.graph-node-option-rel {
-  grid-column: 3;
+  grid-column: 2;
   grid-row: 1;
+  min-width: 0;
+}
+
+.graph-node-option-rel {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -463,7 +446,10 @@
   text-align: right;
   color: var(--text-disabled);
   font-variant-numeric: tabular-nums;
+  grid-column: 3;
+  grid-row: 1;
 }
+
 .graph-node-option-meta {
   grid-column: 2 / span 2;
   grid-row: 2;
@@ -472,15 +458,15 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   font-variant-numeric: tabular-nums;
 }
 
-/* Reduced motion: drop the option hover/active colour transition too. */
 @media (prefers-reduced-motion: reduce) {
   .graph-node-option {
     transition: none;
   }
+
 }
 
 /* ---- Revisão de diff do Claude Code (ponte IDE, ADR 0006) ----

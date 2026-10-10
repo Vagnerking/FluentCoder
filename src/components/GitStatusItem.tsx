@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useState } from "react";
+import { Menu } from "./ui/Menu";
 import { Codicon } from "../icons/codicons/Codicon";
 import type { GitStatus } from "../types";
 
@@ -40,32 +40,14 @@ function relativeTime(ms: number): string {
  */
 export function GitStatusItem(props: GitStatusItemProps) {
   const { status, busy, autoFetch, lastFetch } = props;
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
+  // The sync menu, anchored above the chip that opened it (pressing the chip
+  // again toggles it).
+  const [menu, setMenu] = useState<{ rect: DOMRect; el: HTMLElement } | null>(null);
 
-  useEffect(() => {
-    if (!menu) return;
-    const onDown = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenu(null);
-      }
-    };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMenu(null);
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [menu]);
-
-  const openMenu = (e: React.MouseEvent) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    setMenu({ x: r.left, y: r.top });
-  };
-  const run = (fn: () => void) => () => {
-    setMenu(null);
-    fn();
+  const openMenu = (e: React.MouseEvent | React.KeyboardEvent) => {
+    const el = e.currentTarget as HTMLElement;
+    const rect = el.getBoundingClientRect();
+    setMenu((m) => (m ? null : { rect, el }));
   };
 
   const { ahead, behind, hasUpstream, conflicted, branch } = status;
@@ -114,7 +96,7 @@ export function GitStatusItem(props: GitStatusItemProps) {
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            openMenu(e as unknown as React.MouseEvent);
+            openMenu(e);
           }
         }}
       >
@@ -139,90 +121,74 @@ export function GitStatusItem(props: GitStatusItemProps) {
         )}
       </span>
 
-      {menu &&
-        createPortal(
-          <div
-            ref={menuRef}
-            className="git-actions-menu"
-            style={{ left: menu.x, top: menu.y }}
-            role="menu"
-          >
-            <div className="git-actions-title">
-              <Codicon name="gitBranch" /> {branch}
-              <span className="git-actions-sub">
-                {hasUpstream ? `↓ ${behind}  ↑ ${ahead}` : "sem upstream"}
+      {menu && (
+        <Menu
+          ariaLabel="Sincronização Git"
+          className="git-actions-menu"
+          anchor={{ rect: menu.rect, placement: "top-start" }}
+          onClose={() => setMenu(null)}
+          isInside={(t) => menu.el.contains(t)}
+          minWidth={248}
+          header={
+            <>
+              <span className="ui-menu-title">
+                <Codicon name="gitBranch" /> {branch}
               </span>
-            </div>
-
-            {hasUpstream ? (
-              <button
-                type="button"
-                className="git-actions-item primary"
-                role="menuitem"
-                disabled={busy}
-                onClick={run(props.onSync)}
-              >
-                <Codicon name="sync" /> Sincronizar alterações
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="git-actions-item primary"
-                role="menuitem"
-                disabled={busy}
-                onClick={run(props.onPublish)}
-              >
-                <Codicon name="cloudUpload" /> Publicar branch
-              </button>
-            )}
-
-            <button
-              type="button"
-              className="git-actions-item"
-              role="menuitem"
-              disabled={busy || !hasUpstream}
-              onClick={run(props.onPull)}
-            >
-              <Codicon name="gitPull" /> Pull{behind > 0 ? ` (${behind})` : ""}
-            </button>
-            <button
-              type="button"
-              className="git-actions-item"
-              role="menuitem"
-              disabled={busy || !hasUpstream}
-              onClick={run(props.onPush)}
-            >
-              <Codicon name="gitPush" /> Push{ahead > 0 ? ` (${ahead})` : ""}
-            </button>
-            <button
-              type="button"
-              className="git-actions-item"
-              role="menuitem"
-              disabled={busy}
-              onClick={run(props.onFetch)}
-            >
-              <Codicon name="refresh" /> Fetch
-            </button>
-
-            <div className="git-actions-sep" />
-
-            <button
-              type="button"
-              className="git-actions-item toggle"
-              role="menuitemcheckbox"
-              aria-checked={autoFetch}
-              onClick={run(props.onToggleAutoFetch)}
-            >
-              <Codicon name={autoFetch ? "success" : "close"} />
-              Buscar automaticamente
-              <span className="git-actions-state">{autoFetch ? "ligado" : "desligado"}</span>
-            </button>
-            <div className="git-actions-footer">
-              {lastFetch ? `Última busca ${relativeTime(lastFetch)}` : "Ainda não buscou"}
-            </div>
-          </div>,
-          document.body
-        )}
+              <span className="ui-menu-subtitle">
+                {hasUpstream ? `↓ ${behind} para baixar · ↑ ${ahead} para enviar` : "sem upstream"}
+              </span>
+            </>
+          }
+          footer={lastFetch ? `Última busca ${relativeTime(lastFetch)}` : "Ainda não buscou"}
+          items={[
+            hasUpstream
+              ? {
+                  id: "sync",
+                  label: "Sincronizar alterações",
+                  icon: "sync",
+                  tone: "accent",
+                  disabled: busy,
+                  onSelect: props.onSync,
+                }
+              : {
+                  id: "publish",
+                  label: "Publicar branch",
+                  icon: "cloudUpload",
+                  tone: "accent",
+                  disabled: busy,
+                  onSelect: props.onPublish,
+                },
+            {
+              id: "pull",
+              label: `Pull${behind > 0 ? ` (${behind})` : ""}`,
+              icon: "gitPull",
+              disabled: busy || !hasUpstream,
+              onSelect: props.onPull,
+            },
+            {
+              id: "push",
+              label: `Push${ahead > 0 ? ` (${ahead})` : ""}`,
+              icon: "gitPush",
+              disabled: busy || !hasUpstream,
+              onSelect: props.onPush,
+            },
+            {
+              id: "fetch",
+              label: "Fetch",
+              icon: "refresh",
+              disabled: busy,
+              onSelect: props.onFetch,
+            },
+            { id: "sep", separator: true },
+            {
+              id: "auto-fetch",
+              label: "Buscar automaticamente",
+              checked: autoFetch,
+              onSelect: props.onToggleAutoFetch,
+            },
+          ]}
+        />
+      )}
     </>
   );
 }

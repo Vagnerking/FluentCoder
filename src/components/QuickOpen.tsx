@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { SearchBox } from "./ui/Input";
 import { listProjectFiles } from "../api";
 import { useModalDismiss } from "./useModalDismiss";
 import { rankFiles } from "../quickOpen/fuzzy";
@@ -216,10 +217,9 @@ export function QuickOpen({
     <div className="quick-open-backdrop" {...useModalDismiss(onClose)}>
       <div className="quick-open">
         <div className="quick-pick-title">Ir para arquivo</div>
-        <input
+        <SearchBox
           ref={inputRef}
-          className="quick-open-input"
-          type="text"
+          wrapperClassName="quick-open-field"
           placeholder={
             targets.length > 0
               ? "Digite o nome de um arquivo…"

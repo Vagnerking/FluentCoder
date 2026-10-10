@@ -19,13 +19,13 @@
   min-height: 28px;
   padding: 2px 4px 2px 9px;
   border: 1px solid rgba(210, 228, 242, 0.12);
-  border-radius: 7px;
+  border-radius: var(--radius-control);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.025)),
     rgba(31, 38, 49, 0.92);
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-caption);
   backdrop-filter: blur(14px);
   pointer-events: auto;
 }
@@ -63,7 +63,7 @@
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   font-weight: 650;
   cursor: pointer;
 }
@@ -89,7 +89,7 @@
   height: 28px;
   padding: 3px 4px 3px 7px;
   border: 1px solid rgba(210, 228, 242, 0.14);
-  border-radius: 7px;
+  border-radius: var(--radius-control);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.052), rgba(255, 255, 255, 0.018)),
     rgba(29, 36, 47, 0.96);
@@ -110,7 +110,7 @@
 
 .git-file-annotations-label {
   padding: 0 3px 0 0;
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   font-weight: 800;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -125,7 +125,7 @@
   height: 22px;
   padding: 2px;
   border: 1px solid rgba(210, 228, 242, 0.11);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   background: rgba(14, 18, 24, 0.24);
 }
 
@@ -134,11 +134,11 @@
   min-width: 31px;
   padding: 0 7px;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: #7f8998;
   font: inherit;
-  font-size: 10.5px;
+  font-size: var(--font-caption-xs);
   font-weight: 750;
   line-height: 16px;
   cursor: pointer;

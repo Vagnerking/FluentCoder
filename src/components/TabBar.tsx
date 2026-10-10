@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from "react";
-import { createPortal } from "react-dom";
 import type { OpenFile, FileDecoration } from "../types";
 import type { Edge } from "../editorGroups";
 import { FileIcon } from "../icon-theme/material/FileIcon";
 import { Codicon } from "../icons/codicons/Codicon";
+import { Tooltip } from "./Tooltip";
+import { IconButton } from "./ui/IconButton";
+import { Menu } from "./ui/Menu";
 
 /** dataTransfer MIME carrying a dragged tab's {groupId, path} across groups. */
 export const TAB_DRAG_MIME = "application/x-fluent-tab";
@@ -115,7 +117,6 @@ export function TabBar({
   const [dropAtEnd, setDropAtEnd] = useState(false);
   // Whether there are hidden tabs to the left/right (drives the scroll fades).
   const [overflow, setOverflow] = useState({ left: false, right: false });
-  const menuRef = useRef<HTMLDivElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
   // Edge auto-scroll while dragging near the row's left/right border.
   const autoScroll = useRef({ dir: 0, raf: 0, clientX: 0 });
@@ -136,6 +137,32 @@ export function TabBar({
       right: el.scrollLeft < max - 1,
     });
   };
+  // Scroll-arrow click: slide the row by ~70% of its visible width.
+  const scrollTabsBy = (dir: 1 | -1) => {
+    const el = barRef.current;
+    if (!el) return;
+    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    el.scrollBy({ left: dir * el.clientWidth * 0.7, behavior: reduce ? "auto" : "smooth" });
+  };
+
+  // Keep the active tab in view when it changes (keyboard/Quick Open opens).
+  useEffect(() => {
+    const el = barRef.current;
+    if (!el || !activePath) return;
+    const tab = Array.from(el.querySelectorAll<HTMLElement>(".tab")).find(
+      (t) => t.dataset.path === activePath
+    );
+    if (!tab) return;
+    // Scroll the row itself (not scrollIntoView, which could also nudge an
+    // overflow-hidden ancestor of the workbench).
+    const pad = 24;
+    if (tab.offsetLeft < el.scrollLeft + pad) {
+      el.scrollLeft = Math.max(0, tab.offsetLeft - pad);
+    } else if (tab.offsetLeft + tab.offsetWidth > el.scrollLeft + el.clientWidth - pad) {
+      el.scrollLeft = tab.offsetLeft + tab.offsetWidth - el.clientWidth + pad;
+    }
+  }, [activePath]);
+
   useEffect(() => {
     syncOverflow();
     const el = barRef.current;
@@ -190,24 +217,6 @@ export function TabBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalDragActive]);
 
-  useEffect(() => {
-    if (!contextMenu) return;
-    function handleClick(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setContextMenu(null);
-      }
-    }
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setContextMenu(null);
-    }
-    document.addEventListener("mousedown", handleClick);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("mousedown", handleClick);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [contextMenu]);
-
   if (files.length === 0) return null;
 
   const targetIndex = files.findIndex((f) => f.path === contextMenu?.path);
@@ -227,6 +236,31 @@ export function TabBar({
           className={`tab-fade right${overflow.right ? " show" : ""}`}
           aria-hidden="true"
         />
+        {/* Scroll arrows over the fades: a pointer affordance for the hidden
+            tabs (the wheel also scrolls). Out of the tab order — keyboard
+            users reach every tab through the tablist itself. */}
+        {overflow.left && (
+          <button
+            type="button"
+            className="tab-scroll left"
+            tabIndex={-1}
+            aria-hidden="true"
+            onClick={() => scrollTabsBy(-1)}
+          >
+            <Codicon name="chevronLeft" size={14} />
+          </button>
+        )}
+        {overflow.right && (
+          <button
+            type="button"
+            className="tab-scroll right"
+            tabIndex={-1}
+            aria-hidden="true"
+            onClick={() => scrollTabsBy(1)}
+          >
+            <Codicon name="chevronRight" size={14} />
+          </button>
+        )}
         <div
           className="tab-bar"
           ref={barRef}
@@ -400,23 +434,28 @@ export function TabBar({
                 >
                   {f.name}
                 </span>
-                <button
-                  type="button"
-                  className={`tab-close${f.dirty ? " dirty" : ""}`}
-                  title={f.dirty ? "Não salvo" : "Fechar"}
-                  aria-label={`Fechar ${f.name}`}
-                  tabIndex={-1}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onClose(f.path);
-                  }}
+                <Tooltip
+                  label={f.dirty ? "Fechar (alterações não salvas)" : "Fechar"}
+                  placement="bottom"
                 >
-                  {f.dirty ? (
-                    <span className="tab-dirty-dot" />
-                  ) : (
-                    <Codicon name="close" size={14} />
-                  )}
-                </button>
+                  <button
+                    type="button"
+                    className={`tab-close${f.dirty ? " dirty" : ""}`}
+                    aria-label={
+                      f.dirty ? `Fechar ${f.name} (não salvo)` : `Fechar ${f.name}`
+                    }
+                    tabIndex={-1}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onClose(f.path);
+                    }}
+                  >
+                    {/* Dirty tabs show the dot; hovering the tab swaps it for
+                        the close glyph (CSS), like VS Code. */}
+                    {f.dirty && <span className="tab-dirty-dot" aria-hidden="true" />}
+                    <Codicon name="close" size={14} className="tab-close-glyph" />
+                  </button>
+                </Tooltip>
               </div>
             );
           })}
@@ -425,85 +464,69 @@ export function TabBar({
       </div>
         {onSplit && (
           <div className="tab-bar-actions">
-            <button
-              type="button"
+            <IconButton
+              icon="splitEditor"
+              size="sm"
               className="tab-action-btn"
-              title="Dividir editor para a direita"
-              aria-label="Dividir editor"
+              label="Dividir editor para a direita"
+              tooltipPlacement="bottom"
               onClick={() => onSplit("right")}
-            >
-              {/* Inline SVG (matches the titlebar layout icons, currentColor) so
-                  it always inherits the button's color — no icon-font surprises. */}
-              <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-                <rect
-                  x="1.5"
-                  y="2.5"
-                  width="13"
-                  height="11"
-                  rx="1.5"
-                  stroke="currentColor"
-                  fill="none"
-                />
-                <line x1="8" y1="2.5" x2="8" y2="13.5" stroke="currentColor" />
-              </svg>
-            </button>
+            />
           </div>
         )}
       </div>
 
-      {contextMenu && createPortal(
-        <div
-          ref={menuRef}
-          className="tab-context-menu"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-        >
-          <button
-            className="tab-context-item"
-            onClick={() => { onClose(contextMenu.path); setContextMenu(null); }}
-          >
-            Fechar
-          </button>
-          <button
-            className={`tab-context-item${!hasOthers ? " disabled" : ""}`}
-            disabled={!hasOthers}
-            onClick={() => { if (hasOthers) { onCloseOthers(contextMenu.path); setContextMenu(null); } }}
-          >
-            Fechar outras
-          </button>
-          <button
-            className={`tab-context-item${!hasLeft ? " disabled" : ""}`}
-            disabled={!hasLeft}
-            onClick={() => { if (hasLeft) { onCloseLeft(contextMenu.path); setContextMenu(null); } }}
-          >
-            Fechar à esquerda
-          </button>
-          <button
-            className={`tab-context-item${!hasRight ? " disabled" : ""}`}
-            disabled={!hasRight}
-            onClick={() => { if (hasRight) { onCloseRight(contextMenu.path); setContextMenu(null); } }}
-          >
-            Fechar à direita
-          </button>
-          <div className="tab-context-separator" />
-          <button
-            className="tab-context-item"
-            onClick={() => { onCloseAll(); setContextMenu(null); }}
-          >
-            Fechar todas
-          </button>
-          {onMoveToNewWindow && (
-            <>
-              <div className="tab-context-separator" />
-              <button
-                className="tab-context-item"
-                onClick={() => { onMoveToNewWindow(contextMenu.path); setContextMenu(null); }}
-              >
-                Mover para Nova Janela
-              </button>
-            </>
-          )}
-        </div>,
-        document.body
+      {contextMenu && (
+        <Menu
+          ariaLabel="Ações da aba"
+          anchor={{ x: contextMenu.x, y: contextMenu.y }}
+          onClose={() => setContextMenu(null)}
+          items={[
+            {
+              id: "close",
+              label: "Fechar",
+              icon: "close",
+              shortcut: "Ctrl+W",
+              onSelect: () => onClose(contextMenu.path),
+            },
+            {
+              id: "close-others",
+              label: "Fechar outras",
+              disabled: !hasOthers,
+              onSelect: () => onCloseOthers(contextMenu.path),
+            },
+            {
+              id: "close-left",
+              label: "Fechar à esquerda",
+              disabled: !hasLeft,
+              onSelect: () => onCloseLeft(contextMenu.path),
+            },
+            {
+              id: "close-right",
+              label: "Fechar à direita",
+              disabled: !hasRight,
+              onSelect: () => onCloseRight(contextMenu.path),
+            },
+            { id: "sep-1", separator: true },
+            {
+              id: "close-all",
+              label: "Fechar todas",
+              icon: "closeAll",
+              onSelect: () => onCloseAll(),
+            },
+            ...(onMoveToNewWindow
+              ? [
+                  { id: "sep-2", separator: true },
+                  {
+                    id: "move-window",
+                    label: "Mover para Nova Janela",
+                    icon: "linkExternal" as const,
+                    onSelect: () => onMoveToNewWindow(contextMenu.path),
+                  },
+                ]
+              : []),
+          ]}
+        />
       )}
     </>
   );

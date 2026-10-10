@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { SearchBox } from "./ui/Input";
 import { gitBranches } from "../api";
 import { Codicon } from "../icons/codicons/Codicon";
 import { useModalDismiss } from "./useModalDismiss";
@@ -160,10 +161,9 @@ export function BranchPicker({
     <div className="quick-open-backdrop" {...useModalDismiss(onClose)}>
       <div className="quick-open branch-picker">
         <div className="quick-pick-title">Selecionar branch</div>
-        <input
+        <SearchBox
           ref={inputRef}
-          className="quick-open-input"
-          type="text"
+          wrapperClassName="quick-open-field"
           placeholder="Selecione uma branch para fazer checkout"
           value={query}
           aria-label="Seletor de branch: filtrar branches"

@@ -8,7 +8,7 @@ import {
   type NugetSearchHit,
 } from "../api";
 import { useModalDismiss } from "./useModalDismiss";
-import { Select } from "./ui";
+import { SearchBox, Select, Tabs } from "./ui";
 
 interface NugetManagerProps {
   /** The `.csproj` paths in the workspace (from the caller). */
@@ -120,30 +120,23 @@ export function NugetManager({ csprojs, onClose }: NugetManagerProps) {
               label: p.split(/[\/]/).pop() ?? p,
             }))}
           />
-          <div className="nuget-tabs" role="tablist">
-            <button
-              role="tab"
-              aria-selected={tab === "installed"}
-              className={"nuget-tab" + (tab === "installed" ? " active" : "")}
-              onClick={() => setTab("installed")}
-            >
-              Instalados{installed ? ` (${installed.length})` : ""}
-            </button>
-            <button
-              role="tab"
-              aria-selected={tab === "browse"}
-              className={"nuget-tab" + (tab === "browse" ? " active" : "")}
-              onClick={() => setTab("browse")}
-            >
-              Procurar
-            </button>
-          </div>
+          <Tabs
+            className="nuget-tabs"
+            variant="pill"
+            size="sm"
+            ariaLabel="Pacotes NuGet"
+            value={tab}
+            onChange={setTab}
+            items={[
+              { value: "installed", label: "Instalados", badge: installed?.length },
+              { value: "browse", label: "Procurar" },
+            ]}
+          />
         </div>
 
         {tab === "browse" && (
-          <input
-            className="quick-open-input"
-            type="text"
+          <SearchBox
+            wrapperClassName="quick-open-field"
             placeholder="Buscar no nuget.org…"
             value={query}
             aria-label="Buscar pacotes no nuget.org"

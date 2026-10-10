@@ -6,6 +6,7 @@ import { ImagePreview } from "./ImagePreview";
 import { MediaPreview } from "./MediaPreview";
 import { TabBar } from "./TabBar";
 import { Codicon } from "../icons/codicons/Codicon";
+import { Tooltip } from "./Tooltip";
 import { pickSavePath, writeFile, writeSshTextFile } from "../api";
 import { useSnapLayout } from "../snap/useSnapLayout";
 import { reorderFiles } from "../tabOrder";
@@ -430,58 +431,59 @@ export function DetachedEditor({ token }: { token: string }) {
             <Codicon name="splitEditor" />
             Acoplar de volta
           </button>
-          <button
-            type="button"
-            className={`caption-btn detached-pin${onTop ? " active" : ""}`}
-            title={onTop ? "Desafixar janela" : "Fixar janela sempre no topo"}
-            aria-label="Fixar janela no topo"
-            aria-pressed={onTop}
-            onClick={toggleOnTop}
-          >
-            <svg width="13" height="13" viewBox="0 0 16 16">
-              <path
-                d="M9.6 1.8 L14.2 6.4 L11.7 6.9 L9.1 9.5 L8.7 12.4 L7.3 11 L4.4 13.9 L3.7 13.2 L6.6 10.3 L5.2 8.9 L7.8 6.3 L8.3 3.8 Z"
-                stroke="currentColor"
-                strokeWidth="1"
-                strokeLinejoin="round"
-                fill={onTop ? "currentColor" : "none"}
-              />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className="caption-btn"
-            title="Minimizar"
-            aria-label="Minimizar"
-            onClick={() => win.minimize()}
-          >
-            <svg width="10" height="10" viewBox="0 0 10 10">
-              <rect x="0" y="4.5" width="10" height="1" fill="currentColor" />
-            </svg>
-          </button>
-          <button
-            ref={maxBtnRef}
-            type="button"
-            className={`caption-btn${maxHover ? " nc-hover" : ""}`}
-            title="Maximizar"
-            aria-label="Maximizar"
-            onClick={() => win.toggleMaximize()}
-          >
-            <svg width="10" height="10" viewBox="0 0 10 10">
-              <rect x="0.5" y="0.5" width="9" height="9" stroke="currentColor" fill="none" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className="caption-btn caption-close"
-            title="Fechar"
-            aria-label="Fechar"
-            onClick={() => closeWindow()}
-          >
-            <svg width="10" height="10" viewBox="0 0 10 10">
-              <path d="M0 0 L10 10 M10 0 L0 10" stroke="currentColor" strokeWidth="1" />
-            </svg>
-          </button>
+          <Tooltip label={onTop ? "Desafixar janela" : "Fixar janela sempre no topo"} placement="bottom">
+            <button
+              type="button"
+              className={`caption-btn detached-pin${onTop ? " active" : ""}`}
+              aria-label="Fixar janela no topo"
+              aria-pressed={onTop}
+              onClick={toggleOnTop}
+            >
+              <Codicon name={onTop ? "pinned" : "pin"} />
+            </button>
+          </Tooltip>
+          <Tooltip label="Minimizar" placement="bottom">
+            <button
+              type="button"
+              className="caption-btn"
+              aria-label="Minimizar"
+              onClick={() => win.minimize()}
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                <rect x="0" y="4.5" width="10" height="1" fill="currentColor" />
+              </svg>
+            </button>
+          </Tooltip>
+          <Tooltip label="Maximizar" placement="bottom">
+            <button
+              ref={maxBtnRef}
+              type="button"
+              className={`caption-btn${maxHover ? " nc-hover" : ""}`}
+              aria-label="Maximizar"
+              onClick={() => win.toggleMaximize()}
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                <rect x="0.5" y="0.5" width="9" height="9" rx="1.5" stroke="currentColor" fill="none" />
+              </svg>
+            </button>
+          </Tooltip>
+          <Tooltip label="Fechar" placement="bottom">
+            <button
+              type="button"
+              className="caption-btn caption-close"
+              aria-label="Fechar"
+              onClick={() => closeWindow()}
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                <path
+                  d="M0.5 0.5 L9.5 9.5 M9.5 0.5 L0.5 9.5"
+                  stroke="currentColor"
+                  strokeWidth="1"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </button>
+          </Tooltip>
         </div>
       </div>
 

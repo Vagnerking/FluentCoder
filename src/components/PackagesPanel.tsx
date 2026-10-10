@@ -1,3 +1,4 @@
+import { SearchBox } from "./ui";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { packageIntelAudit, packageIntelOutdated, packageIntelScan } from "../api";
 import {
@@ -238,8 +239,10 @@ function PackageRootSection({
         </div>
       </div>
 
-      <input
-        className="search-input packages-search"
+      <SearchBox
+        size="sm"
+        wrapperClassName="packages-search"
+        aria-label="Filtrar pacotes"
         placeholder="Filtrar por projeto ou gerenciador…"
         value={query}
         onChange={(e) => setQuery(e.target.value)}

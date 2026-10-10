@@ -2,33 +2,40 @@
 
 /* Breakpoint dot in the glyph margin. */
 .debug-breakpoint-glyph {
-  background: radial-gradient(circle at 50% 50%, #e5484d 0 42%, transparent 46%);
+  background: radial-gradient(circle at 50% 50%, var(--color-status-error) 0 42%, transparent 46%);
   cursor: pointer;
 }
+
 /* Conditional breakpoint: hollow red dot. Logpoint: diamond-ish amber. (#9) */
 .debug-breakpoint-conditional-glyph {
-  background: radial-gradient(circle at 50% 50%, transparent 0 26%, #e5484d 30% 42%, transparent 46%);
+  background: radial-gradient(circle at 50% 50%, transparent 0 26%, var(--color-status-error) 30% 42%, transparent 46%);
   cursor: pointer;
 }
+
 .debug-logpoint-glyph {
-  background: radial-gradient(circle at 50% 50%, #f5a623 0 42%, transparent 46%);
+  background: radial-gradient(circle at 50% 50%, var(--color-status-warning-strong) 0 42%, transparent 46%);
   cursor: pointer;
 }
+
 /* Yellow arrow-ish marker + line highlight where execution is stopped. */
 .debug-stopped-glyph {
-  background: radial-gradient(circle at 50% 50%, #f5d90a 0 38%, transparent 44%);
+  background: radial-gradient(circle at 50% 50%, var(--color-status-warning) 0 38%, transparent 44%);
 }
+
 .debug-stopped-line {
-  background: rgba(245, 217, 10, 0.12);
+  background: color-mix(in srgb, var(--color-status-warning) 12%, transparent);
 }
 
 .debug-section .debug-status {
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   opacity: 0.8;
 }
-.debug-status-stopped { color: #f5d90a; }
-.debug-status-running { color: #63c174; }
-.debug-status-error { color: #e5484d; }
+
+.debug-status-stopped { color: var(--color-status-warning); }
+
+.debug-status-running { color: var(--color-status-success); }
+
+.debug-status-error { color: var(--color-status-error); }
 
 .debug-launcher {
   display: flex;
@@ -39,37 +46,31 @@
 
 .debug-toolbar {
   display: flex;
-  gap: 4px;
-  padding: 6px 8px;
+  align-items: center;
+  gap: var(--space-xxs);
+  margin: var(--space-xs) var(--space-sm);
+  padding: var(--space-xxs);
+  width: max-content;
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-control);
 }
-.debug-btn {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 4px;
-  color: inherit;
-  cursor: pointer;
-  font-size: 13px;
-  line-height: 1;
-  padding: 4px 8px;
-}
-.debug-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.12);
-}
-.debug-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-.debug-btn-stop { color: #e5484d; }
+
+.debug-btn-continue:not(:disabled) { color: var(--color-status-success); }
+
+.debug-btn-stop:not(:disabled) { color: var(--color-status-error); }
 
 .debug-block {
   padding: 2px 0;
 }
+
 .debug-block-title {
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   text-transform: uppercase;
   opacity: 0.6;
   padding: 4px 8px 2px;
 }
+
 .debug-frame-row {
   display: block;
   width: 100%;
@@ -78,58 +79,71 @@
   border: none;
   color: inherit;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--font-caption);
   padding: 3px 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
 .debug-frame-row:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--stroke);
 }
+
 .debug-var-row {
   display: flex;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--font-caption);
   padding: 2px 12px;
   overflow: hidden;
 }
+
 .debug-var-name {
   color: #9cdcfe;
   flex-shrink: 0;
 }
+
 .debug-var-value {
   opacity: 0.85;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
 /* Variables tree + watch (milestone #9). */
 .debug-var-row[role="button"] { cursor: pointer; }
-.debug-var-row[role="button"]:hover { background: rgba(127, 127, 127, 0.08); }
-.debug-var-expander { width: 12px; flex-shrink: 0; opacity: 0.7; font-size: 10px; }
-.debug-var-error { color: #e5484d; font-style: italic; }
+
+.debug-var-row[role="button"]:hover { background: var(--acrylic-control); }
+
+.debug-var-expander { width: 12px; flex-shrink: 0; opacity: 0.7; font-size: var(--font-caption-xs); }
+
+.debug-var-error { color: var(--color-status-error); font-style: italic; }
+
 .debug-watch-input { padding: 2px 12px; }
-.debug-watch-input .search-input { width: 100%; font-size: 12px; }
+
 .debug-watch-remove {
   margin-left: auto; background: none; border: none; color: var(--text-muted);
   cursor: pointer; opacity: 0; flex-shrink: 0;
 }
+
 .debug-var-row:hover .debug-watch-remove { opacity: 0.7; }
-.debug-frame-row.selected { background: rgba(127, 127, 127, 0.16); font-weight: 500; }
+
+.debug-frame-row.selected { background: var(--acrylic-control-hover); font-weight: 500; }
+
 .debug-attach-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
+
 .debug-output {
   font-family: "Cascadia Code", Consolas, monospace;
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   line-height: 1.5;
   max-height: 180px;
   overflow: auto;
   padding: 6px 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid var(--stroke);
   opacity: 0.9;
   user-select: text;
 }
@@ -139,22 +153,27 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--font-caption);
   padding: 2px 8px;
   overflow: hidden;
 }
+
 .test-icon { width: 12px; flex-shrink: 0; opacity: 0.7; }
-.test-icon.test-pass { color: #63c174; opacity: 1; }
-.test-icon.test-fail { color: #e5484d; opacity: 1; }
+
+.test-icon.test-pass { color: var(--color-status-success); opacity: 1; }
+
+.test-icon.test-fail { color: var(--color-status-error); opacity: 1; }
+
 .test-name {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
 .test-duration {
   margin-left: auto;
   opacity: 0.5;
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   flex-shrink: 0;
 }
 
@@ -164,45 +183,59 @@
 
 .test-group-header {
   display: flex; align-items: center; gap: 6px;
-  padding: 3px 8px; cursor: pointer; font-size: 12px;
+  padding: 3px 8px; cursor: pointer; font-size: var(--font-caption);
 }
-.test-group-header:hover { background: var(--bg-elevated, rgba(127,127,127,0.08)); }
-.test-expander { width: 12px; flex-shrink: 0; opacity: 0.7; font-size: 10px; }
+
+.test-group-header:hover { background: var(--bg-elevated); }
+
+.test-expander { width: 12px; flex-shrink: 0; opacity: 0.7; font-size: var(--font-caption-xs); }
+
 .test-class { color: var(--text); font-weight: 500; }
-.test-namespace { color: var(--text-muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.test-namespace { color: var(--text-muted); font-size: var(--font-caption-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .test-group-header .git-count { margin-left: auto; }
+
 .test-leaf { padding-left: 22px; }
-.test-debug-btn { font-size: 11px; }
+
+.test-debug-btn { font-size: var(--font-caption-sm); }
 
 /* Coverage gutter bands (from the Cobertura report). */
-.coverage-covered { background: rgba(64, 191, 128, 0.55); width: 3px !important; margin-left: 3px; }
-.coverage-uncovered { background: rgba(229, 83, 75, 0.6); width: 3px !important; margin-left: 3px; }
+.coverage-covered { background: color-mix(in srgb, var(--color-status-success) 55%, transparent); width: 3px !important; margin-left: 3px; }
+
+.coverage-uncovered { background: color-mix(in srgb, var(--color-status-error) 60%, transparent); width: 3px !important; margin-left: 3px; }
 
 /* ── NuGet manager modal (milestone #11) ── */
 .nuget-manager { width: min(680px, 92vw); max-height: 80vh; }
+
 .nuget-toolbar { display: flex; gap: 8px; align-items: center; padding: 0 12px 8px; }
 
 .nuget-toolbar .nuget-project-select { flex: 1; min-width: 0; }
 
-.nuget-tabs { display: flex; gap: 2px; flex-shrink: 0; }
-.nuget-tab {
-  background: transparent; border: none; color: var(--text-muted);
-  padding: 4px 10px; font-size: 12px; cursor: pointer; border-radius: 4px;
-}
-.nuget-tab.active { color: var(--text); background: var(--bg-elevated, rgba(127,127,127,0.12)); }
-.nuget-error { margin: 0 12px 6px; max-height: 100px; overflow: auto; white-space: pre-wrap; font-size: 11px; }
+.nuget-tabs { flex-shrink: 0; }
+
+.nuget-error { margin: 0 12px 6px; max-height: 100px; overflow: auto; white-space: pre-wrap; font-size: var(--font-caption-sm); }
+
 .nuget-list { max-height: 56vh; }
+
 .nuget-row {
   display: flex; align-items: center; gap: 8px;
-  padding: 6px 12px; border-bottom: 1px solid var(--border-subtle, rgba(127,127,127,0.12));
+  padding: 6px 12px; border-bottom: 1px solid var(--border-subtle);
 }
+
 .nuget-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.nuget-id { font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.nuget-version { font-size: 11px; color: var(--text-muted); }
+
+.nuget-id { font-size: var(--font-base); color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.nuget-version { font-size: var(--font-caption-sm); color: var(--text-muted); }
+
 .nuget-update { color: var(--accent); font-weight: 600; }
+
 .nuget-owners, .nuget-downloads { opacity: 0.8; }
+
 .nuget-actions { display: flex; gap: 6px; flex-shrink: 0; }
-.nuget-remove-btn { color: var(--danger, #e5534b); }
+
+.nuget-remove-btn { color: var(--danger); }
 
 /* Output tail of an explicit .NET project action (build/clean/restore). */
 .run-action-output {
@@ -210,58 +243,10 @@
   padding: 6px 8px;
   max-height: 160px;
   overflow: auto;
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   font-family: var(--mono-font, monospace);
   white-space: pre-wrap;
   word-break: break-word;
-  background: var(--bg-elevated, rgba(127, 127, 127, 0.08));
-  border-radius: 4px;
-}
-
-/* ── Solution Explorer (roadmap csharp-ide-parity, Fase D) ────────────────── */
-.sln-project { padding: 2px 0; }
-.sln-project-row {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 0 6px;
-}
-.sln-expander {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  background: none;
-  border: none;
-  color: inherit;
-  cursor: pointer;
-  font-size: 13px;
-  padding: 3px 2px;
-  overflow: hidden;
-}
-.sln-expander:hover { background: rgba(255, 255, 255, 0.05); }
-.sln-project-name {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-weight: 500;
-}
-.sln-file-row {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: none;
-  color: inherit;
-  cursor: pointer;
-  font-size: 12px;
-  padding: 2px 8px 2px 28px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  opacity: 0.85;
-}
-.sln-file-row:hover {
-  background: rgba(255, 255, 255, 0.06);
-  opacity: 1;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
 }

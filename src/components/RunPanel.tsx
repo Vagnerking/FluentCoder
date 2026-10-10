@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Input } from "./ui/Input";
 import {
   dotnetBuild,
   dotnetClean,
@@ -28,8 +29,7 @@ import {
   applyCoverageDecorations,
   clearCoverageDecorations,
 } from "../testing/coverageDecorations";
-import { Tooltip } from "./Tooltip";
-import { Checkbox, Select } from "./ui";
+import { Checkbox, IconButton, Select } from "./ui";
 
 /** Loads the workspace's `.csproj` paths once per root (shared by the .NET sections). */
 function useCsprojs(rootPath: string, connId?: string): string[] {
@@ -260,36 +260,36 @@ function RunRootSection({
         </div>
       )}
       <div className="run-root-actions">
-        <Tooltip label={draft ? "Fechar nova configuração" : "Nova configuração"}>
-          <button
-            className="git-icon-btn"
-            aria-label={draft ? "Fechar nova configuração" : "Nova configuração"}
-            aria-expanded={Boolean(draft)}
-            onClick={() => setDraft(draft ? null : { ...EMPTY_DRAFT })}
-          >
-            +
-          </button>
-        </Tooltip>
+        <IconButton
+          icon="add"
+          size="sm"
+          label={draft ? "Fechar nova configuração" : "Nova configuração"}
+          aria-expanded={Boolean(draft)}
+          onClick={() => setDraft(draft ? null : { ...EMPTY_DRAFT })}
+        />
       </div>
 
       {error && <div className="git-error">{error}</div>}
 
       {draft && (
         <div className="run-draft">
-          <input
-            className="search-input"
+          <Input
+            size="sm"
+            aria-label="Nome da configuração"
             placeholder="Nome (ex.: dev)"
             value={draft.name}
             onChange={(e) => setDraft({ ...draft, name: e.target.value })}
           />
-          <input
-            className="search-input"
+          <Input
+            size="sm"
+            aria-label="Comando"
             placeholder="Comando (ex.: npm run dev)"
             value={draft.command}
             onChange={(e) => setDraft({ ...draft, command: e.target.value })}
           />
-          <input
-            className="search-input"
+          <Input
+            size="sm"
+            aria-label="Diretório de trabalho"
             placeholder="Diretório (opcional, relativo à raiz)"
             value={draft.cwd}
             onChange={(e) => setDraft({ ...draft, cwd: e.target.value })}
@@ -324,28 +324,24 @@ function RunRootSection({
           ) : (
             configs.map((c, i) => (
               <div key={`${c.name}-${i}`} className="run-row" title={c.command}>
-                <Tooltip label={`Executar: ${c.command}`}>
-                  <button
-                    className="run-play"
-                    aria-label={`Executar: ${c.command}`}
-                    onClick={() => onRun(buildCommand(c), target.path, target.connId)}
-                  >
-                    ▶
-                  </button>
-                </Tooltip>
+                <IconButton
+                  icon="run"
+                  size="sm"
+                  label={`Executar: ${c.command}`}
+                  className="run-play"
+                  onClick={() => onRun(buildCommand(c), target.path, target.connId)}
+                />
                 <div className="run-info">
                   <span className="run-name">{c.name}</span>
                   <span className="run-cmd">{c.command}</span>
                 </div>
-                <Tooltip label="Remover">
-                  <button
-                    className="run-remove"
-                    aria-label="Remover"
-                    onClick={() => removeConfig(i)}
-                  >
-                    ✕
-                  </button>
-                </Tooltip>
+                <IconButton
+                  icon="close"
+                  size="sm"
+                  label="Remover"
+                  className="run-remove"
+                  onClick={() => removeConfig(i)}
+                />
               </div>
             ))
           )}
@@ -359,28 +355,23 @@ function RunRootSection({
             </div>
             {suggestions.map((s, i) => (
               <div key={`sug-${i}`} className="run-row" title={s.command}>
-                <Tooltip label={`Executar: ${s.command}`}>
-                  <button
-                    className="run-play"
-                    aria-label={`Executar: ${s.command}`}
-                    onClick={() => onRun(buildCommand(s), target.path, target.connId)}
-                  >
-                    ▶
-                  </button>
-                </Tooltip>
+                <IconButton
+                  icon="run"
+                  size="sm"
+                  label={`Executar: ${s.command}`}
+                  className="run-play"
+                  onClick={() => onRun(buildCommand(s), target.path, target.connId)}
+                />
                 <div className="run-info">
                   <span className="run-name">{s.name}</span>
                   <span className="run-cmd">{s.command}</span>
                 </div>
-                <Tooltip label="Adicionar às configurações">
-                  <button
-                    className="git-link-btn"
-                    aria-label="Adicionar às configurações"
-                    onClick={() => addConfig(s)}
-                  >
-                    +
-                  </button>
-                </Tooltip>
+                <IconButton
+                  icon="add"
+                  size="sm"
+                  label="Adicionar às configurações"
+                  onClick={() => addConfig(s)}
+                />
               </div>
             ))}
           </div>
@@ -526,54 +517,54 @@ function DebugSection({ rootPath }: { rootPath: string }) {
 
       {active && (
         <>
-          <div className="debug-toolbar">
-            <button
-              className="debug-btn"
-              title="Continuar (F5)"
+          <div className="debug-toolbar" role="toolbar" aria-label="Controles de depuração">
+            <IconButton
+              icon="continue"
+              size="sm"
+              label="Continuar (F5)"
+              className="debug-btn debug-btn-continue"
               disabled={state.status !== "stopped"}
               onClick={() => void debugSession.continue_()}
-            >
-              ▶
-            </button>
-            <button
+            />
+            <IconButton
+              icon="debugPause"
+              size="sm"
+              label="Pausar"
               className="debug-btn"
-              title="Pausar"
               disabled={state.status !== "running"}
               onClick={() => void debugSession.pause()}
-            >
-              ⏸
-            </button>
-            <button
+            />
+            <IconButton
+              icon="stepOver"
+              size="sm"
+              label="Passo (step over)"
               className="debug-btn"
-              title="Passo (step over)"
               disabled={state.status !== "stopped"}
               onClick={() => void debugSession.stepOver()}
-            >
-              ⤼
-            </button>
-            <button
+            />
+            <IconButton
+              icon="stepInto"
+              size="sm"
+              label="Entrar (step in)"
               className="debug-btn"
-              title="Entrar (step in)"
               disabled={state.status !== "stopped"}
               onClick={() => void debugSession.stepIn()}
-            >
-              ⤵
-            </button>
-            <button
+            />
+            <IconButton
+              icon="stepOut"
+              size="sm"
+              label="Sair (step out)"
               className="debug-btn"
-              title="Sair (step out)"
               disabled={state.status !== "stopped"}
               onClick={() => void debugSession.stepOut()}
-            >
-              ⤴
-            </button>
-            <button
+            />
+            <IconButton
+              icon="stop"
+              size="sm"
+              label="Parar depuração"
               className="debug-btn debug-btn-stop"
-              title="Parar depuração"
               onClick={() => void debugSession.stop()}
-            >
-              ⏹
-            </button>
+            />
           </div>
 
           {state.frames.length > 0 && (
@@ -707,8 +698,9 @@ function WatchPanel({ watches }: { watches: WatchView[] }) {
     <div className="debug-block">
       <div className="debug-block-title">Watch</div>
       <div className="debug-watch-input">
-        <input
-          className="search-input"
+        <Input
+          size="sm"
+          aria-label="Expressão de watch"
           placeholder="Expressão (ex.: cliente.Nome)…"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -721,13 +713,13 @@ function WatchPanel({ watches }: { watches: WatchView[] }) {
           <span className={"debug-var-value" + (w.error ? " debug-var-error" : "")}>
             {w.error ?? w.value}
           </span>
-          <button
+          <IconButton
+            icon="close"
+            size="sm"
+            label="Remover"
             className="debug-watch-remove"
-            title="Remover"
             onClick={() => debugSession.removeWatch(w.expression)}
-          >
-            ✕
-          </button>
+          />
         </div>
       ))}
     </div>
@@ -970,14 +962,14 @@ function TestsSection({
                     className="test-row test-leaf"
                     title={r?.message ?? leaf.fqn}
                   >
-                    <button
+                    <IconButton
+                      icon="run"
+                      size="sm"
+                      label={`Executar ${leaf.method}`}
                       className="run-play"
-                      title={`Executar ${leaf.method}`}
                       disabled={busy !== ""}
                       onClick={() => void run([leaf.fqn])}
-                    >
-                      ▶
-                    </button>
+                    />
                     <button
                       className="run-play test-debug-btn"
                       title={`Depurar ${leaf.method}`}

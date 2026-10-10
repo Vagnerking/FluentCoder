@@ -21,7 +21,7 @@
     linear-gradient(180deg, rgba(255,255,255,0.034), rgba(255,255,255,0.012)),
     var(--editor-bg);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--font-caption);
   flex-shrink: 0;
 }
 
@@ -50,7 +50,7 @@
   gap: 8px;
   min-width: 0;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   font-weight: 750;
   letter-spacing: 0.02em;
   text-transform: uppercase;
@@ -99,7 +99,7 @@
 
 .claude-diff-title {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--font-body);
   line-height: 20px;
   font-weight: 600;
   color: var(--text);
@@ -109,7 +109,7 @@
 }
 
 .claude-diff-path {
-  font-size: 12px;
+  font-size: var(--font-caption);
   line-height: 16px;
   color: var(--text-secondary);
   white-space: nowrap;
@@ -119,7 +119,7 @@
 
 .claude-diff-queue {
   flex: none;
-  font-size: 12px;
+  font-size: var(--font-caption);
   line-height: 16px;
   padding: 2px 8px;
   border-radius: var(--radius-control);
@@ -136,14 +136,14 @@
   justify-content: center;
 }
 
-.claude-diff-actions .confirm-button:disabled { opacity: 0.6; cursor: default; }
+.claude-diff-actions .confirm-button:disabled { opacity: var(--opacity-disabled); cursor: default; }
 
 .claude-diff-error {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px 16px;
-  font-size: 12px;
+  font-size: var(--font-caption);
   line-height: 16px;
   color: var(--error);
   border-bottom: 1px solid var(--acrylic-border);

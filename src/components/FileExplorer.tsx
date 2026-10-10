@@ -18,7 +18,7 @@ import {
   sshRenamePath,
 } from "../api";
 import type { ContextMenuItem, FileNode, FileDecoration } from "../types";
-import { Codicon } from "../icons/codicons/Codicon";
+import { IconButton } from "./ui/IconButton";
 import { FileIcon } from "../icon-theme/material/FileIcon";
 import {
   ExplorerInlineCreation,
@@ -1182,82 +1182,80 @@ export function FileExplorer({
           </span>
         </div>
         {hasExplorerContent ? (
-          <div className="explorer-actions" role="toolbar" aria-label="Ações do explorador">
+          <div
+            className="explorer-actions explorer-actions-reveal"
+            role="toolbar"
+            aria-label="Ações do explorador"
+          >
             {workspaceView && onAddFolderToWorkspace && (
-              <button
-                className="explorer-action"
-                title="Adicionar pasta ao workspace"
-                aria-label="Adicionar pasta ao workspace"
+              <IconButton
+                icon="add"
+                size="sm"
+                label="Adicionar pasta ao workspace"
+                tooltipPlacement="bottom"
                 onClick={onAddFolderToWorkspace}
-              >
-                <Codicon name="add" size={16} />
-              </button>
+              />
             )}
             {workspaceView && onAddSshFolderToWorkspace && (
-              <button
-                className="explorer-action"
-                title="Adicionar pasta SSH ao workspace"
-                aria-label="Adicionar pasta SSH ao workspace"
+              <IconButton
+                icon="remote"
+                size="sm"
+                label="Adicionar pasta SSH ao workspace"
+                tooltipPlacement="bottom"
                 onClick={onAddSshFolderToWorkspace}
-              >
-                <Codicon name="remote" size={16} />
-              </button>
+              />
             )}
             {!workspaceView && (
               <>
-                <button
-                  className="explorer-action"
-                  title="Novo arquivo"
-                  aria-label="Novo arquivo"
+                <IconButton
+                  icon="newFile"
+                  size="sm"
+                  label="Novo arquivo"
+                  tooltipPlacement="bottom"
                   disabled={actionsDisabled}
                   onClick={() => beginCreation("file")}
-                >
-                  <Codicon name="newFile" size={16} />
-                </button>
-                <button
-                  className="explorer-action"
-                  title="Nova pasta"
-                  aria-label="Nova pasta"
+                />
+                <IconButton
+                  icon="newFolder"
+                  size="sm"
+                  label="Nova pasta"
+                  tooltipPlacement="bottom"
                   disabled={actionsDisabled}
                   onClick={() => beginCreation("folder")}
-                >
-                  <Codicon name="newFolder" size={16} />
-                </button>
+                />
               </>
             )}
-            <button
-              className={`explorer-action${onlyChanged ? " active" : ""}`}
-              title={
+            <IconButton
+              icon="sourceControl"
+              size="sm"
+              label={
                 onlyChanged
                   ? "Mostrar todos os arquivos"
                   : "Mostrar apenas arquivos alterados"
               }
-              aria-label="Alternar exibição de arquivos alterados"
-              aria-pressed={onlyChanged}
+              tooltipPlacement="bottom"
+              pressed={onlyChanged}
               disabled={actionsDisabled}
               onClick={() => setOnlyChanged((v) => !v)}
-            >
-              <Codicon name="sourceControl" size={16} />
-            </button>
-            <button
-              className="explorer-action"
-              title="Atualizar explorador"
-              aria-label="Atualizar explorador"
+            />
+            <IconButton
+              icon="refresh"
+              size="sm"
+              label="Atualizar explorador"
+              tooltipPlacement="bottom"
+              spin={busy}
               disabled={actionsDisabled}
               onClick={refresh}
-            >
-              <Codicon name="refresh" size={16} spin={busy} />
-            </button>
+            />
             {!workspaceView && (
-              <button
-                className="explorer-action"
-                title="Recolher pastas"
-                aria-label="Recolher pastas"
+              <IconButton
+                icon="collapseAll"
+                size="sm"
+                label="Recolher pastas"
+                tooltipPlacement="bottom"
                 disabled={actionsDisabled || !hasExpandedFolders}
                 onClick={collapseAll}
-              >
-                <Codicon name="collapseAll" size={16} />
-              </button>
+              />
             )}
           </div>
         ) : null}

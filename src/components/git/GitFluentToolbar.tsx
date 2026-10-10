@@ -1,3 +1,4 @@
+import { IconButton } from "../ui/IconButton";
 import { Fragment, useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import {
   GIT_FLUENT_PRIMARY_TABS,
@@ -113,11 +114,12 @@ export function GitFluentToolbar({
       )}
       <span className="git-fluent-divider git-fluent-command-divider" aria-hidden="true" />
       <div className="git-fluent-toolbar-actions" aria-label="Ações do Git Fluent">
-        <Tooltip label="Mais ações do Git Fluent">
-          <button type="button" className="git-link-btn" aria-label="Mais ações do Git Fluent" onClick={onOpenMenu}>
-            <Codicon name="filterFiles" />
-          </button>
-        </Tooltip>
+        <IconButton
+          icon="filterFiles"
+          size="sm"
+          label="Mais ações do Git Fluent"
+          onClick={onOpenMenu}
+        />
       </div>
     </div>
   );

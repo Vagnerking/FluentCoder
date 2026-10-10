@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { Menu } from "./ui/Menu";
 import { Codicon } from "../icons/codicons/Codicon";
 import type { IconAction } from "../icons/codicons/codicon-map";
 import type { BlameHunk, GitStatus } from "../types";
@@ -192,8 +193,9 @@ export function StatusBar({
   // The LSP actions menu (Restart, …) anchored above the clicked server item.
   const [lspMenu, setLspMenu] = useState<{
     server: LspServerStatus;
-    x: number;
-    y: number;
+    rect: DOMRect;
+    /** The status item that opened it (pressing it again toggles the menu). */
+    el: HTMLElement;
   } | null>(null);
   const [blameMenu, setBlameMenu] = useState<{ x: number; y: number } | null>(null);
 
@@ -371,13 +373,14 @@ export function StatusBar({
             aria-label={`${s.id}: ${LSP_LABEL[s.status]}; abrir ações do servidor`}
             onClick={(e) => {
               const rect = e.currentTarget.getBoundingClientRect();
-              setLspMenu({ server: s, x: rect.left, y: rect.top });
+              const el = e.currentTarget;
+              setLspMenu((m) => (m?.server.id === s.id ? null : { server: s, rect, el }));
             }}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
                 const rect = e.currentTarget.getBoundingClientRect();
-                setLspMenu({ server: s, x: rect.left, y: rect.top });
+                setLspMenu({ server: s, rect, el: e.currentTarget });
               }
             }}
           >
@@ -522,57 +525,43 @@ export function StatusBar({
         )}
       </div>
 
-      {lspMenu &&
-        createPortal(
-          <>
-            <div
-              className="lsp-menu-overlay"
-              onClick={() => setLspMenu(null)}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setLspMenu(null);
-              }}
-            />
-            <div
-              className="lsp-menu"
-              style={{ left: lspMenu.x, top: lspMenu.y }}
-              role="menu"
-            >
-            <div className="lsp-menu-title">
-              <Codicon name={LSP_ICON[lspMenu.server.status]} />
-              {lspMenu.server.id} · {LSP_LABEL[lspMenu.server.status]}
-            </div>
-            {lspMenu.server.status === "error" && lspMenu.server.error && (
-              <div className="lsp-menu-error">{lspMenu.server.error}</div>
-            )}
-            <button
-              type="button"
-              className="lsp-menu-item"
-              role="menuitem"
-              onClick={() => {
-                onRestartLsp?.(lspMenu.server.id);
-                setLspMenu(null);
-              }}
-            >
-              <Codicon name="restart" size={14} /> Reiniciar servidor
-            </button>
-            {lspMenu.server.id === "typescript" && onSelectTsVersion && (
-              <button
-                type="button"
-                className="lsp-menu-item"
-                role="menuitem"
-                onClick={() => {
-                  onSelectTsVersion();
-                  setLspMenu(null);
-                }}
-              >
-                <Codicon name="settings" size={14} /> Selecionar versão do TypeScript…
-              </button>
-            )}
-            </div>
-          </>,
-          document.body
-        )}
+      {lspMenu && (
+        <Menu
+          ariaLabel={`Ações do servidor ${lspMenu.server.id}`}
+          anchor={{ rect: lspMenu.rect, placement: "top-start" }}
+          onClose={() => setLspMenu(null)}
+          isInside={(t) => lspMenu.el.contains(t)}
+          header={
+            <>
+              <span className="ui-menu-title">
+                <Codicon name={LSP_ICON[lspMenu.server.status]} />
+                {lspMenu.server.id} · {LSP_LABEL[lspMenu.server.status]}
+              </span>
+              {lspMenu.server.status === "error" && lspMenu.server.error && (
+                <span className="ui-menu-error">{lspMenu.server.error}</span>
+              )}
+            </>
+          }
+          items={[
+            {
+              id: "restart",
+              label: "Reiniciar servidor",
+              icon: "restart",
+              onSelect: () => onRestartLsp?.(lspMenu.server.id),
+            },
+            ...(lspMenu.server.id === "typescript" && onSelectTsVersion
+              ? [
+                  {
+                    id: "ts-version",
+                    label: "Selecionar versão do TypeScript…",
+                    icon: "settings" as const,
+                    onSelect: onSelectTsVersion,
+                  },
+                ]
+              : []),
+          ]}
+        />
+      )}
       {blameMenu &&
         currentLineBlame &&
         createPortal(

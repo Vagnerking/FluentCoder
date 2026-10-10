@@ -49,7 +49,7 @@ export function ExplorerInlineRename({
         <FileIcon path={path} isDir={isDir} className="tree-icon" />
         <input
           ref={inputRef}
-          className="explorer-inline-input"
+          className="ui-input ui-input-sm explorer-inline-input"
           aria-label="Novo nome"
           value={name}
           disabled={busy}

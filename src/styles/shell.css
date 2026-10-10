@@ -1,10 +1,11 @@
-/* ---- App shell / window chrome ---- */
 .app {
   display: flex;
   flex-direction: column;
   height: 100%;
-  /* Rounded window corners to match Win11 (the transparent margin reveals them). */
-  background: transparent;
+  /* One continuous shell behind the title bar, the gutters and the status
+     bar; the side bar / editor / panels float on it as rounded cards. The
+     alpha lets the native Mica backdrop tint it on Windows. */
+  background: var(--shell-glow), var(--shell-bg);
 }
 
 /* macOS keeps a native, opaque window (a transparent frameless window never
@@ -15,6 +16,7 @@ html.platform-macos,
 html.platform-macos body {
   background: #191f28;
 }
+
 /* The app already draws the native title bar zone, so the custom drag region and
    window controls are redundant on macOS — but the surface tones still apply. */
 html.platform-macos .titlebar {
@@ -27,9 +29,9 @@ html.platform-macos .titlebar {
    matching the Windows 11 frame. A maximized window goes square and edgeless. */
 html.platform-linux .app,
 html.platform-linux .detached-window {
-  background: #191f28;
-  border-radius: 8px;
-  border: 1px solid rgba(210, 228, 242, 0.14);
+  background: var(--shell-glow), var(--shell-bg-solid);
+  border-radius: var(--radius-surface);
+  border: 1px solid var(--acrylic-border);
   overflow: hidden;
 }
 
@@ -39,34 +41,34 @@ html.platform-linux.window-maximized .detached-window {
   border: none;
 }
 
+/* The close button follows the rounded window corner (top-right). */
+html.platform-linux:not(.window-maximized) .caption-close {
+  border-top-right-radius: calc(var(--radius-surface) - 1px);
+}
+
 /* ---- Title bar ---- */
 .titlebar {
-  /* Three zones: [left: icon + menu] [center: title] [right: layout + controls].
-     The 1fr side tracks keep the title zone centred; the left track can shrink to
-     0 (so the menu collapses to overflow), the right keeps its controls. */
+  /* Three zones: [left: icon + menu] [center: command center] [right: layout +
+     controls]. The 1fr side tracks keep the centre zone centred; the left track
+     can shrink to 0 (so the menu collapses to overflow), the right keeps its
+     controls. The bar is part of the shell surface (no own fill or border). */
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(min-content, 1fr);
   align-items: center;
-  height: 32px;
-  min-height: 32px;
+  height: var(--titlebar-height);
+  min-height: var(--titlebar-height);
   position: relative;
-  background:
-    linear-gradient(90deg, rgba(114, 153, 184, 0.07), transparent 38%),
-    var(--titlebar-bg);
-  border-bottom: 1px solid rgba(210, 228, 242, 0.08);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
-  backdrop-filter: blur(30px) saturate(125%);
-  -webkit-backdrop-filter: blur(30px) saturate(125%);
+  background: transparent;
 }
 
 .titlebar-left {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-xxs);
   min-width: 0;
   overflow: hidden;
   height: 100%;
-  padding-left: 6px;
+  padding-left: var(--space-sm);
 }
 
 .titlebar-center {
@@ -75,21 +77,25 @@ html.platform-linux.window-maximized .detached-window {
   justify-content: center;
   min-width: 0;
   height: 100%;
-  padding: 0 8px;
+  padding: 0 var(--space-sm);
 }
 
 .titlebar-right {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 2px;
+  gap: var(--space-xxs);
   height: 100%;
 }
 
+/* Draggable empty regions are handled by data-tauri-drag-region in markup. */
+
+/* App brand mark in the top-left corner (VS Code-style). Purely decorative —
+   it is part of the window drag region, not a button. */
 .titlebar-logo {
-  width: 18px;
-  height: 18px;
-  margin: 0 6px 0 2px;
+  width: var(--icon-md);
+  height: var(--icon-md);
+  margin: 0 var(--space-sm) 0 var(--space-xxs);
   flex: 0 0 auto;
   object-fit: contain;
   user-select: none;
@@ -97,55 +103,128 @@ html.platform-linux.window-maximized .detached-window {
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
 }
 
+/* VS Code-style layout toggles (chat / side bar / panel), left of the window
+   buttons. The glyph shows the on/off state, so the toggle doesn't also take
+   the selected fill — it only brightens. */
 .titlebar-layout {
   display: flex;
   align-items: center;
   height: 100%;
-  padding: 0 6px;
-  gap: 2px;
+  padding: 0 var(--space-sm);
+  gap: var(--space-xxs);
   flex-shrink: 0;
 }
 
-.titlebar-layout-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 24px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-control);
+.titlebar .ui-icon-button {
   color: var(--text-muted);
-  cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
 
-.titlebar-layout-btn:hover {
-  background: var(--acrylic-control);
-  border-color: var(--acrylic-border);
+.titlebar .ui-icon-button[aria-pressed="true"] {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.titlebar .ui-icon-button:hover:not(:disabled),
+.titlebar .ui-icon-button[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--fill-subtle-hover);
   color: var(--text);
 }
 
-.titlebar-layout-btn.active {
-  color: var(--text);
+.titlebar .ui-icon-button:active:not(:disabled) {
+  background: var(--fill-subtle-active);
 }
 
-.titlebar-layout-btn.active:last-child {
-  color: var(--accent);
-}
-
+/* Fallback centred label (no command center wired). */
 .titlebar-title {
   max-width: 100%;
   text-align: center;
-  font-size: 12px;
+  font-size: var(--font-caption);
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  pointer-events: none;
+  pointer-events: none; /* let drags pass through the label text */
 }
 
-/* ---- Window caption buttons ---- */
+/* ---- Command center (search pill + palette button) ---- */
+.command-center {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  min-width: 0;
+  /* Width follows the window: roomy on wide screens, never crowding the menu. */
+  width: clamp(200px, 34vw, 520px);
+}
+
+.command-center-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  height: var(--control-h-sm);
+  padding: 0 var(--space-xs) 0 var(--space-sm);
+  font: inherit;
+  font-size: var(--font-caption);
+  color: var(--text-muted);
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-rest);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.command-center-search:hover {
+  color: var(--text-secondary);
+  background: var(--acrylic-control-hover);
+  border-color: var(--acrylic-border-strong);
+}
+
+.command-center-search:active {
+  background: var(--acrylic-control-pressed);
+}
+
+.command-center-search:focus-visible {
+  outline: var(--focus-ring-width) solid var(--stroke-focus);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.command-center-icon {
+  flex: 0 0 auto;
+  font-size: var(--icon-sm);
+}
+
+.command-center-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-center-kbd {
+  flex: 0 0 auto;
+  padding: 0 var(--space-xs);
+  font-family: inherit;
+  font-size: var(--font-caption-sm);
+  line-height: var(--line-height-caption);
+  color: var(--text-muted);
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-sm);
+}
+
+@media (max-width: 900px) {
+  .command-center-kbd { display: none; }
+
+}
+
+/* ---- Window caption buttons (min / max / close) ---- */
 .window-controls {
   display: flex;
   height: 100%;
@@ -162,12 +241,17 @@ html.platform-linux.window-maximized .detached-window {
   border: none;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background-color 0.12s ease;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
 }
 
 .caption-btn:hover,
+/* The maximize button sits under the Snap Layouts native overlay, so it can't
+   :hover — the plugin's enter/leave events drive .nc-hover instead. */
 .caption-btn.nc-hover {
   background: var(--fill-subtle-hover);
+  color: var(--text);
 }
 
 .caption-btn:active {
@@ -175,12 +259,13 @@ html.platform-linux.window-maximized .detached-window {
 }
 
 .caption-close:hover {
-  background: #c42b1c;
-  color: #fff;
+  background: var(--color-caption-close);
+  color: var(--text-on-danger);
 }
 
 .caption-close:active {
-  background: #b9281b;
+  background: var(--color-caption-close-pressed);
+  color: var(--text-on-danger);
 }
 
 /* ---- Body layout ---- */
@@ -188,23 +273,29 @@ html.platform-linux.window-maximized .detached-window {
   display: flex;
   flex: 1;
   min-height: 0;
-  gap: 10px;
-  padding: 10px;
-  background:
-    radial-gradient(circle at 18% 0%, rgba(74, 111, 143, 0.12), transparent 38%),
-    rgba(15, 18, 23, 0.82);
+  gap: var(--space-sm);
+  /* The title bar sits right above: no top gutter, just the side/bottom ones. */
+  padding: var(--space-xxs) var(--space-sm) var(--space-xs);
+  /* Part of the shell (`.app` paints it). */
+  background: transparent;
 }
 
 .sidebar {
+  /* Width is driven inline (resizable); keep it from shrinking under flex. */
   flex-shrink: 0;
   background:
     linear-gradient(145deg, var(--acrylic-luminosity), transparent 42%),
     var(--acrylic-tint);
   border: 1px solid var(--acrylic-border);
-  border-radius: 8px;
+  border-radius: var(--radius-surface);
+  /* Permanent surface: separated by border + tint, not a heavy drop shadow
+     (F2-AUD-010). Strong shadows are reserved for transient overlays. */
   box-shadow: var(--shadow-rest);
+  /* Native Mica already supplies the backdrop. A second CSS blur forces
+     WebView2 to recompose this surface during every scroll frame. */
   display: flex;
   flex-direction: column;
+  /* Contain panel content so long titles/text never spill past the sidebar. */
   overflow: hidden;
 }
 
@@ -214,44 +305,83 @@ html.platform-linux.window-maximized .detached-window {
   display: flex;
   flex-direction: column;
   background:
-    linear-gradient(145deg, rgba(119, 158, 190, 0.07), transparent 35%),
+    linear-gradient(145deg, var(--acrylic-luminosity), transparent 35%),
     var(--acrylic-tint-strong);
   border: 1px solid var(--acrylic-border);
-  border-radius: 8px;
+  border-radius: var(--radius-surface);
   box-shadow: var(--shadow-rest);
   backdrop-filter: blur(28px) saturate(120%);
   -webkit-backdrop-filter: blur(28px) saturate(120%);
   overflow: hidden;
 }
 
+/* ---- Sidebar resize handle (drag to resize the sidebar width) ---- */
 .sidebar-resize-handle {
   flex: 0 0 6px;
   align-self: stretch;
-  margin: 0 -8px;
+  /* Negative margins absorb the body's gap so the handle sits in the seam
+     between the sidebar and the editor without widening the layout. */
+  margin: 0 -7px;
   z-index: 3;
   cursor: ew-resize;
-  border-radius: 4px;
+  position: relative;
   background: transparent;
-  transition: background 120ms ease;
 }
 
-.sidebar-resize-handle:hover,
-.sidebar-resize-handle:active {
+/* The grab area stays 6px wide, but only a slim 2px pill lights up — after a
+   short hover delay, so merely crossing the seam doesn't flash the accent. */
+.sidebar-resize-handle::after,
+.agents-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: var(--space-sm);
+  bottom: var(--space-sm);
+  left: 50%;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
   background: var(--accent);
+  opacity: 0;
+  transition: opacity var(--duration-medium) var(--ease-standard);
 }
 
+.sidebar-resize-handle:hover::after,
+.agents-resize-handle:hover::after {
+  opacity: 1;
+  transition-delay: 150ms;
+}
+
+.sidebar-resize-handle:active::after,
+.agents-resize-handle:active::after {
+  opacity: 1;
+  transition-delay: 0ms;
+}
+
+/* ---- Primary dock: activity bar + sidebar grouped, placed together ---- */
 .primary-dock {
   display: flex;
   flex-shrink: 0;
   min-height: 0;
   min-width: 0;
-  gap: 10px;
-  transition: gap 200ms ease;
+  gap: var(--space-sm);
+  transition: gap var(--duration-medium) var(--ease-standard);
 }
 
-.primary-dock.activity-side {
-  flex-direction: row;
-}
+/* Lateral activity bar: side by side with the sidebar. */
+.primary-dock.activity-side { flex-direction: row; }
+
+/* Top activity bar: a compact horizontal strip above the sidebar. */
+.primary-dock.activity-top { flex-direction: column; gap: 8px; min-height: 0; }
+
+/* Top activity bar keeps its height; the sidebar takes the rest and scrolls
+   inside — without this it overflows past the status bar. */
+.primary-dock.activity-top .activity-bar { flex: 0 0 auto; }
+
+.primary-dock.activity-top .sidebar { flex: 1 1 auto; min-height: 0; }
+
+/* When the sidebar is docked right, the lateral activity bar hugs the outer
+   (right) edge — so the seam stays between the sidebar and the editor. */
+.body.sidebar-right .primary-dock.activity-side { flex-direction: row-reverse; }
 
 .primary-dock.activity-right {
   flex-direction: row-reverse;
@@ -291,18 +421,15 @@ html.platform-linux.window-maximized .detached-window {
   flex-direction: row-reverse;
 }
 
-.body.sidebar-right .app-main {
-  order: 0;
-}
+/* ---- Sidebar docked on the right: reorder the body's flex children ---- */
+.body.sidebar-right .app-main { order: 0; }
 
-.body.sidebar-right .sidebar-resize-handle {
-  order: 1;
-}
+.body.sidebar-right .sidebar-resize-handle { order: 1; }
 
-.body.sidebar-right .primary-dock {
-  order: 2;
-}
+.body.sidebar-right .primary-dock { order: 2; }
 
+/* ---- Secondary side bar (AI agents chat), on the edge opposite the primary
+   sidebar. Flex `order` puts it and its handle on the correct side. ---- */
 .agents-dock {
   flex-shrink: 0;
   min-width: 0;
@@ -310,120 +437,169 @@ html.platform-linux.window-maximized .detached-window {
   flex-direction: column;
   overflow: hidden;
   background:
-    linear-gradient(145deg, rgba(119, 158, 190, 0.07), transparent 35%),
+    linear-gradient(145deg, var(--acrylic-luminosity), transparent 35%),
     var(--acrylic-tint-strong);
   border: 1px solid var(--acrylic-border);
   border-radius: var(--radius-card);
+  /* O Monaco cria camadas internas com z-index próprio que vazam sobre irmãos
+     de fluxo. Um contexto de empilhamento próprio, acima do editor (mas abaixo
+     dos overlays em 50+), mantém o chat na frente. */
   position: relative;
   z-index: 4;
 }
 
-.agents-dock-left {
-  order: -2;
-}
+/* Docked left → dock e alça antes do editor; docked right → depois dele.
+   A alça fica sempre na costura, entre o dock e o editor. */
+.agents-dock-left { order: -2; }
 
-.agents-resize-left {
-  order: -1;
-}
+.agents-resize-left { order: -1; }
 
-.agents-resize-right {
-  order: 9;
-}
+.agents-resize-right { order: 9; }
 
-.agents-dock-right {
-  order: 10;
-}
+.agents-dock-right { order: 10; }
 
 .agents-resize-handle {
   flex: 0 0 6px;
   align-self: stretch;
-  margin: 0 -8px;
+  margin: 0 -7px;
   z-index: 3;
   cursor: ew-resize;
-  border-radius: 4px;
-}
-
-.agents-resize-handle:hover,
-.agents-resize-handle:active {
-  background: var(--accent);
-}
-
-/* ---- Activity bar placement, reorder and drag preview ---- */
-.activity-bar {
   position: relative;
-  width: 48px;
-  min-width: 48px;
-  background:
-    linear-gradient(145deg, var(--acrylic-luminosity), transparent 48%),
-    var(--acrylic-tint);
-  border: 1px solid var(--acrylic-border);
-  border-radius: 8px;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 8px 24px rgba(0,0,0,0.24);
-  backdrop-filter: blur(28px) saturate(125%);
-  -webkit-backdrop-filter: blur(28px) saturate(125%);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  cursor: grab;
-  transition: width 200ms ease, height 200ms ease;
 }
+
+/* ---- Horizontal (top) activity bar ---- */
+.activity-bar {
+  /* Smooth morph between lateral and top placements. */
+  transition: width var(--duration-medium) var(--ease-standard), height var(--duration-medium) var(--ease-standard);
+}
+
+.activity-bar.activity-horizontal {
+  width: auto;
+  min-width: 0;
+  height: 44px;
+  min-height: 44px;
+  flex-direction: row;
+  align-items: center;
+}
+
+.activity-bar.activity-horizontal .activity-items {
+  flex-direction: row;
+}
+
+.activity-bar.activity-horizontal .activity-items-bottom {
+  flex-direction: row;
+  margin-top: 0;
+  margin-left: auto;
+}
+
+.activity-bar.activity-horizontal .activity-item {
+  width: 40px;
+  height: 36px;
+  flex: 0 0 40px;
+}
+
+/* Horizontal bar: the active indicator sits along the bottom edge. */
+.activity-bar.activity-horizontal .activity-indicator {
+  top: auto;
+  bottom: 1px;
+  left: 0;
+  width: 16px;
+  height: 3px;
+}
+
+/* ---- Drag-to-reposition (press-and-hold, live preview) ----
+   Hold a draggable chrome element ~1.5s to pick it up. The drag highlight only
+   appears once the hold COMPLETES (it actually becomes draggable) — never during
+   the press itself: only then does the cursor close and the element get the accent
+   outline. While armed, moving previews the new placement live (width/height/dock
+   transitions animate the morph); release keeps it, dropping outside snaps back. */
+
+/* Hover hint: the bar and the panel header read as grabbable (open hand). The
+   press-and-hold stage shows no highlight; only the text-selection freeze. */
+.activity-bar { cursor: grab; }
 
 .activity-items {
   display: flex;
   flex-direction: column;
-  padding: 4px;
+  gap: var(--space-xxs);
+  padding: var(--space-xs);
 }
 
 .activity-items-bottom {
   margin-top: auto;
-  padding: 4px;
+  padding: var(--space-xs);
   display: flex;
   flex-direction: column;
+  gap: var(--space-xxs);
 }
 
+/* 40px square item (hit target) with a 20px glyph; hover/pressed fill as a
+   rounded pill, the selected view gets a soft fill + the accent indicator. */
 .activity-item {
   position: relative;
   width: 100%;
-  height: 48px;
-  flex: 0 0 48px;
+  height: 40px;
+  flex: 0 0 40px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: transparent;
   border: none;
-  color: rgba(255,255,255,0.54);
+  color: var(--text-muted);
   cursor: pointer;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
 }
 
+.activity-item { cursor: pointer; }
+
 .activity-item:hover {
-  color: rgba(255,255,255,0.88);
-  background: var(--acrylic-control-hover);
+  color: var(--text);
+  background: var(--fill-subtle-hover);
+}
+
+.activity-item:active {
+  background: var(--fill-subtle-active);
+}
+
+.activity-item:active .codicon {
+  transform: scale(0.92);
+}
+
+.activity-item .codicon {
+  transition: transform var(--duration-fast) var(--ease-standard);
 }
 
 .activity-item.active {
-  color: #fff;
+  color: var(--text);
+  background: var(--acrylic-control);
 }
 
+.activity-item.active:hover {
+  background: var(--acrylic-control-hover);
+}
+
+/* Drag-to-reorder: an accent delimiter marks where the icon will drop — on the
+   leading edge for "before", the trailing edge for "after". Vertical bar → a
+   horizontal line (top/bottom); horizontal (top) bar → a vertical line
+   (left/right) — like VSCode. */
 .activity-item.drop-before::before,
 .activity-item.drop-after::before {
   content: "";
   position: absolute;
   background: var(--accent);
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   z-index: 2;
   left: 6px;
   right: 6px;
   height: 2px;
 }
 
-.activity-item.drop-before::before {
-  top: -1px;
-}
+.activity-item.drop-before::before { top: -2px; }
 
-.activity-item.drop-after::before {
-  bottom: -1px;
-}
+.activity-item.drop-after::before { bottom: -2px; }
 
 .activity-bar.activity-horizontal .activity-item.drop-before::before,
 .activity-bar.activity-horizontal .activity-item.drop-after::before {
@@ -435,32 +611,29 @@ html.platform-linux.window-maximized .detached-window {
   height: auto;
 }
 
-.activity-bar.activity-horizontal .activity-item.drop-before::before {
-  left: -1px;
-}
+.activity-bar.activity-horizontal .activity-item.drop-before::before { left: -2px; }
 
-.activity-bar.activity-horizontal .activity-item.drop-after::before {
-  right: -1px;
-}
+.activity-bar.activity-horizontal .activity-item.drop-after::before { right: -2px; }
 
+/* Fluent selection indicator: a 3×16px accent pill that GLIDES between views
+   (its offset is measured in ActivityBar.tsx — keep INDICATOR_SIZE in sync). */
 .activity-indicator {
   position: absolute;
   z-index: 1;
-  left: 0;
+  left: 1px;
   top: 0;
-  width: 2px;
-  height: 20px;
+  width: 3px;
+  height: 16px;
   pointer-events: none;
-  background: #60cdff;
-  border-radius: 0 2px 2px 0;
-  transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 100ms ease;
+  background: var(--accent);
+  border-radius: var(--radius-xs);
+  transition:
+    transform var(--duration-medium) var(--ease-decelerate),
+    opacity var(--duration-fast) var(--ease-standard);
 }
 
-.activity-bar.side-right .activity-indicator {
-  left: auto;
-  right: 0;
-  border-radius: 2px 0 0 2px;
-}
+/* Docked right: the active indicator hugs the right edge of the activity bar. */
+.activity-bar.side-right .activity-indicator { left: auto; right: 1px; }
 
 .primary-dock.activity-top .activity-bar,
 .primary-dock.activity-bottom .activity-bar,
@@ -506,29 +679,24 @@ html.platform-linux.window-maximized .detached-window {
   left: 0;
   width: 20px;
   height: 2px;
-  border-radius: 2px 2px 0 0;
+  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
 }
 
 .primary-dock.activity-bottom .activity-indicator,
 .activity-bar.activity-horizontal.activity-bottom .activity-indicator {
   top: 0;
   bottom: auto;
-  border-radius: 0 0 2px 2px;
+  border-radius: 0 0 var(--radius-xs) var(--radius-xs);
 }
 
-.body.arming-activity,
-.body.dragging-activity,
-.editor-area.arming-panel,
-.editor-area.dragging-panel {
-  user-select: none;
-}
+/* the icons stay clickable buttons */
+.body.arming-activity, .body.dragging-activity,
+.editor-area.arming-panel, .editor-area.dragging-panel { user-select: none; }
 
-.body.dragging-activity,
-.body.dragging-activity *,
-.editor-area.dragging-panel,
-.editor-area.dragging-panel * {
-  cursor: grabbing !important;
-}
+/* Armed (the hold finished → actually dragging): the cursor closes and the moved
+   element lifts with a solid accent outline. */
+.body.dragging-activity, .body.dragging-activity *,
+.editor-area.dragging-panel, .editor-area.dragging-panel * { cursor: grabbing !important; }
 
 .body.dragging-activity .activity-bar,
 .editor-area.dragging-panel .terminal-panel {
@@ -537,53 +705,94 @@ html.platform-linux.window-maximized .detached-window {
 }
 
 /* ---- Breadcrumbs ---- */
+/* Under the tab strip, on the editor's own background so the path reads as
+   part of the document, not of the chrome. */
 .breadcrumbs {
+  height: 24px;
+  min-height: 24px;
   display: flex;
   align-items: center;
+  padding: 0 var(--space-md);
   gap: 0;
-  height: 26px;
-  min-height: 26px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--acrylic-border);
-  background: rgba(34,42,53,0.7);
-  font-size: 12px;
+  background: var(--editor-bg);
+  font-size: var(--font-caption);
   overflow: hidden;
   white-space: nowrap;
-  backdrop-filter: blur(20px) saturate(120%);
-  -webkit-backdrop-filter: blur(20px) saturate(120%);
 }
 
 .crumb {
-  color: rgba(255,255,255,0.54);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-width: 0;
+  color: var(--text-muted);
 }
 
-.crumb.last {
-  color: rgba(255,255,255,0.82);
+.crumb.last { color: var(--text-secondary); }
+
+.crumb-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+
+.crumb-icon { flex-shrink: 0; }
 
 .crumb-sep {
-  margin: 0 4px;
-  color: rgba(255,255,255,0.3);
+  color: var(--text-disabled);
+  margin: 0 var(--space-xxs);
 }
 
-/* ---- Panel resize ---- */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ---- Panel Resize ---- */
+/* Seam between editor and panel: a hairline at rest; the grab area lights a
+   2px accent line after a short hover delay (same as the side bar handles). */
 .panel-resize-handle {
+  position: relative;
   flex-shrink: 0;
   height: 4px;
   min-height: 4px;
-  background: rgba(210,228,242,0.06);
   cursor: ns-resize;
+  background: transparent;
 }
 
-.panel-resize-handle:hover {
-  background: rgba(96,205,255,0.3);
+.panel-resize-handle::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
+  margin-top: -1px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity var(--duration-medium) var(--ease-standard);
 }
 
+.panel-resize-handle:hover::after { opacity: 1; transition-delay: 150ms; }
+
+.panel-resize-handle:active::after { opacity: 1; transition-delay: 0ms; }
+
+/* Side-docked panel: the handle is a vertical seam (resize horizontally). */
 .editor-area.panel-right .panel-resize-handle,
 .editor-area.panel-left .panel-resize-handle {
-  width: 4px;
-  min-width: 4px;
   height: auto;
   min-height: 0;
+  width: 4px;
+  min-width: 4px;
   cursor: ew-resize;
+}
+
+.editor-area.panel-right .panel-resize-handle::after,
+.editor-area.panel-left .panel-resize-handle::after {
+  left: 50%;
+  right: auto;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  height: auto;
+  margin: 0 0 0 -1px;
 }

@@ -17,6 +17,8 @@ export interface IconButtonProps
   size?: "sm" | "md";
   /** Toggle buttons: sets `aria-pressed` and the selected fill. */
   pressed?: boolean;
+  /** Spins the glyph (busy feedback, e.g. a refresh in flight). */
+  spin?: boolean;
   /** Tooltip side. Defaults to "top". */
   tooltipPlacement?: "top" | "bottom" | "left" | "right";
 }
@@ -34,6 +36,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
       size = "md",
       pressed,
       tooltipPlacement = "top",
+      spin,
       className,
       type = "button",
       ...rest
@@ -50,7 +53,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
           aria-pressed={pressed}
           {...rest}
         >
-          <Codicon name={icon} className="ui-icon-button-icon" />
+          <Codicon name={icon} spin={spin} className="ui-icon-button-icon" />
         </button>
       </Tooltip>
     );

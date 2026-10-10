@@ -1,3 +1,4 @@
+import { IconButton } from "../ui/IconButton";
 import {
   memo,
   useCallback,
@@ -21,7 +22,6 @@ import {
   visibleGitFluentGraphRefs,
 } from "../../git/gitFluent";
 import { Codicon } from "../../icons/codicons/Codicon";
-import { Tooltip } from "../Tooltip";
 import { GitFluentFilterInput } from "./GitFluentFilterInput";
 
 interface GitFluentGraphViewProps {
@@ -235,16 +235,13 @@ const GitFluentGraphRowItem = memo(function GitFluentGraphRowItem({
         </div>
       )}
       <div className="git-graph-actions">
-        <Tooltip label="Mais ações do commit">
-          <button
-            type="button"
-            className="git-file-action"
-            aria-label="Mais ações do commit"
-            onClick={handleActionClick}
-          >
-            <Codicon name="filterFiles" size={13} />
-          </button>
-        </Tooltip>
+        <IconButton
+          icon="filterFiles"
+          size="sm"
+          label="Mais ações do commit"
+          className="git-file-action"
+          onClick={handleActionClick}
+        />
       </div>
     </article>
   );

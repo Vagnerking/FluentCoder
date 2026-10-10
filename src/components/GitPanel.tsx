@@ -1,3 +1,4 @@
+import { IconButton } from "./ui/IconButton";
 import {
   useCallback,
   useEffect,
@@ -751,15 +752,12 @@ export function GitPanel({
           <span className="explorer-title">CONTROLE DE CÓDIGO-FONTE</span>
           <div className="git-actions">
             {hiddenCount > 0 && <span className="git-hidden-count">{hiddenCount} oculto{hiddenCount === 1 ? "" : "s"}</span>}
-            <Tooltip label="Opções de repositórios">
-              <button
-                className="git-icon-btn"
-                aria-label="Opções de repositórios"
-                onClick={openRepoOptions}
-              >
-                <Codicon name="filterFiles" />
-              </button>
-            </Tooltip>
+            <IconButton
+              icon="filterFiles"
+              size="sm"
+              label="Opções de repositórios"
+              onClick={openRepoOptions}
+            />
           </div>
         </div>
         <div className="git-workspace-list">
@@ -835,15 +833,12 @@ export function GitPanel({
                     </span>
                   </div>
                   <div className="git-root-actions">
-                    <Tooltip label="Ocultar repositório">
-                      <button
-                        className="git-icon-btn"
-                        aria-label="Ocultar repositório"
-                        onClick={() => setRepoHidden(root.id, true)}
-                      >
-                        <Codicon name="close" />
-                      </button>
-                    </Tooltip>
+                    <IconButton
+                      icon="close"
+                      size="sm"
+                      label="Ocultar repositório"
+                      onClick={() => setRepoHidden(root.id, true)}
+                    />
                   </div>
                 </div>
               )}
@@ -2459,26 +2454,20 @@ function GitRepositoryPanel({
 
   const actionButtons = (
     <div className="git-actions">
-      <Tooltip label="Atualizar status">
-        <button
-          className="git-icon-btn"
-          aria-label="Atualizar status"
-          disabled={busy}
-          onClick={() => void refresh()}
-        >
-          <Codicon name="refresh" />
-        </button>
-      </Tooltip>
+      <IconButton
+        icon="refresh"
+        size="sm"
+        label="Atualizar status"
+        disabled={busy}
+        onClick={() => void refresh()}
+      />
       {embedded && onHideRepository && (
-        <Tooltip label="Ocultar repositório">
-          <button
-            className="git-icon-btn"
-            aria-label="Ocultar repositório"
-            onClick={onHideRepository}
-          >
-            <Codicon name="close" />
-          </button>
-        </Tooltip>
+        <IconButton
+          icon="close"
+          size="sm"
+          label="Ocultar repositório"
+          onClick={onHideRepository}
+        />
       )}
     </div>
   );
@@ -2696,17 +2685,14 @@ function GitRepositoryPanel({
               }
             }}
           />
-          <Tooltip label={assistLabel}>
-            <button
-              type="button"
-              className="git-message-assist-btn"
-              disabled={busy || totalChanges === 0}
-              aria-label="Gerar mensagem de commit"
-              onClick={() => void generateCommitMessage()}
-            >
-              <Codicon name="model" size={13} />
-            </button>
-          </Tooltip>
+          <IconButton
+            icon="model"
+            size="sm"
+            label={`Gerar mensagem de commit — ${assistLabel}`}
+            className="git-message-assist-btn"
+            disabled={busy || totalChanges === 0}
+            onClick={() => void generateCommitMessage()}
+          />
         </div>
         <div className="git-commit-actions-row">
           <button
@@ -2823,12 +2809,12 @@ function GitRepositoryPanel({
     if (changes.length === 0) return null;
     return (
       <>
-        <Tooltip label="Descartar todas as alterações">
-          <button
-            className="git-link-btn"
-            disabled={busy}
-            aria-label="Descartar todas as alterações"
-            onClick={() =>
+        <IconButton
+          icon="discard"
+          size="sm"
+          label="Descartar todas as alterações"
+          disabled={busy}
+          onClick={() =>
               act(async () => {
                 if (
                   !window.confirm(
@@ -2839,20 +2825,14 @@ function GitRepositoryPanel({
                 await gitDiscardAll(repoRootPath, connId);
               })
             }
-          >
-            <Codicon name="discard" />
-          </button>
-        </Tooltip>
-        <Tooltip label="Preparar tudo">
-          <button
-            className="git-link-btn"
-            disabled={busy}
-            aria-label="Preparar tudo"
-            onClick={() => act(() => gitStageAll(repoRootPath, connId))}
-          >
-            <Codicon name="add" />
-          </button>
-        </Tooltip>
+        />
+        <IconButton
+          icon="add"
+          size="sm"
+          label="Preparar tudo"
+          disabled={busy}
+          onClick={() => act(() => gitStageAll(repoRootPath, connId))}
+        />
       </>
     );
   }
@@ -2861,26 +2841,20 @@ function GitRepositoryPanel({
     if (staged.length === 0) return null;
     return (
       <>
-        <Tooltip label="Visualizar primeiro arquivo preparado">
-          <button
-            className="git-link-btn"
-            disabled={busy || staged.length === 0}
-            aria-label="Visualizar primeiro arquivo preparado"
-            onClick={openFirstStagedChange}
-          >
-            <Codicon name="openChanges" />
-          </button>
-        </Tooltip>
-        <Tooltip label="Remover tudo do stage">
-          <button
-            className="git-link-btn"
-            disabled={busy}
-            aria-label="Remover tudo do stage"
-            onClick={() => act(() => gitUnstageAll(repoRootPath, connId))}
-          >
-            <Codicon name="remove" />
-          </button>
-        </Tooltip>
+        <IconButton
+          icon="openChanges"
+          size="sm"
+          label="Visualizar primeiro arquivo preparado"
+          disabled={busy || staged.length === 0}
+          onClick={openFirstStagedChange}
+        />
+        <IconButton
+          icon="remove"
+          size="sm"
+          label="Remover tudo do stage"
+          disabled={busy}
+          onClick={() => act(() => gitUnstageAll(repoRootPath, connId))}
+        />
       </>
     );
   }
@@ -3264,16 +3238,14 @@ function GitFileRow({
       </span>
       <span className="git-file-spacer" />
       {onDiscard && (
-        <Tooltip label="Descartar alterações">
-          <button
-            className="git-file-action"
-            aria-label="Descartar alterações"
-            disabled={disabled}
-            onClick={onDiscard}
-          >
-            <Codicon name="discard" />
-          </button>
-        </Tooltip>
+        <IconButton
+          icon="discard"
+          size="sm"
+          label="Descartar alterações"
+          className="git-file-action"
+          disabled={disabled}
+          onClick={onDiscard}
+        />
       )}
       <Tooltip label={actionTitle}>
         <button

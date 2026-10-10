@@ -1,6 +1,7 @@
 .git-fluent-commit-list {
   gap: 0;
 }
+
 .git-fluent-history-scope {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) auto;
@@ -13,14 +14,17 @@
   color: var(--text-secondary);
   background: rgba(210, 228, 242, 0.025);
 }
+
 .git-fluent-history-scope > .codicon {
   color: var(--accent);
 }
+
 .git-fluent-history-scope span {
   display: grid;
   gap: 0;
   min-width: 0;
 }
+
 .git-fluent-history-scope strong,
 .git-fluent-history-scope small {
   min-width: 0;
@@ -28,20 +32,24 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .git-fluent-history-scope strong {
   color: var(--text);
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   font-weight: 700;
   line-height: 13px;
 }
+
 .git-fluent-history-scope small {
   color: var(--text-muted);
-  font-size: 9.5px;
+  font-size: var(--font-caption-xs);
   line-height: 11px;
 }
+
 .git-fluent-history-scope.line {
   background: rgba(96, 205, 255, 0.055);
 }
+
 .git-fluent-history-scope button {
   display: inline-grid;
   place-items: center;
@@ -53,15 +61,18 @@
   background: transparent;
   cursor: pointer;
 }
+
 .git-fluent-history-scope button:hover {
   color: var(--text);
   background: var(--fill-subtle-hover);
 }
+
 .git-fluent-timeline-group {
   display: grid;
   gap: 0;
   min-width: 0;
 }
+
 .git-fluent-timeline-heading {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) auto;
@@ -70,30 +81,34 @@
   min-height: 18px;
   padding: 0 3px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--font-caption-xs);
   font-weight: 750;
   text-transform: uppercase;
 }
+
 .git-fluent-timeline-heading span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .git-fluent-timeline-heading .codicon {
   color: var(--accent);
 }
+
 .git-fluent-timeline-heading small {
   min-width: 16px;
   height: 14px;
   padding: 0 4px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: var(--text-muted);
   background: rgba(210, 228, 242, 0.055);
-  font-size: 9px;
+  font-size: var(--font-caption-xs);
   line-height: 14px;
   text-align: center;
 }
+
 .git-fluent-timeline-row {
   position: relative;
   display: grid;
@@ -113,10 +128,12 @@
   content-visibility: auto;
   contain-intrinsic-size: 20px;
 }
+
 .git-fluent-timeline-row:hover {
   color: var(--text);
   background: var(--fill-subtle-hover);
 }
+
 .git-fluent-timeline-row:focus-visible,
 .git-fluent-history-jump:focus-visible {
   outline: 1px solid rgba(96, 205, 255, 0.72);
@@ -124,6 +141,7 @@
   color: var(--text);
   background: rgba(96, 205, 255, 0.075);
 }
+
 .git-fluent-timeline-rail {
   position: relative;
   align-self: stretch;
@@ -131,6 +149,7 @@
   place-items: center;
   min-height: 20px;
 }
+
 .git-fluent-timeline-rail::before {
   content: "";
   position: absolute;
@@ -141,19 +160,22 @@
   background: rgba(96, 205, 255, 0.22);
   transform: translateX(-50%);
 }
+
 .git-fluent-timeline-dot {
   position: relative;
   z-index: 1;
   width: 7px;
   height: 7px;
   border: 1px solid var(--accent);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--panel-bg);
   box-shadow: 0 0 0 1px rgba(17, 24, 33, 0.92);
 }
+
 .git-fluent-timeline-dot.latest {
   background: var(--accent);
 }
+
 .git-fluent-avatar {
   display: inline-grid;
   place-items: center;
@@ -162,20 +184,23 @@
   border-radius: 50%;
   color: #062033;
   background: linear-gradient(135deg, #60cdff, #73c991);
-  font-size: 9px;
+  font-size: var(--font-caption-xs);
   font-weight: 800;
   overflow: hidden;
 }
+
 .git-fluent-avatar img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
+
 .git-fluent-commit-main {
   display: grid;
   gap: 0;
   min-width: 0;
 }
+
 .git-fluent-commit-subject,
 .git-fluent-commit-meta,
 .git-fluent-commit-stats {
@@ -184,29 +209,34 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .git-fluent-commit-subject {
   color: var(--text);
-  font-size: 11.5px;
+  font-size: var(--font-caption-sm);
   font-weight: 650;
   line-height: 14px;
 }
+
 .git-fluent-commit-meta {
   color: var(--text-muted);
-  font-size: 9.5px;
+  font-size: var(--font-caption-xs);
   line-height: 11px;
 }
+
 .git-fluent-commit-stats {
   max-width: 72px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--font-caption-xs);
   font-variant-numeric: tabular-nums;
 }
+
 .git-fluent-timeline-row code {
   color: var(--text-muted);
   font-family: var(--font-mono, "Cascadia Mono", Consolas, monospace);
-  font-size: 10px;
+  font-size: var(--font-caption-xs);
   line-height: 16px;
 }
+
 .git-fluent-timeline-actions {
   position: absolute;
   right: 2px;
@@ -219,11 +249,13 @@
   pointer-events: none;
   transition: opacity 90ms ease;
 }
+
 .git-fluent-timeline-row:hover .git-fluent-timeline-actions,
 .git-fluent-timeline-row:focus-within .git-fluent-timeline-actions {
   opacity: 1;
   pointer-events: auto;
 }
+
 .git-fluent-history-jump {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) auto;
@@ -240,21 +272,26 @@
   text-align: left;
   cursor: pointer;
 }
+
 .git-fluent-history-jump:hover {
   color: var(--text);
   background: var(--fill-subtle-hover);
 }
+
 .git-fluent-history-jump > .codicon:first-child {
   color: var(--accent);
 }
+
 .git-fluent-history-jump > .codicon:last-child {
   color: var(--text-muted);
 }
+
 .git-fluent-history-jump span {
   display: grid;
   gap: 0;
   min-width: 0;
 }
+
 .git-fluent-history-jump strong,
 .git-fluent-history-jump small {
   min-width: 0;
@@ -262,19 +299,23 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .git-fluent-history-jump strong {
   color: var(--text);
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   font-weight: 650;
   line-height: 13px;
 }
+
 .git-fluent-history-jump small {
   color: var(--text-muted);
-  font-size: 9.5px;
+  font-size: var(--font-caption-xs);
   line-height: 11px;
 }
+
 @media (prefers-reduced-motion: reduce) {
   .git-fluent-timeline-actions {
     transition: none;
   }
+
 }

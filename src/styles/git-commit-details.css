@@ -27,11 +27,11 @@
   height: 22px;
   padding: 0 6px;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   line-height: 22px;
   cursor: pointer;
 }
@@ -52,9 +52,11 @@
   border-color: rgba(96, 205, 255, 0.16);
   color: var(--text);
 }
+
 .git-commit-toolbar-item.danger {
   color: #ffb4ab;
 }
+
 .git-commit-toolbar-item.danger:hover:not(:disabled) {
   background: rgba(196, 43, 28, 0.16);
   border-color: rgba(196, 43, 28, 0.28);
@@ -80,12 +82,14 @@
   align-items: baseline;
   min-width: 0;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   line-height: 16px;
 }
+
 .git-commit-expanded-row > span:first-child {
   color: var(--text-muted);
 }
+
 .git-commit-expanded-row > span:last-child,
 .git-commit-expanded-row code {
   min-width: 0;
@@ -93,11 +97,13 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .git-commit-expanded-row code {
   color: var(--text);
   font-family: "Cascadia Code", "Consolas", monospace;
-  font-size: 10px;
+  font-size: var(--font-caption-xs);
 }
+
 .git-commit-expanded-actions {
   display: flex;
   flex-wrap: wrap;
@@ -108,7 +114,7 @@
 .git-commit-expanded-actions .git-link-btn {
   height: 24px;
   padding: 0 7px;
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
 }
 
 .git-commit-files {
@@ -128,7 +134,7 @@
   gap: 8px;
   margin-bottom: 2px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--font-caption-xs);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.03em;
@@ -144,7 +150,7 @@
 .git-commit-files-empty {
   padding: 5px 2px;
   color: var(--text-disabled);
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
 }
 
 .git-commit-file-row {
@@ -154,7 +160,7 @@
   gap: 6px;
   min-height: 24px;
   padding: 2px 3px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
 }
 
 .git-commit-file-row:hover {
@@ -167,15 +173,18 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 4px;
-  font-size: 10px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-caption-xs);
   font-weight: 800;
   font-family: "Cascadia Code", "Consolas", monospace;
 }
 
 .git-commit-file-status.modified { color: #e2c08d; background: rgba(226, 192, 141, 0.1); }
+
 .git-commit-file-status.added { color: #8fe0ad; background: rgba(143, 224, 173, 0.1); }
+
 .git-commit-file-status.deleted { color: #ff9aa8; background: rgba(255, 154, 168, 0.1); }
+
 .git-commit-file-status.renamed { color: var(--accent); background: rgba(96, 205, 255, 0.1); }
 
 .git-commit-file-name {
@@ -185,7 +194,7 @@
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--font-caption-sm);
   text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -200,7 +209,7 @@
 .git-commit-file-name span {
   display: block;
   color: var(--text-disabled);
-  font-size: 10px;
+  font-size: var(--font-caption-xs);
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -212,8 +221,9 @@
   justify-content: flex-end;
   color: var(--text-muted);
   font-family: "Cascadia Code", "Consolas", monospace;
-  font-size: 10px;
+  font-size: var(--font-caption-xs);
 }
 
 .git-commit-file-stat .add { color: #8fe0ad; }
+
 .git-commit-file-stat .del { color: #ff9aa8; }

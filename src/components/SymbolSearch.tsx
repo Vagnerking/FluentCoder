@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { SearchBox } from "./ui/Input";
 import { useModalDismiss } from "./useModalDismiss";
 import {
   toSymbolHits,
@@ -142,10 +143,9 @@ export function SymbolSearch({ onOpenSymbol, onClose }: SymbolSearchProps) {
     <div className="quick-open-backdrop" {...useModalDismiss(onClose)}>
       <div className="quick-open">
         <div className="quick-pick-title">Ir para símbolo no projeto</div>
-        <input
+        <SearchBox
           ref={inputRef}
-          className="quick-open-input"
-          type="text"
+          wrapperClassName="quick-open-field"
           placeholder="Digite o nome de um símbolo…"
           value={query}
           aria-label="Ir para símbolo: pesquisar por nome"

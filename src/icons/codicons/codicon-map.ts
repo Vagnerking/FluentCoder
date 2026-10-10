@@ -174,7 +174,28 @@ export type IconAction =
   | "agentDatabase"
   | "agentPaintcan"
   | "agentGlobe"
-  | "agentOrganization";
+  | "agentOrganization"
+  // Workbench chrome (title bar layout toggles, tab strip, menus)
+  | "layoutSidebarLeft"
+  | "layoutSidebarLeftOff"
+  | "layoutSidebarRight"
+  | "layoutSidebarRightOff"
+  | "layoutPanel"
+  | "layoutPanelOff"
+  | "chevronLeft"
+  | "more"
+  | "dirty"
+  | "clearAll"
+  | "filter"
+  | "debugPause"
+  | "stepInto"
+  | "stepOut"
+  | "zoomIn"
+  | "zoomOut"
+  | "zoomFit"
+  | "list"
+  | "pin"
+  | "pinned";
 
 /** action → codicon name (without the `codicon-` prefix). */
 export const CODICON_MAP: Record<IconAction, string> = {
@@ -358,6 +379,26 @@ export const CODICON_MAP: Record<IconAction, string> = {
   agentPaintcan: "paintcan",
   agentGlobe: "globe",
   agentOrganization: "organization",
+  layoutSidebarLeft: "layout-sidebar-left",
+  layoutSidebarLeftOff: "layout-sidebar-left-off",
+  layoutSidebarRight: "layout-sidebar-right",
+  layoutSidebarRightOff: "layout-sidebar-right-off",
+  layoutPanel: "layout-panel",
+  layoutPanelOff: "layout-panel-off",
+  chevronLeft: "chevron-left",
+  more: "ellipsis",
+  dirty: "circle-filled",
+  clearAll: "clear-all",
+  filter: "filter",
+  debugPause: "debug-pause",
+  stepInto: "debug-step-into",
+  stepOut: "debug-step-out",
+  zoomIn: "zoom-in",
+  zoomOut: "zoom-out",
+  zoomFit: "screen-full",
+  list: "list-unordered",
+  pin: "pin",
+  pinned: "pinned",
 };
 
 /** Codicon names that should spin (loading/sync feedback). */
