@@ -146,6 +146,7 @@
   border-top: 1px solid var(--stroke);
   opacity: 0.9;
   user-select: text;
+  -webkit-user-select: text;
 }
 
 /* ── Test runner (roadmap csharp-ide-parity, Fase C) ─────────────────────── */

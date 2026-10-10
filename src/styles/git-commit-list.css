@@ -69,6 +69,7 @@
   font-size: var(--font-caption-xs);
   font-weight: 700;
   user-select: none;
+  -webkit-user-select: none;
 }
 
 .git-commit-main {

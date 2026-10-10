@@ -197,6 +197,7 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   user-select: text;
+  -webkit-user-select: text;
 }
 .fc-msg-author {
   display: flex;
@@ -437,6 +438,7 @@
   background: var(--editor-bg);
   border-radius: var(--radius-sm);
   user-select: text;
+  -webkit-user-select: text;
 }
 .fc-tool-locations {
   display: flex;

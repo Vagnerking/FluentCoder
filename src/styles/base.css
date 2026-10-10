@@ -21,6 +21,7 @@ body {
   /* Fully transparent so the Mica backdrop is what we see between surfaces. */
   background: transparent;
   user-select: none;
+  -webkit-user-select: none;
   -webkit-font-smoothing: antialiased;
 }
 

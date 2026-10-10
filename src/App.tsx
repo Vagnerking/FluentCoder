@@ -250,6 +250,7 @@ import {
   serializeWorkspaceFile,
   type NormalizedWorkspace,
 } from "./workspace/workspaceFile";
+import { useWorkbenchDrag } from "./workbench/useWorkbenchDrag";
 
 /** Abas nativas do Fluent Chat na sidebar secundária. */
 const FLUENT_CHAT_TAB = "fluent-chat";
@@ -581,6 +582,9 @@ function panelZoneAtPoint(x: number, y: number): PanelPos | null {
 }
 
 export default function App() {
+  // Arrastes por ponteiro (painel, activity bar, alças): limpeza única em
+  // pointerup/pointercancel/Escape/blur e sem seleção acidental no WebKitGTK.
+  const workbenchDrag = useWorkbenchDrag();
   const [rootName, setRootName] = useState<string | null>(null);
   const [rootPath, setRootPath] = useState<string | null>(null);
   const [activeWorkspace, setActiveWorkspace] = useState<ActiveWorkspace | null>(null);
@@ -2538,31 +2542,35 @@ export default function App() {
           setSidebarSide(origSide);
         }
       };
-      const onMove = (me: PointerEvent) => {
-        if (!armed) {
-          // Drifting too far before the hold finishes aborts it (not a hold).
-          if (Math.hypot(me.clientX - startX, me.clientY - startY) > 24) cancelHold();
-          return;
-        }
-        preview(me.clientX, me.clientY);
-      };
-      const onUp = () => {
-        cancelHold();
-        window.removeEventListener("pointermove", onMove);
-        window.removeEventListener("pointerup", onUp);
-        if (armed) {
+      workbenchDrag.pointer({
+        kind: "activity",
+        onMove: (me) => {
+          if (!armed) {
+            // Drifting too far before the hold finishes aborts it (not a hold).
+            if (Math.hypot(me.clientX - startX, me.clientY - startY) > 24) cancelHold();
+            return;
+          }
+          preview(me.clientX, me.clientY);
+        },
+        onEnd: (committed) => {
+          cancelHold();
+          if (!armed) return;
           setDraggingActivity(false);
+          if (!committed) {
+            // Escape / blur / pointercancel: volta para onde estava.
+            setActivityBarPos(origPos);
+            setSidebarSide(origSide);
+            return;
+          }
           const swallow = (ce: MouseEvent) => {
             ce.stopPropagation();
             ce.preventDefault();
           };
           window.addEventListener("click", swallow, { capture: true, once: true });
-        }
-      };
-      window.addEventListener("pointermove", onMove);
-      window.addEventListener("pointerup", onUp);
+        },
+      });
     },
-    [activityBarPos, sidebarSide]
+    [activityBarPos, sidebarSide, workbenchDrag]
   );
 
   // Counter for unique "Untitled-N" names within this window.
@@ -4724,30 +4732,34 @@ export default function App() {
         setArmingPanel(false);
       };
 
-      const onMove = (me: PointerEvent) => {
-        if (!armed) {
-          if (Math.hypot(me.clientX - startX, me.clientY - startY) > 24) cancelHold();
-          return;
-        }
-        setPanelPos(panelZoneAtPoint(me.clientX, me.clientY) ?? origPos);
-      };
-      const onUp = () => {
-        cancelHold();
-        window.removeEventListener("pointermove", onMove);
-        window.removeEventListener("pointerup", onUp);
-        if (armed) {
+      // pointerup confirma; pointercancel, Escape e blur cancelam (o painel
+      // volta à posição original e nenhum estado de arraste fica preso).
+      workbenchDrag.pointer({
+        kind: "panel",
+        onMove: (me) => {
+          if (!armed) {
+            if (Math.hypot(me.clientX - startX, me.clientY - startY) > 24) cancelHold();
+            return;
+          }
+          setPanelPos(panelZoneAtPoint(me.clientX, me.clientY) ?? origPos);
+        },
+        onEnd: (committed) => {
+          cancelHold();
+          if (!armed) return;
           setDraggingPanel(false);
+          if (!committed) {
+            setPanelPos(origPos);
+            return;
+          }
           const swallow = (ce: MouseEvent) => {
             ce.stopPropagation();
             ce.preventDefault();
           };
           window.addEventListener("click", swallow, { capture: true, once: true });
-        }
-      };
-      window.addEventListener("pointermove", onMove);
-      window.addEventListener("pointerup", onUp);
+        },
+      });
     },
-    [panelPos]
+    [panelPos, workbenchDrag]
   );
 
   /** Open/focus the integrated terminal at `cwd` (explorer "Abrir no Terminal"). */
@@ -6197,27 +6209,30 @@ export default function App() {
             className="sidebar-resize-handle"
             title="Arraste para redimensionar a barra lateral"
             onPointerDown={(e) => {
-              e.currentTarget.setPointerCapture(e.pointerId);
               const startX = e.clientX;
               // Top/bottom activity bars need a wider floor so the explorer
               // can't shrink past the icon strip around it.
               const minW =
                 activityBarHorizontal ? SIDEBAR_MIN_HORIZONTAL_ACTIVITY : SIDEBAR_MIN;
               const startW = Math.max(sidebarWidth, minW);
-              const onMove = (me: PointerEvent) => {
-                const delta = me.clientX - startX;
-                // Docked right, dragging left widens the sidebar.
-                const signed = sidebarSide === "right" ? -delta : delta;
-                setSidebarWidth(
-                  Math.max(minW, Math.min(startW + signed, window.innerWidth * 0.6))
-                );
-              };
-              const onUp = () => {
-                window.removeEventListener("pointermove", onMove);
-                window.removeEventListener("pointerup", onUp);
-              };
-              window.addEventListener("pointermove", onMove);
-              window.addEventListener("pointerup", onUp);
+              const original = sidebarWidth;
+              workbenchDrag.pointer({
+                kind: "resize",
+                cursor: "col-resize",
+                captureTarget: e.currentTarget,
+                pointerId: e.pointerId,
+                onMove: (me) => {
+                  const delta = me.clientX - startX;
+                  // Docked right, dragging left widens the sidebar.
+                  const signed = sidebarSide === "right" ? -delta : delta;
+                  setSidebarWidth(
+                    Math.max(minW, Math.min(startW + signed, window.innerWidth * 0.6))
+                  );
+                },
+                onEnd: (committed) => {
+                  if (!committed) setSidebarWidth(original);
+                },
+              });
             }}
           />
         )}
@@ -6275,32 +6290,36 @@ export default function App() {
               <div
                 className="panel-resize-handle"
                 onPointerDown={(e) => {
-                  e.currentTarget.setPointerCapture(e.pointerId);
                   const startX = e.clientX;
                   const startY = e.clientY;
                   const startH = panelHeight;
                   const startW = panelWidth;
-                  const onMove = (me: PointerEvent) => {
-                    if (panelPos === "bottom") {
-                      const delta = startY - me.clientY;
-                      setPanelHeight(
-                        Math.max(80, Math.min(startH + delta, window.innerHeight * 0.7))
-                      );
-                    } else {
-                      // Right: drag left widens; left: drag right widens.
-                      const delta =
-                        panelPos === "right" ? startX - me.clientX : me.clientX - startX;
-                      setPanelWidth(
-                        Math.max(180, Math.min(startW + delta, window.innerWidth * 0.7))
-                      );
-                    }
-                  };
-                  const onUp = () => {
-                    window.removeEventListener("pointermove", onMove);
-                    window.removeEventListener("pointerup", onUp);
-                  };
-                  window.addEventListener("pointermove", onMove);
-                  window.addEventListener("pointerup", onUp);
+                  workbenchDrag.pointer({
+                    kind: "resize",
+                    cursor: panelPos === "bottom" ? "row-resize" : "col-resize",
+                    captureTarget: e.currentTarget,
+                    pointerId: e.pointerId,
+                    onMove: (me) => {
+                      if (panelPos === "bottom") {
+                        const delta = startY - me.clientY;
+                        setPanelHeight(
+                          Math.max(80, Math.min(startH + delta, window.innerHeight * 0.7))
+                        );
+                      } else {
+                        // Right: drag left widens; left: drag right widens.
+                        const delta =
+                          panelPos === "right" ? startX - me.clientX : me.clientX - startX;
+                        setPanelWidth(
+                          Math.max(180, Math.min(startW + delta, window.innerWidth * 0.7))
+                        );
+                      }
+                    },
+                    onEnd: (committed) => {
+                      if (committed) return;
+                      setPanelHeight(startH);
+                      setPanelWidth(startW);
+                    },
+                  });
                 }}
               />
             )}
@@ -6337,27 +6356,30 @@ export default function App() {
             className={`agents-resize-handle agents-resize-${agentsSide}`}
             title="Arraste para redimensionar o Fluent Chat"
             onPointerDown={(e) => {
-              e.currentTarget.setPointerCapture(e.pointerId);
               const startX = e.clientX;
               const startW = Math.max(agentsSidebarWidth, AGENTS_SIDEBAR_MIN);
-              const onMove = (me: PointerEvent) => {
-                const delta = me.clientX - startX;
-                // Docked left, dragging right widens; docked right, dragging
-                // left widens.
-                const signed = agentsSide === "left" ? delta : -delta;
-                setAgentsSidebarWidth(
-                  Math.max(
-                    AGENTS_SIDEBAR_MIN,
-                    Math.min(startW + signed, window.innerWidth * 0.7),
-                  ),
-                );
-              };
-              const onUp = () => {
-                window.removeEventListener("pointermove", onMove);
-                window.removeEventListener("pointerup", onUp);
-              };
-              window.addEventListener("pointermove", onMove);
-              window.addEventListener("pointerup", onUp);
+              const original = agentsSidebarWidth;
+              workbenchDrag.pointer({
+                kind: "resize",
+                cursor: "col-resize",
+                captureTarget: e.currentTarget,
+                pointerId: e.pointerId,
+                onMove: (me) => {
+                  const delta = me.clientX - startX;
+                  // Docked left, dragging right widens; docked right, dragging
+                  // left widens.
+                  const signed = agentsSide === "left" ? delta : -delta;
+                  setAgentsSidebarWidth(
+                    Math.max(
+                      AGENTS_SIDEBAR_MIN,
+                      Math.min(startW + signed, window.innerWidth * 0.7),
+                    ),
+                  );
+                },
+                onEnd: (committed) => {
+                  if (!committed) setAgentsSidebarWidth(original);
+                },
+              });
             }}
           />
         )}

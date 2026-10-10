@@ -26,8 +26,10 @@ import "./styles/overlays.css";
 import "./styles/graph.css";
 import "./styles/menu.css";
 import "./styles/tooltip.css";
+import "./styles/workbench.css";
 import "./theme/acrylic.css";
 import { applyAcrylicFlyouts } from "./theme/acrylic";
+import { installNativeDragGuard } from "./workbench/workbenchDrag";
 
 // macOS runs a native, opaque window (a transparent frameless window never
 // materializes there — the app would show only a Dock icon and menu bar). Tag the
@@ -53,6 +55,10 @@ applyAcrylicFlyouts();
 // preventDefault (so they're unaffected) and Monaco renders its own menu. Runs
 // in the capture phase so it wins even where a child stops propagation.
 window.addEventListener("contextmenu", (e) => e.preventDefault(), { capture: true });
+
+// Qualquer arraste HTML5 (Explorer, abas, Git…) liga o estado de arraste do
+// workbench: sem seleção acidental de texto no WebKitGTK e iframes blindados.
+installNativeDragGuard();
 
 // A window opened as a torn-off editor renders only that editor — never the full
 // workbench (no session restore, no LSP manager, etc.).

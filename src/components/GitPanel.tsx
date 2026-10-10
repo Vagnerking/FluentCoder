@@ -106,6 +106,7 @@ import { GitFluentViewActions } from "./git/GitFluentViewActions";
 import { GitFluentWorktreesView } from "./git/GitFluentWorktreesView";
 import { TreeContextMenu } from "./TreeContextMenu";
 import { Tooltip } from "./Tooltip";
+import { startPointerDrag } from "../workbench/workbenchDrag";
 
 interface GitPanelProps {
   /** Open folder; the repo is resolved from here. Null when nothing is open. */
@@ -2597,24 +2598,22 @@ function GitRepositoryPanel({
     const minHeight = GIT_PANEL_MIN_VIEW_HEIGHTS[view];
     const maxHeight = GIT_PANEL_MAX_VIEW_HEIGHT;
 
-    function onPointerMove(moveEvent: globalThis.PointerEvent) {
-      const nextHeight = Math.min(maxHeight, Math.max(minHeight, startHeight + moveEvent.clientY - startY));
+    const setHeight = (nextHeight: number) =>
       setPanelViewHeights((current) =>
         current[view] === nextHeight ? current : { ...current, [view]: nextHeight }
       );
-    }
-
-    function onPointerUp() {
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerUp);
-      document.body.classList.remove("git-pane-resizing");
-    }
 
     document.body.classList.add("git-pane-resizing");
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp, { once: true });
-    window.addEventListener("pointercancel", onPointerUp, { once: true });
+    startPointerDrag({
+      kind: "resize",
+      cursor: "row-resize",
+      onMove: (moveEvent) =>
+        setHeight(Math.min(maxHeight, Math.max(minHeight, startHeight + moveEvent.clientY - startY))),
+      onEnd: (committed) => {
+        document.body.classList.remove("git-pane-resizing");
+        if (!committed) setHeight(startHeight);
+      },
+    });
   }
 
   function renderPanelResizeHandle(view: GitPanelViewId) {

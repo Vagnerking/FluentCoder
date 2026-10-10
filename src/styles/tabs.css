@@ -94,6 +94,7 @@
   cursor: pointer;
   white-space: nowrap;
   user-select: none;
+  -webkit-user-select: none;
   font-size: var(--font-base);
   color: var(--text-muted);
   transition:

@@ -12,6 +12,7 @@
   font-size: var(--font-caption);
   color: var(--text-muted);
   user-select: none;
+  -webkit-user-select: none;
   overflow: hidden;
   /* Lets the items below react to the bar's width (responsive hide). */
   container-type: inline-size;

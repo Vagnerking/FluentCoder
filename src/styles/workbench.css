@@ -1,0 +1,53 @@
+/* ---- Arraste ativo no workbench (src/workbench/workbenchDrag.ts) ----
+   O WebKitGTK (Tauri no Linux) só respeita a forma prefixada de
+   `user-select`; sem ela, arrastar abas/painéis/alças selecionava texto e
+   itens pelo caminho. Enquanto houver uma sessão de arraste a raiz recebe
+   `workbench-dragging` e a superfície inteira deixa de ser selecionável. */
+html.workbench-dragging,
+html.workbench-dragging * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
+/* Iframes (webviews de extensões) engolem os eventos de ponteiro/arraste:
+   durante o arraste eles ficam transparentes a eventos para que os alvos de
+   drop do app (que estão fora deles) continuem funcionando. */
+html.workbench-dragging iframe,
+html.workbench-dragging webview {
+  pointer-events: none !important;
+}
+
+/* Arrastes por ponteiro (painel, activity bar, redimensionamento): o Monaco
+   não reage a hover/cursor sob o arraste. Arrastes de aba já usam o overlay
+   `.drop-capture` do grupo, que precisa continuar recebendo o drop. */
+html.workbench-dragging-pointer .monaco-editor {
+  pointer-events: none !important;
+}
+
+html.workbench-dragging-resize,
+html.workbench-dragging-resize * {
+  cursor: var(--workbench-drag-cursor, default) !important;
+}
+
+/* Preview dedicado do arraste (não o elemento vivo da aba). Fica fora da
+   tela; o motor só o fotografa no `setDragImage`. */
+.workbench-drag-preview {
+  position: fixed;
+  top: -1000px;
+  left: -1000px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 var(--space-sm) 0 10px;
+  border: 1px solid var(--acrylic-border-strong);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-raised);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--font-base);
+  white-space: nowrap;
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
+}

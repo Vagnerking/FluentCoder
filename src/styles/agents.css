@@ -57,6 +57,7 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   user-select: text;
+  -webkit-user-select: text;
 }
 
 /* Rendered Markdown from the assistant. Whitespace is normalized (not pre-wrap)
@@ -65,6 +66,7 @@
   font-size: var(--font-body);
   line-height: 20px;
   user-select: text;
+  -webkit-user-select: text;
   overflow-wrap: anywhere;
 }
 

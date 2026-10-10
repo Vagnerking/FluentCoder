@@ -283,6 +283,7 @@
 .git-pane-resizing {
   cursor: ns-resize;
   user-select: none;
+  -webkit-user-select: none;
 }
 
 .git-lists { flex: 1; overflow-y: auto; padding-bottom: 12px; order: 30; scrollbar-gutter: stable; }

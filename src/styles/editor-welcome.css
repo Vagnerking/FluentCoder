@@ -18,6 +18,7 @@
 .welcome-home-inner {
   width: min(360px, 80%);
   user-select: none;
+  -webkit-user-select: none;
 }
 
 .welcome-home-brand {
@@ -280,4 +281,5 @@
   opacity: 1;
   pointer-events: none;
   user-select: none;
+  -webkit-user-select: none;
 }

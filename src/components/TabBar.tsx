@@ -6,6 +6,7 @@ import { Codicon } from "../icons/codicons/Codicon";
 import { Tooltip } from "./Tooltip";
 import { IconButton } from "./ui/IconButton";
 import { Menu } from "./ui/Menu";
+import { setDragPreview } from "../workbench/workbenchDrag";
 
 /** dataTransfer MIME carrying a dragged tab's {groupId, path} across groups. */
 export const TAB_DRAG_MIME = "application/x-fluent-tab";
@@ -362,13 +363,13 @@ export function TabBar({
                     TAB_DRAG_MIME,
                     JSON.stringify({ groupId: groupId ?? "", path: f.path })
                   );
-                  // Use the tab chip itself as a clean drag image, anchored where
-                  // the user grabbed it (avoids the browser's messy default ghost).
-                  const r = e.currentTarget.getBoundingClientRect();
-                  e.dataTransfer.setDragImage(
-                    e.currentTarget,
-                    e.clientX - r.left,
-                    e.clientY - r.top
+                  // Dedicated drag preview (icon + name), anchored where the
+                  // user grabbed it — not the live tab, whose snapshot dragged
+                  // highlights/selection along on WebKitGTK.
+                  setDragPreview(
+                    e,
+                    f.name,
+                    e.currentTarget.querySelector(".tab-icon")
                   );
                 }}
                 onDragOver={(e) => {
