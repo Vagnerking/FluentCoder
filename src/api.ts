@@ -37,9 +37,11 @@ import type {
 import type {
   AcpEvent,
   AgentMode,
+  AgentRunOptions,
   AgentStore,
   RevertPoint,
 } from "./agents/types";
+import type { ProviderStatus } from "./acp/providers";
 import { getFilesExcludeGlobs } from "./settings/filesExclude";
 
 /** Raw shape returned by the Rust `git_status` (snake_case from serde). */
@@ -1885,7 +1887,7 @@ export function agentsSave(root: string, store: AgentStore): Promise<void> {
  * updates are streamed through a request-scoped Tauri channel.
  */
 export function acpPrompt(
-  provider: "codex" | "claude",
+  provider: string,
   workspaceRoot: string,
   conversationId: string,
   contextPrompt: string,
@@ -1893,13 +1895,14 @@ export function acpPrompt(
   mode: AgentMode,
   model: string,
   nativeSessionId: string | null,
+  options: AgentRunOptions,
   onEvent: (event: AcpEvent) => void,
 ): Promise<void> {
   if (getActiveRemote())
     return Promise.reject(
       new Error(
-        "O modo agente roda localmente e ainda não opera num workspace remoto (SSH). " +
-          "Abra a pasta localmente para usar os agentes."
+        "O Fluent Chat roda localmente e ainda não opera num workspace remoto (SSH). " +
+          "Abra a pasta localmente para conversar com os agentes."
       )
     );
   const channel = new Channel<AcpEvent>();
@@ -1913,18 +1916,40 @@ export function acpPrompt(
     mode,
     model,
     nativeSessionId,
+    options,
     onEvent: channel,
   });
 }
 
 /** Pré-aquece o processo do provedor para o workspace (o boot sai do caminho
  *  do primeiro envio). Fire-and-forget; no-op sobre SSH. */
-export function acpWarm(
-  provider: "codex" | "claude",
-  workspaceRoot: string,
-): Promise<void> {
+export function acpWarm(provider: string, workspaceRoot: string): Promise<void> {
   if (getActiveRemote()) return Promise.resolve();
   return invoke("acp_warm", { provider, workspaceRoot });
+}
+
+/** Provedores do registro (nativos + ACP) e se o CLI está no PATH. */
+export function chatProviders(): Promise<Partial<ProviderStatus>[]> {
+  return invoke<Partial<ProviderStatus>[]>("chat_providers");
+}
+
+/** Responde um cartão de aprovação do chat (`optionId` = opção escolhida). */
+export function chatRespondApproval(requestId: string, optionId: string): Promise<void> {
+  return invoke("chat_respond_approval", { requestId, optionId });
+}
+
+/** Agentes personalizados globais (dados do app, valem em qualquer pasta). */
+export function chatGlobalAgentsLoad(): Promise<unknown> {
+  return invoke("chat_global_agents_load");
+}
+
+export function chatGlobalAgentsSave(store: unknown): Promise<void> {
+  return invoke("chat_global_agents_save", { store });
+}
+
+/** Derruba todos os processos de agentes (reinício pela Paleta). */
+export function acpStopAll(): Promise<void> {
+  return invoke("acp_stop_all");
 }
 
 /** Interrupts the in-flight turn while preserving any streamed response. */

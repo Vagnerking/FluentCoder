@@ -1,9 +1,29 @@
-export type AgentProviderId = "codex" | "claude";
+/**
+ * Id de um provedor do Fluent Chat (registro do backend: `claude`, `codex`,
+ * `gemini`, `opencode`, `qwen`, `copilot`, `goose`…). String livre para que
+ * novos CLIs entrem pelo registro sem mudar tipos.
+ */
+export type AgentProviderId = string;
+
+/** Contexto que um agente personalizado anexa sempre (preset). */
+export type ContextPreset = "graph" | "context" | "workspace" | "problems" | "selection";
+
+export const CONTEXT_PRESETS: ContextPreset[] = [
+  "graph",
+  "context",
+  "workspace",
+  "problems",
+  "selection",
+];
 
 export interface AgentDefinition {
   id: string;
   name: string;
   color: string;
+  /**
+   * Instruções do agente (prompt inicial definido pelo USUÁRIO). Vai apenas no
+   * `contextPrompt` de sessão nova — nunca um prompt de aplicativo.
+   */
   initialPrompt: string;
   provider: AgentProviderId;
   /**
@@ -15,6 +35,22 @@ export interface AgentDefinition {
   workspacePath: string;
   createdAt: string;
   updatedAt: string;
+  /** Descrição curta exibida no seletor e na lista de agentes (v2). */
+  description?: string;
+  /** Codicon do agente (v2). */
+  icon?: string;
+  /** Modo aplicado ao escolher o agente no composer (v2). */
+  defaultMode?: AgentMode;
+  /** Contexto anexado automaticamente a cada envio (v2). */
+  contextPresets?: ContextPreset[];
+  /** Claude: `--allowedTools` (v2). */
+  allowedTools?: string[];
+  /** Claude: `--disallowedTools` (v2). */
+  disallowedTools?: string[];
+  /** Codex: rede liberada no sandbox `workspace-write` (v2). */
+  networkAccess?: boolean;
+  /** Onde o agente vive: no workspace (`.project/agents.json`) ou global (v2). */
+  scope?: "workspace" | "global";
 }
 
 export type AgentMessageRole = "user" | "assistant";
@@ -22,12 +58,8 @@ export type AgentMessageRole = "user" | "assistant";
 /**
  * Modo de permissão de um envio, espelhando os modos nativos do Claude Code e
  * mapeado para o equivalente de cada provedor (Claude: `--permission-mode`;
- * Codex: sandbox + approvalPolicy):
- * - `ask`:    somente leitura — o agente apenas responde.
- * - `plan`:   somente leitura — explora e apresenta um plano antes de editar.
- * - `edit`:   edita arquivos do workspace automaticamente.
- * - `auto`:   o agente escolhe o nível; escalações arriscadas são negadas.
- * - `bypass`: acesso total, sem confirmações.
+ * Codex: sandbox + approvalPolicy; ACP: modo nativo + política de aprovação).
+ * Na UI (estilo Copilot): Perguntar, Planejar, Editar, Agente, Bypass.
  *
  * `dev` é o nome legado de `bypass` (persistido em stores antigos) e é
  * migrado na normalização.
@@ -56,6 +88,47 @@ export function normalizeAgentMode(value: unknown): AgentMode | undefined {
     : undefined;
 }
 
+/** Diff de arquivo reportado por uma ferramenta (Edit/Write, fileChange, ACP). */
+export interface ChatFileDiff {
+  path: string;
+  oldText?: string;
+  newText?: string;
+  /** Patch unificado (Codex), quando não há os textos completos. */
+  unified?: string;
+}
+
+export type ToolCallStatus = "pending" | "in_progress" | "completed" | "failed";
+
+/** Uma chamada de ferramenta no transcript (cartão colapsável). */
+export interface ChatToolCall {
+  id: string;
+  kind?: string;
+  title?: string;
+  status?: ToolCallStatus;
+  detail?: string;
+  output?: string;
+  locations?: string[];
+  diffs?: ChatFileDiff[];
+  /** Posição no texto da resposta onde a chamada aconteceu (intercalação). */
+  textOffset: number;
+}
+
+/** Consumo de um turno, quando o provedor reporta. */
+export interface ChatUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  costUsd?: number;
+  contextWindow?: number;
+  contextUsed?: number;
+}
+
+/** Chip de contexto exibido na mensagem do usuário (só o rótulo). */
+export interface ChatAttachmentLabel {
+  kind: string;
+  label: string;
+}
+
 export interface AgentMessage {
   id: string;
   role: AgentMessageRole;
@@ -66,10 +139,16 @@ export interface AgentMessage {
   mode?: AgentMode;
   /**
    * Git snapshot captured right before this user message ran, when the mode
-   * could change files (plan/dev) and the workspace is a git repo. Lets the
-   * user roll the working tree back to the pre-request state.
+   * could change files and the workspace is a git repo. Lets the user roll
+   * the working tree back to the pre-request state.
    */
   revert?: RevertPoint;
+  /** Contexto anexado ao envio (mensagens do usuário, v2). */
+  attachments?: ChatAttachmentLabel[];
+  /** Chamadas de ferramenta da resposta (mensagens do agente, v2). */
+  toolCalls?: ChatToolCall[];
+  /** Consumo do turno (mensagens do agente, v2). */
+  usage?: ChatUsage;
 }
 
 /** A restorable workspace snapshot taken before a write-capable request. */
@@ -84,6 +163,10 @@ export interface RevertPoint {
 
 export interface AgentConversation {
   id: string;
+  /**
+   * Alvo da conversa: id de um agente personalizado ou `provider:<id>` para o
+   * chat direto com um provedor (zero-setup, v2).
+   */
   agentId: string;
   title: string;
   messages: AgentMessage[];
@@ -91,14 +174,16 @@ export interface AgentConversation {
   updatedAt: string;
   /**
    * Session/thread id da conversa no provedor (session do Claude Code, thread
-   * do Codex). Permite retomar a conversa nativamente — sem reenviar o
-   * histórico inteiro a cada reinício do app/processo.
+   * do Codex, sessão ACP). Permite retomar a conversa nativamente — sem
+   * reenviar o histórico inteiro a cada reinício do app/processo.
    */
   nativeSessionId?: string;
 }
 
+export const AGENT_STORE_VERSION = 2;
+
 export interface AgentStore {
-  version: 1;
+  version: typeof AGENT_STORE_VERSION;
   agents: AgentDefinition[];
   conversations: AgentConversation[];
 }
@@ -116,6 +201,14 @@ export interface AgentDraft {
   provider: AgentProviderId;
   /** Modelo selecionado para o provedor (vazio ⇒ padrão do provedor). */
   model?: string;
+  description?: string;
+  icon?: string;
+  defaultMode?: AgentMode;
+  contextPresets?: ContextPreset[];
+  allowedTools?: string[];
+  disallowedTools?: string[];
+  networkAccess?: boolean;
+  scope?: "workspace" | "global";
 }
 
 /**
@@ -136,6 +229,12 @@ export interface AgentEditorContext {
   endLine?: number;
 }
 
+export interface ApprovalOption {
+  id: string;
+  label: string;
+  kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" | string;
+}
+
 export type AcpEvent =
   | { type: "text"; content: string }
   /** Delta do raciocínio do modelo — exibido ao vivo, nunca persistido. */
@@ -143,4 +242,35 @@ export type AcpEvent =
   | { type: "status"; message: string }
   | { type: "session"; sessionId: string }
   | { type: "done"; stopReason: string }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | ({ type: "toolCall" } & Omit<ChatToolCall, "textOffset">)
+  | {
+      type: "approval";
+      requestId: string;
+      title: string;
+      detail?: string;
+      toolKind: string;
+      options: ApprovalOption[];
+      diffs?: ChatFileDiff[];
+    }
+  | { type: "approvalResolved"; requestId: string }
+  | ({ type: "usage" } & ChatUsage)
+  | { type: "models"; models: { id: string; label: string }[]; current?: string };
+
+/** Pedido de aprovação pendente (efêmero, fora do store). */
+export interface ChatApproval {
+  conversationId: string;
+  requestId: string;
+  title: string;
+  detail?: string;
+  toolKind: string;
+  options: ApprovalOption[];
+  diffs?: ChatFileDiff[];
+}
+
+/** Restrições do agente passadas ao backend (`RunOptions` no Rust). */
+export interface AgentRunOptions {
+  allowedTools: string[];
+  disallowedTools: string[];
+  networkAccess: boolean;
+}

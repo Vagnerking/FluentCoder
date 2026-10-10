@@ -90,10 +90,12 @@ responde com `respond`), `openFile`, `diff`, `openVirtualDocument`,
 
 ## UI
 
-- Abas no topo da sidebar secundária (o dock de agentes): **Agentes** (chat
-  nativo, inalterado) | uma aba por extensão suportada instalada | painéis
-  (`createWebviewPanel`) abertos pelas extensões, fecháveis. Aba lembrada em
-  `ui.agentsDockTab`. Sem extensões/Node, as abas não aparecem.
+- Abas no topo da sidebar secundária (o Fluent Chat): as abas nativas
+  **Chat** e **Agentes** (prop `nativeTabs` do `ExtensionDock`; ver
+  [Fluent Chat](agentes-ia.md)) | uma aba por extensão suportada instalada |
+  painéis (`createWebviewPanel`) abertos pelas extensões, fecháveis. Aba
+  lembrada em `ui.agentsDockTab`; `requestedTab` foca uma aba de fora (Paleta).
+  Sem extensões/Node, só as abas nativas aparecem.
 - A extensão só é **ativada ao abrir a aba** (o host sobe junto com a sidebar,
   mas só lista as instaladas).
 - `vscode.diff` e documentos virtuais abrem num modal somente leitura com o

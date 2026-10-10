@@ -1,16 +1,20 @@
-# Agentes de IA (Claude Code / Codex) — contratos de integração
+# Fluent Chat (agentes de IA: Claude Code, Codex, ACP) — contratos de integração
 
 Este documento registra as decisões obrigatórias da integração com os CLIs de
-IA. O código vive em `src-tauri/src/agents/` (backend) e
-`src/components/AgentSidebar.tsx` + `src/agents/` (frontend).
+IA. O chat chama-se **Fluent Chat** e vive na sidebar secundária. O código
+vive em `src-tauri/src/agents/` (backend: `mod.rs`, `registry.rs`,
+`events.rs`, `claude.rs`, `codex.rs`, `acp.rs`) e em `src/chat/` (lógica:
+hook `useFluentChat`, menções, contexto, transcript) +
+`src/components/chat/` (UI) + `src/agents/` (tipos/store) no frontend.
+Registro multi-CLI: [ADR 0007](../adr/0007-fluent-chat-provider-registry.md).
 
 ## Arquitetura
 
 - **Um processo por provedor+workspace**, de longa duração, gerenciado por um
   worker (`AcpState`). Nunca criar processo por mensagem — o custo de startup é
   o que deixava o chat lento.
-- O chat abre **somente na sidebar** (view `agents` da activity bar). O centro
-  do editor nunca é substituído pelo chat.
+- O chat abre **somente na sidebar secundária**. O centro do editor nunca é
+  substituído pelo chat.
 - Cada conversa guarda o **id nativo de sessão/thread** do provedor em
   `.project/agents.json` (`conversation.nativeSessionId`). É ele que permite
   retomar a conversa sem reenviar o transcript: o evento `session` do backend
@@ -19,27 +23,54 @@ IA. O código vive em `src-tauri/src/agents/` (backend) e
   **apenas fallback**, usado quando não existe sessão nativa retomável
   (conversa nova ou sessão apagada/expirada). Com sessão nativa, envia-se só a
   nova mensagem.
-- Cada agente guarda o **modelo** escolhido do provedor
-  (`AgentDefinition.model`, id do catálogo em `src/acp/providers`). O catálogo é
-  a fonte da verdade: `acpModels(provider)` lista as opções (a primeira é o
-  padrão) e `acpResolveModel(provider, model)` blinda contra ids antigos/
-  removidos caindo no padrão. O modelo é passado ao backend via `acp_prompt`
-  (`model`) e daí a cada provedor; vazio ⇒ o CLI usa o modelo padrão dele.
+- O **modelo** vem do catálogo em `src/acp/providers` (fonte da verdade):
+  agente personalizado guarda em `AgentDefinition.model`; chat direto com um
+  provedor guarda a escolha por alvo nas preferências locais
+  (`fluentChat.prefs`). `acpModels(provider, dinâmicos)` lista as opções (a
+  primeira é o padrão) e `acpResolveModel` blinda contra ids antigos/removidos
+  caindo no padrão. Agentes ACP não têm catálogo fixo: a primeira opção é
+  "Padrão do agente" (`""`) e os modelos anunciados pela sessão (evento
+  `models`) entram em runtime. Vazio ⇒ o CLI usa o modelo padrão dele.
 - **Ids de modelo são validados contra os CLIs reais, nunca chutados** (um id
-  inválido faz o turno falhar no provedor). Como validar ao atualizar o
-  catálogo: Codex → `codex app-server` + request `model/list` (retorna ids,
-  displayName e descrição); Claude → `--model` aceita o nome completo do
-  modelo da família atual (testar com `claude -p --model <id> "ok"`). Rótulos
-  devem exibir a **versão** (ex.: "Opus 4.8", "GPT-5.5").
+  inválido faz o turno falhar no provedor). Como validar sem custo ao
+  atualizar o catálogo: Codex → `codex app-server` + request `model/list`;
+  Claude → `claude -p --input-format stream-json --output-format stream-json
+  --verbose --permission-prompt-tool stdio` + `control_request`
+  `{"subtype":"initialize"}`: a resposta traz `models[].value` (usamos esses
+  aliases — `opus`, `sonnet`… — estáveis entre versões). Rótulos exibem a
+  **versão** (ex.: "Opus 5.5", "GPT-6.1-Sol"). Validado em 10/2026: Codex
+  0.162.1, Claude 2.1.296.
 
-## Referência do arquivo/seleção ativos no envio
+## Contexto anexado (menções `#`/`@`)
 
-Espelha o Claude Code: ao enviar, o chat pode anexar o **arquivo aberto** e o
-**trecho selecionado** no editor.
+Espelha o Copilot Chat: o usuário anexa contexto por **menções** no composer
+(`#`/`@` abre um popup navegável por teclado; o botão `@` da barra insere `#`)
+ou pelas sugestões do welcome. Cada menção vira uma **chip**; as chips somem
+ao enviar e ficam registradas (só o rótulo) na mensagem do usuário.
 
-- A chip de contexto no composer é preenchida pelo botão "anexar" (ícone
-  `mention`), que lê `EditorActionsApi.getSelection()` + o `activePath` no
-  momento do clique (`readEditorContext` no `App`). Some ao enviar.
+| Menção | Conteúdo no prompt |
+|---|---|
+| `#arquivo` / arquivo do índice | arquivo ativo, ou qualquer arquivo do índice do Quick Open (fuzzy em `mentionSuggestions`), com conteúdo (até 12 mil caracteres) |
+| `#seleção` | bloco `CONTEXTO DO EDITOR` (`formatEditorContextReference`) |
+| `#problemas` | diagnósticos do workspace (erros primeiro, até 60) |
+| `#grafo` | `build_context_bundle` do arquivo ativo (vizinhos no grafo, profundidade 1) |
+| `#contexto` | arquivos relevantes à pergunta: índice de conhecimento (`loadIndex`) ranqueado por `rankKnowledge` (termos da pergunta × nome/caminho/títulos/tags + vizinhança do arquivo ativo + hubs) e o conteúdo dos 2 primeiros |
+| `#terminal` | saída recente do terminal integrado (escuta global de `term-data`, ANSI removido) |
+| `@workspace` | busca no projeto guiada pelo grafo (15 arquivos, motivos, conexões, hubs) |
+
+- Agentes personalizados podem ter **presets** de contexto (anexados em todo
+  envio): `graph`, `context`, `workspace`, `problems`, `selection`.
+- Regras: o contexto é **originado do usuário** (chip/menção ou preset do
+  agente dele) — nunca um prompt de aplicativo. Os blocos são montados por
+  `assemblePrompt` (`src/chat/context.ts`) antes de `MENSAGEM DO USUÁRIO`, no
+  mesmo formato do `CONTEXTO DO EDITOR`. Falha ao obter um anexo vira um bloco
+  `CONTEXTO INDISPONÍVEL` — nunca impede o envio.
+
+### Referência do arquivo/seleção ativos
+
+- `#seleção`/`#arquivo` leem `EditorActionsApi.getSelection()` + o
+  `activePath` no momento em que a menção é escolhida (`readEditorContext` no
+  `App`).
 - `formatEditorContextReference` (em `src/agents/store.ts`) formata o bloco
   `CONTEXTO DO EDITOR` com o caminho **relativo ao workspace** (separador
   POSIX) e, quando há seleção, o intervalo de linhas + o trecho num code fence.
@@ -79,7 +110,24 @@ claude -p --input-format stream-json --output-format stream-json \
   pura — mais limpo que `default` headless, que negaria pedido a pedido);
   `plan` = `--permission-mode plan`; `edit` = `--permission-mode acceptEdits
   --disallowedTools Bash`; `auto` = `--permission-mode auto`; `bypass` =
-  `--permission-mode bypassPermissions`.
+  `--permission-mode bypassPermissions`. Restrições de agente personalizado
+  (`RunOptions`: `--allowedTools`/`--disallowedTools`) somam às do modo e,
+  como as demais flags, fazem parte da identidade do processo.
+- **Aprovações interativas:** em todos os modos exceto Bypass o processo sobe
+  com `--permission-prompt-tool stdio` (o mesmo protocolo de controle do Claude
+  Agent SDK). Pedidos de permissão chegam no stdout como
+  `{"type":"control_request","request_id":…,"request":{"subtype":"can_use_tool","tool_name","input","permission_suggestions"}}`
+  e viram cartão de aprovação; a resposta vai no stdin como
+  `{"type":"control_response","response":{"subtype":"success","request_id",…,"response":{"behavior":"allow","updatedInput":…}}}`
+  (ou `"deny"` + `message`). "Sempre nesta sessão" devolve as
+  `permission_suggestions` em `updatedPermissions` e libera a ferramenta no
+  processo. Outros `control_request` recebem `subtype: "error"`. (O caminho
+  alternativo `--permission-prompt-tool mcp__…` com uma ferramenta MCP do app
+  foi descartado: o stdio já é o canal nativo e não exige servidor extra.)
+- Chamadas de ferramenta: blocos `tool_use` das mensagens `assistant` (sem
+  `parent_tool_use_id`) viram cartões (`claude_tool_call`: título, tipo ACP,
+  diffs de Edit/MultiEdit/Write); `tool_result` das mensagens `user` os
+  completam. Consumo: `result.usage` + `total_cost_usd`.
 - Modelo → flag `--model <id>` (omitida quando vazio). Como as flags são
   por-processo, **trocar de modelo derruba e recria o processo** (igual à troca
   de modo), retomando a sessão com `--resume`.
@@ -88,7 +136,8 @@ claude -p --input-format stream-json --output-format stream-json \
   spawnar `.cmd` direto só como último recurso. Todo spawn precisa de
   `CREATE_NO_WINDOW`.
 - O servidor MCP de conhecimento do editor (`fluent-coder --mcp <root>`) é
-  injetado via `--mcp-config <arquivo temporário>`.
+  injetado via `--mcp-config <arquivo temporário>` (comando em
+  `knowledge_mcp_server`, compartilhado por todos os provedores).
 - O MCP expõe `get_graph_overview` para dar ao agente uma leitura estrutural do
   workspace antes de pedir arquivos completos: estatísticas, células/pastas,
   hubs de contexto, isolados e, opcionalmente, a vizinhança de um arquivo
@@ -103,7 +152,7 @@ IDE, igual à extensão do VS Code. Código: `src-tauri/src/agents/ide_bridge.rs
 (servidor), `src/agents/ideBridge.ts` + `ideBridgeModel.ts` (estado/requests)
 e `src/components/ClaudeDiffReview.tsx` (diff).
 
-- **Não ligar ao chat da sidebar**: `claude -p` nunca conecta na IDE
+- **Não ligar ao Fluent Chat**: `claude -p` nunca conecta na IDE
   (limitação do CLI). A ponte atende só o CLI interativo.
 - Um servidor WS por processo do app, em `127.0.0.1`. Lock file
   `~/.claude/ide/<porta>.lock` (`$CLAUDE_CONFIG_DIR/ide` se definido) com
@@ -156,12 +205,111 @@ Mesmo protocolo da extensão IDE oficial (validado no código da tag
 - Modos → sandbox + approvalPolicy nativos (variantes validadas no 0.136.0):
   `ask`/`plan` = `read-only`/`never`; `edit` = `workspace-write`
   (`writableRoots=[workspace]`, rede off)/`never`; `auto` = `workspace-write`/
-  `on-request` (escalações chegam como requests e este cliente headless as
-  nega via `reject_server_request` — equivalente ao Auto sem aprovador);
-  `bypass` = `danger-full-access`/`never`.
+  `on-request`; `bypass` = `danger-full-access`/`never`. Agente personalizado
+  pode liberar a rede do `workspace-write` (`RunOptions.networkAccess`).
+- **Aprovações interativas (modo Agente):** os requests do servidor
+  `item/commandExecution/requestApproval` e `item/fileChange/requestApproval`
+  (e os legados `execCommandApproval`/`applyPatchApproval`) viram cartões; a
+  resposta é `{"decision": "accept" | "acceptForSession" | "decline" |
+  "cancel"}` (legado: `approved`/`approved_for_session`/`{denied}`/`abort`).
+  O diff do `fileChange` vem do `item/started` do mesmo `itemId`.
+  `serverRequest/resolved` e o cancelamento tiram o cartão da tela. Outros
+  requests continuam recusados (`reject_server_request`).
+- Chamadas de ferramenta: `item/started|completed` de `commandExecution`,
+  `fileChange` (diff unificado), `mcpToolCall` e `webSearch`. Consumo:
+  `thread/tokenUsage/updated` (último turno + janela de contexto).
+- MCP de conhecimento: `codex app-server -c
+  mcp_servers.fluent_knowledge.command=<exe> -c
+  mcp_servers.fluent_knowledge.args=["--mcp","<root>"]` (valores TOML;
+  validado com `mcpServerStatus/list` no 0.162.1).
 - Modelo → campo `model` no `thread/start` e no `turn/start` (omitido quando
   vazio). No `turn/start` ele honra a troca de modelo mesmo numa thread já
   retomada, sem recriar a thread.
+
+## Agentes ACP (Agent Client Protocol)
+
+Cliente genérico em `src-tauri/src/agents/acp.rs` para os CLIs do registro
+(`registry.rs`, `ACP_AGENTS`): Gemini CLI (`gemini --acp`, fallback
+`--experimental-acp`), GitHub Copilot CLI (`copilot --acp --stdio`), opencode
+(`opencode acp`), Qwen Code (`qwen --acp`, fallback `--experimental-acp`),
+Goose (`goose acp`), Kimi (`kimi acp`), Augment (`auggie --acp`) e Cursor
+Agent (`cursor-agent acp`). Comandos conferidos no registro oficial do ACP em
+10/2026 — revalidar ao atualizar.
+
+- **Um processo por provedor+workspace**; cada conversa é uma sessão ACP
+  (`session/new` com `cwd` + `mcpServers: [fluent-knowledge]`). Retomada:
+  `session/load` (quando o agente anuncia `loadSession`) com o id salvo em
+  `nativeSessionId`; o replay do histórico em `session/update` é ignorado (a UI
+  já tem a conversa). Falhou ⇒ sessão nova com o `contextPrompt`.
+- `initialize` declara `fs`/`terminal` como **não suportados**: o agente lê,
+  escreve e executa por conta própria; nós exibimos as chamadas.
+- Streaming: `agent_message_chunk` → `text`, `agent_thought_chunk` →
+  `thought`, `tool_call`/`tool_call_update` → `toolCall` (diffs `oldText`/
+  `newText`), `plan` → cartão "Plano", `usage_update` → `usage`. Variantes
+  desconhecidas são ignoradas.
+- Modos: o modo nativo do agente é aplicado quando existe
+  (`configOptions` de categoria `mode` via `session/set_config_option`, ou
+  `modes` via `session/set_mode`), casando por vocabulário (`pick_native_mode`:
+  plan, acceptEdits/auto_edit, default, bypassPermissions/yolo…). Além disso,
+  `session/request_permission` segue a política do modo
+  (`permission_policy`): Bypass permite tudo; Perguntar/Planejar negam
+  escrita/execução; Editar permite edições e nega comandos; Agente pergunta.
+- Modelo: `configOptions` de categoria `model` (ou `models` instável via
+  `session/set_model`) quando o id escolhido está entre os anunciados.
+- Cancelamento: notificação `session/cancel`; pedidos de permissão pendentes
+  recebem `{"outcome":{"outcome":"cancelled"}}`; o turno termina `cancelled`.
+- Erro de autenticação no `session/new` ⇒ mensagem acionável ("rode `<cli>` no
+  terminal para autenticar").
+- **Não usar ACP para o Claude** (o adaptador `npx` continua proibido) nem
+  para o Codex: os caminhos nativos acima prevalecem.
+- Teste sem custo: `tools/acp-fixture/fake-agent.mjs` (agente falso);
+  `cargo test fake_agent_end_to_end` dirige o cliente real contra ele e
+  `FLUENT_ACP_FAKE=1 npm run tauri dev` o mostra no seletor como "Agente ACP
+  de teste".
+
+## Aprovações interativas
+
+- Todos os provedores emitem `approval {requestId, title, detail, toolKind,
+  options, diffs}`; o cartão (Permitir uma vez / Sempre nesta sessão / Negar,
+  ou as opções do agente ACP) responde por `chat_respond_approval(requestId,
+  optionId)`. O `ApprovalBroker` do `AcpState` roteia a resposta ao turno que
+  espera; `approvalResolved` remove o cartão.
+- Aprovações são **efêmeras** (fora do store) e pertencem à conversa dona;
+  terminar/cancelar o turno descarta as pendentes.
+
+## Transcript rico
+
+- `toolCall` é upsert por `id` (`upsertToolCall`): a chamada guarda o offset do
+  texto em que começou e o transcript intercala texto e grupos de cartões
+  (`interleaveTranscript`). Persistidas em `AgentMessage.toolCalls` (diffs
+  capados em 20 mil caracteres); chamadas abertas no fim do turno são
+  encerradas (`settleToolCalls`).
+- "Abrir diff" abre o DiffEditor do Monaco (modal somente leitura); diffs
+  unificados do Codex são reconstruídos por `unifiedDiffToTexts`.
+- `usage` é mesclado em `AgentMessage.usage` e exibido no rodapé da resposta.
+- Ações: copiar (mensagem/resposta/bloco de código), **tentar de novo** e
+  **editar a última pergunta**. As duas últimas criam um *fork* da conversa
+  (novo id, sem a última troca e sem `nativeSessionId`): a sessão nativa não
+  pode ser rebobinada, então o provedor recebe o `contextPrompt` com o
+  histórico da UI até ali.
+- Desempenho: mensagens memoizadas (o streaming só re-renderiza a resposta em
+  andamento), deltas coalescidos por frame, só as últimas 40 mensagens
+  montadas ("Mostrar anteriores") e `content-visibility: auto`.
+
+## Agentes personalizados e store
+
+- `.project/agents.json` **v2** (migração aditiva do v1 em
+  `normalizeAgentStore`; um v1 válido sai idêntico, só com `version: 2`):
+  `AgentDefinition` ganha `description`, `icon`, `defaultMode`,
+  `contextPresets`, `allowedTools`/`disallowedTools` (Claude), `networkAccess`
+  (Codex) e `scope`; `provider` é qualquer id do registro.
+- Agentes **globais** (`scope: "global"`) ficam em
+  `<app_data>/fluent-chat/agents.json` (`chat_global_agents_load|save`).
+- Conversa aponta para `agentId` = id do agente **ou** `provider:<id>` (chat
+  direto, zero-setup). Excluir um agente mantém as conversas dele com o
+  provedor base.
+- As instruções do agente são o `initialPrompt` (definido pelo usuário) e vão
+  só no `contextPrompt` de sessão nova.
 
 ## Modos sem prompt injetado
 
@@ -175,14 +323,19 @@ nativamente.
 
 Os únicos prefixos possíveis na mensagem enviada, todos originados do usuário:
 
-- o **prompt inicial do agente** (`AgentDefinition.initialPrompt`), quando o
-  usuário o definiu ao criar o agente — vai no `contextPrompt` de sessão nova;
-- a **referência do editor** (arquivo/seleção), quando o usuário anexa a chip;
+- o **prompt inicial do agente** (`AgentDefinition.initialPrompt`, as
+  "Instruções" do agente personalizado), quando o usuário o definiu — vai no
+  `contextPrompt` de sessão nova;
+- os **blocos de contexto** que o usuário anexou (menções/chips) ou que o
+  agente personalizado dele define como preset;
 - o **histórico da UI**, reenviado apenas quando a sessão nativa se perdeu.
 
 Sem nada disso, `buildAgentPrompt` retorna a mensagem crua.
 
-Os modos são `ask | plan | edit | auto | bypass` (espelham os do Claude Code);
+Os modos são `ask | plan | edit | auto | bypass` (espelham os do Claude Code)
+e aparecem na UI com os nomes do Copilot: **Perguntar** (ask), **Planejar**
+(plan), **Editar** (edit), **Agente** (auto) e **Bypass** (com aviso fixo no
+composer);
 `dev` é o nome legado de `bypass` — aceito no parse do backend e migrado no
 store pelo frontend (`normalizeAgentMode`). Modos somente leitura (ask/plan)
 não criam snapshot de reversão no envio (`READ_ONLY_MODES`).
@@ -201,26 +354,41 @@ não criam snapshot de reversão no envio (`READ_ONLY_MODES`).
 
 ## Regras de UI
 
-- Prompt inicial do agente é **opcional** (só o nome é obrigatório).
-- O composer traz um **seletor de modo de permissão** (Ask/Plan/Edit/Auto/
-  Bypass) e um **seletor de modelo**, ambos no popover `ComposerPicker`
-  (padrão do seletor de modos do Claude Code: ícone + título + descrição +
-  check no selecionado; `align` start/end para não vazar da sidebar), além do
-  botão de **anexar contexto** do editor. O modelo também aparece no
-  formulário de criação/edição do agente e é persistido em
-  `AgentDefinition.model`.
-- A sidebar secundária tem abas: **Agentes** (este chat) e, quando instaladas
-  no VS Code do usuário, a UI **real** das extensões Claude Code/Codex
-  hospedada pelo mini extension host (PoC) — contratos em
-  [Extensões VS Code hospedadas](extensoes-vscode.md). As abas de extensão não
-  mudam nada deste chat.
+- **Zero-setup:** abrir o Fluent Chat mostra o composer pronto (welcome com
+  sugestões); a conversa é criada no primeiro envio com o alvo escolhido. Não
+  é preciso criar agente. Se o último alvo não está instalado, o chat novo cai
+  no primeiro provedor instalado.
+- Instruções do agente são **opcionais** (só o nome é obrigatório).
+- Composer: textarea com auto-altura (até 240px), **Enter envia /
+  Shift+Enter quebra linha**, botão Parar durante o streaming, chips de
+  contexto e a barra inferior com os seletores no popover `ComposerPicker`
+  (WAI-ARIA de menu: setas/Home/End, Enter, Esc devolve o foco): **agente**
+  (provedores instalados, não instalados desabilitados com a dica de
+  instalação, agentes personalizados e "Gerenciar agentes…"), **modo** e
+  **modelo**. Trocar de agente numa conversa com mensagens abre uma conversa
+  nova (a sessão nativa pertence ao alvo anterior).
+- A sidebar secundária tem abas: **Chat** (padrão), **Agentes** (gerenciador
+  de agentes personalizados + provedores detectados) e, quando instaladas no
+  VS Code do usuário, a UI **real** das extensões Claude Code/Codex hospedada
+  pelo mini extension host (PoC) — contratos em
+  [Extensões VS Code hospedadas](extensoes-vscode.md). As abas nativas entram
+  pelo `nativeTabs` do `ExtensionDock` (chaves `fluent-chat`/`fluent-agents`);
+  as abas de extensão não mudam nada deste chat.
+- Paleta: "Fluent Chat: Abrir", "Nova Conversa", "Histórico de Conversas",
+  "Gerenciar Agentes" e "Reiniciar Agentes de IA" (`acp_stop_all`; os
+  processos de agentes não são servidores de linguagem e ficam fora do
+  "Resetar Servidores de Código" — ver
+  [Paleta de Comandos](command-palette.md)).
+- Histórico: busca (título + mensagens, sem acento), grupos por data,
+  renomear inline e excluir com confirmação.
 - O chat é uma **sidebar secundária**, ancorada na borda **oposta** à barra
   lateral principal (nunca na principal). Largura redimensionável, padrão
   500px, persistida em `ui.agentsSidebarWidth`. O lado é derivado:
   `agentsSide = oposto de sidebarSide`, então as duas nunca colidem.
 - O toggle mostra/oculta essa sidebar e fica na **title bar**, à esquerda dos
   botões de layout (barra lateral / painel).
-- Criar/editar agente, histórico e chat acontecem todos dentro dessa sidebar,
+- Criar/editar agente, histórico e chat acontecem todos dentro dessa sidebar
+  (título do toggle: "Mostrar/Ocultar Fluent Chat"),
   seguindo o [guia Fluent 2](../design/fluent-design.md).
 - Texto da conversa em contraste alto (`--text`), não secundário/muted.
 - **Status e erro pertencem à conversa que os produziu**: no `App`, os estados
@@ -241,7 +409,7 @@ não criam snapshot de reversão no envio (`READ_ONLY_MODES`).
   o melhor candidato no índice do Quick Open (sufixo do caminho relativo >
   nome do arquivo; empate = menos aninhado) antes de mostrar erro — agentes
   costumam citar só o nome (`Controller.cs`).
-- **Pré-aquecimento**: selecionar um chat dispara `acp_warm` (idempotente), que
+- **Pré-aquecimento**: com o Fluent Chat visível, o alvo atual dispara `acp_warm` (idempotente), que
   sobe o worker do provedor — no Codex isso inclui o `app-server` +
   `initialize` — antes do primeiro envio. A latência restante é do turno do
   modelo em si (medida: ~5–6s para um prompt trivial no gpt-5.5 com reasoning
@@ -252,7 +420,7 @@ não criam snapshot de reversão no envio (`READ_ONLY_MODES`).
   Grammars carregam sob demanda por linguagem; falha/linguagem desconhecida/
   bloco > 20k chars degradam para o bloco plano (mesma moldura, sem salto de
   layout). O override fica no `pre` do ReactMarkdown (`CodeBlock` no
-  `AgentSidebar`); o `code` custom segue tratando apenas o inline.
+  `ChatMarkdown`, que também ganha a barra com linguagem + "Copiar"); o `code` custom segue tratando apenas o inline.
 - **Chips de `code` inline têm coloração heurística por token**
   (`src/agents/inlineCode.ts`, função pura `tokenizeInline`): palavra-chave/
   fluxo de controle/`Chamada(`/`PascalCase`/número/string nas cores Dark+ do

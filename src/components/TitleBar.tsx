@@ -14,7 +14,7 @@ interface TitleBarProps {
   /** Bottom panel (terminal/problems) open state + toggle. */
   panelOpen: boolean;
   onTogglePanel: () => void;
-  /** Secondary side bar (AI agents chat) open state + toggle. */
+  /** Secondary side bar (Fluent Chat) open state + toggle. */
   agentsOpen: boolean;
   onToggleAgents: () => void;
   /** Menu definitions (File, Edit, …) rendered in the left-hand MenuBar. */
@@ -90,13 +90,13 @@ export function TitleBar({
       {/* VS Code-style layout controls, just left of the window buttons. */}
       <div className="titlebar-layout" data-tauri-drag-region>
         <Tooltip
-          label={agentsOpen ? "Ocultar chat de agentes" : "Mostrar chat de agentes"}
+          label={agentsOpen ? "Ocultar Fluent Chat" : "Mostrar Fluent Chat"}
           placement="bottom"
         >
           <button
             className={`titlebar-layout-btn${agentsOpen ? " active" : ""}`}
             onClick={onToggleAgents}
-            aria-label="Alternar chat de agentes"
+            aria-label="Alternar Fluent Chat"
             aria-pressed={agentsOpen}
           >
             <ChatIcon />
@@ -190,15 +190,19 @@ function SidebarIcon({ open }: { open: boolean }) {
   );
 }
 
-/** Chat bubble glyph for the AI agents secondary side bar toggle. */
+/** Fluent Chat glyph (balão + brilho) for the secondary side bar toggle. */
 function ChatIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 16 16">
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
       <path
         d="M2 3.5 A1.5 1.5 0 0 1 3.5 2 h9 A1.5 1.5 0 0 1 14 3.5 v6 A1.5 1.5 0 0 1 12.5 11 H6.5 L3.5 13.5 V11 H3.5 A1.5 1.5 0 0 1 2 9.5 Z"
         stroke="currentColor"
         fill="none"
         strokeLinejoin="round"
+      />
+      <path
+        d="M8 4 L8.7 5.8 L10.5 6.5 L8.7 7.2 L8 9 L7.3 7.2 L5.5 6.5 L7.3 5.8 Z"
+        fill="currentColor"
       />
     </svg>
   );

@@ -64,6 +64,19 @@ linguagem/linter e fica fora deste reset: reiniciá-la derrubaria a sessão do
 **"Reiniciar Integração com o Claude Code (IDE)"** (`claude.restartIdeBridge`),
 que troca porta e token e regrava o lock file.
 
+### Exceção: agentes do Fluent Chat (Claude, Codex, ACP)
+
+Os processos dos agentes de IA do Fluent Chat (`claude` stream-json,
+`codex app-server` e os CLIs ACP — Gemini, opencode, Qwen Code, Copilot CLI,
+Goose…) **não** são servidores de linguagem/linter e ficam fora deste reset:
+derrubá-los interromperia um turno em andamento sem ganho para os
+diagnósticos. Eles têm comando próprio, **"Fluent Chat: Reiniciar Agentes de
+IA"** (`fluentChat.restartAgents` → `acp_stop_all`), que mata todos os
+workers; o próximo envio sobe o processo de novo e retoma a sessão nativa.
+Todo provedor novo entra pelo registro (`src-tauri/src/agents/registry.rs`) e
+fica coberto automaticamente por esse comando. O servidor MCP de conhecimento
+(`fluent-coder --mcp`) é filho de cada CLI e morre com ele.
+
 ## Como estender com novos comandos
 
 Adicione uma entrada ao array `commands` em `App.tsx`:

@@ -134,7 +134,47 @@ export type IconAction =
   | "lock"
   // Form controls (src/components/ui)
   | "checkmark"
-  | "indeterminate";
+  | "indeterminate"
+  // Fluent Chat (sidebar secundária de IA)
+  | "fluentChat"
+  | "sparkle"
+  | "robot"
+  | "retry"
+  | "editMessage"
+  | "thinking"
+  | "toolRead"
+  | "toolEdit"
+  | "toolExecute"
+  | "toolSearch"
+  | "toolFetch"
+  | "toolPlan"
+  | "toolOther"
+  | "toolDelete"
+  | "toolMove"
+  | "usage"
+  | "selection"
+  | "workspaceContext"
+  | "linkExternal"
+  | "globe"
+  | "pending"
+  | "duplicate"
+  // Ícones escolhíveis de agentes personalizados
+  | "agentHubot"
+  | "agentRobot"
+  | "agentSparkle"
+  | "agentBeaker"
+  | "agentBug"
+  | "agentBook"
+  | "agentRocket"
+  | "agentShield"
+  | "agentTools"
+  | "agentLaw"
+  | "agentMortarBoard"
+  | "agentPulse"
+  | "agentDatabase"
+  | "agentPaintcan"
+  | "agentGlobe"
+  | "agentOrganization";
 
 /** action → codicon name (without the `codicon-` prefix). */
 export const CODICON_MAP: Record<IconAction, string> = {
@@ -278,6 +318,46 @@ export const CODICON_MAP: Record<IconAction, string> = {
   // Form controls (src/components/ui)
   checkmark: "check",
   indeterminate: "dash",
+
+  // Fluent Chat
+  fluentChat: "chat-sparkle",
+  sparkle: "sparkle",
+  robot: "robot",
+  retry: "debug-rerun",
+  editMessage: "edit",
+  thinking: "lightbulb",
+  toolRead: "eye",
+  toolEdit: "edit",
+  toolExecute: "terminal",
+  toolSearch: "search",
+  toolFetch: "globe",
+  toolPlan: "checklist",
+  toolOther: "tools",
+  toolDelete: "trash",
+  toolMove: "arrow-swap",
+  usage: "dashboard",
+  selection: "selection",
+  workspaceContext: "folder-library",
+  linkExternal: "link-external",
+  globe: "globe",
+  pending: "circle-large-outline",
+  duplicate: "copy",
+  agentHubot: "hubot",
+  agentRobot: "robot",
+  agentSparkle: "sparkle",
+  agentBeaker: "beaker",
+  agentBug: "bug",
+  agentBook: "book",
+  agentRocket: "rocket",
+  agentShield: "shield",
+  agentTools: "tools",
+  agentLaw: "law",
+  agentMortarBoard: "mortar-board",
+  agentPulse: "pulse",
+  agentDatabase: "database",
+  agentPaintcan: "paintcan",
+  agentGlobe: "globe",
+  agentOrganization: "organization",
 };
 
 /** Codicon names that should spin (loading/sync feedback). */

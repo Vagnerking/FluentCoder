@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  agentRunOptions,
   buildAgentPrompt,
+  capToolCall,
   EMPTY_AGENT_STORE,
+  normalizeGlobalAgents,
   formatEditorContextReference,
   normalizeAgentStore,
   replaceConversation,
@@ -172,7 +175,7 @@ test("migra o modo legado `dev` das mensagens salvas para `bypass`", () => {
 
 test("substitui apenas a conversa selecionada", () => {
   const store: AgentStore = {
-    version: 1,
+    version: 2,
     agents: [agent],
     conversations: [
       {
@@ -193,4 +196,110 @@ test("substitui apenas a conversa selecionada", () => {
 
   assert.equal(next.conversations[0]?.title, "Atualizada");
   assert.equal(store.conversations[0]?.title, "Original");
+});
+
+test("migra agents.json v1 → v2 sem perder dados", () => {
+  const v1 = {
+    version: 1,
+    agents: [{ ...agent, model: "gpt-5.5" }],
+    conversations: [
+      {
+        id: "conversation-1",
+        agentId: agent.id,
+        title: "Antiga",
+        nativeSessionId: "thread-1",
+        messages: [
+          { id: "m1", role: "user", content: "Oi", createdAt: agent.createdAt, mode: "ask" },
+          { id: "m2", role: "assistant", content: "Olá", createdAt: agent.createdAt, status: "done" },
+        ],
+        createdAt: agent.createdAt,
+        updatedAt: agent.updatedAt,
+      },
+    ],
+  };
+  const store = normalizeAgentStore(v1);
+  assert.equal(store.version, 2);
+  assert.deepEqual(store.agents[0], { ...agent, model: "gpt-5.5" });
+  assert.equal(store.conversations[0].nativeSessionId, "thread-1");
+  assert.equal(store.conversations[0].messages.length, 2);
+  // Um store v1 válido sai idêntico, só com a versão nova.
+  assert.deepEqual(store.conversations, v1.conversations);
+});
+
+test("v2 aceita provedores do registro e campos de agente personalizado", () => {
+  const store = normalizeAgentStore({
+    version: 2,
+    agents: [
+      {
+        ...agent,
+        id: "a2",
+        provider: "gemini",
+        description: "Revisor de PR",
+        icon: "agentShield",
+        defaultMode: "dev",
+        contextPresets: ["graph", "invalido", "problems"],
+        allowedTools: ["Read", "", 3],
+        disallowedTools: [],
+        networkAccess: true,
+        scope: "workspace",
+      },
+      { ...agent, id: "a3", provider: "" },
+    ],
+    conversations: [
+      {
+        id: "c1",
+        agentId: "provider:codex",
+        title: "Direto",
+        messages: [
+          {
+            id: "m1",
+            role: "assistant",
+            content: "x",
+            createdAt: "",
+            toolCalls: [{ id: "t1", kind: "edit" }, { kind: "sem id" }],
+            usage: { inputTokens: 3 },
+          },
+        ],
+        createdAt: "",
+        updatedAt: "",
+      },
+    ],
+  });
+  assert.equal(store.agents.length, 1, "provider vazio é descartado");
+  const custom = store.agents[0];
+  assert.equal(custom.provider, "gemini");
+  assert.equal(custom.defaultMode, "bypass");
+  assert.deepEqual(custom.contextPresets, ["graph", "problems"]);
+  assert.deepEqual(custom.allowedTools, ["Read"]);
+  assert.equal(custom.disallowedTools, undefined);
+  assert.equal(custom.scope, undefined, "workspace é o padrão implícito");
+  const message = store.conversations[0].messages[0];
+  assert.deepEqual(message.toolCalls, [{ id: "t1", kind: "edit", textOffset: 0 }]);
+  assert.deepEqual(message.usage, { inputTokens: 3 });
+});
+
+test("agentes globais vêm marcados com scope global", () => {
+  const agents = normalizeGlobalAgents({ version: 2, agents: [agent, { nome: "lixo" }] });
+  assert.equal(agents.length, 1);
+  assert.equal(agents[0].scope, "global");
+  assert.deepEqual(normalizeGlobalAgents(null), []);
+});
+
+test("restrições do agente para o backend têm padrão seguro", () => {
+  assert.deepEqual(agentRunOptions(null), { allowedTools: [], disallowedTools: [], networkAccess: false });
+  assert.deepEqual(agentRunOptions({ allowedTools: ["Read"], networkAccess: true }), {
+    allowedTools: ["Read"],
+    disallowedTools: [],
+    networkAccess: true,
+  });
+});
+
+test("diffs enormes são cortados antes de persistir", () => {
+  const call = capToolCall({
+    id: "t",
+    textOffset: 0,
+    diffs: [{ path: "a", newText: "x".repeat(30_000) }],
+  });
+  assert.ok(call.diffs![0].newText!.length < 21_000);
+  assert.ok(call.diffs![0].newText!.endsWith("…(truncado)"));
 });

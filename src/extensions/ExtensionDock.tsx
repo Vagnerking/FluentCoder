@@ -12,10 +12,21 @@ import type { EditorStatePayload, HostEvent, InstalledExtension, WebviewInfo } f
 const TAB_KEY = "ui.agentsDockTab";
 const AGENTS_TAB = "agents";
 
+/** Aba nativa do app no topo da sidebar (ex.: "Chat", "Agentes" do Fluent Chat). */
+export interface NativeDockTab {
+  key: string;
+  label: string;
+  node: ReactNode;
+}
+
 interface Props {
   rootPath: string | null;
-  /** Conteúdo nativo da aba "Agentes" (o AgentSidebar existente). */
-  agentsNode: ReactNode;
+  /** Conteúdo nativo da aba "Agentes" (legado; use `nativeTabs`). */
+  agentsNode?: ReactNode;
+  /** Abas nativas, antes das abas das extensões. A primeira é a padrão. */
+  nativeTabs?: NativeDockTab[];
+  /** Pedido externo para focar uma aba (ex.: Paleta → "Gerenciar agentes"). */
+  requestedTab?: { key: string; nonce: number } | null;
   /** Abre um arquivo no editor (linha 1-based opcional). */
   onOpenFile: (path: string, line?: number) => void;
   /** Snapshot do editor ativo publicado como `activeTextEditor` às extensões. */
@@ -50,7 +61,10 @@ function readTab(): string {
  * extensões VS Code instaladas (Claude Code, Codex), hospedadas pelo
  * mini extension host (`tools/ext-host`). Ver docs/context/extensoes-vscode.md.
  */
-export function ExtensionDock({ rootPath, agentsNode, onOpenFile, readEditorState }: Props) {
+export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab, onOpenFile, readEditorState }: Props) {
+  const natives: NativeDockTab[] =
+    nativeTabs ?? [{ key: AGENTS_TAB, label: "Agentes", node: agentsNode }];
+  const defaultTab = natives[0]?.key ?? AGENTS_TAB;
   const [tab, setTab] = useState<string>(readTab);
   const [installed, setInstalled] = useState<InstalledExtension[]>([]);
   const [hostError, setHostError] = useState<string | null>(null);
@@ -74,6 +88,10 @@ export function ExtensionDock({ rootPath, agentsNode, onOpenFile, readEditorStat
       /* ignora */
     }
   }, []);
+
+  useEffect(() => {
+    if (requestedTab) selectTab(requestedTab.key);
+  }, [requestedTab, selectTab]);
 
   // Sobe o host (barato: só Node + servidor HTTP; nada é ativado ainda).
   const start = useCallback(() => {
@@ -238,20 +256,24 @@ export function ExtensionDock({ rootPath, agentsNode, onOpenFile, readEditorStat
     ...installed.map((e) => ({ key: e.id, label: e.label, extensionId: e.id, viewIds: e.viewIds })),
     ...panels.map((p) => ({ key: `panel:${p.handle}`, label: p.title || p.viewType, extensionId: p.extensionId, panel: p })),
   ];
-  const activeTab = tab === AGENTS_TAB || tabs.some((t) => t.key === tab) ? tab : AGENTS_TAB;
+  const isNative = (key: string) => natives.some((n) => n.key === key);
+  const activeTab = isNative(tab) || tabs.some((t) => t.key === tab) ? tab : defaultTab;
 
   return (
     <div className="ext-dock">
-      {tabs.length > 0 && (
-        <div className="ext-dock-tabs" role="tablist" aria-label="Agentes e extensões">
-          <button
-            role="tab"
-            aria-selected={activeTab === AGENTS_TAB}
-            className={`ext-dock-tab${activeTab === AGENTS_TAB ? " active" : ""}`}
-            onClick={() => selectTab(AGENTS_TAB)}
-          >
-            Agentes
-          </button>
+      {(tabs.length > 0 || natives.length > 1) && (
+        <div className="ext-dock-tabs" role="tablist" aria-label="Fluent Chat e extensões">
+          {natives.map((n) => (
+            <button
+              key={n.key}
+              role="tab"
+              aria-selected={activeTab === n.key}
+              className={`ext-dock-tab${activeTab === n.key ? " active" : ""}`}
+              onClick={() => selectTab(n.key)}
+            >
+              {n.label}
+            </button>
+          ))}
           {tabs.map((t) => (
             <span key={t.key} className={`ext-dock-tab-wrap${activeTab === t.key ? " active" : ""}`}>
               <button
@@ -282,9 +304,11 @@ export function ExtensionDock({ rootPath, agentsNode, onOpenFile, readEditorStat
       )}
 
       <div className="ext-dock-body">
-        <div className="ext-dock-pane" hidden={activeTab !== AGENTS_TAB}>
-          {agentsNode}
-        </div>
+        {natives.map((n) => (
+          <div key={n.key} className="ext-dock-pane" hidden={activeTab !== n.key}>
+            {n.node}
+          </div>
+        ))}
         {tabs.map((t) => {
           const isActive = activeTab === t.key;
           const state = t.panel ?? views[t.extensionId];
@@ -304,7 +328,7 @@ export function ExtensionDock({ rootPath, agentsNode, onOpenFile, readEditorStat
             </div>
           );
         })}
-        {hostError && activeTab !== AGENTS_TAB && (
+        {hostError && !isNative(activeTab) && (
           <div className="ext-webview-status error" role="alert">
             {hostError}{" "}
             <button className="ext-dock-retry" onClick={start}>

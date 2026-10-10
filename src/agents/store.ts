@@ -1,19 +1,27 @@
 // Extensão explícita: este import carrega valor em runtime e os testes rodam
 // no Node com strip-types, que não resolve import sem extensão.
 import {
+  AGENT_STORE_VERSION,
+  CONTEXT_PRESETS,
   normalizeAgentMode,
   type AgentConversation,
   type AgentDefinition,
   type AgentEditorContext,
   type AgentMessage,
+  type AgentRunOptions,
   type AgentStore,
+  type ChatToolCall,
+  type ContextPreset,
 } from "./types.ts";
 
 export const EMPTY_AGENT_STORE: AgentStore = {
-  version: 1,
+  version: AGENT_STORE_VERSION,
   agents: [],
   conversations: [],
 };
+
+/** Teto de caracteres por texto de diff persistido (o `agents.json` não incha). */
+const MAX_DIFF_CHARS = 20_000;
 
 export function createLocalId(prefix: string): string {
   const random =
@@ -22,18 +30,99 @@ export function createLocalId(prefix: string): string {
   return `${prefix}-${random}`;
 }
 
+/**
+ * Normaliza (e migra) o `.project/agents.json`.
+ *
+ * - v1 → v2: o `provider` deixa de ser só `codex|claude` (registro multi-CLI);
+ *   agentes ganham campos opcionais (descrição, ícone, modo padrão, presets de
+ *   contexto, ferramentas, rede); conversas podem apontar para um provedor
+ *   direto (`provider:<id>`); mensagens ganham `toolCalls`/`usage`/
+ *   `attachments`. Nada é removido de um v1 válido — a migração é aditiva.
+ * - Entradas malformadas são descartadas sem derrubar o resto.
+ */
 export function normalizeAgentStore(value: unknown): AgentStore {
   if (!value || typeof value !== "object") return { ...EMPTY_AGENT_STORE };
   const candidate = value as Partial<AgentStore>;
   return {
-    version: 1,
+    version: AGENT_STORE_VERSION,
     agents: Array.isArray(candidate.agents)
-      ? candidate.agents.filter(isAgentDefinition)
+      ? candidate.agents.filter(isAgentDefinition).map(normalizeAgent)
       : [],
     conversations: Array.isArray(candidate.conversations)
       ? candidate.conversations.filter(isConversation).map(normalizeConversation)
       : [],
   };
+}
+
+/** Agentes globais (dados do app): mesmo formato, sem conversas. */
+export function normalizeGlobalAgents(value: unknown): AgentDefinition[] {
+  if (!value || typeof value !== "object") return [];
+  const agents = (value as { agents?: unknown }).agents;
+  return Array.isArray(agents)
+    ? agents
+        .filter(isAgentDefinition)
+        .map((agent) => ({ ...normalizeAgent(agent), scope: "global" as const }))
+    : [];
+}
+
+function stringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const list = value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return list.length ? list : undefined;
+}
+
+function normalizeAgent(agent: AgentDefinition): AgentDefinition {
+  const next: AgentDefinition = { ...agent };
+  const mode = normalizeAgentMode(agent.defaultMode);
+  if (mode) next.defaultMode = mode;
+  else delete next.defaultMode;
+  const presets = Array.isArray(agent.contextPresets)
+    ? agent.contextPresets.filter((preset): preset is ContextPreset =>
+        CONTEXT_PRESETS.includes(preset),
+      )
+    : [];
+  if (presets.length) next.contextPresets = presets;
+  else delete next.contextPresets;
+  const allowed = stringList(agent.allowedTools);
+  if (allowed) next.allowedTools = allowed;
+  else delete next.allowedTools;
+  const disallowed = stringList(agent.disallowedTools);
+  if (disallowed) next.disallowedTools = disallowed;
+  else delete next.disallowedTools;
+  if (typeof agent.description !== "string") delete next.description;
+  if (typeof agent.icon !== "string") delete next.icon;
+  if (typeof agent.networkAccess !== "boolean") delete next.networkAccess;
+  if (agent.scope !== "global") delete next.scope;
+  return next;
+}
+
+function capText(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  return value.length > MAX_DIFF_CHARS
+    ? `${value.slice(0, MAX_DIFF_CHARS)}\n…(truncado)`
+    : value;
+}
+
+function normalizeToolCalls(value: unknown): ChatToolCall[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const calls = value.filter(
+    (call): call is ChatToolCall =>
+      !!call &&
+      typeof call === "object" &&
+      typeof (call as ChatToolCall).id === "string",
+  );
+  return calls.length
+    ? calls.map((call) => ({
+        ...call,
+        textOffset:
+          typeof call.textOffset === "number" && call.textOffset >= 0
+            ? call.textOffset
+            : 0,
+      }))
+    : undefined;
 }
 
 /**
@@ -44,13 +133,25 @@ function normalizeConversation(
   conversation: AgentConversation,
 ): AgentConversation {
   const messages = conversation.messages.filter(isMessage).map((message) => {
+    let next = message;
     const mode = normalizeAgentMode(message.mode);
-    if (mode === message.mode) return message;
-    if (mode === undefined) {
-      const { mode: _dropped, ...rest } = message;
-      return rest;
+    if (mode !== message.mode) {
+      if (mode === undefined) {
+        const { mode: _dropped, ...rest } = message;
+        next = rest;
+      } else {
+        next = { ...message, mode };
+      }
     }
-    return { ...message, mode };
+    if (message.toolCalls !== undefined) {
+      const toolCalls = normalizeToolCalls(message.toolCalls);
+      if (toolCalls) next = { ...next, toolCalls };
+      else {
+        const { toolCalls: _dropped, ...rest } = next;
+        next = rest;
+      }
+    }
+    return next;
   });
   const untouched =
     messages.length === conversation.messages.length &&
@@ -58,8 +159,22 @@ function normalizeConversation(
   return untouched ? conversation : { ...conversation, messages };
 }
 
+/** Limita diffs grandes (ex.: `Write` de um arquivo inteiro) antes de persistir. */
+export function capToolCall(call: ChatToolCall): ChatToolCall {
+  if (!call.diffs?.length) return call;
+  return {
+    ...call,
+    diffs: call.diffs.map((diff) => ({
+      ...diff,
+      oldText: capText(diff.oldText),
+      newText: capText(diff.newText),
+      unified: capText(diff.unified),
+    })),
+  };
+}
+
 /** Caminho do arquivo relativo ao workspace (com separador POSIX), p/ referências. */
-function relativeToWorkspace(workspacePath: string, filePath: string): string {
+export function relativeToWorkspace(workspacePath: string, filePath: string): string {
   const normalize = (value: string) => value.replace(/\\/g, "/");
   const root = normalize(workspacePath).replace(/\/+$/, "");
   const target = normalize(filePath);
@@ -108,13 +223,13 @@ export function formatEditorContextReference(
  * perdida). Com sessão nativa, só a nova mensagem é enviada.
  *
  * Nenhum prompt de aplicativo é injetado antes do chat: os únicos prefixos
- * possíveis são o prompt inicial que o usuário definiu ao criar o agente e o
- * histórico da UI (reenviado só quando a sessão nativa se perdeu). Sem eles, a
- * mensagem vai crua ao provedor — permissões são responsabilidade das flags
- * nativas do CLI, não de texto no prompt.
+ * possíveis são as instruções que o usuário definiu no agente e o histórico da
+ * UI (reenviado só quando a sessão nativa se perdeu). Sem eles, a mensagem vai
+ * crua ao provedor — permissões são responsabilidade das flags nativas do CLI,
+ * não de texto no prompt.
  */
 export function buildAgentPrompt(
-  agent: AgentDefinition,
+  agent: Pick<AgentDefinition, "initialPrompt">,
   messages: AgentMessage[],
   userMessage: string,
 ): string {
@@ -135,6 +250,17 @@ export function buildAgentPrompt(
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+/** Restrições do agente para o backend (`RunOptions`). */
+export function agentRunOptions(
+  agent: Pick<AgentDefinition, "allowedTools" | "disallowedTools" | "networkAccess"> | null,
+): AgentRunOptions {
+  return {
+    allowedTools: agent?.allowedTools ?? [],
+    disallowedTools: agent?.disallowedTools ?? [],
+    networkAccess: agent?.networkAccess ?? false,
+  };
 }
 
 export function replaceConversation(
@@ -158,7 +284,8 @@ function isAgentDefinition(value: unknown): value is AgentDefinition {
     typeof agent.name === "string" &&
     typeof agent.color === "string" &&
     typeof agent.initialPrompt === "string" &&
-    (agent.provider === "codex" || agent.provider === "claude") &&
+    typeof agent.provider === "string" &&
+    agent.provider.trim() !== "" &&
     typeof agent.workspacePath === "string"
   );
 }
