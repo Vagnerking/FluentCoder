@@ -219,7 +219,12 @@ export type IconAction =
   | "symbolOperator"
   | "symbolTypeParameter"
   | "symbolMisc"
-  | "workspaceRoot";
+  | "workspaceRoot"
+  // View Extensões
+  | "cloudDownload"
+  | "verified"
+  | "circleSlash"
+  | "pass";
 
 /** action → codicon name (without the `codicon-` prefix). */
 export const CODICON_MAP: Record<IconAction, string> = {
@@ -448,6 +453,10 @@ export const CODICON_MAP: Record<IconAction, string> = {
   symbolTypeParameter: "symbol-parameter",
   symbolMisc: "symbol-misc",
   workspaceRoot: "root-folder",
+  cloudDownload: "cloud-download",
+  verified: "verified-filled",
+  circleSlash: "circle-slash",
+  pass: "pass",
 };
 
 /** Codicon names that should spin (loading/sync feedback). */

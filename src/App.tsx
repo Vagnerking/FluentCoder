@@ -24,6 +24,8 @@ import { SearchPanel } from "./components/SearchPanel";
 import { GitPanel } from "./components/GitPanel";
 import { RunPanel, type PendingTest } from "./components/RunPanel";
 import { PackagesPanel } from "./components/PackagesPanel";
+import { ExtensionsView } from "./components/extensions/ExtensionsView";
+import { checkForUpdates as checkExtensionUpdates, scheduleStartupUpdateCheck, useExtensionUpdateCount } from "./components/extensions/extensionsStore";
 import { NugetManager } from "./components/NugetManager";
 import {
   RUN_TEST_EVENT,
@@ -5902,6 +5904,9 @@ export default function App() {
   // Full command-palette list (issue #12 + #8): the curated commands + the
   // remote-SSH entry + every runnable menu action, in the palette's shape.
   const hostedExtensions = useHostedExtensions();
+  // View Extensões: badge de atualizações + checagem no startup (throttle de 12 h).
+  const extensionUpdateCount = useExtensionUpdateCount();
+  useEffect(() => scheduleStartupUpdateCheck(), []);
   const extensionDiffs = useExtensionDiffs();
   const paletteCommands = useMemo<Command[]>(() => {
     const fromMenus: Command[] = menus.flatMap((menu) =>
@@ -5926,6 +5931,25 @@ export default function App() {
     // Host de extensões VS Code: reinício manual + comandos contribuídos
     // (Claude Code, Codex) com os títulos do package.json delas.
     const extensions: Command[] = [
+      {
+        id: "extensions.showView",
+        title: "Extensões: Mostrar Extensões",
+        detail: "Extensões",
+        run: () => {
+          setActiveView("extensions");
+          setSidebarOpen(true);
+        },
+      },
+      {
+        id: "extensions.checkUpdates",
+        title: "Extensões: Checar Atualizações",
+        detail: "Extensões",
+        run: () => {
+          setActiveView("extensions");
+          setSidebarOpen(true);
+          void checkExtensionUpdates(true);
+        },
+      },
       {
         id: "extensions.restartHost",
         title: "Reiniciar Host de Extensões",
@@ -6053,6 +6077,8 @@ export default function App() {
         );
       case "packages":
         return <PackagesPanel rootPath={rootPath} workspaceRoots={explorerWorkspaceRoots} />;
+      case "extensions":
+        return <ExtensionsView />;
       case "graph":
         return (
           <BacklinksPanel
@@ -6308,6 +6334,7 @@ export default function App() {
               setSidebarSide((s) => (s === "left" ? "right" : "left"))
             }
             onDragStart={startActivityDrag}
+            badges={{ extensions: extensionUpdateCount }}
           />
 
           {sidebarOpen && (

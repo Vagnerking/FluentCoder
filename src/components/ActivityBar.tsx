@@ -9,6 +9,7 @@ import {
 import { Codicon } from '../icons/codicons/Codicon';
 import type { IconAction } from '../icons/codicons/codicon-map';
 import { Tooltip } from './Tooltip';
+import { mergeActivityOrder } from './activityOrder';
 
 interface ActivityBarProps {
   activeView: string;
@@ -23,6 +24,8 @@ interface ActivityBarProps {
   onToggleSide?: () => void;
   /** Begins dragging the *whole bar* to reposition it (from empty bar area). */
   onDragStart?: (e: PointerEvent<HTMLElement>) => void;
+  /** Contadores por view (ex.: atualizações de extensões); 0/ausente = sem badge. */
+  badges?: Record<string, number>;
 }
 
 // Agents são a sidebar secundária (do lado oposto), com toggle na title bar —
@@ -32,6 +35,7 @@ const VIEWS: { id: string; label: string; icon: IconAction }[] = [
   { id: 'search', label: 'Pesquisar', icon: 'search' },
   { id: 'git', label: 'Controle do Código-Fonte', icon: 'sourceControl' },
   { id: 'debug', label: 'Executar e Depurar', icon: 'run' },
+  { id: 'extensions', label: 'Extensões', icon: 'extensions' },
   { id: 'packages', label: 'Pacotes', icon: 'packages' },
   { id: 'graph', label: 'Grafo de Contextos', icon: 'graph' },
 ];
@@ -48,17 +52,10 @@ const INDICATOR_SIZE = 16;
 const ORDER_KEY = 'ui.activityBarOrder';
 const DEFAULT_ORDER = VIEWS.map((v) => v.id);
 
-/** Reads the persisted icon order, validating it still holds exactly the known views. */
+/** Reads the persisted icon order (see activityOrder.ts). */
 function readOrder(): string[] {
   try {
-    const parsed = JSON.parse(localStorage.getItem(ORDER_KEY) ?? '');
-    if (
-      Array.isArray(parsed) &&
-      parsed.length === DEFAULT_ORDER.length &&
-      DEFAULT_ORDER.every((id) => parsed.includes(id))
-    ) {
-      return parsed as string[];
-    }
+    return mergeActivityOrder(JSON.parse(localStorage.getItem(ORDER_KEY) ?? ''), DEFAULT_ORDER);
   } catch {
     /* missing or malformed — fall back */
   }
@@ -73,6 +70,7 @@ export function ActivityBar({
   horizontalEdge = 'top',
   onToggleSide,
   onDragStart,
+  badges,
 }: ActivityBarProps) {
   const barRef = useRef<HTMLDivElement>(null);
   const [indicatorOffset, setIndicatorOffset] = useState<number | null>(null);
@@ -234,7 +232,7 @@ export function ActivityBar({
             }`}
             data-view={v.id}
             draggable
-            aria-label={v.label}
+            aria-label={badges?.[v.id] ? `${v.label} (${badges[v.id]})` : v.label}
             style={horizontalItemStyle}
             onClick={() => onViewChange(v.id)}
             onDragStart={(e) => {
@@ -270,6 +268,11 @@ export function ActivityBar({
             }}
           >
             <Codicon name={v.icon} size={20} />
+            {badges?.[v.id] ? (
+              <span className="activity-badge" aria-hidden="true">
+                {badges[v.id] > 99 ? '99+' : badges[v.id]}
+              </span>
+            ) : null}
           </button>
           </Tooltip>
         ))}
