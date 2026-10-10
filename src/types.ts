@@ -166,6 +166,14 @@ export interface OpenFile {
   /** Lados de uma comparação Git (só em abas `mode: "diff"`). */
   diff?: EditorDiffPresentation;
   /**
+   * Aba de preview (nome em itálico): a próxima abertura por clique simples no
+   * mesmo grupo a substitui. Editar, dar duplo clique ou fixar a torna
+   * permanente.
+   */
+  preview?: boolean;
+  /** Aba fixada: fica no início e não fecha por "Fechar outras/todas/…". */
+  pinned?: boolean;
+  /**
    * Which view renders this file. Defaults to `"text"` when omitted (every
    * pre-Open-With caller). Image files opened by double-click default to
    * `"image"`; "Open With…" can override either way.
@@ -236,6 +244,8 @@ export interface OpenTab {
   path: string;
   /** Persisted view; omitted ⇒ let `defaultModeFor` decide on reopen. */
   mode?: OpenMode;
+  /** Aba fixada. */
+  pinned?: boolean;
 }
 
 /** Workspace shell persisted in the UI session, including unsaved workspaces. */

@@ -39,6 +39,9 @@ export interface EditorGroupViewProps {
   onCloseLeft: (path: string) => void;
   onCloseRight: (path: string) => void;
   onReorder: (from: string, to: string, before: boolean) => void;
+  /** Fixar/desafixar e "manter aberta" (sair do preview). */
+  onPin: (path: string, pinned: boolean) => void;
+  onKeepOpen: (path: string) => void;
   externalDragActive: boolean;
   onTabStripDrop: (
     payload: { groupId: string; path: string },
@@ -247,6 +250,8 @@ export function EditorGroupView(props: EditorGroupViewProps) {
         onMoveToNewWindow: props.onMoveToNewWindow,
         onDetach: props.onDetach,
         onReorder: props.onReorder,
+        onPin: props.onPin,
+        onKeepOpen: props.onKeepOpen,
         externalDragActive: props.externalDragActive,
         onTabStripDrop: props.onTabStripDrop,
         onDragStateChange: (d) => (d ? props.onTabDragStart(d) : props.onTabDragEnd()),

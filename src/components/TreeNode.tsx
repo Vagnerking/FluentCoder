@@ -34,7 +34,8 @@ interface TreeNodeProps {
   cutPath: string | null;
   onSelectDirectory: (path: string) => void;
   onToggleDirectory: (path: string) => void;
-  onOpenFile: (node: FileNode) => void;
+  /** Clique simples abre em preview; duplo clique/Enter abre permanente. */
+  onOpenFile: (node: FileNode, open?: { preview?: boolean }) => void;
   onSubmitCreation: (name: string) => void;
   onCancelCreation: () => void;
   onContextMenu: (event: React.MouseEvent, node: FileNode) => void;
@@ -135,7 +136,7 @@ export function TreeNode({
     onFocusNode(node.path);
     if (workspaceRootDisabled) return;
     if (!node.isDir) {
-      onOpenFile(node);
+      onOpenFile(node, { preview: true });
       return;
     }
     onSelectDirectory(node.path);
@@ -235,6 +236,9 @@ export function TreeNode({
         }${isFocused ? " focused" : ""}${isCut ? " cut" : ""}`}
         style={{ paddingLeft: depth * 12 + 6 }}
         onClick={activate}
+        onDoubleClick={() => {
+          if (!node.isDir && !workspaceRootDisabled) onOpenFile(node, { preview: false });
+        }}
         onContextMenu={(event) => onContextMenu(event, node)}
         role="treeitem"
         aria-level={depth + 1}

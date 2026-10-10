@@ -1,35 +1,13 @@
-import { useState, useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { OpenFile, FileDecoration } from "../types";
-import { FileIcon } from "../icon-theme/material/FileIcon";
 import { Codicon } from "../icons/codicons/Codicon";
-import { Tooltip } from "./Tooltip";
-import { Menu } from "./ui/Menu";
-import { setDragPreview } from "../workbench/workbenchDrag";
+import { EditorTab } from "./editor/EditorTab";
+import { TabContextMenu } from "./editor/TabContextMenu";
+import { tabDescriptions, tabRovingIndex } from "./editor/tabLogic";
+import { useTabOverflow } from "./editor/useTabOverflow";
+import { useEditorTabDrag, type TabDragPayload } from "./editor/useEditorTabDrag";
 
-/** dataTransfer MIME carrying a dragged tab's {groupId, path} across groups. */
-export const TAB_DRAG_MIME = "application/x-fluent-tab";
-
-export interface TabDragPayload {
-  groupId: string;
-  path: string;
-}
-
-/** Reads {groupId, path} from a tab-drag dataTransfer (null if not ours). */
-export function readTabDragPayload(dt: DataTransfer): TabDragPayload | null {
-  const raw = dt.getData(TAB_DRAG_MIME);
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as TabDragPayload;
-  } catch {
-    return null;
-  }
-}
-
-interface TabContextMenu {
-  x: number;
-  y: number;
-  path: string;
-}
+export { TAB_DRAG_MIME, readTabDragPayload, type TabDragPayload } from "./editor/useEditorTabDrag";
 
 interface TabBarProps {
   files: OpenFile[];
@@ -72,8 +50,7 @@ interface TabBarProps {
   ) => void;
   /** Notifies when a tab drag starts/ends, so groups can shield their editors
    *  (drop-zone overlay) while a tab is in flight. Carries the dragged tab's
-   *  {groupId, path} on start (the payload is unreadable during dragover, so the
-   *  app keeps it to judge whether a drop would do anything) and null on end. */
+   *  {groupId, path} on start and null on end. */
   onDragStateChange?: (drag: TabDragPayload | null) => void;
   /** Throttled live screen position during a tab drag — used to hint which
    *  window the tab would drop on (cross-window drag feedback). */
@@ -82,9 +59,19 @@ interface TabBarProps {
   actions?: ReactNode;
   /** Resolves the git/diagnostic decoration for a path; default = none. */
   decorationFor?: (path: string) => FileDecoration | undefined;
+  /** Fixar/desafixar uma aba. */
+  onPin?: (path: string, pinned: boolean) => void;
+  /** Tira a aba do modo preview (duplo clique / "Manter aberta"). */
+  onKeepOpen?: (path: string) => void;
 }
 
-/** Row of open-file tabs above the editor, each with its Material file icon. */
+/**
+ * Faixa de abas do grupo: composição de EditorTab (apresentação),
+ * useTabOverflow (rolagem/fades/setas), useEditorTabDrag (reordenar, mover
+ * entre grupos/janelas, destacar) e TabContextMenu. Teclado (tablist com
+ * ativação manual): ←/→/Home/End movem o foco, Enter/Espaço ativam, Delete
+ * fecha.
+ */
 export function TabBar({
   files,
   activePath,
@@ -104,415 +91,151 @@ export function TabBar({
   onDragMove,
   actions,
   decorationFor = () => undefined,
+  onPin,
+  onKeepOpen,
 }: TabBarProps) {
-  const [contextMenu, setContextMenu] = useState<TabContextMenu | null>(null);
-  const [dragPath, setDragPath] = useState<string | null>(null);
-  const [dragOverPath, setDragOverPath] = useState<string | null>(null);
-  // Which edge of the hovered tab the insertion bar sits on (VS Code aims the
-  // drop before/after the target depending on which half the cursor is over).
-  const [dragOverSide, setDragOverSide] = useState<"left" | "right">("left");
-  // Insertion bar after the last tab (dropping a tab onto the empty strip area).
-  const [dropAtEnd, setDropAtEnd] = useState(false);
-  // Whether there are hidden tabs to the left/right (drives the scroll fades).
-  const [overflow, setOverflow] = useState({ left: false, right: false });
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string } | null>(null);
+  // Aba com o foco itinerante (null = segue a ativa).
+  const [focusPath, setFocusPath] = useState<string | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
-  // Edge auto-scroll while dragging near the row's left/right border.
-  const autoScroll = useRef({ dir: 0, raf: 0, clientX: 0 });
-  // Last screen coords seen during the drag — `dragend` alone can report stale
-  // or clamped coords when dropping over another window, so the live `drag`
-  // event keeps a reliable fallback.
-  const lastDragScreen = useRef({ x: 0, y: 0 });
-  // Throttle the cross-window hint (a per-frame backend hit-test would be wasteful).
-  const lastHintTime = useRef(0);
-
-  // Recompute the scroll fades when the row scrolls, resizes, or its tabs change.
-  const syncOverflow = () => {
-    const el = barRef.current;
-    if (!el) return;
-    const max = el.scrollWidth - el.clientWidth;
-    setOverflow({
-      left: el.scrollLeft > 1,
-      right: el.scrollLeft < max - 1,
-    });
-  };
-  // Scroll-arrow click: slide the row by ~70% of its visible width.
-  const scrollTabsBy = (dir: 1 | -1) => {
-    const el = barRef.current;
-    if (!el) return;
-    const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    el.scrollBy({ left: dir * el.clientWidth * 0.7, behavior: reduce ? "auto" : "smooth" });
-  };
-
-  // Keep the active tab in view when it changes (keyboard/Quick Open opens).
-  useEffect(() => {
-    const el = barRef.current;
-    if (!el || !activePath) return;
-    const tab = Array.from(el.querySelectorAll<HTMLElement>(".tab")).find(
-      (t) => t.dataset.path === activePath
-    );
-    if (!tab) return;
-    // Scroll the row itself (not scrollIntoView, which could also nudge an
-    // overflow-hidden ancestor of the workbench).
-    const pad = 24;
-    if (tab.offsetLeft < el.scrollLeft + pad) {
-      el.scrollLeft = Math.max(0, tab.offsetLeft - pad);
-    } else if (tab.offsetLeft + tab.offsetWidth > el.scrollLeft + el.clientWidth - pad) {
-      el.scrollLeft = tab.offsetLeft + tab.offsetWidth - el.clientWidth + pad;
-    }
-  }, [activePath]);
-
-  useEffect(() => {
-    syncOverflow();
-    const el = barRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(syncOverflow);
-    ro.observe(el);
-    return () => ro.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files.length]);
-
-  // Drives the edge auto-scroll: while a drag hovers within EDGE px of a border
-  // (and there's more to reveal), the row scrolls that way each frame so you can
-  // reorder into off-screen tabs.
-  const stopAutoScroll = () => {
-    if (autoScroll.current.raf) cancelAnimationFrame(autoScroll.current.raf);
-    autoScroll.current = { dir: 0, raf: 0, clientX: 0 };
-  };
-  const tickAutoScroll = () => {
-    const el = barRef.current;
-    const st = autoScroll.current;
-    if (!el || st.dir === 0) {
-      st.raf = 0;
-      return;
-    }
-    el.scrollLeft += st.dir * 12;
-    syncOverflow();
-    st.raf = requestAnimationFrame(tickAutoScroll);
-  };
-  const updateAutoScroll = (clientX: number) => {
-    const el = barRef.current;
-    if (!el) return;
-    const EDGE = 44;
-    const r = el.getBoundingClientRect();
-    const max = el.scrollWidth - el.clientWidth;
-    let dir = 0;
-    if (clientX < r.left + EDGE && el.scrollLeft > 0) dir = -1;
-    else if (clientX > r.right - EDGE && el.scrollLeft < max) dir = 1;
-    autoScroll.current.dir = dir;
-    if (dir !== 0 && !autoScroll.current.raf) {
-      autoScroll.current.raf = requestAnimationFrame(tickAutoScroll);
-    }
-  };
-
-  useEffect(() => () => stopAutoScroll(), []);
-
-  // When an external drag (from another division) ends, drop our insertion hints.
-  useEffect(() => {
-    if (!externalDragActive) {
-      setDropAtEnd(false);
-      if (!dragPath) setDragOverPath(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [externalDragActive]);
+  const tabRefs = useRef(new Map<string, HTMLDivElement>());
+  const overflowState = useTabOverflow(barRef, activePath, files.length);
+  const { overflow, syncOverflow, scrollTabsBy, onWheel, revealTab } = overflowState;
+  const drag = useEditorTabDrag({
+    groupId,
+    onReorder,
+    externalDragActive,
+    onTabStripDrop,
+    onDetach,
+    onDragStateChange,
+    onDragMove,
+    updateAutoScroll: overflowState.updateAutoScroll,
+    pauseAutoScroll: overflowState.pauseAutoScroll,
+    stopAutoScroll: overflowState.stopAutoScroll,
+  });
+  const descriptions = useMemo(() => tabDescriptions(files), [files]);
+  // A ativa mudou por fora (Quick Open, clique): o foco itinerante a acompanha.
+  useEffect(() => setFocusPath(null), [activePath]);
 
   if (files.length === 0) return null;
 
-  const targetIndex = files.findIndex((f) => f.path === contextMenu?.path);
-  const hasLeft = targetIndex > 0;
-  const hasRight = targetIndex < files.length - 1;
-  const hasOthers = files.length > 1;
+  const stopPath =
+    focusPath && files.some((f) => f.path === focusPath)
+      ? focusPath
+      : activePath && files.some((f) => f.path === activePath)
+        ? activePath
+        : files[0].path;
+
+  const onTabKeyDown = (event: KeyboardEvent<HTMLDivElement>, path: string, index: number) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onSelect(path);
+      return;
+    }
+    if (event.key === "Delete") {
+      event.preventDefault();
+      void onClose(path);
+      return;
+    }
+    const next = tabRovingIndex(index, event.key, files.length);
+    if (next === null) return;
+    event.preventDefault();
+    const target = files[next].path;
+    setFocusPath(target);
+    tabRefs.current.get(target)?.focus();
+    revealTab(target);
+  };
 
   return (
     <>
       <div className="tab-strip">
-      <div className="tab-bar-wrap">
-        <div
-          className={`tab-fade left${overflow.left ? " show" : ""}`}
-          aria-hidden="true"
-        />
-        <div
-          className={`tab-fade right${overflow.right ? " show" : ""}`}
-          aria-hidden="true"
-        />
-        {/* Scroll arrows over the fades: a pointer affordance for the hidden
-            tabs (the wheel also scrolls). Out of the tab order — keyboard
-            users reach every tab through the tablist itself. */}
-        {overflow.left && (
-          <button
-            type="button"
-            className="tab-scroll left"
-            tabIndex={-1}
-            aria-hidden="true"
-            onClick={() => scrollTabsBy(-1)}
+        <div className="tab-bar-wrap">
+          <div className={`tab-fade left${overflow.left ? " show" : ""}`} aria-hidden="true" />
+          <div className={`tab-fade right${overflow.right ? " show" : ""}`} aria-hidden="true" />
+          {/* Scroll arrows over the fades: a pointer affordance for the hidden
+              tabs (the wheel also scrolls). Out of the tab order — keyboard
+              users reach every tab through the tablist itself. */}
+          {overflow.left && (
+            <button
+              type="button"
+              className="tab-scroll left"
+              tabIndex={-1}
+              aria-hidden="true"
+              onClick={() => scrollTabsBy(-1)}
+            >
+              <Codicon name="chevronLeft" size={14} />
+            </button>
+          )}
+          {overflow.right && (
+            <button
+              type="button"
+              className="tab-scroll right"
+              tabIndex={-1}
+              aria-hidden="true"
+              onClick={() => scrollTabsBy(1)}
+            >
+              <Codicon name="chevronRight" size={14} />
+            </button>
+          )}
+          <div
+            className="tab-bar"
+            ref={barRef}
+            role="tablist"
+            aria-label="Abas abertas"
+            aria-orientation="horizontal"
+            data-group-id={groupId}
+            onScroll={syncOverflow}
+            onWheel={onWheel}
+            {...drag.stripHandlers}
           >
-            <Codicon name="chevronLeft" size={14} />
-          </button>
-        )}
-        {overflow.right && (
-          <button
-            type="button"
-            className="tab-scroll right"
-            tabIndex={-1}
-            aria-hidden="true"
-            onClick={() => scrollTabsBy(1)}
-          >
-            <Codicon name="chevronRight" size={14} />
-          </button>
-        )}
-        <div
-          className="tab-bar"
-          ref={barRef}
-          role="tablist"
-          aria-label="Abas abertas"
-          data-group-id={groupId}
-          onScroll={syncOverflow}
-          // No visible scrollbar: let the wheel scroll the row horizontally so the
-          // overflowing tabs "slide" left/right into view.
-          onWheel={(e) => {
-            const el = barRef.current;
-            if (!el || el.scrollWidth <= el.clientWidth) return;
-            const delta = e.deltaX !== 0 ? e.deltaX : e.deltaY;
-            if (delta !== 0) el.scrollLeft += delta;
-          }}
-          // While dragging near an edge, auto-scroll the row so off-screen tabs
-          // become reachable drop targets. A tab from another division dropped on
-          // the empty strip area is appended at the end.
-          onDragOver={(e) => {
-            if (dragPath) updateAutoScroll(e.clientX);
-            const external = !dragPath && externalDragActive;
-            if (external && e.target === e.currentTarget) {
-              e.preventDefault();
-              e.dataTransfer.dropEffect = "move";
-              setDragOverPath(null);
-              setDropAtEnd(true);
-            }
-          }}
-          onDrop={(e) => {
-            if (!dragPath && externalDragActive && e.target === e.currentTarget) {
-              e.preventDefault();
-              const payload = readTabDragPayload(e.dataTransfer);
-              if (payload) onTabStripDrop?.(payload, null, false);
-              setDragOverPath(null);
-              setDropAtEnd(false);
-            }
-          }}
-          onDragLeave={(e) => {
-            autoScroll.current.dir = 0;
-            if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-              setDropAtEnd(false);
-              if (!dragPath) setDragOverPath(null);
-            }
-          }}
-        >
-          {files.map((f) => {
-            const deco = decorationFor(f.path);
-            const accepting = dragPath ? dragPath !== f.path : !!externalDragActive;
-            const isOver = f.path === dragOverPath && accepting;
-            return (
-              <div
+            {files.map((f, index) => (
+              <EditorTab
                 key={f.path}
-                role="tab"
-                tabIndex={f.path === activePath ? 0 : -1}
-                data-path={f.path}
-                aria-selected={f.path === activePath}
-                className={
-                  `tab${f.path === activePath ? " active" : ""}` +
-                  (f.readOnly ? " readonly" : "") +
-                  (f.path === dragPath ? " dragging" : "") +
-                  (isOver ? ` drag-over-${dragOverSide}` : "")
-                }
-                draggable={!!onReorder}
-                onClick={() => onSelect(f.path)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    onSelect(f.path);
-                  } else if (event.key === "Delete") {
-                    event.preventDefault();
-                    onClose(f.path);
-                  }
+                file={f}
+                active={f.path === activePath}
+                tabStop={f.path === stopPath}
+                description={descriptions.get(f.path)}
+                decoration={decorationFor(f.path)}
+                dragClass={drag.dragClassFor(f.path)}
+                drag={drag.tabHandlers(f.path, f.name)}
+                tabRef={(el) => {
+                  if (el) tabRefs.current.set(f.path, el);
+                  else tabRefs.current.delete(f.path);
                 }}
+                onSelect={() => {
+                  setFocusPath(f.path);
+                  onSelect(f.path);
+                }}
+                onClose={() => void onClose(f.path)}
+                onKeepOpen={onKeepOpen && f.preview ? () => onKeepOpen(f.path) : undefined}
+                onUnpin={onPin ? () => onPin(f.path, false) : undefined}
+                onKeyDown={(e) => onTabKeyDown(e, f.path, index)}
+                onFocus={() => setFocusPath(f.path)}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   setContextMenu({ x: e.clientX, y: e.clientY, path: f.path });
                 }}
-                onDrag={(e) => {
-                  // screenX/Y are 0 on the final drag event of some platforms;
-                  // ignore those and keep the last real position.
-                  if (e.screenX || e.screenY) {
-                    lastDragScreen.current = { x: e.screenX, y: e.screenY };
-                    const now = performance.now();
-                    if (onDragMove && now - lastHintTime.current > 70) {
-                      lastHintTime.current = now;
-                      onDragMove(e.screenX, e.screenY);
-                    }
-                  }
-                }}
-                onDragStart={(e) => {
-                  setDragPath(f.path);
-                  onDragStateChange?.({ groupId: groupId ?? "", path: f.path });
-                  lastDragScreen.current = { x: e.screenX, y: e.screenY };
-                  e.dataTransfer.effectAllowed = "move";
-                  // Stamp the payload so OTHER groups' drop-zones know what (and
-                  // from where) is being dragged (getData is unreadable in
-                  // dragover, but the type is — that's enough to light up zones).
-                  e.dataTransfer.setData(
-                    TAB_DRAG_MIME,
-                    JSON.stringify({ groupId: groupId ?? "", path: f.path })
-                  );
-                  // Dedicated drag preview (icon + name), anchored where the
-                  // user grabbed it — not the live tab, whose snapshot dragged
-                  // highlights/selection along on WebKitGTK.
-                  setDragPreview(
-                    e,
-                    f.name,
-                    e.currentTarget.querySelector(".tab-icon")
-                  );
-                }}
-                onDragOver={(e) => {
-                  // Accept a local reorder (drag started here) OR a tab from
-                  // ANOTHER division (externalDragActive). Either way, show the
-                  // insertion bar before/after this tab.
-                  const accepting = dragPath
-                    ? dragPath !== f.path
-                    : !!externalDragActive;
-                  if (!accepting) return;
-                  e.preventDefault();
-                  if (!dragPath) e.dataTransfer.dropEffect = "move";
-                  // Left half → insert before this tab; right half → after it.
-                  const r = e.currentTarget.getBoundingClientRect();
-                  setDragOverSide(
-                    e.clientX < r.left + r.width / 2 ? "left" : "right"
-                  );
-                  setDragOverPath(f.path);
-                  setDropAtEnd(false);
-                }}
-                onDragLeave={() => {
-                  setDragOverPath((p) => (p === f.path ? null : p));
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  const before = dragOverSide === "left";
-                  if (dragPath && dragPath !== f.path) {
-                    onReorder?.(dragPath, f.path, before);
-                  } else if (!dragPath && externalDragActive) {
-                    const payload = readTabDragPayload(e.dataTransfer);
-                    if (payload) onTabStripDrop?.(payload, f.path, before);
-                  }
-                  setDragPath(null);
-                  setDragOverPath(null);
-                  setDropAtEnd(false);
-                  stopAutoScroll();
-                }}
-                onDragEnd={(e) => {
-                  // Always hand the drop's SCREEN coords to the app and let it
-                  // decide by POSITION (hit-test), NOT by dropEffect: when you
-                  // drop over another app (e.g. VS Code) it "accepts" the drag, so
-                  // dropEffect is "copy"/"move" — checking it here would wrongly
-                  // cancel the tear-off. The app ignores drops inside this same
-                  // window (an internal drop-zone already handled those).
-                  if (onDetach) {
-                    const x = e.screenX || lastDragScreen.current.x;
-                    const y = e.screenY || lastDragScreen.current.y;
-                    onDetach(f.path, x, y);
-                  }
-                  setDragPath(null);
-                  setDragOverPath(null);
-                  setDropAtEnd(false);
-                  stopAutoScroll();
-                  onDragStateChange?.(null);
-                }}
-                title={f.sourceLabel ?? f.path}
-              >
-                <FileIcon path={f.sourcePath ?? f.path} className="tab-icon" />
-                {f.readOnly && <Codicon name="lock" size={12} />}
-                <span
-                  className={`tab-name${deco ? ` deco-${deco.kind}` : ""}`}
-                >
-                  {f.name}
-                </span>
-                <Tooltip
-                  label={f.dirty ? "Fechar (alterações não salvas)" : "Fechar"}
-                  placement="bottom"
-                >
-                  <button
-                    type="button"
-                    className={`tab-close${f.dirty ? " dirty" : ""}`}
-                    aria-label={
-                      f.dirty ? `Fechar ${f.name} (não salvo)` : `Fechar ${f.name}`
-                    }
-                    tabIndex={-1}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onClose(f.path);
-                    }}
-                  >
-                    {/* Dirty tabs show the dot; hovering the tab swaps it for
-                        the close glyph (CSS), like VS Code. */}
-                    {f.dirty && <span className="tab-dirty-dot" aria-hidden="true" />}
-                    <Codicon name="close" size={14} className="tab-close-glyph" />
-                  </button>
-                </Tooltip>
-              </div>
-            );
-          })}
-          {dropAtEnd && <div className="tab-drop-end" aria-hidden="true" />}
+              />
+            ))}
+            {drag.dropAtEnd && <div className="tab-drop-end" aria-hidden="true" />}
+          </div>
         </div>
-      </div>
         {actions && <div className="tab-bar-actions">{actions}</div>}
       </div>
 
       {contextMenu && (
-        <Menu
-          ariaLabel="Ações da aba"
-          anchor={{ x: contextMenu.x, y: contextMenu.y }}
-          onClose={() => setContextMenu(null)}
-          items={[
-            {
-              id: "close",
-              label: "Fechar",
-              icon: "close",
-              shortcut: "Ctrl+W",
-              onSelect: () => onClose(contextMenu.path),
-            },
-            {
-              id: "close-others",
-              label: "Fechar outras",
-              disabled: !hasOthers,
-              onSelect: () => onCloseOthers(contextMenu.path),
-            },
-            {
-              id: "close-left",
-              label: "Fechar à esquerda",
-              disabled: !hasLeft,
-              onSelect: () => onCloseLeft(contextMenu.path),
-            },
-            {
-              id: "close-right",
-              label: "Fechar à direita",
-              disabled: !hasRight,
-              onSelect: () => onCloseRight(contextMenu.path),
-            },
-            { id: "sep-1", separator: true },
-            {
-              id: "close-all",
-              label: "Fechar todas",
-              icon: "closeAll",
-              onSelect: () => onCloseAll(),
-            },
-            ...(onMoveToNewWindow
-              ? [
-                  { id: "sep-2", separator: true },
-                  {
-                    id: "move-window",
-                    label: "Mover para Nova Janela",
-                    icon: "linkExternal" as const,
-                    onSelect: () => onMoveToNewWindow(contextMenu.path),
-                  },
-                ]
-              : []),
-          ]}
+        <TabContextMenu
+          {...contextMenu}
+          files={files}
+          onDismiss={() => setContextMenu(null)}
+          onClose={onClose}
+          onCloseOthers={onCloseOthers}
+          onCloseLeft={onCloseLeft}
+          onCloseRight={onCloseRight}
+          onCloseAll={onCloseAll}
+          onMoveToNewWindow={onMoveToNewWindow}
+          onPin={onPin}
+          onKeepOpen={onKeepOpen}
         />
       )}
     </>

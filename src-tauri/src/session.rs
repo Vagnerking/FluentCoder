@@ -18,6 +18,9 @@ pub struct OpenTab {
     /// Persisted view ("text" | "image"); `None` ⇒ let the front decide.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// Aba fixada (fica no início e sobrevive a "Fechar outras/todas").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<bool>,
 }
 
 /// What we remember between runs. New fields stay `#[serde(default)]` so older

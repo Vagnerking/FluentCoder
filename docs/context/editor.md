@@ -216,3 +216,17 @@ O Roslyn usado pelo app aceita `textDocument/diagnostic`, mas pode omitir
 - Símbolos vêm do `IOutlineModelService` do Monaco — o mesmo agregador de
   `DocumentSymbolProvider`s do outline (Ctrl+Shift+O). Não registrar provider
   novo nem criar outra instância do Monaco para isso.
+
+## Abas
+
+- `TabBar` é composição: `EditorTab` (apresentação), `useTabOverflow`
+  (fades/setas/roda/auto-rolagem), `useEditorTabDrag` (reordenar, mover entre
+  grupos/janelas, destacar; preview de arraste dedicado) e `TabContextMenu`.
+  Regras puras em `src/components/editor/tabLogic.ts`.
+- Teclado (tablist, ativação manual): ←/→/Home/End movem o foco itinerante;
+  Enter/Espaço ativam; Delete fecha; botão do meio fecha.
+- Homônimos ganham o sufixo de pasta esmaecido que os distingue (`…/git`).
+- Preview: clique simples no Explorer abre em itálico e substitui a preview
+  limpa do grupo; editar, duplo clique ou fixar tornam a aba permanente.
+  Abas fixadas ficam no início, mostram o pino e sobrevivem a "Fechar
+  outras/à esquerda/à direita/todas"; o estado fixado é salvo na sessão.

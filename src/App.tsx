@@ -256,6 +256,7 @@ import {
 } from "./workspace/workspaceFile";
 import { useWorkbenchDrag } from "./workbench/useWorkbenchDrag";
 import { diffSideLabel, diffTabName } from "./editor/openRouting";
+import { openTabInList, setTabPinned, tabsKeptAfterClose } from "./components/editor/tabLogic";
 import type { BreadcrumbRoot } from "./editor/breadcrumbs";
 
 /** Abas nativas do Fluent Chat na sidebar secundária. */
@@ -1639,7 +1640,7 @@ export default function App() {
   useAcpClientServices(
     {
       bufferChanged: (path, content) =>
-        setLayout((l) => patchFileEverywhere(l, path, { content, dirty: true })),
+        setLayout((l) => patchFileEverywhere(l, path, { content, dirty: true, preview: undefined })),
       saveFile: async (path, content) => {
         const file = Object.values(layoutRef.current.groups)
           .flatMap((g) => g.files)
@@ -2760,6 +2761,7 @@ export default function App() {
                   name: baseName(t.path),
                   content,
                   dirty: false,
+                  pinned: t.pinned || undefined,
                   mode,
                   encoding,
                   bom,
@@ -2806,7 +2808,7 @@ export default function App() {
           undefined,
           tab.mode,
           undefined,
-          { silent: true }
+          { silent: true, pinned: tab.pinned }
         );
         if (ok) restored.push(tab);
       }
@@ -3048,7 +3050,14 @@ export default function App() {
       line?: number,
       mode?: OpenMode,
       selection?: MatchSelection,
-      opts?: { silent?: boolean; origin?: EditorOpenOrigin }
+      opts?: {
+        silent?: boolean;
+        origin?: EditorOpenOrigin;
+        /** Abre como aba de preview (substitui a preview limpa do grupo). */
+        preview?: boolean;
+        /** Restaura como aba fixada (sessão). */
+        pinned?: boolean;
+      }
     ): Promise<boolean> => {
       if (node.isDir) return false;
 
@@ -3068,6 +3077,12 @@ export default function App() {
             prev.map((f) =>
               samePath(f.path, node.path) ? { ...f, mode: resolvedMode } : f
             )
+          );
+        }
+        // Abrir de forma "permanente" (duplo clique, Enter…) fixa a preview.
+        if (already.preview && opts?.preview === false) {
+          setOpenFiles((prev) =>
+            prev.map((f) => (samePath(f.path, node.path) ? { ...f, preview: undefined } : f))
           );
         }
         setActivePath(already.path);
@@ -3126,21 +3141,21 @@ export default function App() {
             duplicate = true;
             return prev;
           }
-          return [
-            ...prev,
-            {
-              path: node.path,
-              name: node.name,
-              content: decoded?.content ?? "",
-              workspaceRemote,
-              dirty: false,
-              mode: resolvedMode,
-              encoding: decoded?.encoding,
-              bom: decoded?.bom,
-              eol: decoded?.eol,
-              openedFrom: opts?.origin,
-            },
-          ];
+          // Preview substitui no lugar a aba de preview limpa (tabLogic).
+          return openTabInList(prev, {
+            path: node.path,
+            name: node.name,
+            content: decoded?.content ?? "",
+            workspaceRemote,
+            dirty: false,
+            mode: resolvedMode,
+            encoding: decoded?.encoding,
+            bom: decoded?.bom,
+            eol: decoded?.eol,
+            openedFrom: opts?.origin,
+            preview: opts?.preview && !opts?.pinned ? true : undefined,
+            pinned: opts?.pinned || undefined,
+          });
         });
         setActivePath(node.path);
         // The editor isn't mounted with this content yet; defer the reveal.
@@ -3160,8 +3175,11 @@ export default function App() {
 
   /** Explorer opens show the plain editor (no Git chrome, see openRouting). */
   const handleOpenFromExplorer = useCallback(
-    (node: FileNode) =>
-      handleOpenFile(node, undefined, undefined, undefined, { origin: "explorer" }),
+    (node: FileNode, open?: { preview?: boolean }) =>
+      handleOpenFile(node, undefined, undefined, undefined, {
+        origin: "explorer",
+        preview: open?.preview ?? true,
+      }),
     [handleOpenFile]
   );
 
@@ -3523,7 +3541,7 @@ export default function App() {
     setLayout((l) => {
       const g = l.groups[groupId];
       if (!g || !g.activePath) return l;
-      return patchFileEverywhere(l, g.activePath, { content: value, dirty: true });
+      return patchFileEverywhere(l, g.activePath, { content: value, dirty: true, preview: undefined });
     });
   }, []);
 
@@ -3865,7 +3883,7 @@ export default function App() {
       // never persisted.
       const tabs: OpenTab[] = openFiles
         .filter((f) => !isVirtualTab(f.path))
-        .map((f) => ({ path: f.path, mode: f.mode }));
+        .map((f) => ({ path: f.path, mode: f.mode, pinned: f.pinned || undefined }));
       const sl = serializeLayout(layout);
       sl.groups = sl.groups.map((g) => ({
         ...g,
@@ -3980,14 +3998,21 @@ export default function App() {
   const handleCloseAll = useCallback(
     async (groupId = layoutRef.current.activeGroup) => {
       const group = layoutRef.current.groups[groupId];
-      if (!group || !(await guardDirtyFiles(group.files))) return;
+      // Abas fixadas sobrevivem a "Fechar todas" (como no VS Code).
+      const kept = group ? tabsKeptAfterClose(group.files, null, "all") : [];
+      if (!group || !(await guardDirtyFiles(group.files.filter((f) => !kept.includes(f))))) return;
       setLayout((l) => {
-        if (groupOrder(l.root).length > 1) return removeGroup(l, groupId);
         const g = l.groups[groupId];
         if (!g) return l;
+        const files = tabsKeptAfterClose(g.files, null, "all");
+        if (files.length === 0 && groupOrder(l.root).length > 1) return removeGroup(l, groupId);
+        const activePath =
+          g.activePath && files.some((f) => f.path === g.activePath)
+            ? g.activePath
+            : files[files.length - 1]?.path ?? null;
         return {
           ...l,
-          groups: { ...l.groups, [groupId]: { ...g, files: [], activePath: null } },
+          groups: { ...l.groups, [groupId]: { ...g, files, activePath } },
         };
       });
     },
@@ -3997,7 +4022,8 @@ export default function App() {
   const handleCloseOthers = useCallback(
     async (path: string, groupId = layoutRef.current.activeGroup) => {
       const group = layoutRef.current.groups[groupId];
-      if (!group || !(await guardDirtyFiles(group.files.filter((file) => file.path !== path)))) return;
+      const kept = group ? tabsKeptAfterClose(group.files, path, "others") : [];
+      if (!group || !(await guardDirtyFiles(group.files.filter((file) => !kept.includes(file))))) return;
       setLayout((l) => {
         const g = l.groups[groupId];
         if (!g) return l;
@@ -4007,7 +4033,7 @@ export default function App() {
             ...l.groups,
             [groupId]: {
               ...g,
-              files: g.files.filter((f) => f.path === path),
+              files: tabsKeptAfterClose(g.files, path, "others"),
               activePath: path,
             },
           },
@@ -4021,12 +4047,16 @@ export default function App() {
     async (path: string, groupId = layoutRef.current.activeGroup) => {
       const group = layoutRef.current.groups[groupId];
       const index = group?.files.findIndex((file) => file.path === path) ?? -1;
-      if (!group || index <= 0 || !(await guardDirtyFiles(group.files.slice(0, index)))) return;
+      if (
+        !group ||
+        index <= 0 ||
+        !(await guardDirtyFiles(group.files.slice(0, index).filter((f) => !f.pinned)))
+      )
+        return;
       setLayout((l) => {
         const g = l.groups[groupId];
         if (!g) return l;
-        const idx = g.files.findIndex((f) => f.path === path);
-        const files = idx > 0 ? g.files.slice(idx) : g.files;
+        const files = tabsKeptAfterClose(g.files, path, "left");
         const activePath =
           g.activePath && !files.some((f) => f.path === g.activePath)
             ? files[0]?.path ?? null
@@ -4044,12 +4074,16 @@ export default function App() {
     async (path: string, groupId = layoutRef.current.activeGroup) => {
       const group = layoutRef.current.groups[groupId];
       const index = group?.files.findIndex((file) => file.path === path) ?? -1;
-      if (!group || index < 0 || !(await guardDirtyFiles(group.files.slice(index + 1)))) return;
+      if (
+        !group ||
+        index < 0 ||
+        !(await guardDirtyFiles(group.files.slice(index + 1).filter((f) => !f.pinned)))
+      )
+        return;
       setLayout((l) => {
         const g = l.groups[groupId];
         if (!g) return l;
-        const idx = g.files.findIndex((f) => f.path === path);
-        const files = idx >= 0 ? g.files.slice(0, idx + 1) : g.files;
+        const files = tabsKeptAfterClose(g.files, path, "right");
         const activePath =
           g.activePath && !files.some((f) => f.path === g.activePath)
             ? files[files.length - 1]?.path ?? null
@@ -4062,6 +4096,30 @@ export default function App() {
     },
     [guardDirtyFiles]
   );
+
+  /** Fixa/desafixa uma aba no grupo (bloco fixado no início). */
+  const pinInGroup = useCallback((groupId: string, path: string, pinned: boolean) => {
+    setLayout((l) => {
+      const g = l.groups[groupId];
+      if (!g) return l;
+      return { ...l, groups: { ...l.groups, [groupId]: { ...g, files: setTabPinned(g.files, path, pinned) } } };
+    });
+  }, []);
+
+  /** Tira a aba do modo preview (duplo clique na aba / "Manter aberta"). */
+  const keepOpenInGroup = useCallback((groupId: string, path: string) => {
+    setLayout((l) => {
+      const g = l.groups[groupId];
+      if (!g) return l;
+      return {
+        ...l,
+        groups: {
+          ...l.groups,
+          [groupId]: { ...g, files: g.files.map((f) => (f.path === path ? { ...f, preview: undefined } : f)) },
+        },
+      };
+    });
+  }, []);
 
   /** Focuses a tab within a group (and makes the group active). */
   const selectInGroup = useCallback((groupId: string, path: string) => {
@@ -6118,6 +6176,8 @@ export default function App() {
         onCloseOthers={(p) => handleCloseOthers(p, groupId)}
         onCloseLeft={(p) => handleCloseLeft(p, groupId)}
         onCloseRight={(p) => handleCloseRight(p, groupId)}
+        onPin={(p, pinned) => pinInGroup(groupId, p, pinned)}
+        onKeepOpen={(p) => keepOpenInGroup(groupId, p)}
         onReorder={(from, to, before) =>
           reorderTabsInGroup(groupId, from, to, before)
         }

@@ -486,7 +486,7 @@ export function insertFileInGroup(
 
 export interface SerializedGroup {
   id: GroupId;
-  tabs: { path: string; mode?: OpenFile["mode"] }[];
+  tabs: { path: string; mode?: OpenFile["mode"]; pinned?: boolean }[];
   activePath: string | null;
 }
 export interface SerializedLayout {
@@ -504,7 +504,7 @@ export function serializeLayout(layout: EditorLayout): SerializedLayout {
     groups: Object.values(layout.groups).map((g) => ({
       id: g.id,
       activePath: g.activePath,
-      tabs: g.files.map((f) => ({ path: f.path, mode: f.mode })),
+      tabs: g.files.map((f) => ({ path: f.path, mode: f.mode, pinned: f.pinned || undefined })),
     })),
   };
 }

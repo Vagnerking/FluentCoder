@@ -49,7 +49,8 @@ interface FileExplorerProps {
   workspaceRoots?: ExplorerWorkspaceRoot[];
   isWorkspace?: boolean;
   activePath: string | null;
-  onOpenFile: (node: FileNode) => void;
+  /** Clique simples abre em preview; duplo clique/Enter abre permanente. */
+  onOpenFile: (node: FileNode, open?: { preview?: boolean }) => void;
   onRefreshRoot: () => Promise<void>;
   decorationFor?: (path: string) => FileDecoration | undefined;
   /** Notifies the host that a path was renamed, so it can re-point open tabs. */
@@ -423,7 +424,7 @@ export function FileExplorer({
         setSelectedDirectory(created.path);
         setExpandedPaths((current) => new Set(current).add(created.path));
       } else {
-        onOpenFile(created);
+        onOpenFile(created, { preview: false });
       }
     } catch (cause) {
       setError(String(cause));
@@ -1097,7 +1098,7 @@ export function FileExplorer({
               return next;
             });
           } else {
-            onOpenFile(current);
+            onOpenFile(current, { preview: false });
           }
         }
         return;
@@ -1302,8 +1303,11 @@ export function FileExplorer({
                   role="treeitem"
                   onClick={() => {
                     setFocusedPath(p);
-                    onOpenFile({ name: baseName(p), path: p, isDir: false });
+                    onOpenFile({ name: baseName(p), path: p, isDir: false }, { preview: true });
                   }}
+                  onDoubleClick={() =>
+                    onOpenFile({ name: baseName(p), path: p, isDir: false }, { preview: false })
+                  }
                 >
                   <FileIcon path={p} className="explorer-flat-icon" />
                   <span className="explorer-flat-name">{baseName(p)}</span>

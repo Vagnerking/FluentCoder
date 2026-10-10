@@ -246,3 +246,24 @@
 .tab:hover .tab-close.dirty .tab-dirty-dot { display: none; }
 
 .tab:hover .tab-close.dirty .tab-close-glyph { display: inline-block; }
+
+/* Same-name tabs: dim parent-folder suffix (`index.ts  …/git`). */
+.tab-description {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-disabled);
+  font-size: var(--font-caption);
+}
+
+.tab.active .tab-description { color: var(--text-muted); }
+
+/* Preview tab: italic name until it's kept open (edit, double-click, pin). */
+.tab.preview .tab-name { font-style: italic; }
+
+/* Pinned tab: the close slot shows the pin (click = unpin); always visible. */
+.tab.pinned .tab-close { opacity: 1; }
+
+.tab.pinned .tab-close-glyph { color: var(--text-muted); }
+
+.tab.pinned .tab-close:hover .tab-close-glyph { color: var(--text); }
