@@ -159,6 +159,8 @@ export type HostEvent =
   | { event: "revealView"; viewId?: string; container?: string }
   | { event: "webviewTitle"; handle: string; title: string }
   | { event: "webviewDisposed"; handle: string }
+  /** Painéis persistíveis (serializer/custom editor) — o app guarda por workspace. */
+  | { event: "webviewPanels"; panels: unknown[] }
   | { event: "context"; key: string; value: unknown }
   | {
       event: "request";

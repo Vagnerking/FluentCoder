@@ -5789,6 +5789,7 @@ export default function App() {
           id: `menu.${it.id}`,
           title: it.label,
           detail: menu.label,
+          keybinding: it.accelerator,
           run: it.run as () => void,
         }))
     );

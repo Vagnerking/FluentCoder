@@ -11,8 +11,19 @@ const isPos = (p) => isObj(p) && isNum(p.line) && isNum(p.character) && p.line >
 const isRange = (r) => isObj(r) && isPos(r.start) && isPos(r.end);
 const isSel = (s) => isObj(s) && ((isPos(s.anchor) && isPos(s.active)) || (isPos(s.start) && isPos(s.end)));
 const isPath = (p) => isStr(p, 4096) && p.length > 0 && !p.includes('\0');
+const isDim = (n) => isNum(n) && Number.isInteger(n) && n >= 1 && n <= 10000;
 const arr = (v, fn, max = 10000) => Array.isArray(v) && v.length <= max && v.every(fn);
 const optArr = (v, fn, max) => v === undefined || arr(v, fn, max);
+
+/** Painel persistido pelo app (ver host.panelSnapshot). */
+const isPersistedPanel = (r) =>
+  isObj(r) &&
+  isStr(r.viewType, 256) &&
+  isStr(r.extensionId, 256) &&
+  isOptStr(r.title, 1024) &&
+  (r.viewColumn === undefined || r.viewColumn === null || (isNum(r.viewColumn) && r.viewColumn >= 1 && r.viewColumn <= 64)) &&
+  (r.customUri === undefined || r.customUri === null || (isStr(r.customUri, 8192) && !r.customUri.includes('\0') && /^[a-z][\w+.-]*:/i.test(r.customUri))) &&
+  (r.options === undefined || isObj(r.options));
 
 /** method → (params) => true se válido. */
 const SCHEMAS = {
@@ -21,6 +32,7 @@ const SCHEMAS = {
   loadExtension: (p) => isObj(p) && (isStr(p.id, 256) || isPath(p.path)),
   activate: (p) => isObj(p) && isStr(p.id, 256),
   resolveView: (p) => isObj(p) && isStr(p.viewId, 256),
+  restoreWebviewPanels: (p) => isObj(p) && arr(p.panels, isPersistedPanel, 32),
   webviewMessage: (p) => isObj(p) && isStr(p.handle, 64),
   webviewState: (p) => isObj(p) && isStr(p.handle, 64),
   webviewVisible: (p) => isObj(p) && isStr(p.handle, 64),
@@ -51,7 +63,9 @@ const SCHEMAS = {
   diagnostics: (p) => isObj(p) && arr(p.entries, (e) => isObj(e) && isPath(e.path) && arr(e.diagnostics || [], (d) => isObj(d) && isRange(d.range), 100000), 100000),
   windowState: (p) => isObj(p) && typeof p.focused === 'boolean',
   // Terminais
-  terminalOpened: (p) => isObj(p) && isStr(p.id, 64),
+  terminalOpened: (p) => isObj(p) && isStr(p.id, 64) && (p.cols === undefined || (isDim(p.cols) && isDim(p.rows))),
+  terminalInput: (p) => isObj(p) && isStr(p.id, 64) && isStr(p.data, 1 << 20),
+  terminalResize: (p) => isObj(p) && isStr(p.id, 64) && isDim(p.cols) && isDim(p.rows),
   terminalClosed: (p) => isObj(p) && isStr(p.id, 64),
   terminalShell: (p) =>
     isObj(p) &&
@@ -65,6 +79,7 @@ const SCHEMAS = {
   diffAction: (p) => isObj(p) && isStr(p.diffId, 64) && (p.action === 'accept' || p.action === 'reject') && (p.text === undefined || isStr(p.text, 64 << 20)),
   diffClosed: (p) => isObj(p) && isStr(p.diffId, 64),
   diffEdited: (p) => isObj(p) && isStr(p.diffId, 64) && isStr(p.text, 64 << 20),
+  cancelProgress: (p) => isObj(p) && isStr(p.id, 64),
   // QuickPick/InputBox (interações da UI)
   quickInputEvent: (p) =>
     isObj(p) &&
@@ -79,6 +94,8 @@ const SCHEMAS = {
   commentReaction: (p) => isObj(p) && isStr(p.handle, 64) && isNum(p.commentIndex) && p.commentIndex >= 0 && isStr(p.reaction, 256),
   commentingRanges: (p) => isObj(p) && isStr(p.uri, 8192) && !p.uri.includes('\0'),
   commentThreads: () => true,
+  commentCreateThread: (p) => isObj(p) && isStr(p.controllerId, 256) && isStr(p.uri, 8192) && !p.uri.includes('\0') && (p.range === undefined || p.range === null || isRange(p.range)),
+  commentDisposeTemplate: (p) => isObj(p) && isStr(p.handle, 64),
   provideCodeLenses: (p) => isObj(p) && isPath(p.path),
   executeCodeLens: (p) => isObj(p) && isStr(p.id, 64),
   handleUri: (p) => isObj(p) && isStr(p.uri, 8192) && /^(fluent-coder|vscode):\/\//i.test(p.uri),

@@ -198,14 +198,53 @@ export interface DecorationRender {
     isWholeLine?: boolean;
     beforeContentClassName?: string;
     afterContentClassName?: string;
+    glyphMarginClassName?: string;
     overviewRulerColor?: string;
+    /** `vscode.OverviewRulerLane` (Left=1, Center=2, Right=4, Full=7 — iguais aos do Monaco). */
+    overviewRulerLane?: number;
+    /** `vscode.DecorationRangeBehavior` = `monaco.TrackedRangeStickiness` (mesmos números). */
+    stickiness?: number;
   };
+}
+
+const DATA_URI_RE = /^data:image\/(svg\+xml|png|gif|jpeg|webp);base64,[A-Za-z0-9+/=]+$/;
+
+/** `{dataUri}` vindo do host (ícone já embutido e validado lá) → `url("…")` seguro. */
+function iconUrl(v: unknown): string | undefined {
+  const d = v && typeof v === "object" ? (v as { dataUri?: unknown }).dataUri : undefined;
+  return typeof d === "string" && d.length <= 128 * 1024 && DATA_URI_RE.test(d) ? `url("${d}")` : undefined;
+}
+
+/** `gutterIconSize` do VS Code → `background-size`. */
+export function gutterIconSize(v: unknown): string {
+  if (v === "auto" || v === "cover" || v === "contain") return v;
+  if (typeof v === "string" && /^\d{1,3}(\.\d+)?%$/.test(v)) return v;
+  return "contain";
+}
+
+/** Regras `::before`/`::after` (texto, ícone, cores, tamanho) de uma decoração. */
+function attachmentRules(cls: string, side: "before" | "after", s: Record<string, unknown>, resolve: ThemeColorResolver): string | null {
+  const parts = [declarations(s, resolve)];
+  if (typeof s.contentText === "string") parts.push(`content:${cssString(s.contentText)}`);
+  const icon = iconUrl(s.contentIconPath);
+  if (icon) {
+    if (typeof s.contentText !== "string") parts.push(`content:""`);
+    parts.push(`display:inline-block;background:${icon} center center no-repeat;background-size:contain`);
+  }
+  for (const k of ["width", "height"] as const) {
+    const v = s[k];
+    if (typeof v === "string" && safeCss(v)) parts.push(`${k}:${v}`);
+  }
+  const decl = parts.filter(Boolean).join(";");
+  return decl ? `.${cls}::${side}{${decl}}` : null;
 }
 
 /**
  * `createTextEditorDecorationType(options)` → CSS (classes `.extd-<key>`) e as
  * opções de decoração do Monaco. Só propriedades conhecidas; valores com
- * `; { } < > \` são descartados (viram CSS injetado no app).
+ * `; { } < > \` são descartados (viram CSS injetado no app). Ícones de
+ * gutter/anexos chegam do host como `data:` URI de imagem (validados aqui de
+ * novo) → glyph margin / `::before`/`::after`.
  */
 export function renderDecorationType(key: string, raw: Record<string, unknown>, resolve: ThemeColorResolver): DecorationRender {
   const safeKey = key.replace(/[^\w-]/g, "");
@@ -227,15 +266,70 @@ export function renderDecorationType(key: string, raw: Record<string, unknown>, 
     const s = o[side] as Record<string, unknown> | undefined;
     if (!s || typeof s !== "object") continue;
     const cls = `extd-${safeKey}-${side}`;
-    const decl = [declarations(s, resolve), typeof s.contentText === "string" ? `content:${cssString(s.contentText)}` : ""].filter(Boolean).join(";");
-    if (!decl) continue;
-    rules.push(`.${cls}::${side === "before" ? "before" : "after"}{${decl}}`);
+    const rule = attachmentRules(cls, side, s, resolve);
+    if (!rule) continue;
+    rules.push(rule);
     if (side === "before") options.beforeContentClassName = cls;
     else options.afterContentClassName = cls;
   }
+  const gutter = iconUrl(o.gutterIconPath);
+  if (gutter) {
+    const cls = `extd-${safeKey}-gutter`;
+    rules.push(`.${cls}{background:${gutter} center center no-repeat;background-size:${gutterIconSize(o.gutterIconSize)}}`);
+    options.glyphMarginClassName = cls;
+  }
   const ruler = color(o.overviewRulerColor, resolve);
-  if (ruler && safeCss(ruler)) options.overviewRulerColor = ruler;
+  if (ruler && safeCss(ruler)) {
+    options.overviewRulerColor = ruler;
+    const lane = o.overviewRulerLane;
+    options.overviewRulerLane = lane === 1 || lane === 2 || lane === 4 || lane === 7 ? lane : 2;
+  }
+  const rb = o.rangeBehavior;
+  if (rb === 0 || rb === 1 || rb === 2 || rb === 3) options.stickiness = rb;
   return { css: rules.join("\n"), options };
+}
+
+/** Hash curto e estável (FNV-1a) para nomear classes por instância. */
+function shortHash(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+}
+
+/**
+ * `renderOptions` de UMA faixa (`DecorationOptions.renderOptions`: before/after
+ * com texto/ícone próprios — ex.: blame inline) → classes `extd-<key>-i<hash>`.
+ * Sobrepõem o before/after do tipo naquela faixa.
+ */
+export function renderDecorationInstance(key: string, raw: Record<string, unknown> | undefined, resolve: ThemeColorResolver): DecorationRender | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = { ...raw, ...((raw.dark as Record<string, unknown>) ?? {}) };
+  const id = `extd-${key.replace(/[^\w-]/g, "")}-i${shortHash(JSON.stringify(o))}`;
+  const rules: string[] = [];
+  const options: DecorationRender["options"] = {};
+  for (const side of ["before", "after"] as const) {
+    const s = o[side] as Record<string, unknown> | undefined;
+    if (!s || typeof s !== "object") continue;
+    const cls = `${id}-${side}`;
+    const rule = attachmentRules(cls, side, s, resolve);
+    if (!rule) continue;
+    rules.push(rule);
+    if (side === "before") options.beforeContentClassName = cls;
+    else options.afterContentClassName = cls;
+  }
+  return rules.length ? { css: rules.join("\n"), options } : null;
+}
+
+/** Opções finais do Monaco para uma faixa (tipo + instância + hover). */
+export function monacoDecorationOptions(type: DecorationRender, instance?: DecorationRender | null, hoverMessage?: string): Record<string, unknown> {
+  const { overviewRulerColor, overviewRulerLane, ...rest } = type.options;
+  const out: Record<string, unknown> = { ...rest, ...(instance?.options ?? {}) };
+  if (overviewRulerColor) out.overviewRuler = { color: overviewRulerColor, position: overviewRulerLane ?? 2 };
+  if (hoverMessage) out.hoverMessage = { value: hoverMessage };
+  return out;
 }
 
 /** ThemeColor do VS Code ("editor.findMatchBackground") → variável `--vscode-*`. */

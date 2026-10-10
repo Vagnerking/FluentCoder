@@ -1,3 +1,4 @@
+import { Tooltip } from "../components/Tooltip";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { extHost, extLog } from "./client";
 import { ExtensionWebview } from "./ExtensionWebview";
@@ -165,11 +166,11 @@ export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab }
           ))}
           {tabs.map((t) => (
             <span key={t.key} className={`ext-dock-tab-wrap${activeTab === t.key ? " active" : ""}`}>
+              <Tooltip label={`${t.label} — extensão do VS Code instalada`} placement="bottom">
               <button
                 role="tab"
                 aria-selected={activeTab === t.key}
                 className={`ext-dock-tab${activeTab === t.key ? " active" : ""}`}
-                title={`${t.label} — extensão do VS Code instalada`}
                 // Ponteiro sobre a aba: ativa em segundo plano (o clique já encontra pronto).
                 onPointerEnter={() => extHost.prewarm(t.extensionId)}
                 onFocus={() => extHost.prewarm(t.extensionId)}
@@ -177,6 +178,7 @@ export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab }
               >
                 {t.label}
               </button>
+              </Tooltip>
             </span>
           ))}
         </div>

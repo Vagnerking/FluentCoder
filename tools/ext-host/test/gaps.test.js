@@ -282,8 +282,7 @@ test('notebooks: APIs presentes e inertes (sem lançar no acesso)', async () => 
     const { vscode } = await host.activate(ext.id);
     assert.equal(vscode.window.activeNotebookEditor, undefined);
     assert.deepEqual(vscode.workspace.notebookDocuments, []);
-    await assert.rejects(vscode.workspace.openNotebookDocument(Uri.file('/x.ipynb')), /Notebooks/);
-    await assert.rejects(vscode.window.showNotebookDocument({}), /Notebooks/);
+    await assert.rejects(vscode.workspace.openNotebookDocument(Uri.file('/nao-existe.ipynb')), /ENOENT/);
     const ctl = vscode.notebooks.createNotebookController('c', 'jupyter-notebook', 'C');
     assert.equal(ctl.id, 'c');
     ctl.dispose();

@@ -277,3 +277,32 @@
     transform: none;
   }
 }
+
+/* ---- "+" para comentar (commentingRanges.ts): faixa discreta nas linhas
+   comentáveis e o "+" ao passar o mouse na área de decorações de linha. */
+.monaco-editor .ext-commenting-range {
+  box-sizing: border-box;
+  border-left: 2px solid transparent;
+  margin-left: var(--space-xxs);
+}
+
+.monaco-editor .margin-view-overlays:hover .ext-commenting-range {
+  border-left-color: var(--border-subtle);
+}
+
+.monaco-editor .ext-comment-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text);
+  background: var(--fill-subtle-hover);
+  border-radius: var(--radius-xs);
+}
+
+.monaco-editor .ext-comment-add::before {
+  content: "\ea60"; /* codicon "add" */
+  font-family: codicon;
+  font-size: var(--font-caption);
+  line-height: 1;
+}

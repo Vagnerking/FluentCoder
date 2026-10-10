@@ -380,7 +380,9 @@ export function StatusBar({
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
                 const rect = e.currentTarget.getBoundingClientRect();
-                setLspMenu({ server: s, rect, el: e.currentTarget });
+                const el = e.currentTarget;
+                // Igual ao clique (e ao chip de sincronização): o mesmo item alterna.
+                setLspMenu((m) => (m?.server.id === s.id ? null : { server: s, rect, el }));
               }
             }}
           >

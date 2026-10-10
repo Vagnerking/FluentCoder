@@ -1,0 +1,60 @@
+/**
+ * Acrílico (translucidez + desfoque) nos flyouts — menus, Quick Open, Paleta —
+ * ligado SÓ quando é seguro: o WebView precisa suportar `backdrop-filter` E
+ * efetivamente desenhá-lo. No Linux (WebKitGTK) o filtro é aceito pelo CSS mas
+ * some sem composição por GPU, e o código do editor vazaria através do menu —
+ * lá a superfície continua opaca. Também respeita `prefers-reduced-transparency`
+ * e a preferência `ui.acrylicFlyouts` ("on"/"off") no localStorage.
+ *
+ * Sem a classe `acrylic-flyouts` no <html>, nada muda (fundo opaco do token
+ * `--color-surface-flyout`). Ver src/theme/acrylic.css.
+ */
+
+export interface AcrylicEnv {
+  supportsBackdrop: boolean;
+  platform: "windows" | "macos" | "linux" | "other";
+  reducedTransparency: boolean;
+  /** Preferência explícita do usuário (null = automático). */
+  preference: "on" | "off" | null;
+}
+
+/** Decide se os flyouts podem ficar translúcidos. */
+export function acrylicAllowed(env: AcrylicEnv): boolean {
+  if (!env.supportsBackdrop) return false; // sem o filtro: translucidez = texto vazando
+  if (env.preference === "off") return false;
+  if (env.reducedTransparency) return false;
+  if (env.preference === "on") return true;
+  // Automático: só onde o WebView desenha o filtro de forma confiável.
+  return env.platform === "windows" || env.platform === "macos";
+}
+
+function detect(): AcrylicEnv {
+  const css = typeof CSS !== "undefined" && typeof CSS.supports === "function" ? CSS : null;
+  const supportsBackdrop = !!css && (css.supports("backdrop-filter", "blur(2px)") || css.supports("-webkit-backdrop-filter", "blur(2px)"));
+  const ua =
+    (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ?? navigator.platform ?? "";
+  const platform = /win/i.test(ua) ? "windows" : /mac/i.test(ua) ? "macos" : /linux/i.test(ua) ? "linux" : "other";
+  let reducedTransparency = false;
+  try {
+    reducedTransparency = window.matchMedia?.("(prefers-reduced-transparency: reduce)").matches ?? false;
+  } catch {
+    /* sem suporte à media query */
+  }
+  let preference: AcrylicEnv["preference"] = null;
+  try {
+    const v = localStorage.getItem("ui.acrylicFlyouts");
+    preference = v === "on" || v === "off" ? v : null;
+  } catch {
+    /* armazenamento indisponível */
+  }
+  return { supportsBackdrop, platform, reducedTransparency, preference };
+}
+
+/** Aplica (uma vez, antes do 1º paint) a classe `acrylic-flyouts` no <html>. */
+export function applyAcrylicFlyouts(): void {
+  try {
+    document.documentElement.classList.toggle("acrylic-flyouts", acrylicAllowed(detect()));
+  } catch {
+    /* fica opaco */
+  }
+}

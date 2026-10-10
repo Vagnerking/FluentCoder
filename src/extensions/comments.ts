@@ -53,6 +53,38 @@ export interface CommentThreadInfo {
   /** Menu `comments/commentThread/context` (botões da resposta). */
   replyActions: CommentAction[];
   canReact: boolean;
+  /** Rascunho criado pelo "+" do app, ainda sem comentários. */
+  isTemplate?: boolean;
+  /** `CommentController.options` (prompt da caixa vazia e placeholder). */
+  prompt?: string;
+  placeHolder?: string;
+}
+
+/** Faixas comentáveis de um controller num documento (`commentingRanges`). */
+export interface CommentingRanges {
+  controllerId: string;
+  ranges: PlainRange[];
+  enableFileComments: boolean;
+}
+
+/** Controller cuja faixa contém a linha (0-based), ou null. */
+export function controllerForLine(list: CommentingRanges[], line: number): string | null {
+  for (const c of list) if (c.ranges.some((r) => r.start.line <= line && r.end.line >= line)) return c.controllerId;
+  return null;
+}
+
+/** Linhas (0-based) cobertas pelas faixas, sem repetição (teto p/ arquivos enormes). */
+export function commentableLines(list: CommentingRanges[], max = 100000): number[] {
+  const set = new Set<number>();
+  for (const c of list)
+    for (const r of c.ranges)
+      for (let l = r.start.line; l <= r.end.line && set.size < max; l++) set.add(l);
+  return [...set].sort((a, b) => a - b);
+}
+
+/** Comentário em modo edição (`CommentMode.Editing = 0`). */
+export function isEditing(c: Pick<CommentInfo, "mode">): boolean {
+  return c.mode === 0;
 }
 
 const threads = new Map<string, CommentThreadInfo>();

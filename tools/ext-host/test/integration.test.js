@@ -415,12 +415,14 @@ test('status bar, decorações e output channel viram eventos para o app', async
 
     const progress = ext.api.window.withProgress({ location: 15, title: 'Trabalhando' }, async (p) => {
       p.report({ message: 'meio' });
+      await new Promise((r) => setTimeout(r, 80));
       return 7;
     });
     assert.equal(await progress, 7);
-    const msgs = events.filter((e) => e.event === 'statusMessage');
-    assert.ok(msgs.some((m) => m.text === 'Trabalhando: meio'));
-    assert.equal(msgs.at(-1).text, null);
+    const msgs = events.filter((e) => e.event === 'progress');
+    assert.equal(msgs[0].location, 'notification');
+    assert.ok(msgs.some((m) => m.title === 'Trabalhando' && m.message === 'meio'));
+    assert.equal(events.filter((e) => e.event === 'progressEnd').at(-1).id, msgs[0].id);
   } finally {
     await host.stop();
   }

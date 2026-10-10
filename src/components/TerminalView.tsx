@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { termCreate, termWrite, termResize, termClose, type TermSpawnOptions } from "../api";
 import { terminalTheme } from "../theme/palette";
 import "@xterm/xterm/css/xterm.css";
+import { pseudoAttach, pseudoInput, pseudoResize } from "../extensions/pseudoTerminal";
 
 interface TerminalViewProps {
   id: string;
@@ -22,6 +23,12 @@ interface TerminalViewProps {
    * spawning a shell.
    */
   attach?: boolean;
+  /**
+   * Pseudoterminal of a hosted VS Code extension (`createTerminal({ pty })`,
+   * `CustomExecution` tasks): no PTY — output/input go through the extension
+   * host (src/extensions/pseudoTerminal.ts).
+   */
+  pseudo?: boolean;
   /** The PTY exists (pid when known). */
   onReady?: (pid: number | null) => void;
   /** The PTY process exited (exit code when known). */
@@ -35,13 +42,14 @@ interface TermDataPayload {
   seq?: number;
 }
 
-export function TerminalView({ id, cwd, connId, command, spawn, attach, onReady, onExit }: TerminalViewProps) {
+export function TerminalView({ id, cwd, connId, command, spawn, attach, pseudo, onReady, onExit }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   // Callbacks lidos por ref: não recriam o PTY quando o pai re-renderiza.
   const cbRef = useRef({ onReady, onExit });
   cbRef.current = { onReady, onExit };
   const spawnRef = useRef(spawn);
   const attachRef = useRef(attach);
+  const pseudoRef = useRef(pseudo);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -64,9 +72,12 @@ export function TerminalView({ id, cwd, connId, command, spawn, attach, onReady,
     let disposed = false;
     let created = false;
     let unlistenFn: (() => void) | undefined;
+    let detachPseudo: (() => void) | undefined;
+    const isPseudo = !!pseudoRef.current;
 
     const onData = term.onData((data) => {
-      termWrite(id, data).catch(console.error);
+      if (isPseudo) pseudoInput(id, data);
+      else termWrite(id, data).catch(console.error);
     });
 
     /** Fits only when the container is actually laid out; returns success. */
@@ -101,6 +112,19 @@ export function TerminalView({ id, cwd, connId, command, spawn, attach, onReady,
 
     const startWhenSized = () => {
       if (disposed || created) return;
+      if (isPseudo) {
+        if (!safeFit()) {
+          requestAnimationFrame(startWhenSized);
+          return;
+        }
+        created = true;
+        detachPseudo = pseudoAttach(id, term.cols, term.rows, {
+          write: (d) => term.write(d),
+          exit: (code) => cbRef.current.onExit?.(code),
+        });
+        cbRef.current.onReady?.(null);
+        return;
+      }
       if (attachRef.current) {
         attachToPty();
         return;
@@ -154,7 +178,8 @@ export function TerminalView({ id, cwd, connId, command, spawn, attach, onReady,
     const ro = new ResizeObserver(() => {
       if (!created || !safeFit()) return;
       const { cols, rows } = term;
-      if (cols > 0 && rows > 0) termResize(id, cols, rows).catch(console.error);
+      if (isPseudo) pseudoResize(id, cols, rows);
+      else if (cols > 0 && rows > 0) termResize(id, cols, rows).catch(console.error);
     });
     if (containerRef.current) ro.observe(containerRef.current);
 
@@ -164,7 +189,8 @@ export function TerminalView({ id, cwd, connId, command, spawn, attach, onReady,
       unlistenFn?.();
       unlistenExit?.();
       ro.disconnect();
-      if (created) termClose(id).catch(console.error);
+      detachPseudo?.();
+      if (created && !isPseudo) termClose(id).catch(console.error);
       term.dispose();
     };
   }, [id, cwd, connId, command]);

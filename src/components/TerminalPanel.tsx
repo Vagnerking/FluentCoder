@@ -89,6 +89,8 @@ interface TermInstance {
   exited?: boolean;
   /** PTY criado pelo backend (terminal/* de um agente ACP): só se conecta a ele. */
   attach?: boolean;
+  /** Pseudoterminal de extensão (sem PTY; o host escreve/lê — pseudoTerminal.ts). */
+  pseudo?: boolean;
 }
 
 export function TerminalPanel({
@@ -200,7 +202,9 @@ export function TerminalPanel({
                     title: spec.name,
                     cwd: dir,
                     command: null,
-                    spawn: { shellPath: spec.shellPath, shellArgs: spec.shellArgs, env: spec.env, strictEnv: spec.strictEnv, shellIntegration: spec.shellIntegration },
+                    ...(spec.pseudo
+                      ? { pseudo: true }
+                      : { spawn: { shellPath: spec.shellPath, shellArgs: spec.shellArgs, env: spec.env, strictEnv: spec.strictEnv, shellIntegration: spec.shellIntegration } }),
                   },
                 ]
           );
@@ -209,6 +213,10 @@ export function TerminalPanel({
           setActiveTab("terminal");
         } else if (a.type === "dispose") {
           closeTerminal(a.ptyId);
+        } else if (a.type === "rename") {
+          setTerminals((prev) => prev.map((t) => (t.id === a.ptyId ? { ...t, title: a.name } : t)));
+        } else if (a.type === "exited") {
+          setTerminals((prev) => prev.map((t) => (t.id === a.ptyId ? { ...t, exited: true } : t)));
         }
       }),
     [cwd, closeTerminal]
@@ -428,9 +436,10 @@ export function TerminalPanel({
                       command={t.command}
                       spawn={t.spawn}
                       attach={t.attach}
-                      onReady={t.spawn ? (pid) => ptyReady(t.id, pid) : undefined}
+                      pseudo={t.pseudo}
+                      onReady={t.spawn || t.pseudo ? (pid) => ptyReady(t.id, pid) : undefined}
                       onExit={
-                        t.spawn || t.attach
+                        t.spawn || t.attach || t.pseudo
                           ? (code) => {
                               ptyClosed(t.id, code);
                               setTerminals((prev) => prev.map((x) => (x.id === t.id ? { ...x, exited: true } : x)));

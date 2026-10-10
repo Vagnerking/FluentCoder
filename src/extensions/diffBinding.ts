@@ -14,12 +14,12 @@
 import * as monaco from "monaco-editor";
 import { extHost } from "./client";
 import { attachCommentWidgets } from "./commentWidgets";
-import { extDecorationType } from "./editorBridge";
+import { extDecorationOptions } from "./editorBridge";
 import { toMonacoRange } from "./editorModel";
 import type { HostEvent, PlainRange } from "./protocol";
 import { minimalEdit } from "./textEdits";
 
-type DecoItems = { range: PlainRange; hoverMessage?: string }[];
+type DecoItems = { range: PlainRange; hoverMessage?: string; renderOptions?: Record<string, unknown> }[];
 
 /** Últimas decorações por uri virtual (podem chegar antes da revisão montar). */
 const latestDecorations = new Map<string, Map<string, DecoItems>>();
@@ -51,13 +51,12 @@ export function bindExtDiffEditor(diffId: string, rightUri: string, editor: mona
   // ---- decorações da extensão no lado direito
   const decoIds = new Map<string, string[]>();
   const applyDeco = (key: string, items: DecoItems) => {
-    const type = extDecorationType(key);
     const m = modified.getModel();
-    if (!type || !m) return;
-    const next = items.map((it) => ({
-      range: toMonacoRange(it.range) as monaco.IRange,
-      options: { ...type.options, ...(it.hoverMessage ? { hoverMessage: { value: it.hoverMessage } } : {}) } as monaco.editor.IModelDecorationOptions,
-    }));
+    if (!m) return;
+    const next = items.flatMap((it) => {
+      const options = extDecorationOptions(key, it);
+      return options ? [{ range: toMonacoRange(it.range) as monaco.IRange, options }] : [];
+    });
     decoIds.set(key, m.deltaDecorations(decoIds.get(key) ?? [], next));
   };
   latestDecorations.get(rightUri)?.forEach((items, key) => applyDeco(key, items));

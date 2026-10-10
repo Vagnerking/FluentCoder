@@ -1,3 +1,4 @@
+import { Tooltip } from "../Tooltip";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { AgentMessage, ChatApproval, ChatFileDiff } from "../../agents/types";
 import { MODE_META } from "../../chat/modes";
@@ -25,11 +26,11 @@ interface MessageActions {
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
   return (
+    <Tooltip label={copied ? "Copiado" : label}>
     <button
       type="button"
       className="fc-msg-action"
       aria-label={copied ? "Copiado" : label}
-      title={copied ? "Copiado" : label}
       onClick={() =>
         void navigator.clipboard?.writeText(text).then(() => {
           setCopied(true);
@@ -39,6 +40,7 @@ function CopyButton({ text, label }: { text: string; label: string }) {
     >
       <Codicon name={copied ? "success" : "copy"} size={13} />
     </button>
+    </Tooltip>
   );
 }
 
@@ -73,20 +75,23 @@ const UserMessage = memo(function UserMessage({
           </span>
         )}
         {message.revert && (
-          <button
-            type="button"
-            className="fc-msg-action labeled"
-            disabled={actions.busy || message.revert.reverted}
-            onClick={() => actions.onRevert(message.id)}
-            title={
+          <Tooltip
+            label={
               message.revert.reverted
                 ? "Já revertido para antes deste pedido"
                 : "Reverter o código para antes deste pedido"
             }
           >
-            <Codicon name="discard" size={12} />
-            {message.revert.reverted ? "Revertido" : "Reverter"}
-          </button>
+            <button
+              type="button"
+              className="fc-msg-action labeled"
+              disabled={actions.busy || message.revert.reverted}
+              onClick={() => actions.onRevert(message.id)}
+            >
+              <Codicon name="discard" size={12} />
+              {message.revert.reverted ? "Revertido" : "Reverter"}
+            </button>
+          </Tooltip>
         )}
         <span className="fc-msg-actions">
           <CopyButton text={message.content} label="Copiar mensagem" />

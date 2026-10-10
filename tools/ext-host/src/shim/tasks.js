@@ -4,7 +4,8 @@
 // `onDidStart/EndTaskProcess` (pid e código de saída reais do PTY).
 //
 // Sem app conectado (headless/testes) a tarefa roda com child_process.
-// CustomExecution (pseudoterminal da extensão) não é suportada.
+// CustomExecution: o callback da extensão devolve um Pseudoterminal, que dirige
+// uma aba do terminal do app (onDidWrite/handleInput/setDimensions/onDidClose).
 'use strict';
 const { spawn } = require('child_process');
 const { EventEmitter, Disposable, CancellationTokenSource, ShellExecution, ProcessExecution, CustomExecution } = require('./types');
@@ -23,7 +24,7 @@ function quote(arg) {
 function resolveExecution(task, workspaceCwd) {
   const ex = task && task.execution;
   if (!ex) throw new Error('A tarefa não tem execution.');
-  if (ex instanceof CustomExecution || typeof ex.callback === 'function') throw new Error('CustomExecution não é suportada pelo host de extensões do Fluent Coder.');
+  if (ex instanceof CustomExecution || typeof ex.callback === 'function') return { custom: true, label: task.name || 'tarefa' };
   const opts = ex.options || {};
   const cwd = opts.cwd || workspaceCwd;
   const env = opts.env || undefined;
@@ -102,6 +103,29 @@ class TaskService {
       service.onDidEndTask.fire({ execution });
     };
     this.onDidStartTask.fire({ execution });
+    if (spec.custom) {
+      // Pseudoterminal da extensão: termina quando o pty dispara onDidClose
+      // (ou a aba é fechada). Sem processo (sem onDidStartTaskProcess).
+      let pty;
+      try {
+        pty = await task.execution.callback(task.definition || {});
+      } catch (err) {
+        finish(undefined);
+        throw err;
+      }
+      if (!pty || typeof pty.open !== 'function' || typeof pty.onDidWrite !== 'function') {
+        finish(undefined);
+        throw new Error('CustomExecution não devolveu um Pseudoterminal.');
+      }
+      terminal = this.host.createTerminal(ext, { name: `Tarefa: ${task.name || spec.label}`, pty, _task: true });
+      const sub = this.host.events.closeTerminal.event((t) => {
+        if (t !== terminal) return;
+        sub.dispose();
+        finish(t.exitStatus ? t.exitStatus.code : undefined);
+      });
+      if (!task.presentationOptions || task.presentationOptions.reveal !== 3) terminal.show(true);
+      return execution;
+    }
     if (this.host.appConnected) {
       // Terminal integrado do app com o processo da tarefa (aba "Tarefa: …").
       terminal = this.host.createTerminal(ext, {

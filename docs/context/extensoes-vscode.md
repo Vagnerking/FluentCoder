@@ -31,7 +31,7 @@ src/extensions/client.ts ──invoke(ext_host_send)──▶ Rust src-tauri/src
   `main.js` (protocolo stdio), `src/host.js` (estado), `src/shim/*` (API
   `vscode`: `api.js`, `documents.js`, `terminal.js`, `watcher.js`,
   `memento.js`, `webview.js`, `configuration.js`, `types.js`, `comments.js`,
-  `quickinput.js`, `tasks.js`),
+  `quickinput.js`, `tasks.js`, `progress.js`, `notebooks.js`),
   `src/server.js` (HTTP), `src/preamble.js` (injeção no HTML),
   `src/protocol.js` (validação), `src/when.js` (cláusulas `when`),
   `src/contributions.js` (`contributes`). `require('vscode')` é interceptado em
@@ -58,15 +58,18 @@ respostas); respostas `{id, result|error}`; eventos `{event, …}`.
 | Grupo | Métodos app → host |
 |---|---|
 | ciclo de vida | `initialize` (workspaceFolders, dataDir, language, `secrets: "keyring"`, debugWebviews), `listInstalled`, `loadExtension`, `activate`, `shutdown` |
-| webviews | `resolveView`, `webviewMessage`, `webviewState`, `webviewVisible`, `webviewUrl`, `disposeWebview`, `setTheme` |
+| webviews | `resolveView`, `webviewMessage`, `webviewState`, `webviewVisible`, `webviewUrl`, `disposeWebview`, `setTheme`, `restoreWebviewPanels` (painéis da sessão anterior) |
 | editor | `documentOpened`, `documentChanged` (mudanças incrementais 0-based + versão + dirty + undo/redo), `documentClosed`, `documentSaved`, `editorsChanged` (ativo, visíveis, abas), `selectionChanged`, `visibleRangesChanged`, `diagnostics`, `windowState` |
-| ações | `executeCommand`, `listCommands`, `runKeybinding`, `diffAction` (accept/reject + texto final), `diffEdited` (texto do lado direito editado na revisão), `diffClosed`, `terminalOpened` (pid, `shellIntegration` pedida), `terminalShell` (OSC 633: ready/cwd/start/data/end), `terminalClosed` (exitCode), `handleUri`, `provideCodeLenses`, `executeCodeLens`, `respond`, `setWorkspaceFolders` |
-| comentários | `commentAction` (botão de um thread: só comandos que o thread oferece), `commentReaction`, `commentingRanges`, `commentThreads` (snapshot) |
+| ações | `executeCommand`, `listCommands`, `runKeybinding`, `diffAction` (accept/reject + texto final), `diffEdited` (texto do lado direito editado na revisão), `diffClosed`, `terminalOpened` (pid, `shellIntegration` pedida; cols/rows no pseudoterminal), `terminalShell` (OSC 633: ready/cwd/start/data/end), `terminalInput`/`terminalResize` (pseudoterminal), `terminalClosed` (exitCode), `handleUri`, `provideCodeLenses`, `executeCodeLens`, `cancelProgress`, `respond`, `setWorkspaceFolders` |
+| comentários | `commentAction` (botão de um thread: só comandos que o thread oferece; com `text` num comentário em edição = corpo novo), `commentReaction`, `commentingRanges`, `commentCreateThread` ("+" numa faixa comentável), `commentDisposeTemplate` (cancelar o rascunho), `commentThreads` (snapshot) |
 | quick input | `quickInputEvent` (value/accept/hide/active/selection/button/itemButton) |
 | painéis | `webviewPanelState` (aba do painel na grade: active/visible/viewColumn) |
 
 Eventos host → app: `postMessage`, `webviewHtml`, `webviewPanelCreated`
 (com `viewColumn`/`preserveFocus`), `webviewTitle`, `webviewDisposed`,
+`webviewPanels` (lista persistível dos painéis), `progress`/`progressEnd`,
+`terminalPtyWrite`/`terminalPtyExit`/`terminalRename` (pseudoterminal),
+`commentingRangesChanged`,
 `revealWebview` (com `viewColumn`), `revealView`, `context`,
 `request` (showMessage, openDialog, saveDialog, **applyEdit**,
 **saveDocument**, **clipboardRead** → o app responde com `respond`),
@@ -145,7 +148,17 @@ no lado virtual de um diff)/`decorationTypeDisposed`,
     pedem a integração (tarefas e shells com `shellArgs` próprios não).
 14. **Painéis de webview** são abas sintéticas (`extwebview:<handle>`): fora
     da sessão salva, do contexto dos agentes, da ponte IDE e do "Mover para
-    Nova Janela" (o relay vive nesta janela).
+    Nova Janela" (o relay vive nesta janela). A restauração entre sessões tem
+    armazenamento próprio (abaixo) e **não** persiste `localResourceRoots`
+    (só as opções booleanas); o app valida a lista lida do `localStorage`
+    (`sanitizePersistedPanels`) e o host de novo (`restoreWebviewPanels`).
+15. **Ícones de decoração** (`gutterIconPath`, `contentIconPath`) só de dentro
+    da pasta da extensão ou do workspace (conferido no realpath), só
+    svg/png/gif/jpg/webp ≤ 64 KB, embutidos como `data:` URI no host; o app
+    revalida o `data:` URI antes de virar CSS. Remoto/http nunca.
+16. **Comentário novo** (`commentCreateThread`) só dentro das faixas que o
+    `commentingRangeProvider` do PRÓPRIO controller devolve; cancelar
+    (`commentDisposeTemplate`) só descarta rascunho sem comentários.
 
 ## Desempenho
 
@@ -223,7 +236,45 @@ no lado virtual de um diff)/`decorationTypeDisposed`,
 - `showTextDocument` (seleção/preview/preserveFocus), `TextEditor.selection(s)`
   (setter), `revealRange` → editor do app.
 - Decorações → `model.deltaDecorations` + CSS gerado (`.extd-<chave>`),
-  `ThemeColor` resolvido pelo mapa do tema.
+  `ThemeColor` resolvido pelo mapa do tema. `gutterIconPath` → glyph margin
+  (`gutterIconSize` = `background-size`), `overviewRulerColor` +
+  `overviewRulerLane` → régua, `isWholeLine`, `rangeBehavior` → stickiness,
+  `before`/`after` (texto, ícone, cores, margem, largura/altura) e as
+  `renderOptions` POR FAIXA (ex.: blame inline) com classes
+  `extd-<chave>-i<hash>`. O lado direito dos diffs usa o mesmo caminho
+  (`extDecorationOptions`).
+
+## Painéis restaurados ao reiniciar
+
+Como o VS Code (`registerWebviewPanelSerializer` e custom editors): o host
+emite `webviewPanels` (debounce 250 ms) a cada mudança dos painéis (criar,
+fechar, título, coluna, `setState` do webview) com viewType, extensão,
+título, coluna real, opções booleanas, estado (≤ 256 KB) e, no custom editor,
+a uri. O app (`panelRestore.ts`) guarda por workspace no `localStorage`
+(`ext.webviewPanels:<raiz>`, ≤ 1 MB; acima disso guarda sem o estado). No
+encerramento do host (`stop`) a lista NÃO é atualizada (o `deactivate`
+descarta painéis). Quando o host sobe (`hostReady`: startup ou "Reiniciar
+Host de Extensões"), o app manda `restoreWebviewPanels` (o ativo por último):
+o host carrega/ativa a extensão dona (como `onWebviewPanel:<viewType>`) e
+chama `deserializeWebviewPanel(panel, state)` — ou `openWith(uri)` no custom
+editor — com `preserveFocus`. Sem serializer/editor da MESMA extensão o
+painel é descartado; deserialize que lança descarta o painel. Várias janelas
+compartilham o sidecar: a lista é gravada na chave da raiz de cada janela.
+
+- Claude Code: `claudeVSCodePanel` (sessão em aba; o estado traz o
+  `sessionID`). Codex: custom editor `chatgpt.conversationEditor` com
+  `openai-codex://route/<rota>`.
+
+## Progresso (`withProgress`)
+
+`shim/progress.js` → evento `progress` (location `notification`/`window`/
+`scm`, título, mensagem, percentual acumulado dos `increment`, `cancellable`;
+atualizações coalescidas em 50 ms) e `progressEnd` (resolvida ou rejeitada).
+Notification → aviso no canto (`ExtProgressToasts.tsx`, barra determinada ou
+indeterminada, **Cancelar**); Window/SourceControl → item com spinner na barra
+de status, clicável para cancelar quando `cancellable`. Cancelar =
+`cancelProgress` → `CancellationToken` da tarefa. As mensagens simples
+(`show*Message` sem botões) usam a mesma pilha de avisos.
 - `languages.getDiagnostics`/`onDidChangeDiagnostics` = markers do Monaco
   (exceto os `ext:*`) + coleções das extensões; coleções viram markers
   `ext:<nome>` no app.
@@ -264,6 +315,20 @@ as ações já resolvidas: `actions` (`comments/commentThread/title`),
   continua no cabeçalho da revisão.
 - `commentingRanges(uri)` devolve as faixas do `commentingRangeProvider`;
   `reactionHandler` é chamado por `commentReaction`.
+- **Novo comentário** (`commentingRanges.ts`): nas linhas comentáveis a área
+  de decorações de linha mostra uma faixa discreta e, sob o mouse, o "+"
+  (também a ação "Adicionar Comentário" do menu de contexto, com o context
+  key `fluentExtCommentable`). Clicar → `commentCreateThread` (linha, ou a
+  seleção que começa nela) → thread vazio (`isTemplate`) expandido com a caixa
+  aberta, `prompt`/`placeHolder` do `controller.options`, Ctrl+Enter envia
+  pela 1ª ação `comments/commentThread/context` (recebe `{thread, text}`),
+  Esc/Cancelar descarta. A lista é recalculada ao trocar de modelo, editar
+  (400 ms) e em `commentingRangesChanged` (o controller ganhou o provider).
+- **Editar/apagar**: em leitura o comentário mostra as ações
+  `comments/comment/title` (ex.: Editar/Apagar); com `mode = Editing` vira
+  caixa com o corpo e as ações `comments/comment/context` (Salvar/Cancelar) —
+  o host põe o texto editado em `comment.body` (preservando `MarkdownString`)
+  antes de rodar o comando, como o VS Code.
 
 ## QuickPick / InputBox
 
@@ -291,11 +356,20 @@ múltipla (Ctrl+Espaço alterna o ativo; botão OK), barra de progresso no
   Windows) e `ProcessExecution` num terminal de extensão "Tarefa: <nome>"
   (sem shell integration); `onDidStartTask`, `onDidStartTaskProcess` (pid do
   PTY), `onDidEndTaskProcess` (`exitCode` do PTY), `onDidEndTask`;
-  `execution.terminate()` fecha o terminal. `CustomExecution` rejeita.
-  Headless (sem app): `child_process`. Uso real: instalador WSL do Codex.
-- Notebooks: APIs presentes e inertes (`activeNotebookEditor` indefinido,
-  `notebookDocuments` vazio, controller sem execução); `openNotebookDocument`/
-  `showNotebookDocument` rejeitam; `notebook.cell.execute` é no-op.
+  `execution.terminate()` fecha o terminal. `CustomExecution`: o callback
+  devolve um `Pseudoterminal` que dirige uma aba "Tarefa: <nome>" (ver
+  Terminal); a tarefa termina com o código do `onDidClose` (sem
+  `onDidStartTaskProcess`: não há processo). Headless (sem app):
+  `child_process` / pty aberto sem dimensões. Uso real: instalador WSL do Codex.
+- Notebooks (`shim/notebooks.js`): **sem editor de notebook**, mas objetos
+  coerentes. `openNotebookDocument(uri)` lê o .ipynb (nbformat 4, ≤ 32 MB, só
+  leitura) → `NotebookDocument` com células (`kind`, `document` com
+  `getText`/`lineAt`/`offsetAt`, linguagem do kernel, metadados), entra em
+  `notebookDocuments` + `onDidOpenNotebookDocument`; `(tipo, NotebookData)`
+  cria um sem título. `showNotebookDocument` mostra um aviso em pt-BR (abra no
+  VS Code/Jupyter) e devolve um `NotebookEditor` inerte;
+  `activeNotebookEditor` segue indefinido; `createNotebookCellExecution`
+  devolve uma execução inerte; `notebook.cell.execute` é no-op.
 
 ## Diffs propostos (Claude Code)
 
@@ -325,6 +399,17 @@ da extensão é aplicado — o `CLAUDE_CODE_SSE_PORT` dela tem precedência sobr
 da ponte IDE). `show` abre o painel e foca; `sendText` (retido até o PTY
 existir); `dispose`/fechar a aba → `onDidCloseTerminal` com `exitStatus`;
 saída do processo → aba "(encerrado)". `processId` = pid do PTY.
+
+**Pseudoterminal** (`createTerminal({ pty })`, tarefas `CustomExecution`):
+aba sem PTY (`pseudoTerminal.ts`; `TerminalView` com `pseudo`). O xterm abre
+com o tamanho real → `terminalOpened {cols, rows}` → `pty.open({columns,
+rows})`; `onDidWrite` → `terminalPtyWrite` (retido até o xterm montar, teto
+1 MB); teclado → `terminalInput` → `handleInput`; `sendText` →
+`handleInput`; resize → `terminalResize` → `setDimensions`;
+`onDidChangeName` → renomeia a aba; `onDidClose(code)` → `terminalPtyExit`
+(terminal comum fecha a aba; tarefa mantém a saída marcada como encerrada) +
+`onDidCloseTerminal` com o código; fechar a aba → `pty.close()`.
+`processId` = `undefined`.
 
 **Shell integration real (OSC 633, formato do VS Code)**: terminais de
 extensão sem `shellArgs` pedem a integração (`shellIntegration` no
@@ -398,7 +483,9 @@ no VS Code. Sem as sequências em 2,5 s (outro shell) → integração simulada
   `editorTextFocus`; no webview, todos), `menus.editor/title` (diff),
   `views`/`viewsContainers` (metadados). Itens de barra de status
   (`createStatusBarItem`, `setStatusBarMessage`, `withProgress`) aparecem na
-  barra do app, com `$(ícone)` e comando.
+  barra do app, com `$(ícone)`, comando e Tooltip. Os comandos contribuídos
+  na Paleta mostram o atalho contribuído (`keybindingFor`), como os itens de
+  menu do app mostram o acelerador.
 
 ## Empacotamento
 
@@ -435,17 +522,24 @@ layout), `ExtensionHostRuntime`, `ExtensionStatusItems`, `useExtensionDiffs`,
 - Headless pelo protocolo real: `npm run ext-host:check` (ativa, resolve a
   view, HTML + assets 200, round trip).
 - **Fluxos com a extensão real do Claude Code**:
-  `node tools/ext-host/scripts/flows-check.js` (espera 25/25): editor
+  `node tools/ext-host/scripts/flows-check.js` (espera 31/31; 29/29 sem o
+  Codex instalado): editor
   espelhado visto pelas ferramentas MCP da extensão (`getOpenEditors`,
   `getCurrentSelection`, `getDiagnostics`, `checkDocumentDirty`), `openDiff` →
   aceitar com texto editado (FILE_SAVED) e rejeitar (DIFF_REJECTED) pelos
   comandos da extensão, `close_tab` → `closeDiff`, terminal com shell
   integration, `fluent-coder://anthropic.claude-code/open` e a **barra de
   hunks** (`open_diff` do chat → um CommentThread por hunk, decoração do lado
-  direito, aceitar e rejeitar pelos botões → `diffContent`).
+  direito, aceitar e rejeitar pelos botões → `diffContent`) e os **painéis
+  restaurados** numa 2ª sessão do host (serializer do Claude Code e custom
+  editor do Codex).
 - Lacunas fechadas: `tools/ext-host/test/gaps.test.js` (comments, tasks,
-  notebooks, quick input, painéis, shell integration), `src/extensions/
-  {comments,quickInputModel,webviewTabs,shellIntegration}.test.ts` e, no Rust,
+  notebooks, quick input, painéis, shell integration),
+  `tools/ext-host/test/finais.test.js` (painéis restaurados, ícones de
+  decoração, withProgress cancelável, Pseudoterminal/CustomExecution, novo
+  comentário/editar/apagar, notebooks), `src/extensions/
+  {comments,quickInputModel,webviewTabs,shellIntegration,panelRestore,
+  decorations,progress,pseudoTerminal}.test.ts` e, no Rust,
   `cargo test shell_integration` (bash real num PTY emitindo OSC 633).
 - Render em WebKitGTK: `python3 tools/ext-host/scripts/webkit-harness.py
   claude|codex --png out.png [--theme-file tema.json] [--data-dir dir]`.

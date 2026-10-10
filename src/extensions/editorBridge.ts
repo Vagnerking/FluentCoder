@@ -23,6 +23,8 @@ import { extHost, extLog } from "./client";
 import type { HostEvent, PlainRange, PlainSelection } from "./protocol";
 import {
   markersToDiagnostics,
+  monacoDecorationOptions,
+  renderDecorationInstance,
   renderDecorationType,
   themeColorVar,
   toMonacoRange,
@@ -34,6 +36,7 @@ import {
 } from "./editorModel";
 import { readFluentThemeVars } from "./theme";
 import { attachCommentWidgets } from "./commentWidgets";
+import { attachCommentingRanges } from "./commentingRanges";
 
 /**
  * Tipos de decoração das extensões (CSS gerado), compartilhados com a revisão
@@ -43,6 +46,39 @@ const decoTypes = new Map<string, ReturnType<typeof renderDecorationType>>();
 
 export function extDecorationType(key: string): ReturnType<typeof renderDecorationType> | undefined {
   return decoTypes.get(key);
+}
+
+/** CSS das `renderOptions` por faixa (classe → regras), por tipo. */
+const instanceCss = new Map<string, Map<string, string>>();
+let instanceCssChanged: () => void = () => {};
+
+/** Tema escuro do app: ThemeColor → valor das variáveis `--vscode-*` (cache por sessão). */
+const resolveExtThemeColor = (() => {
+  let vars: Record<string, string> | null = null;
+  return (id: string) => {
+    vars = vars ?? readFluentThemeVars();
+    return vars[themeColorVar(id)];
+  };
+})();
+
+/**
+ * Opções do Monaco de UMA faixa decorada (tipo + `renderOptions` próprias +
+ * hover). Registra o CSS das renderOptions quando é novo.
+ */
+export function extDecorationOptions(key: string, item: { hoverMessage?: string; renderOptions?: Record<string, unknown> }): monaco.editor.IModelDecorationOptions | null {
+  const type = decoTypes.get(key);
+  if (!type) return null;
+  const inst = renderDecorationInstance(key, item.renderOptions, resolveExtThemeColor);
+  if (inst) {
+    const map = instanceCss.get(key) ?? new Map<string, string>();
+    const cls = inst.options.beforeContentClassName ?? inst.options.afterContentClassName ?? "";
+    if (!map.has(cls)) {
+      map.set(cls, inst.css);
+      instanceCss.set(key, map);
+      instanceCssChanged();
+    }
+  }
+  return monacoDecorationOptions(type, inst, item.hoverMessage) as monaco.editor.IModelDecorationOptions;
 }
 
 export interface EditorBridgeHost {
@@ -226,6 +262,11 @@ export function startEditorBridge(hostRef: { current: EditorBridgeHost }): { dis
         const m = ed.getModel();
         return !!t.path && isFileModel(m) && sameFile(t.path, pathOf(m));
       }),
+      // "+" nas linhas comentáveis (commentingRangeProvider das extensões).
+      attachCommentingRanges(ed, () => {
+        const m = ed.getModel();
+        return isFileModel(m) ? pathOf(m) : null;
+      }),
       ed.onDidFocusEditorText(() => {
         lastFocused = ed;
         pushEditors();
@@ -290,13 +331,7 @@ export function startEditorBridge(hostRef: { current: EditorBridgeHost }): { dis
   // ------------------------------------------------------------ host → editor
   const decoKey = (path: string, key: string) => `${path}\u0000${key}`;
 
-  const resolveThemeColor = (() => {
-    let vars: Record<string, string> | null = null;
-    return (id: string) => {
-      vars = vars ?? readFluentThemeVars();
-      return vars[themeColorVar(id)];
-    };
-  })();
+  const resolveThemeColor = resolveExtThemeColor;
 
   const rebuildStyles = () => {
     if (!styleEl) {
@@ -304,21 +339,17 @@ export function startEditorBridge(hostRef: { current: EditorBridgeHost }): { dis
       styleEl.id = "fluent-ext-decorations";
       document.head.appendChild(styleEl);
     }
-    styleEl.textContent = [...decoTypes.values()].map((d) => d.css).join("\n");
+    styleEl.textContent = [...decoTypes.values()].map((d) => d.css).concat([...instanceCss.values()].flatMap((m) => [...m.values()])).join("\n");
   };
+  instanceCssChanged = () => rebuildStyles();
 
-  const applyDecorations = (m: monaco.editor.ITextModel, key: string, items: { range: PlainRange; hoverMessage?: string }[]) => {
-    const type = decoTypes.get(key);
-    if (!type) return;
+  const applyDecorations = (m: monaco.editor.ITextModel, key: string, items: { range: PlainRange; hoverMessage?: string; renderOptions?: Record<string, unknown> }[]) => {
+    if (!decoTypes.has(key)) return;
     const k = decoKey(pathOf(m), key);
-    const next = items.map((it) => ({
-      range: toMonacoRange(it.range) as monaco.IRange,
-      options: {
-        ...type.options,
-        ...(it.hoverMessage ? { hoverMessage: { value: it.hoverMessage } } : {}),
-        ...(type.options.overviewRulerColor ? { overviewRuler: { color: type.options.overviewRulerColor, position: monaco.editor.OverviewRulerLane.Center } } : {}),
-      } as monaco.editor.IModelDecorationOptions,
-    }));
+    const next = items.flatMap((it) => {
+      const options = extDecorationOptions(key, it);
+      return options ? [{ range: toMonacoRange(it.range) as monaco.IRange, options }] : [];
+    });
     decoIds.set(k, m.deltaDecorations(decoIds.get(k) ?? [], next));
   };
 
@@ -467,6 +498,7 @@ export function startEditorBridge(hostRef: { current: EditorBridgeHost }): { dis
       case "decorationTypeDisposed": {
         const key = (ev as { key: string }).key;
         decoTypes.delete(key);
+        instanceCss.delete(key);
         for (const [k, ids] of [...decoIds]) {
           if (!k.endsWith(`\u0000${key}`)) continue;
           const m = modelFor(k.slice(0, k.indexOf("\u0000")));
@@ -477,7 +509,7 @@ export function startEditorBridge(hostRef: { current: EditorBridgeHost }): { dis
         break;
       }
       case "decorations": {
-        const e = ev as { path?: string; uri?: string; key: string; items: { range: PlainRange; hoverMessage?: string }[] };
+        const e = ev as { path?: string; uri?: string; key: string; items: { range: PlainRange; hoverMessage?: string; renderOptions?: Record<string, unknown> }[] };
         if (!e.path) break; // lado virtual de um diff: diffBinding.ts
         const m = modelFor(e.path);
         if (m) applyDecorations(m, e.key, e.items);

@@ -21,6 +21,8 @@ const { WatchService } = require('./shim/watcher');
 const { CommentService } = require('./shim/comments');
 const { TaskService } = require('./shim/tasks');
 const { QuickInputService } = require('./shim/quickinput');
+const { ProgressService } = require('./shim/progress');
+const { NotebookService } = require('./shim/notebooks');
 const { createVscodeApi, toUri } = require('./shim/api');
 const { ResourceServer } = require('./server');
 const { buildPreamble, injectPreamble } = require('./preamble');
@@ -123,6 +125,8 @@ class ExtensionHost {
     this.comments = new CommentService(this);
     this.tasks = new TaskService(this);
     this.quickInputs = new QuickInputService(this);
+    this.progress = new ProgressService(this);
+    this.notebooks = new NotebookService(this);
     this._activeEditor = undefined;
     this._visibleEditors = [];
     this._appTabs = []; // [{path, dirty, active, preview}]
@@ -170,7 +174,10 @@ class ExtensionHost {
       post: (handle, message) => this._postToWebview(handle, message),
       allowRoots: (roots) => roots.forEach((r) => this.server.allowRoot(toUri(r).fsPath)),
       reveal: (handle, preserveFocus, viewColumn) => this.emit({ event: 'revealWebview', handle, preserveFocus, viewColumn: typeof viewColumn === 'number' ? viewColumn : undefined }),
-      retitle: (handle, title) => this.emit({ event: 'webviewTitle', handle, title }),
+      retitle: (handle, title) => {
+        this.emit({ event: 'webviewTitle', handle, title });
+        this._panelsChanged();
+      },
       disposeWebview: (handle) => this._disposeWebview(handle, false),
     };
     this._installBuiltinCommands();
@@ -190,6 +197,10 @@ class ExtensionHost {
   }
 
   async stop() {
+    // Encerrando: os painéis que as extensões descartarem no deactivate NÃO
+    // saem da lista persistida (o app os restaura na próxima sessão).
+    this._stopping = true;
+    clearTimeout(this._panelsTimer);
     for (const ext of this.extensions.values()) await this.deactivate(ext.id);
     this.watchers.closeAll();
     this._flushOutput();
@@ -671,15 +682,95 @@ class ExtensionHost {
     }
     this.emit({ event: 'webviewPanelCreated', ...this._webviewInfo(entry) });
     this.events.tabs.fire({ opened: [], closed: [], changed: [] });
+    this._panelsChanged();
     return panel;
+  }
+
+  // ------------------------------------------- persistência dos painéis
+  /**
+   * Painéis abertos em formato persistível (o app guarda por workspace e
+   * devolve em `restoreWebviewPanels` na próxima sessão), como o VS Code faz
+   * com `registerWebviewPanelSerializer` e os custom editors.
+   */
+  panelSnapshot() {
+    const out = [];
+    for (const entry of this.webviews.values()) {
+      if (!entry.panel || entry.panel._disposed) continue;
+      const rec = {
+        viewType: entry.webview.viewType,
+        extensionId: entry.ext.id,
+        title: String(entry.panel.title || '').slice(0, 1024),
+        viewColumn: typeof entry.panel.viewColumn === 'number' && entry.panel.viewColumn > 0 ? entry.panel.viewColumn : undefined,
+        active: !!entry.panel.active,
+        options: pickPanelOptions(entry.webview.options),
+      };
+      if (entry.customUri) rec.customUri = entry.customUri.toString();
+      if (entry.webview.state !== undefined) {
+        const json = safeJson(entry.webview.state);
+        if (json && json.length <= MAX_PERSISTED_STATE) rec.state = entry.webview.state;
+      }
+      out.push(rec);
+    }
+    return out.slice(0, MAX_PERSISTED_PANELS);
+  }
+
+  /** Avisa o app (com debounce) que a lista persistível mudou. */
+  _panelsChanged() {
+    if (this._stopping) return;
+    clearTimeout(this._panelsTimer);
+    this._panelsTimer = setTimeout(() => {
+      if (!this._stopping) this.emit({ event: 'webviewPanels', panels: this.panelSnapshot() });
+    }, PANELS_DEBOUNCE_MS);
+    if (this._panelsTimer.unref) this._panelsTimer.unref();
+  }
+
+  /**
+   * Restaura UM painel persistido: custom editor → `openWith(uri)` de novo;
+   * painel comum → `deserializeWebviewPanel(panel, state)` do serializer da
+   * extensão. Sem serializer/editor registrado após ativar, o painel é
+   * descartado (como no VS Code). Devolve true se restaurou.
+   */
+  async restoreWebviewPanel(rec) {
+    const ext = this.extensions.get(String(rec.extensionId || '').toLowerCase());
+    if (!ext) return false;
+    if (!ext.isActive) await this.activate(ext.id);
+    const viewColumn = typeof rec.viewColumn === 'number' && rec.viewColumn >= 1 ? rec.viewColumn : -1;
+    if (rec.customUri) {
+      const reg = this.customEditors.get(rec.viewType);
+      if (!reg || reg.ext !== ext) return false;
+      let uri;
+      try {
+        uri = Uri.parse(rec.customUri);
+      } catch {
+        return false;
+      }
+      await this.openWith(uri, rec.viewType, { viewColumn, preserveFocus: true, state: rec.state });
+      return true;
+    }
+    const serializer = this.serializers.get(rec.viewType);
+    if (!serializer || serializer.ext !== ext || typeof serializer.serializer.deserializeWebviewPanel !== 'function') return false;
+    const { WebviewPanel } = require('./shim/webview');
+    const panel = new WebviewPanel(this.webviewBridge, rec.viewType, String(rec.title || rec.viewType), { viewColumn, preserveFocus: true }, pickPanelOptions(rec.options), ext);
+    panel.webview.state = rec.state;
+    this.createWebviewPanel(ext, panel);
+    try {
+      await serializer.serializer.deserializeWebviewPanel(panel, rec.state);
+    } catch (err) {
+      this.log(`deserializeWebviewPanel (${rec.viewType}) falhou:`, err);
+      panel.dispose();
+      return false;
+    }
+    return true;
   }
 
   async openWith(uri, viewType, opts) {
     const reg = this.customEditors.get(viewType);
     if (!reg) return this.showTextDocument(uri, opts);
     const { WebviewPanel } = require('./shim/webview');
-    const panel = new WebviewPanel(this.webviewBridge, viewType, path.basename(uri.path) || viewType, (opts && opts.viewColumn) || -1, (reg.options && reg.options.webviewOptions) || {}, reg.ext);
+    const showOptions = { viewColumn: (opts && opts.viewColumn) || -1, preserveFocus: !!(opts && opts.preserveFocus) };
+    const panel = new WebviewPanel(this.webviewBridge, viewType, path.basename(uri.path) || viewType, showOptions, (reg.options && reg.options.webviewOptions) || {}, reg.ext);
     panel._customUri = uri;
+    if (opts && opts.state !== undefined) panel.webview.state = opts.state;
     this.createWebviewPanel(reg.ext, panel);
     const cts = new types.CancellationTokenSource();
     if (typeof reg.provider.resolveCustomTextEditor === 'function') {
@@ -749,7 +840,9 @@ class ExtensionHost {
 
   setWebviewState(handle, state) {
     const entry = this.webviews.get(handle);
-    if (entry) entry.webview.state = state;
+    if (!entry) return;
+    entry.webview.state = state;
+    if (entry.panel) this._panelsChanged();
   }
 
   setWebviewVisible(handle, visible) {
@@ -764,6 +857,7 @@ class ExtensionHost {
     const entry = this.webviews.get(handle);
     if (!entry || !entry.panel) return;
     entry.panel._setViewState({ active, visible, viewColumn });
+    this._panelsChanged();
     if (active) {
       this._activePanel = handle;
       this._activeDiff = null;
@@ -776,7 +870,10 @@ class ExtensionHost {
     if (!entry) return;
     this.webviews.delete(handle);
     if (this._activePanel === handle) this._activePanel = null;
-    if (entry.panel) this.events.tabs.fire({ opened: [], closed: [], changed: [] });
+    if (entry.panel) {
+      this.events.tabs.fire({ opened: [], closed: [], changed: [] });
+      this._panelsChanged();
+    }
     if (fromApp) {
       if (entry.view) entry.view._dispose();
       if (entry.panel) entry.panel.dispose();
@@ -1175,8 +1272,9 @@ class ExtensionHost {
 
   createDecorationType(ext, options) {
     const key = `d${crypto.randomBytes(6).toString('hex')}`;
-    const opts = sanitizeDecorationOptions(options || {});
-    this.decorationTypes.set(key, { ext, options: opts });
+    const icon = this._decorationIcon(ext);
+    const opts = sanitizeDecorationOptions(options || {}, icon);
+    this.decorationTypes.set(key, { ext, options: opts, icon });
     this.emit({ event: 'decorationType', key, options: opts });
     return {
       key,
@@ -1184,6 +1282,12 @@ class ExtensionHost {
         if (this.decorationTypes.delete(key)) this.emit({ event: 'decorationTypeDisposed', key });
       },
     };
+  }
+
+  /** Resolver de ícones de decoração da extensão (raízes: pasta dela + workspace). */
+  _decorationIcon(ext) {
+    this._iconCache = this._iconCache || new Map();
+    return (v) => iconDataUri(v, [ext.extensionPath, ...this.workspaceFolders.map((f) => f.uri.fsPath)], this._iconCache);
   }
 
   setDecorations(editor, type, rangesOrOptions) {
@@ -1196,7 +1300,7 @@ class ExtensionHost {
       if (r instanceof Range || (r && r.start && r.end && !r.range)) return { range: plainRange(toRange(r)) };
       const o = { range: plainRange(toRange(r.range)) };
       if (r.hoverMessage) o.hoverMessage = markdownText(r.hoverMessage);
-      if (r.renderOptions) o.renderOptions = sanitizeDecorationOptions(r.renderOptions);
+      if (r.renderOptions) o.renderOptions = sanitizeDecorationOptions(r.renderOptions, this.decorationTypes.get(type.key).icon);
       return o;
     });
     if (diff) this.emit({ event: 'decorations', uri: uri.toString(), diffId: diff.id, key: type.key, items });
@@ -1462,9 +1566,20 @@ class ExtensionHost {
   }
 
   /** App criou o PTY do terminal. */
-  terminalOpened(id, pid, shellIntegration) {
+  terminalOpened(id, pid, shellIntegration, dims) {
     const t = this._terminal(id);
-    if (t) t._onOpened(pid, !!shellIntegration);
+    if (t) t._onOpened(pid, !!shellIntegration, dims);
+  }
+
+  /** Teclado/resize da aba de um pseudoterminal (pty da extensão). */
+  terminalInput(id, data) {
+    const t = this._terminal(id);
+    if (t) t._pseudoInput(data);
+  }
+
+  terminalResize(id, cols, rows) {
+    const t = this._terminal(id);
+    if (t) t._pseudoResize(cols, rows);
   }
 
   /** Sequência OSC 633 do PTY interpretada pelo app (shell integration real). */
@@ -1598,30 +1713,102 @@ function matchSelector(selector, doc) {
 }
 
 /** Só propriedades de estilo conhecidas e valores sem `;{}<` (viram CSS no app). */
-function sanitizeDecorationOptions(o) {
-  const ALLOWED = ['backgroundColor', 'border', 'borderColor', 'borderRadius', 'borderStyle', 'borderWidth', 'color', 'fontStyle', 'fontWeight', 'opacity', 'outline', 'outlineColor', 'textDecoration', 'cursor', 'letterSpacing', 'isWholeLine', 'overviewRulerColor', 'rangeBehavior'];
+/** Teto do estado (setState) persistido por painel e de painéis por sessão. */
+const MAX_PERSISTED_STATE = 256 * 1024;
+const MAX_PERSISTED_PANELS = 32;
+const PANELS_DEBOUNCE_MS = 250;
+
+/**
+ * Só as opções booleanas do webview/painel. `localResourceRoots` NÃO é
+ * persistido nem restaurado (a extensão o define de novo no deserialize; o
+ * padrão já cobre a pasta da extensão e o workspace).
+ */
+function pickPanelOptions(o) {
+  const out = {};
+  if (!o || typeof o !== 'object') return out;
+  for (const k of ['enableScripts', 'enableForms', 'enableCommandUris', 'enableFindWidget', 'retainContextWhenHidden']) if (typeof o[k] === 'boolean') out[k] = o[k];
+  return out;
+}
+
+/**
+ * Só propriedades de estilo conhecidas e valores sem `;{}<` (viram CSS no
+ * app). Ícones (`gutterIconPath`, `contentIconPath`) passam por `icon(v)`,
+ * que devolve um `data:` URI de imagem pequena de uma raiz permitida — sem
+ * resolver, são descartados.
+ */
+function sanitizeDecorationOptions(o, icon) {
+  const ALLOWED = ['backgroundColor', 'border', 'borderColor', 'borderRadius', 'borderStyle', 'borderWidth', 'color', 'fontStyle', 'fontWeight', 'opacity', 'outline', 'outlineColor', 'outlineStyle', 'outlineWidth', 'textDecoration', 'cursor', 'letterSpacing', 'isWholeLine', 'overviewRulerColor', 'overviewRulerLane', 'rangeBehavior', 'gutterIconSize'];
   const out = {};
   const clean = (v) => {
     if (v && typeof v === 'object' && typeof v.id === 'string') return { themeColor: v.id };
-    if (typeof v === 'string' && !/[;{}<>]/.test(v) && v.length < 200) return v;
+    if (typeof v === 'string' && !/[;{}<>\\]/.test(v) && v.length < 200) return v;
     if (typeof v === 'number' || typeof v === 'boolean') return v;
     return undefined;
   };
   for (const k of ALLOWED) if (o[k] !== undefined && clean(o[k]) !== undefined) out[k] = clean(o[k]);
+  if (o.gutterIconPath && typeof icon === 'function') {
+    const data = icon(o.gutterIconPath);
+    if (data) out.gutterIconPath = { dataUri: data };
+  }
   for (const side of ['before', 'after']) {
     if (o[side] && typeof o[side] === 'object') {
       const s = {};
-      for (const k of ['contentText', 'color', 'backgroundColor', 'fontStyle', 'fontWeight', 'margin', 'textDecoration', 'border']) {
+      for (const k of ['contentText', 'color', 'backgroundColor', 'fontStyle', 'fontWeight', 'margin', 'textDecoration', 'border', 'borderColor', 'width', 'height']) {
         if (o[side][k] !== undefined) {
           const c = k === 'contentText' ? (typeof o[side][k] === 'string' ? o[side][k].slice(0, 500) : undefined) : clean(o[side][k]);
           if (c !== undefined) s[k] = c;
         }
       }
+      if (o[side].contentIconPath && typeof icon === 'function') {
+        const data = icon(o[side].contentIconPath);
+        if (data) s.contentIconPath = { dataUri: data };
+      }
       out[side] = s;
     }
   }
-  for (const theme of ['light', 'dark']) if (o[theme] && typeof o[theme] === 'object') out[theme] = sanitizeDecorationOptions(o[theme]);
+  for (const theme of ['light', 'dark']) if (o[theme] && typeof o[theme] === 'object') out[theme] = sanitizeDecorationOptions(o[theme], icon);
   return out;
+}
+
+const ICON_MIME = { '.svg': 'image/svg+xml', '.png': 'image/png', '.gif': 'image/gif', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' };
+/** Teto de um ícone de decoração embutido como data: URI. */
+const MAX_ICON_BYTES = 64 * 1024;
+
+/**
+ * Ícone de decoração (Uri/caminho) → `data:` URI, só de dentro de `roots`
+ * (pasta da extensão e do workspace, conferido no realpath), só imagens
+ * conhecidas e ≤ 64 KB. Remoto (http) e o resto → undefined.
+ */
+function iconDataUri(v, roots, cache) {
+  let fsPath;
+  try {
+    if (typeof v === 'string') fsPath = /^[a-z][\w+.-]*:\/\//i.test(v) ? (v.startsWith('file:') ? Uri.parse(v).fsPath : null) : v;
+    else if (v && typeof v === 'object' && (v.scheme === 'file' || v.scheme === undefined) && typeof (v.fsPath || v.path) === 'string') fsPath = v.fsPath || v.path;
+  } catch {
+    return undefined;
+  }
+  if (!fsPath || fsPath.includes('\0')) return undefined;
+  const mime = ICON_MIME[path.extname(fsPath).toLowerCase()];
+  if (!mime) return undefined;
+  if (cache && cache.has(fsPath)) return cache.get(fsPath);
+  let data;
+  try {
+    const real = fs.realpathSync(path.resolve(fsPath));
+    const inside = roots.some((r) => {
+      try {
+        const rr = fs.realpathSync(r);
+        return real === rr || real.startsWith(rr.endsWith(path.sep) ? rr : rr + path.sep);
+      } catch {
+        return false;
+      }
+    });
+    const st = inside ? fs.statSync(real) : null;
+    if (st && st.isFile() && st.size <= MAX_ICON_BYTES) data = `data:${mime};base64,${fs.readFileSync(real).toString('base64')}`;
+  } catch {
+    data = undefined;
+  }
+  if (cache) cache.set(fsPath, data);
+  return data;
 }
 
 function markdownText(m) {
@@ -1652,4 +1839,4 @@ function summarize(m) {
   return s.length > 300 ? s.slice(0, 300) + '…' : s;
 }
 
-module.exports = { ExtensionHost, installRequireHook, sanitizeDecorationOptions, matchSelector, pathKey, os, Range };
+module.exports = { ExtensionHost, installRequireHook, sanitizeDecorationOptions, iconDataUri, matchSelector, pathKey, os, Range };

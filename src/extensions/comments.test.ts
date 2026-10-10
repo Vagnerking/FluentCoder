@@ -69,3 +69,20 @@ test("minimalEdit: só o trecho que mudou", () => {
   assert.deepEqual(minimalEdit("x\ny\n", "x\nY\nz\n"), { start: 2, end: 3, text: "Y\nz" });
   assert.deepEqual(minimalEdit("", "novo"), { start: 0, end: 0, text: "novo" });
 });
+
+test("faixas comentáveis: controller por linha, linhas únicas e modo edição", async () => {
+  const { controllerForLine, commentableLines, isEditing } = await import("./comments.ts");
+  const list = [
+    { controllerId: "a", ranges: [{ start: { line: 0, character: 0 }, end: { line: 2, character: 0 } }], enableFileComments: false },
+    { controllerId: "b", ranges: [{ start: { line: 2, character: 0 }, end: { line: 4, character: 0 } }], enableFileComments: true },
+  ];
+  assert.equal(controllerForLine(list, 1), "a");
+  assert.equal(controllerForLine(list, 2), "a", "o primeiro controller vence na sobreposição");
+  assert.equal(controllerForLine(list, 4), "b");
+  assert.equal(controllerForLine(list, 9), null);
+  assert.deepEqual(commentableLines(list), [0, 1, 2, 3, 4]);
+  assert.equal(commentableLines(list, 2).length, 2, "teto respeitado");
+  assert.equal(isEditing({ mode: 0 }), true);
+  assert.equal(isEditing({ mode: 1 }), false);
+  assert.equal(isEditing({}), false);
+});

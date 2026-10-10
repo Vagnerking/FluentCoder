@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { extHost } from "./client";
+import { Tooltip } from "../components/Tooltip";
+import { cancelExtProgress } from "./ExtProgressToasts";
 import { parseStatusText, statusItemsSnapshot, subscribeStatusItems } from "./statusBar";
 
 /** Itens de barra de status das extensões hospedadas (um lado da barra). */
@@ -18,20 +20,36 @@ export function ExtensionStatusItems({ alignment }: { alignment: "left" | "right
         );
         const label = item.text.replace(/\$\([^)]*\)/g, "").trim();
         const style = item.color ? { color: item.color } : undefined;
+        if (item.cancelProgress) {
+          const pid = item.cancelProgress;
+          return (
+            <Tooltip key={item.id} label={item.tooltip ?? label}>
+              <button
+                type="button"
+                className="status-item status-clickable status-ext"
+                aria-label={`Cancelar: ${label}`}
+                style={style}
+                onClick={() => cancelExtProgress(pid)}
+              >
+                {parts}
+              </button>
+            </Tooltip>
+          );
+        }
         if (item.command) {
           const cmd = item.command;
           return (
-            <button
-              key={item.id}
-              type="button"
-              className="status-item status-clickable status-ext"
-              title={item.tooltip ?? cmd.title ?? label}
-              aria-label={item.tooltip ?? label}
-              style={style}
-              onClick={() => void extHost.call("executeCommand", { command: cmd.command, args: cmd.arguments ?? [] }).catch(() => {})}
-            >
-              {parts}
-            </button>
+            <Tooltip key={item.id} label={item.tooltip ?? cmd.title ?? label}>
+              <button
+                type="button"
+                className="status-item status-clickable status-ext"
+                aria-label={item.tooltip ?? label}
+                style={style}
+                onClick={() => void extHost.call("executeCommand", { command: cmd.command, args: cmd.arguments ?? [] }).catch(() => {})}
+              >
+                {parts}
+              </button>
+            </Tooltip>
           );
         }
         return (

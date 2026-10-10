@@ -24,6 +24,7 @@
 import { useEffect, useState } from "react";
 import { extHost } from "./client";
 import { removeWebviewPanel } from "./webviewTabs";
+import { keybindingFor } from "../keybindingLabel";
 import type { HostEvent, InstalledExtension, WebviewInfo } from "./protocol";
 
 export { ExtensionDock } from "./ExtensionDock";
@@ -77,6 +78,7 @@ export interface ExtensionPaletteCommand {
   id: string;
   title: string;
   detail: string;
+  keybinding?: string;
   run: () => void;
 }
 
@@ -93,6 +95,8 @@ export function extensionPaletteCommands(installed: InstalledExtension[], onErro
         id: `ext:${c.command}`,
         title: c.category ? `${c.category}: ${c.title}` : c.title,
         detail: ext.label,
+        // Atalho contribuído pela extensão (package.json → keybindings).
+        keybinding: keybindingFor(c.command, ext.keybindings),
         run: () => {
           void (async () => {
             await extHost.loadExtension(ext.id);

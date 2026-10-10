@@ -7,6 +7,7 @@
  * Cada interação vai ao host (`quickInputEvent`), que dispara os eventos da
  * extensão (onDidChangeValue/onDidAccept/onDidTriggerButton/onDidHide…).
  */
+import { Tooltip } from "../components/Tooltip";
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Checkbox } from "../components/ui";
 import { Codicon } from "../icons/codicons/Codicon";
@@ -39,16 +40,16 @@ function InputButtons({ buttons, onClick }: { buttons: QuickInputButtonInfo[]; o
   return (
     <div className="ext-quick-buttons">
       {buttons.map((b) => (
-        <button
-          key={b.index}
-          type="button"
-          className="ui-icon-button ui-icon-button-sm"
-          aria-label={b.tooltip ?? (b.back ? "Voltar" : "Botão")}
-          title={b.tooltip ?? (b.back ? "Voltar" : undefined)}
-          onClick={() => onClick(b)}
-        >
-          <RawIcon icon={b.icon ?? (b.back ? "arrow-left" : "circle-small")} />
-        </button>
+        <Tooltip key={b.index} label={b.tooltip ?? (b.back ? "Voltar" : "Botão")} placement="bottom">
+          <button
+            type="button"
+            className="ui-icon-button ui-icon-button-sm"
+            aria-label={b.tooltip ?? (b.back ? "Voltar" : "Botão")}
+            onClick={() => onClick(b)}
+          >
+            <RawIcon icon={b.icon ?? (b.back ? "arrow-left" : "circle-small")} />
+          </button>
+        </Tooltip>
       ))}
     </div>
   );

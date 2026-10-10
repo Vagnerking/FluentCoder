@@ -1,0 +1,136 @@
+/*
+ * Avisos das extensões no canto inferior direito (ExtProgressToasts):
+ * progresso de `withProgress` (Notification) com barra e Cancelar, e as
+ * mensagens sem botões (`showInformationMessage`…). Só tokens do :root
+ * (docs/design/fluent-design.md).
+ */
+.ext-toast-stack {
+  position: fixed;
+  right: var(--space-md);
+  bottom: 40px;
+  z-index: 900;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: var(--space-sm);
+  width: min(400px, calc(100vw - 2 * var(--space-md)));
+  pointer-events: none;
+}
+
+.ext-toast {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-sm) var(--space-sm) var(--space-md);
+  color: var(--text);
+  font-size: var(--font-base);
+  line-height: var(--line-height-base);
+  background: var(--color-surface-overlay);
+  border: 1px solid var(--color-surface-overlay-border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-dialog);
+}
+
+.ext-toast.error {
+  border-left-color: var(--color-status-error);
+}
+
+.ext-toast.warning {
+  border-left-color: var(--color-status-warning);
+}
+
+.ext-toast-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+}
+
+.ext-toast-icon {
+  flex: none;
+  margin-top: var(--space-xxs);
+  font-size: var(--icon-md);
+}
+
+.ext-toast.error .ext-toast-icon {
+  color: var(--color-status-error);
+}
+
+.ext-toast.warning .ext-toast-icon {
+  color: var(--color-status-warning);
+}
+
+.ext-toast-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ext-toast-source {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--font-caption);
+  line-height: var(--line-height-caption);
+}
+
+.ext-toast-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-xs);
+}
+
+.ext-toast-bar {
+  position: relative;
+  height: 2px;
+  overflow: hidden;
+  border-radius: var(--radius-xs);
+  background: var(--border-subtle);
+}
+
+.ext-toast-bar > span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: var(--radius-xs);
+  background: var(--accent);
+  transition: width var(--duration-medium) var(--ease-standard);
+}
+
+.ext-toast-bar.indeterminate > span {
+  width: 30%;
+  animation: ext-toast-indeterminate 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ext-toast-bar.indeterminate > span {
+    width: 100%;
+    opacity: 0.6;
+    animation: none;
+  }
+  .ext-toast-bar > span {
+    transition: none;
+  }
+}
+
+@keyframes ext-toast-indeterminate {
+  from {
+    left: -30%;
+  }
+  to {
+    left: 100%;
+  }
+}
+
+/* Aviso de editor de notebook não suportado (aba de webview/aviso central). */
+.ext-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  height: 100%;
+  padding: var(--space-xl);
+  color: var(--text-secondary);
+  text-align: center;
+}

@@ -120,6 +120,28 @@ const handlers = {
   resolveView(p) {
     return host.resolveView(p.viewId);
   },
+  /**
+   * Painéis da sessão anterior (persistidos pelo app): carrega/ativa a
+   * extensão dona (como o `onWebviewPanel:<viewType>` do VS Code) e chama o
+   * serializer/custom editor dela. Devolve quantos voltaram.
+   */
+  async restoreWebviewPanels(p) {
+    let restored = 0;
+    for (const rec of p.panels) {
+      try {
+        const id = String(rec.extensionId).toLowerCase();
+        if (!host.extensions.has(id)) {
+          const target = (installed.find((e) => e.id === id && e.supported) || {}).path;
+          if (!target) continue;
+          host.loadExtension(target);
+        }
+        if (await host.restoreWebviewPanel(rec)) restored++;
+      } catch (err) {
+        logErr(`[ext-host] restaurar painel ${rec && rec.viewType} falhou: ${err && err.stack ? err.stack : err}\n`);
+      }
+    }
+    return { restored };
+  },
   webviewMessage(p) {
     return host.webviewMessage(p.handle, p.message);
   },
@@ -193,7 +215,13 @@ const handlers = {
   },
   // ---- terminais / diffs / URIs
   terminalOpened(p) {
-    host.terminalOpened(p.id, p.pid, p.shellIntegration);
+    host.terminalOpened(p.id, p.pid, p.shellIntegration, p.cols ? { cols: p.cols, rows: p.rows } : undefined);
+  },
+  terminalInput(p) {
+    host.terminalInput(p.id, p.data);
+  },
+  terminalResize(p) {
+    host.terminalResize(p.id, p.cols, p.rows);
   },
   terminalShell(p) {
     host.terminalShell(p);
@@ -210,6 +238,9 @@ const handlers = {
   handleUri(p) {
     return host.handleUri(p.uri);
   },
+  cancelProgress(p) {
+    return host.progress.cancel(p.id);
+  },
   quickInputEvent(p) {
     return host.quickInputs.event(p);
   },
@@ -221,6 +252,12 @@ const handlers = {
   },
   commentingRanges(p) {
     return host.comments.commentingRanges(p.uri);
+  },
+  commentCreateThread(p) {
+    return host.comments.createThread(p);
+  },
+  commentDisposeTemplate(p) {
+    return host.comments.disposeTemplate(p.handle);
   },
   commentThreads() {
     return host.comments.snapshot();

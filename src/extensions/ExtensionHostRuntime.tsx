@@ -39,9 +39,12 @@ import {
   upsertWebviewPanel,
   webviewTabPath,
 } from "./webviewTabs";
+import { loadPersistedPanels, restoreOrder, savePersistedPanels } from "./panelRestore";
 import { hideQuickInput, setQuickInput, type QuickInputState } from "./quickInputModel";
 import { clearCommentThreads, removeCommentThread, upsertCommentThread, type CommentThreadInfo } from "./comments";
-import { applyStatusBarItem, applyStatusMessage, clearStatusItems } from "./statusBar";
+import { applyProgressItem, applyStatusBarItem, applyStatusMessage, clearStatusItems } from "./statusBar";
+import { clearProgress, endProgress, progressFromEvent, progressLabel, upsertProgress } from "./progress";
+import { ExtProgressToasts } from "./ExtProgressToasts";
 import { editorKeybindingListener, setContributedKeybindings } from "./keys";
 import { themeColorVar } from "./editorModel";
 import { readFluentThemeVars } from "./theme";
@@ -232,6 +235,19 @@ export function ExtensionHostRuntime(props: ExtensionHostRuntimeProps) {
         case "statusMessage":
           applyStatusMessage(ev as { id: string; extensionId: string; text: string | null; progress?: boolean });
           break;
+        case "progress": {
+          const pr = progressFromEvent(ev as Record<string, unknown>);
+          if (!pr) break;
+          upsertProgress(pr);
+          if (pr.location !== "notification") applyProgressItem({ id: pr.id, extensionId: pr.extensionId, label: progressLabel(pr), cancellable: pr.cancellable });
+          break;
+        }
+        case "progressEnd": {
+          const id = String((ev as { id?: unknown }).id);
+          endProgress(id);
+          applyProgressItem({ id, end: true });
+          break;
+        }
         case "filesChanged":
           p.filesChanged?.((ev as { paths: string[] }).paths);
           break;
@@ -256,6 +272,23 @@ export function ExtensionHostRuntime(props: ExtensionHostRuntimeProps) {
           const info = ev as unknown as WebviewInfo;
           upsertWebviewPanel(info);
           p.openWebviewTab?.({ path: webviewTabPath(info.handle), title: info.title || info.viewType, viewColumn: info.viewColumn, preserveFocus: info.preserveFocus });
+          break;
+        }
+        case "webviewPanels":
+          // Lista persistível dos painéis (serializer/custom editor) por workspace.
+          savePersistedPanels(p.rootPath, (ev as { panels: unknown }).panels);
+          break;
+        case "hostReady": {
+          // Host novo (startup ou reinício): os painéis da sessão anterior voltam.
+          const panels = restoreOrder(loadPersistedPanels(p.rootPath));
+          if (panels.length === 0) break;
+          void extHost
+            .call("restoreWebviewPanels", { panels })
+            .then((r) => {
+              const n = (r as { restored?: number } | null)?.restored ?? 0;
+              if (n > 0) hostOutput(`${n} painel(is) de extensão restaurado(s) da sessão anterior.`);
+            })
+            .catch((err) => extLog("restaurar painéis falhou", err));
           break;
         }
         case "webviewHtml": {
@@ -310,6 +343,7 @@ export function ExtensionHostRuntime(props: ExtensionHostRuntimeProps) {
           // O host caiu: os painéis morreram com ele (as abas fecham).
           for (const h of clearWebviewPanels()) p.closeWebviewTab?.(webviewTabPath(h));
           clearStatusItems();
+          clearProgress();
           setRequest(null);
           break;
         default:
@@ -395,11 +429,7 @@ export function ExtensionHostRuntime(props: ExtensionHostRuntimeProps) {
   if (!enabled) return null;
   return (
     <>
-      {toast && (
-        <div className={`ext-dock-toast ext-runtime-toast ${toast.severity}`} role="status" onClick={() => setToast(null)}>
-          {toast.message}
-        </div>
-      )}
+      <ExtProgressToasts message={toast} onDismissMessage={() => setToast(null)} />
       {request?.kind === "showMessage" && ((request.params.items as string[])?.length > 0 || !!request.params.modal) && (
         <ConfirmDialog<number>
           title={request.params.severity === "error" ? "Erro" : request.params.severity === "warning" ? "Aviso" : "Informação"}

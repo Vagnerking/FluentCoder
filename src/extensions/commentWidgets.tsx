@@ -13,6 +13,7 @@ import { createRoot, type Root } from "react-dom/client";
 import * as monaco from "monaco-editor";
 import { extHost, extLog } from "./client";
 import {
+  isEditing,
   commentThreads,
   sortActions,
   subscribeCommentThreads,
@@ -22,6 +23,7 @@ import {
   type CommentThreadInfo,
 } from "./comments";
 import "./editorWidgets.css";
+import { Tooltip } from "../components/Tooltip";
 
 const MIN_HEIGHT = 34;
 
@@ -64,7 +66,6 @@ export function CommentThreadView({ thread }: { thread: CommentThreadInfo }) {
               key={a.command}
               type="button"
               className={`ui-button ui-button-sm ${i === 0 ? "ui-button-primary" : "ui-button-secondary"}`}
-              title={a.title}
               aria-busy={busy === a.command || undefined}
               disabled={busy !== null && busy !== a.command}
               onClick={() => click(a)}
@@ -77,60 +78,48 @@ export function CommentThreadView({ thread }: { thread: CommentThreadInfo }) {
       </div>
       {thread.collapsibleState === 1 &&
         thread.comments.map((c) => (
-          <div key={c.index} className="ext-comment">
-            <div className="ext-comment-meta">
-              {c.author && <span className="ext-comment-author">{c.author}</span>}
-              {c.label && <span className="ext-comment-label">{c.label}</span>}
-              <span className="ext-comment-spacer" />
-              {sortActions([...c.actions, ...c.contextActions]).map((a) => (
-                <button
-                  key={a.command}
-                  type="button"
-                  className="ui-icon-button ui-icon-button-sm"
-                  aria-label={a.title}
-                  title={a.title}
-                  onClick={() => click(a, { commentIndex: c.index })}
-                >
-                  {a.icon ? <ActionIcon icon={a.icon} /> : <span className="ext-comment-text-action">{a.title}</span>}
-                </button>
-              ))}
-            </div>
-            <div className="ext-comment-body">{c.body}</div>
-            {(c.reactions.length > 0 || thread.canReact) && (
-              <div className="ext-comment-reactions">
-                {c.reactions.map((r) => (
-                  <button
-                    key={r.label}
-                    type="button"
-                    className={`ext-comment-reaction${r.authorHasReacted ? " reacted" : ""}`}
-                    aria-pressed={r.authorHasReacted}
-                    disabled={!thread.canReact}
-                    onClick={() => void extHost.call("commentReaction", { handle: thread.handle, commentIndex: c.index, reaction: r.label }).catch(() => {})}
-                  >
-                    {r.label} {r.count > 0 ? r.count : ""}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          <CommentView key={c.index} thread={thread} comment={c} busy={busy} onAction={click} />
         ))}
-      {thread.collapsibleState === 1 && thread.canReply && thread.replyActions.length > 0 && (
+      {(thread.collapsibleState === 1 || thread.isTemplate) && thread.canReply && thread.replyActions.length > 0 && (
         <div className="ext-comment-reply">
+          {thread.isTemplate && thread.prompt && <span className="ext-comment-title">{thread.prompt}</span>}
           <textarea
             className="ext-comment-input"
-            aria-label="Responder"
-            placeholder="Responder…"
+            aria-label={thread.isTemplate ? "Novo comentário" : "Responder"}
+            placeholder={thread.placeHolder ?? (thread.isTemplate ? "Escreva um comentário…" : "Responder…")}
             value={reply}
             rows={2}
+            autoFocus={thread.isTemplate}
             onChange={(e) => setReply(e.target.value)}
+            onKeyDown={(e) => {
+              // Ctrl/Cmd+Enter envia pela 1ª ação; Esc cancela o rascunho.
+              const first = sortActions(thread.replyActions)[0];
+              if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && first && reply.trim()) {
+                e.preventDefault();
+                click(first, { text: reply });
+                setReply("");
+              } else if (e.key === "Escape" && thread.isTemplate) {
+                e.preventDefault();
+                void extHost.call("commentDisposeTemplate", { handle: thread.handle }).catch(() => {});
+              }
+            }}
           />
           <div className="ext-comment-actions">
+            {thread.isTemplate && (
+              <button
+                type="button"
+                className="ui-button ui-button-sm ui-button-secondary"
+                onClick={() => void extHost.call("commentDisposeTemplate", { handle: thread.handle }).catch(() => {})}
+              >
+                <span>Cancelar</span>
+              </button>
+            )}
             {sortActions(thread.replyActions).map((a, i) => (
               <button
                 key={a.command}
                 type="button"
                 className={`ui-button ui-button-sm ${i === 0 ? "ui-button-primary" : "ui-button-secondary"}`}
-                disabled={busy !== null}
+                disabled={busy !== null || !reply.trim()}
                 onClick={() => {
                   click(a, { text: reply });
                   setReply("");
@@ -141,6 +130,94 @@ export function CommentThreadView({ thread }: { thread: CommentThreadInfo }) {
               </button>
             ))}
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Um comentário: em leitura mostra as ações `comments/comment/title` (ex.:
+ * Editar/Apagar da própria nota); em edição (`CommentMode.Editing`) vira uma
+ * caixa com o corpo e as ações `comments/comment/context` (Salvar/Cancelar),
+ * que recebem o texto editado — como no VS Code.
+ */
+function CommentView({
+  thread,
+  comment: c,
+  busy,
+  onAction,
+}: {
+  thread: CommentThreadInfo;
+  comment: CommentThreadInfo["comments"][number];
+  busy: string | null;
+  onAction(a: CommentAction, extra?: Record<string, unknown>): void;
+}) {
+  const editing = isEditing(c);
+  const [draft, setDraft] = useState(c.body);
+  return (
+    <div className="ext-comment">
+      <div className="ext-comment-meta">
+        {c.author && <span className="ext-comment-author">{c.author}</span>}
+        {c.label && <span className="ext-comment-label">{c.label}</span>}
+        <span className="ext-comment-spacer" />
+        {!editing &&
+          sortActions(c.actions).map((a) => (
+            <Tooltip key={a.command} label={a.title}>
+              <button
+                type="button"
+                className="ui-icon-button ui-icon-button-sm"
+                aria-label={a.title}
+                disabled={busy !== null}
+                onClick={() => onAction(a, { commentIndex: c.index })}
+              >
+                {a.icon ? <ActionIcon icon={a.icon} /> : <span className="ext-comment-text-action">{a.title}</span>}
+              </button>
+            </Tooltip>
+          ))}
+      </div>
+      {editing ? (
+        <div className="ext-comment-reply">
+          <textarea
+            className="ext-comment-input"
+            aria-label="Editar comentário"
+            value={draft}
+            rows={3}
+            autoFocus
+            onChange={(e) => setDraft(e.target.value)}
+          />
+          <div className="ext-comment-actions">
+            {sortActions(c.contextActions).map((a, i) => (
+              <button
+                key={a.command}
+                type="button"
+                className={`ui-button ui-button-sm ${i === 0 ? "ui-button-primary" : "ui-button-secondary"}`}
+                disabled={busy !== null}
+                onClick={() => onAction(a, { commentIndex: c.index, text: draft })}
+              >
+                <ActionIcon icon={a.icon} />
+                <span>{a.title}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="ext-comment-body">{c.body}</div>
+      )}
+      {!editing && (c.reactions.length > 0 || thread.canReact) && (
+        <div className="ext-comment-reactions">
+          {c.reactions.map((r) => (
+            <button
+              key={r.label}
+              type="button"
+              className={`ext-comment-reaction${r.authorHasReacted ? " reacted" : ""}`}
+              aria-pressed={r.authorHasReacted}
+              disabled={!thread.canReact}
+              onClick={() => void extHost.call("commentReaction", { handle: thread.handle, commentIndex: c.index, reaction: r.label }).catch(() => {})}
+            >
+              {r.label} {r.count > 0 ? r.count : ""}
+            </button>
+          ))}
         </div>
       )}
     </div>

@@ -15,6 +15,8 @@ export interface ExtStatusItem {
   command?: { command: string; title?: string; arguments?: unknown[] };
   color?: string;
   progress?: boolean;
+  /** `withProgress` cancelável (Window/SCM): clicar cancela este progresso. */
+  cancelProgress?: string;
 }
 
 const items = new Map<string, ExtStatusItem>();
@@ -53,6 +55,26 @@ export function applyStatusMessage(e: { id: string; extensionId: string; text: s
     return;
   }
   items.set(e.id, { id: e.id, extensionId: e.extensionId, alignment: "left", priority: -1000, text: e.progress ? `$(sync~spin) ${e.text}` : e.text, progress: e.progress });
+  changed();
+}
+
+/** `withProgress` em Window/SourceControl: spinner na barra; cancelável = clicável. */
+export function applyProgressItem(p: { id: string; extensionId: string; label: string; cancellable: boolean } | { id: string; end: true }): void {
+  const id = `progress:${p.id}`;
+  if ("end" in p) {
+    if (items.delete(id)) changed();
+    return;
+  }
+  items.set(id, {
+    id,
+    extensionId: p.extensionId,
+    alignment: "left",
+    priority: -1000,
+    text: `$(sync~spin) ${p.label}`,
+    tooltip: p.cancellable ? `${p.label} — clique para cancelar` : p.label,
+    progress: true,
+    cancelProgress: p.cancellable ? p.id : undefined,
+  });
   changed();
 }
 

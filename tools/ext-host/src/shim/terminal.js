@@ -121,6 +121,23 @@ class Terminal {
     });
     const cwd = options.cwd ? (typeof options.cwd === 'string' ? options.cwd : options.cwd.fsPath) : host.workspaceFolders[0] ? host.workspaceFolders[0].uri.fsPath : undefined;
     this._cwd = cwd;
+    // Pseudoterminal da extensão (`createTerminal({ pty })` / CustomExecution):
+    // sem processo; a aba do app é dirigida pelo pty (onDidWrite/onDidClose).
+    if (options.pty && typeof options.pty.open === 'function') {
+      this._setupPseudo(options.pty, !!options._task);
+      host.emit({
+        event: 'terminalCreate',
+        id: this.id,
+        name: this.name,
+        cwd,
+        pseudo: true,
+        hideFromUser: !!options.hideFromUser,
+        isTransient: !!options.isTransient,
+        extensionId: options._extensionId,
+        shellIntegration: false,
+      });
+      return;
+    }
     const env = options.strictEnv ? safeEnv(options.env) : safeEnv(applyEnvCollections(options.env || {}, envCollections));
     host.emit({
       event: 'terminalCreate',
@@ -138,8 +155,60 @@ class Terminal {
       shellIntegration: !options._task && !(Array.isArray(options.shellArgs) ? options.shellArgs.length : options.shellArgs),
     });
   }
+  _setupPseudo(pty, isTask) {
+    this._pty = pty;
+    this._ptyTask = isTask;
+    this._ptyClosed = false;
+    this._ptySubs = [];
+    const on = (ev, fn) => {
+      if (typeof ev === 'function') this._ptySubs.push(ev(fn));
+    };
+    on(pty.onDidWrite, (data) => {
+      if (!this._ptyClosed) this._host.emit({ event: 'terminalPtyWrite', id: this.id, data: String(data) });
+    });
+    on(pty.onDidClose, (code) => this._pseudoExit(typeof code === 'number' ? code : undefined));
+    on(pty.onDidChangeName, (name) => {
+      if (typeof name !== 'string' || !name) return;
+      this.name = name;
+      this._host.emit({ event: 'terminalRename', id: this.id, name });
+    });
+  }
+
+  /** O pty da extensão encerrou (onDidClose): fecha a aba (tarefa: mantém com a saída). */
+  _pseudoExit(code) {
+    if (this._ptyClosed) return;
+    this._ptyClosed = true;
+    this._host.emit({ event: 'terminalPtyExit', id: this.id, exitCode: code, close: !this._ptyTask });
+    this._host.terminalClosed(this.id, code, 1);
+  }
+
+  /** App: entrada do teclado (pty) — `handleInput`. */
+  _pseudoInput(data) {
+    if (!this._pty || this._ptyClosed || typeof this._pty.handleInput !== 'function') return;
+    this.state = { ...this.state, isInteractedWith: true };
+    try {
+      this._pty.handleInput(String(data));
+    } catch (err) {
+      this._host.log('pty.handleInput falhou:', err);
+    }
+  }
+
+  /** App: a aba mudou de tamanho — `setDimensions`. */
+  _pseudoResize(cols, rows) {
+    if (!this._pty || this._ptyClosed || typeof this._pty.setDimensions !== 'function') return;
+    try {
+      this._pty.setDimensions({ columns: cols, rows });
+    } catch (err) {
+      this._host.log('pty.setDimensions falhou:', err);
+    }
+  }
+
   sendText(text, shouldExecute = true) {
     if (this._disposed) return;
+    if (this._pty) {
+      this._pseudoInput(String(text) + (shouldExecute ? '\r' : ''));
+      return;
+    }
     this.state = { ...this.state, isInteractedWith: true };
     // VS Code normaliza quebras para \r ao enviar ao PTY.
     const data = String(text).replace(/\r?\n/g, '\r') + (shouldExecute ? '\r' : '');
@@ -163,9 +232,19 @@ class Terminal {
    * App criou o PTY. `integrationRequested` = o PTY subiu com os scripts OSC
    * 633 (bash/zsh/fish): espera as sequências; sem elas, integração simulada.
    */
-  _onOpened(pid, integrationRequested) {
+  _onOpened(pid, integrationRequested, dims) {
     if (this._opened) return;
     this._opened = true;
+    if (this._pty) {
+      this._resolvePid(undefined);
+      try {
+        const r = this._pty.open(dims && dims.cols > 0 && dims.rows > 0 ? { columns: dims.cols, rows: dims.rows } : undefined);
+        if (r && typeof r.catch === 'function') r.catch((err) => this._host.log('pty.open falhou:', err));
+      } catch (err) {
+        this._host.log('pty.open falhou:', err);
+      }
+      return;
+    }
     this._pid = pid;
     this._resolvePid(pid);
     if (integrationRequested && this._host.appConnected) {
@@ -266,6 +345,20 @@ class Terminal {
   /** PTY encerrou: execução em andamento termina sem código. */
   _onClosed() {
     clearTimeout(this._fallbackTimer);
+    if (this._pty) {
+      // Aba fechada pelo usuário/dispose: o pty recebe close() uma vez.
+      const wasOpen = !this._ptyClosed;
+      this._ptyClosed = true;
+      if (wasOpen && typeof this._pty.close === 'function') {
+        try {
+          this._pty.close();
+        } catch (err) {
+          this._host.log('pty.close falhou:', err);
+        }
+      }
+      for (const d of this._ptySubs) d && d.dispose && d.dispose();
+      this._ptySubs = [];
+    }
     if (this._currentExec) this._finishExec(undefined);
   }
 }

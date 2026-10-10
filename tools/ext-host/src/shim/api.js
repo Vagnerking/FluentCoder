@@ -402,7 +402,7 @@ function createVscodeApi(host, ext) {
     onDidChangeVisibleNotebookEditors: host.events.never.event,
     onDidChangeNotebookEditorSelection: host.events.never.event,
     onDidChangeNotebookEditorVisibleRanges: host.events.never.event,
-    showNotebookDocument: () => Promise.reject(new Error('Notebooks não são suportados pelo Fluent Coder.')),
+    showNotebookDocument: (doc, options) => host.notebooks.show(doc, options),
 
     registerWebviewViewProvider(viewId, provider, options) {
       return host.registerWebviewViewProvider(ext, viewId, provider, options);
@@ -411,8 +411,11 @@ function createVscodeApi(host, ext) {
       return host.createWebviewPanel(ext, new WebviewPanel(host.webviewBridge, viewType, title, showOptions, options, ext));
     },
     registerWebviewPanelSerializer(viewType, serializer) {
-      host.serializers.set(viewType, serializer);
-      return new Disposable(() => host.serializers.delete(viewType));
+      const reg = { serializer, ext };
+      host.serializers.set(viewType, reg);
+      return new Disposable(() => {
+        if (host.serializers.get(viewType) === reg) host.serializers.delete(viewType);
+      });
     },
     registerCustomEditorProvider(viewType, provider, options) {
       host.customEditors.set(viewType, { provider, options, ext });
@@ -470,31 +473,16 @@ function createVscodeApi(host, ext) {
       return new Disposable(clear);
     },
     withProgress(options, task) {
-      const cts = new CancellationTokenSource();
-      const id = `${ext.id}:progress${++statusSeq}`;
-      const title = options && options.title ? String(options.title) : '';
-      // Notificação/janela: mostra na barra de status enquanto a tarefa roda.
-      const show = (msg) => host.emit({ event: 'statusMessage', id, extensionId: ext.id, text: [title, msg].filter(Boolean).join(': ') || null, progress: true });
-      if (title) show();
-      const progress = {
-        report(v) {
-          if (v && v.message) show(String(v.message));
-        },
-      };
-      const done = () => host.emit({ event: 'statusMessage', id, extensionId: ext.id, text: null });
-      return Promise.resolve()
-        .then(() => task(progress, cts.token))
-        .finally(done);
+      return host.progress.withProgress(ext, options, task);
     },
     withScmProgress(task) {
-      return Promise.resolve(task({ report() {} }));
+      return host.progress.withProgress(ext, { location: types.ProgressLocation.SourceControl }, (p) => task(p));
     },
     createTextEditorDecorationType(opts) {
       return host.createDecorationType(ext, opts);
     },
     createTerminal(nameOrOptions, shellPath, shellArgs) {
       const opts = typeof nameOrOptions === 'object' && nameOrOptions ? nameOrOptions : { name: nameOrOptions, shellPath, shellArgs };
-      if (opts.pty) log('createTerminal com pty de extensão não é suportado; abrindo um shell comum');
       return host.createTerminal(ext, opts);
     },
     createInputBox() {
@@ -665,10 +653,13 @@ function createVscodeApi(host, ext) {
     onWillCreateFiles: host.events.never.event,
     onWillDeleteFiles: host.events.never.event,
     onWillRenameFiles: host.events.never.event,
-    onDidOpenNotebookDocument: host.events.never.event,
-    onDidCloseNotebookDocument: host.events.never.event,
+    onDidOpenNotebookDocument: host.notebooks.onDidOpen.event,
+    onDidCloseNotebookDocument: host.notebooks.onDidClose.event,
     onDidChangeNotebookDocument: host.events.never.event,
-    notebookDocuments: [],
+    onDidSaveNotebookDocument: host.events.never.event,
+    get notebookDocuments() {
+      return host.notebooks.documents.slice();
+    },
     async findFiles(include, exclude, maxResults = 10000) {
       const incPattern = typeof include === 'string' ? include : include && include.pattern;
       const exPattern = typeof exclude === 'string' ? exclude : exclude && exclude.pattern;
@@ -725,7 +716,7 @@ function createVscodeApi(host, ext) {
     },
     registerTaskProvider: (type, provider) => host.tasks.registerTaskProvider(ext, type, provider),
     registerNotebookSerializer: () => noopDisposable(),
-    openNotebookDocument: () => Promise.reject(new Error('Notebooks não são suportados pelo Fluent Coder.')),
+    openNotebookDocument: (uriOrType, content) => host.notebooks.open(uriOrType, content),
   };
 
   // ------------------------------------------------------------------ env
@@ -855,25 +846,11 @@ function createVscodeApi(host, ext) {
     startDebugging: () => Promise.resolve(false),
   };
 
-  // Sem notebooks no Fluent Coder: APIs presentes e inertes (nunca lançam no
-  // acesso); abrir/mostrar um notebook rejeita com mensagem clara.
+  // Sem editor de notebook no Fluent Coder: abrir devolve um NotebookDocument
+  // real (só leitura) e mostrar avisa em pt-BR (ver shim/notebooks.js).
   const notebooks = {
     createNotebookController(id, notebookType, label) {
-      return {
-        id,
-        notebookType,
-        label,
-        supportedLanguages: [],
-        supportsExecutionOrder: false,
-        executeHandler: undefined,
-        interruptHandler: undefined,
-        onDidChangeSelectedNotebooks: host.events.never.event,
-        createNotebookCellExecution() {
-          throw new Error('Notebooks não são suportados pelo Fluent Coder.');
-        },
-        updateNotebookAffinity() {},
-        dispose() {},
-      };
+      return host.notebooks.createController(id, notebookType, label);
     },
     registerNotebookCellStatusBarItemProvider: () => noopDisposable(),
     createRendererMessaging: () => ({ onDidReceiveMessage: host.events.never.event, postMessage: () => Promise.resolve(false) }),

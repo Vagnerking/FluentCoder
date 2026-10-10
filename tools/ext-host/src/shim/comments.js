@@ -10,7 +10,7 @@
 // como argumento — é assim que o Claude Code aceita/rejeita um hunk pela barra
 // (`claude-vscode.acceptProposedHunkFromBar(thread)`).
 'use strict';
-const { Range, Disposable, CancellationTokenSource } = require('./types');
+const { Range, Disposable, CancellationTokenSource, MarkdownString } = require('./types');
 
 let nextThread = 1;
 
@@ -24,6 +24,11 @@ const MENU_KEYS = {
 function markdownText(m) {
   if (m && typeof m === 'object') return String(m.value || '');
   return String(m == null ? '' : m);
+}
+
+function controllerOption(controller, key) {
+  const o = controller && controller.options;
+  return o && typeof o[key] === 'string' ? o[key].slice(0, 500) : undefined;
 }
 
 function plainRange(r) {
@@ -50,6 +55,7 @@ class CommentService {
   createController(ext, id, label) {
     const service = this;
     const threads = new Set();
+    let rangeProvider;
     const controller = {
       get id() {
         return id;
@@ -58,8 +64,15 @@ class CommentService {
         return label;
       },
       options: undefined,
-      commentingRangeProvider: undefined,
       reactionHandler: undefined,
+      // Ao ganhar/perder o provider, o app recalcula onde mostrar o "+".
+      get commentingRangeProvider() {
+        return rangeProvider;
+      },
+      set commentingRangeProvider(v) {
+        rangeProvider = v;
+        service.host.emit({ event: 'commentingRangesChanged', controllerId: id });
+      },
       createCommentThread(uri, range, comments) {
         const t = service._createThread(ext, controller, uri, range, comments || []);
         threads.add(t);
@@ -195,6 +208,10 @@ class CommentService {
       actions: this._actions(thread, MENU_KEYS.threadTitle, this._ctx(thread)),
       replyActions: this._actions(thread, MENU_KEYS.threadContext, this._ctx(thread)),
       canReact: typeof thread._controller.reactionHandler === 'function',
+      // Thread criado pelo "+" do app e ainda sem comentários (rascunho).
+      isTemplate: !!thread._template && (thread.comments || []).length === 0,
+      prompt: controllerOption(thread._controller, 'prompt'),
+      placeHolder: controllerOption(thread._controller, 'placeHolder'),
     };
   }
 
@@ -210,6 +227,12 @@ class CommentService {
       const c = d.comments[commentIndex];
       const comment = thread.comments[commentIndex];
       if (!c || !comment || ![...c.actions, ...c.contextActions].some((a) => a.command === command)) return { ok: false, error: 'ação não oferecida por este comentário' };
+      // Salvar a edição (menu comments/comment/context): como o VS Code, o
+      // corpo do comentário recebe o texto editado antes do comando rodar.
+      if (typeof text === 'string' && c.contextActions.some((a) => a.command === command)) {
+        const body = text.slice(0, 1 << 20);
+        comment.body = comment.body && typeof comment.body === 'object' ? new MarkdownString(body) : body;
+      }
       await this.host.executeCommand(command, comment);
       return { ok: true };
     }
@@ -233,6 +256,39 @@ class CommentService {
     await handler(comment, r);
     this._schedule(handle);
     return { ok: true };
+  }
+
+  /**
+   * "+" do app numa linha comentável: cria um thread VAZIO no controller (como
+   * o `createCommentThreadTemplate` do VS Code) com a caixa de resposta
+   * aberta; as ações `comments/commentThread/context` da extensão recebem
+   * `{ thread, text }`. Só dentro de uma faixa do commentingRangeProvider.
+   */
+  async createThread({ controllerId, uri, range }) {
+    const entry = [...this.controllers].find((e) => e.controller.id === controllerId);
+    const prov = entry && entry.controller.commentingRangeProvider;
+    if (!entry || !prov) return { ok: false, error: 'controller sem commentingRangeProvider' };
+    const available = (await this.commentingRanges(uri)).find((r) => r.controllerId === controllerId);
+    const inside = range
+      ? available && available.ranges.some((r) => r.start.line <= range.start.line && r.end.line >= range.end.line)
+      : available && available.enableFileComments;
+    if (!inside) return { ok: false, error: 'fora das faixas comentáveis' };
+    const { Uri } = require('./types');
+    const docUri = uri.includes('://') ? Uri.parse(uri) : Uri.file(uri);
+    const r = range ? new Range(range.start.line, range.start.character, range.end.line, range.end.character) : undefined;
+    const thread = entry.controller.createCommentThread(docUri, r, []);
+    Object.defineProperty(thread, '_template', { value: true });
+    thread.collapsibleState = 1;
+    thread.canReply = true;
+    return { ok: true, handle: thread._handle };
+  }
+
+  /** Cancelar o rascunho do "+": descarta o thread se ainda não tem comentários. */
+  disposeTemplate(handle) {
+    const t = this.threads.get(handle);
+    if (!t || !t._template || (t.comments || []).length) return false;
+    t.dispose();
+    return true;
   }
 
   /** Faixas onde se pode comentar (commentingRangeProvider) para um documento. */

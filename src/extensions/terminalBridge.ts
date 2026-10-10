@@ -9,6 +9,7 @@
  */
 import type { HostEvent } from "./protocol";
 import { ShellIntegrationParser } from "./shellIntegration.ts";
+import { configurePseudoTerminals, pseudoExit, pseudoForget, pseudoWrite } from "./pseudoTerminal.ts";
 
 export interface ExtTerminalSpec {
   /** Id do terminal no host (o PTY usa `ext-<id>`). */
@@ -24,12 +25,16 @@ export interface ExtTerminalSpec {
   hideFromUser?: boolean;
   /** Pedir a shell integration (OSC 633) ao PTY (bash/zsh/fish). */
   shellIntegration?: boolean;
+  /** Pseudoterminal da extensão (sem PTY; dirigido pelo host — pseudoTerminal.ts). */
+  pseudo?: boolean;
 }
 
 type Action =
   | { type: "create"; spec: ExtTerminalSpec }
   | { type: "show"; ptyId: string; preserveFocus: boolean }
-  | { type: "dispose"; ptyId: string };
+  | { type: "dispose"; ptyId: string }
+  | { type: "rename"; ptyId: string; name: string }
+  | { type: "exited"; ptyId: string };
 
 type Listener = (a: Action) => void;
 
@@ -82,6 +87,7 @@ export function configureTerminalBridge(opts: {
 }): void {
   writer = opts.write;
   notifyHost = opts.notify;
+  configurePseudoTerminals(opts.notify);
 }
 
 /** TerminalView criou o PTY de um terminal de extensão. */
@@ -89,6 +95,8 @@ export function ptyReady(ptyId: string, pid: number | null): void {
   const spec = specs.get(ptyId);
   if (!spec) return;
   ready.add(ptyId);
+  // Pseudoterminal: o `terminalOpened` (com cols/rows) sai do pseudoAttach.
+  if (spec.pseudo) return;
   notifyHost("terminalOpened", { id: spec.hostId, pid: pid ?? undefined, shellIntegration: !!spec.shellIntegration });
   const queued = pendingWrites.get(ptyId);
   pendingWrites.delete(ptyId);
@@ -102,6 +110,7 @@ export function ptyClosed(ptyId: string, exitCode: number | null): void {
   specs.delete(ptyId);
   ready.delete(ptyId);
   pendingWrites.delete(ptyId);
+  pseudoForget(ptyId);
   shells.delete(ptyId);
   execBytes.delete(ptyId);
   notifyHost("terminalClosed", { id: spec.hostId, exitCode: exitCode ?? undefined });
@@ -177,6 +186,7 @@ export function handleTerminalEvent(ev: HostEvent, onShowPanel: () => void): boo
         extensionId: e.extensionId,
         hideFromUser: e.hideFromUser,
         shellIntegration: e.shellIntegration,
+        pseudo: e.pseudo === true,
       };
       specs.set(spec.ptyId, spec);
       emit({ type: "create", spec });
@@ -193,6 +203,25 @@ export function handleTerminalEvent(ev: HostEvent, onShowPanel: () => void): boo
       const ptyId = ptyIdFor(e.id);
       if (ready.has(ptyId)) writer(ptyId, e.text);
       else pendingWrites.set(ptyId, [...(pendingWrites.get(ptyId) ?? []), e.text]);
+      return true;
+    }
+    case "terminalPtyWrite": {
+      const e = ev as unknown as { id: string; data: string };
+      pseudoWrite(ptyIdFor(e.id), String(e.data ?? ""));
+      return true;
+    }
+    case "terminalPtyExit": {
+      const e = ev as unknown as { id: string; exitCode?: number; close?: boolean };
+      const ptyId = ptyIdFor(e.id);
+      pseudoExit(ptyId, typeof e.exitCode === "number" ? e.exitCode : null);
+      // Terminal comum: o pty encerrou → a aba fecha (como no VS Code).
+      // Tarefa: a aba fica com a saída, marcada como encerrada.
+      emit(e.close ? { type: "dispose", ptyId } : { type: "exited", ptyId });
+      return true;
+    }
+    case "terminalRename": {
+      const e = ev as unknown as { id: string; name: string };
+      if (typeof e.name === "string" && e.name) emit({ type: "rename", ptyId: ptyIdFor(e.id), name: e.name.slice(0, 200) });
       return true;
     }
     case "terminalDispose": {

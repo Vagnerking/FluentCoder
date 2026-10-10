@@ -26,6 +26,8 @@ import "./styles/overlays.css";
 import "./styles/graph.css";
 import "./styles/menu.css";
 import "./styles/tooltip.css";
+import "./theme/acrylic.css";
+import { applyAcrylicFlyouts } from "./theme/acrylic";
 
 // macOS runs a native, opaque window (a transparent frameless window never
 // materializes there — the app would show only a Dock icon and menu bar). Tag the
@@ -41,6 +43,9 @@ if (/mac/i.test(platform ?? "")) {
   // paints a solid, rounded window surface itself (see `html.platform-linux`).
   document.documentElement.classList.add("platform-linux");
 }
+
+// Flyouts acrílicos só onde o WebView desenha o backdrop-filter (senão opacos).
+applyAcrylicFlyouts();
 
 // Kill the WebView's native right-click menu (Inspecionar / Recarregar / Salvar
 // como…). The app provides its own context menus everywhere; this suppresses the

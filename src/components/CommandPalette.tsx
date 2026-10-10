@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SearchBox } from "./ui/Input";
 import { fuzzyMatch } from "../quickOpen/fuzzy";
+import { formatKeybinding } from "../keybindingLabel";
+import "./commandPalette.css";
 
 /**
  * One entry in the Command Palette. The registry lives in App.tsx (so commands
@@ -13,6 +15,11 @@ export interface Command {
   title: string;
   /** Optional dimmed secondary text (e.g. a category). */
   detail?: string;
+  /**
+   * Atalho conhecido (acelerador do menu do app ou keybinding contribuído por
+   * uma extensão), mostrado à direita da linha.
+   */
+  keybinding?: string;
   /** Runs the command. The palette closes right before this fires. */
   run: () => void;
 }
@@ -167,7 +174,6 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
                 role="option"
                 aria-selected={i === selected}
                 className={"quick-open-item" + (i === selected ? " selected" : "")}
-                title={hit.command.title}
                 onMouseMove={() => setSelected(i)}
                 onClick={() => runAt(i)}
               >
@@ -176,6 +182,11 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
                 </span>
                 {hit.command.detail && (
                   <span className="quick-open-path">{hit.command.detail}</span>
+                )}
+                {formatKeybinding(hit.command.keybinding) && (
+                  <kbd className="command-palette-kbd" aria-label={`Atalho: ${formatKeybinding(hit.command.keybinding)}`}>
+                    {formatKeybinding(hit.command.keybinding)}
+                  </kbd>
                 )}
               </div>
             ))

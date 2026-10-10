@@ -13,7 +13,11 @@
 //      `terminalOpened` → a shell integration digita a linha do `claude`;
 //   4. URI handler: `fluent-coder://anthropic.claude-code/open` → painel;
 //   5. diff do chat (`open_diff` da UI): barra de hunks por CommentThread
-//      (comments API) — aceitar/rejeitar cada mudança pelos botões.
+//      (comments API) — aceitar/rejeitar cada mudança pelos botões;
+//   6. painéis restaurados após reiniciar: a lista persistível (`webviewPanels`)
+//      sai do 1º host; um 2º host recebe `restoreWebviewPanels` e o
+//      serializer do Claude Code (`claudeVSCodePanel`) e o custom editor do
+//      Codex (`chatgpt.conversationEditor`, se instalado) recriam os painéis.
 //
 // NÃO envia prompts a modelos e não executa o `claude` (o terminal é simulado).
 // Use CLAUDE_CONFIG_DIR temporário (o script cria um se não houver).
@@ -268,11 +272,55 @@ async function main() {
     check('fluxo de hunks (comments API)', false, err.message);
   }
 
+  // ---- 6. painéis voltam depois de reiniciar (serializer / custom editor)
+  let restoreHost = null;
+  try {
+    restoreHost = await restoreFlow(host, init);
+  } catch (err) {
+    check('restauração de painéis', false, err.message);
+  }
+
   await host.call('shutdown').catch(() => {});
+  if (restoreHost) await restoreHost.call('shutdown').catch(() => {});
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${results.length - failed.length}/${results.length} verificações ok`);
   if (failed.length && !process.env.VERBOSE) console.error('--- stderr do host (cauda) ---\n' + host.stderr.split('\n').slice(-30).join('\n'));
   setTimeout(() => process.exit(failed.length ? 1 : 0), 300);
+}
+
+/**
+ * O 1º host publica a lista persistível dos painéis (o app a guarda); um 2º
+ * host (app reiniciado) recebe `restoreWebviewPanels` e as extensões REAIS
+ * recriam os painéis pelo serializer / custom editor delas.
+ */
+async function restoreFlow(host, init) {
+  const snap = await host.waitEvent((e) => e.event === 'webviewPanels' && e.panels.some((p) => p.viewType === 'claudeVSCodePanel'), 3000);
+  const latest = host.events.filter((e) => e.event === 'webviewPanels').at(-1) || snap;
+  const panels = latest.panels.filter((p) => p.viewType === 'claudeVSCodePanel').slice(0, 1);
+  check('lista persistível dos painéis (webviewPanels)', panels.length === 1, `${latest.panels.length} painel(is), estado ${panels[0] && panels[0].state !== undefined ? 'com' : 'sem'} setState`);
+  const codex = init.extensions.find((e) => e.id === 'openai.chatgpt' && e.supported);
+  if (codex) panels.push({ viewType: 'chatgpt.conversationEditor', extensionId: 'openai.chatgpt', title: 'Codex', customUri: 'openai-codex://route/extension/panel/new' });
+  const h2 = startHost();
+  await h2.waitEvent((e) => e.event === 'hello', 10000);
+  h2.on((e) => {
+    if (e.event === 'request') h2.notify('respond', { requestId: e.requestId, result: null });
+  });
+  await h2.call('initialize', { workspaceFolders: [workspace], dataDir: path.join(tmp, 'data'), appConnected: true });
+  const t0 = Date.now();
+  const r = await h2.call('restoreWebviewPanels', { panels });
+  check('restoreWebviewPanels (2ª sessão)', r && r.restored === panels.length, `${r && r.restored}/${panels.length} em ${Date.now() - t0} ms`);
+  const created = (vt) => h2.events.find((e) => e.event === 'webviewPanelCreated' && e.viewType === vt);
+  const claudePanel = created('claudeVSCodePanel');
+  check('Claude Code: deserializeWebviewPanel recria o painel (sem roubar foco)', !!claudePanel && claudePanel.preserveFocus === true);
+  const html = await h2.waitEvent((e) => e.event === 'webviewHtml' && claudePanel && e.handle === claudePanel.handle, 5000).catch(() => null);
+  check('…e define o HTML da UI dele', !!html && !!html.url);
+  if (codex) {
+    const codexPanel = created('chatgpt.conversationEditor');
+    check('Codex: custom editor reaberto pela uri persistida', !!codexPanel);
+    const chtml = await h2.waitEvent((e) => e.event === 'webviewHtml' && codexPanel && e.handle === codexPanel.handle, 8000).catch(() => null);
+    check('…com o HTML da conversa', !!chtml);
+  }
+  return h2;
 }
 
 /**
