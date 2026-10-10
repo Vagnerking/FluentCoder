@@ -6,6 +6,11 @@ e do Codex (`openai.chatgpt`) instaladas pelo usuário no VS Code, mostra a
 editor, ao terminal, à revisão de diffs, à Paleta e à barra de status. Não é
 reimplementação da UI e não é um VS Code Server embutido.
 
+Além delas, a view **Extensões** (activity bar) instala/atualiza/remove
+extensões de catálogos Open VSX-compatíveis numa pasta **própria do app** e
+libera para o host só as que passam no **portão de compatibilidade** — ver
+[Gerenciamento de extensões](#gerenciamento-de-extensões-view-extensões).
+
 Pesquisa/cobertura da API: [docs/research/vsix-api-surface.md](../research/vsix-api-surface.md).
 
 ## Arquitetura
@@ -131,6 +136,10 @@ no lado virtual de um diff)/`decorationTypeDisposed`,
 9. **Nada da configuração real do usuário é escrito** (`~/.vscode`,
    `~/.claude/settings.json`, `~/.codex`): a extensão é lida da pasta
    instalada (somente leitura) e o estado do host fica no `app_data_dir`.
+   Instalar/atualizar/remover só escreve em `<app_data_dir>/extensions/`;
+   "Importar do VS Code" **copia** (lê a origem, nunca a altera) e
+   habilitar/desabilitar uma extensão do VS Code grava só um override no
+   índice do app.
 10. **Terminais de extensão**: env com nomes válidos (sem `=`/NUL);
     `shellPath` precisa existir no PATH (`which`); `strictEnv` respeitado.
 11. **Estilos de decoração** viram CSS no app: só propriedades conhecidas e
@@ -159,6 +168,41 @@ no lado virtual de um diff)/`decorationTypeDisposed`,
 16. **Comentário novo** (`commentCreateThread`) só dentro das faixas que o
     `commentingRangeProvider` do PRÓPRIO controller devolve; cancelar
     (`commentDisposeTemplate`) só descarta rascunho sem comentários.
+17. **Rede de extensões só pelo Rust, só HTTPS e só para a allowlist**: os
+    hosts das fontes configuradas (+ os hosts de conteúdo que elas declaram,
+    ex.: `openvsx.eclipsecontent.org` do Open VSX). Vale também para cada
+    redirecionamento (no máximo 5); fora disso o pedido falha. URL de fonte:
+    `https://` + nome de domínio (sem IP literal, credenciais, query ou
+    fragmento). O frontend nunca busca o catálogo nem carrega ícone/imagem
+    remota direto: ícones vêm como `data:` URI (≤ 512 KB, png/jpeg/gif/
+    webp/svg) e README/CHANGELOG como texto (≤ 2 MB).
+18. **Integridade e tetos no download**: `.vsix` ≤ 1 GiB baixado em
+    streaming com SHA-256 calculado; se o catálogo publica `files.sha256`, o
+    hash TEM de bater (senão a instalação é cancelada e nada é gravado);
+    `Content-Length` divergente do recebido = erro. O manifesto do pacote tem
+    de bater com o pedido (publisher, nome, versão e plataforma).
+19. **Extração segura** (`vsix.rs`): só o payload `extension/`; qualquer
+    nome com caminho absoluto, `..`, `\`, NUL, letra de unidade ou
+    componente vazio recusa o PACOTE inteiro (zip-slip); symlink no zip →
+    recusa; tetos de 60 000 entradas, 1 GiB por arquivo e 2 GiB no total
+    contados nos bytes descomprimidos (zip bomb); só o bit de execução é
+    preservado. Extração em `.staging/<uuid>/`, troca atômica com a versão
+    anterior em `.trash/` e rollback se qualquer passo falhar.
+20. **Instalar não executa nada** da extensão (sem scripts, sem `npm`, sem
+    `activate`). Ela só roda no host depois de **habilitada** e classificada
+    como **Compatível** ou **Parcial** para a MESMA versão e o MESMO shim
+    (portão gravado no índice; o host confere). Incompatível / Não avaliada
+    nunca rodam. `loadExtension` por caminho só é aceito sem app (headless).
+21. **Confirmação antes de instalar** qualquer extensão não recomendada ou
+    classificada como Incompatível / Não avaliada (antes de instalar o código
+    ainda não foi analisado, então na prática toda instalação pede
+    confirmação), com o **publisher em destaque** (verificado ou não pelo
+    catálogo), versão, fonte, se há SHA-256 publicado e os motivos da
+    classificação. `.vsix` local: sempre confirma e avisa que não há hash de
+    referência.
+22. **README/CHANGELOG de terceiros**: markdown sem HTML cru (`skipHtml`),
+    imagens não são carregadas (viram link) e links só `http(s)`/`mailto`,
+    abertos no navegador do sistema (`ext_host_open_external`).
 
 ## Desempenho
 
@@ -204,7 +248,7 @@ no lado virtual de um diff)/`decorationTypeDisposed`,
 
 - Abas no topo da sidebar secundária (o Fluent Chat): as abas nativas
   **Chat** e **Agentes** (prop `nativeTabs` do `ExtensionDock`; ver
-  [Fluent Chat](agentes-ia.md)) | uma aba por extensão suportada instalada
+  [Fluent Chat](agentes-ia.md)) | uma aba por extensão liberada no portão que contribua view de webview
   (as views de sidebar dela). Aba lembrada em `ui.agentsDockTab`;
   `requestedTab` foca uma aba de fora (Paleta). Sem extensões/Node, só as
   abas nativas aparecem.
@@ -501,9 +545,11 @@ no VS Code. Sem as sequências em 2,5 s (outro shell) → integração simulada
 
 ## Licenciamento
 
-Carregamos a extensão **instalada localmente pelo usuário**, direto de
-`~/.vscode/extensions/` (somente leitura) — nada é copiado, empacotado ou
-redistribuído. Não incluir VSIX de terceiros no bundle.
+Carregamos a extensão **instalada localmente pelo usuário**: direto de
+`~/.vscode/extensions/` (somente leitura) ou da pasta do app, para onde o
+PRÓPRIO usuário a baixou de um catálogo (Open VSX) ou a copiou do VS Code
+("Importar do VS Code"). Nada é empacotado nem redistribuído: não incluir
+VSIX de terceiros no bundle.
 
 ## API para outras partes do app
 
@@ -511,14 +557,125 @@ redistribuído. Não incluir VSIX de terceiros no bundle.
 `agentsNode`), `ExtensionWebview` (renderizar um webview resolvido em outro
 layout), `ExtensionHostRuntime`, `ExtensionStatusItems`, `useExtensionDiffs`,
 `useHostedExtensions`, `listHostedExtensions`, `openExtensionView(id)`,
-`prewarmExtension(id)`, `restartExtensionHost()`, `onExtensionHostEvent`,
-`extensionPaletteCommands`.
+`prewarmExtension(id)`, `restartExtensionHost()`, `refreshHostedExtensions()`
+(o host relê as instaladas sem reiniciar → evento `installedChanged`),
+`isExtensionActive(id)`, `onExtensionHostEvent`, `extensionPaletteCommands`.
+
+View Extensões: `src/components/extensions/` (`ExtensionsView` — montada
+pelo App sem props, `ExtensionCard`, `ExtensionDetails`, `extensionsStore`
+com `useExtensionUpdateCount()` para o badge e
+`scheduleStartupUpdateCheck()`); catálogo em `src/extensions/catalog.ts`,
+classificador em `src/extensions/compatibility.ts`.
+
+## Gerenciamento de extensões (view Extensões)
+
+### Pasta gerenciada e índice (contrato Rust ⇄ host Node)
+
+```
+<app_data_dir>/extensions/                (FLUENT_APP_EXTENSIONS_DIR em testes)
+  extensions.json                         índice — único escritor: src-tauri/src/extensions/store.rs
+  sources.json                            fontes de catálogo
+  <publisher>.<nome>-<versão>[-<plataforma>]/   payload extension/ do VSIX (minúsculo)
+  .staging/<uuid>/  .trash/<uuid>/        instalação em andamento / versão substituída (limpas no startup)
+```
+
+`extensions.json` (`version: 1`): `extensions` = mapa id → `{ id, version,
+dir, targetPlatform, source: {kind: "registry", registry, namespace, name} |
+{kind: "vscode-import", from} | {kind: "vsix"}, sha256, size, verified,
+preRelease, installedAt, enabled, gate }`; `vscode` = mapa id → `{ enabled?,
+gate? }` (overrides das extensões do VS Code, que seguem somente leitura).
+`gate = { verdict: compatible|partial|incompatible|unknown, version,
+hostVersion, evaluatedAt }`. O host ignora entrada com `dir` inseguro ou cujo
+`package.json` não bata com o id.
+
+- **Descoberta** (`tools/ext-host/src/installed.js` no host,
+  `store::discover` no Rust): pasta gerenciada (pelo índice) + VS Code
+  (`~/.vscode/extensions`, a mais nova de cada id, pacotes de outra
+  plataforma ignorados). Mesmo id nas duas → **vence a gerenciada**; a
+  do VS Code aparece como `shadowedVersion`. O host recebe a pasta no
+  `initialize` (`extensionsDir`, vindo do `ext_host_start`).
+- **`supported` = portão de compatibilidade** (não mais allowlist fixa):
+  habilitada **e** veredito `compatible`/`partial` gravado para a mesma
+  versão e a mesma API do shim (`VSCODE_VERSION`). **Embutidas** (Claude
+  Code, Codex — validadas pelo `flows-check`) continuam liberadas e com os
+  rótulos/views preferidas de sempre; o usuário pode desabilitá-las. As
+  demais do VS Code começam **desabilitadas**. `blockedReason` explica
+  (`disabled`, `not-evaluated`, `incompatible`, `unknown`).
+- `viewIds` de uma não embutida = suas views `type: "webview"`; o Fluent
+  Chat ganha uma aba por extensão liberada que tenha alguma.
+  `activationEvents` `*`/`onStartupFinished` ativam ao subir o host.
+- **Sem reiniciar o app**: depois de instalar/habilitar, o app chama
+  `refreshHostedExtensions()` (o host relê o índice → `installedChanged`):
+  extensão nova já é carregável. Uma que JÁ estava ativa e foi atualizada,
+  desabilitada ou removida só troca com **"Reiniciar Host de Extensões"**
+  (a view mostra o aviso com o botão).
+
+### Catálogo (`src-tauri/src/extensions/openvsx.rs`)
+
+Fonte padrão **Open VSX** (`https://open-vsx.org/api`, hosts
+`open-vsx.org` + `openvsx.eclipsecontent.org`), não removível (só
+desabilitável); o usuário adiciona/remove fontes Open VSX-compatíveis no
+diálogo "Fontes de extensões" da view. Endpoints (verificados em
+10/10/2026): `-/search?query&offset&size&targetPlatform`,
+`{ns}/{nome}/{plataforma}/latest` → `{ns}/{nome}/universal/latest` →
+`{ns}/{nome}/latest`, `-/query?extensionId&targetPlatform&includeAllVersions`
+(última **estável**: o `latest` pode ser pré-lançamento), `files.sha256`
+(texto hex). **Recomendadas**: Claude Code e Codex — a disponibilidade é
+consultada nas fontes em tempo de execução; sem resposta, a view mostra a
+página oficial. Instaladas no VS Code: "Importar do VS Code" (cópia).
+Verificado em 10/10/2026: `Anthropic.claude-code` 2.1.296 (linux-x64) e
+`openai.chatgpt` (última pré-lançamento 26.5908.x; estável 26.908.x) estão no
+Open VSX.
+
+**Atualizações**: `extensions_check_updates` (SemVer, só as instaladas de um
+catálogo; estável a menos que a instalada seja pré-lançamento) no startup
+(15 s após abrir, throttle de 12 h com cache local) e sob demanda (botão /
+Paleta "Extensões: Checar Atualizações"); badge com a contagem no item da
+activity bar; "Atualizar tudo".
+
+Comandos Tauri: `extensions_paths`, `extensions_list`,
+`extensions_local_details` (README/CHANGELOG/ícone + varredura do código),
+`extensions_sources_list`/`_save`, `extensions_search`,
+`extensions_metadata` (+ `package.json` da versão), `extensions_fetch_text`,
+`extensions_fetch_icon`, `extensions_install`, `extensions_install_vsix`,
+`extensions_import_vscode`, `extensions_uninstall` (só gerenciadas),
+`extensions_set_enabled`, `extensions_set_gate`, `extensions_check_updates`;
+evento `extensions://progress` (`metadata`/`download`/`extract`/`commit`).
+
+### Compatibilidade (`src/extensions/compatibility.ts`)
+
+Extensão + versão + plataforma + API do shim → **Compatível / Parcial /
+Incompatível / Não avaliada**, com motivos (bloqueio/limitação/informação).
+Análise estática do manifesto (`main`/`browser`, `engines.vscode` como faixa
+SemVer do VS Code, `targetPlatform`, `enabledApiProposals`,
+`activationEvents`, `contributes`, `extensionDependencies`,
+`extensionPack`, `capabilities`, `extensionKind`) + varredura do código Node
+instalado (`vscode.<api>` referenciados — chamados × só lidos —, apelidos de
+namespace, vários arquivos; `store::scan_extension`, espelhado em
+`tools/ext-host/discovery/api-scan.js`) contra `src/extensions/
+capabilities.json`, **gerado** do próprio shim por
+`node tools/ext-host/discovery/capabilities.js` (o teste
+`capabilities.test.js` falha se o JSON ficar desatualizado — mudou o shim,
+regenere). Regras: sem código analisado → **Não avaliada** (nunca positivo
+por omissão; vale para todo resultado da loja antes de instalar); API ausente
+chamada, engine fora da faixa, outra plataforma, só web, dependência não
+instalada, só contribuições sem suporte ou só stubs como função principal →
+Incompatível; propostas, tree views, stubs, APIs parciais, eventos de
+ativação não disparados → Parcial.
 
 ## Aceite
 
 - Unitários: `npm run test:unit` (inclui `tools/ext-host/test/*.test.js` e
   `src/extensions/*.test.ts`); Rust: `cargo test` (`ext_host::*`; o teste do
   cofre real é `cargo test --lib roundtrip_in_os_keyring -- --ignored`).
+- Gerenciamento: `cargo test --lib extensions::` (VSIX de fixture: zip-slip,
+  symlink, tetos, troca atômica/rollback, descoberta, importação, fontes,
+  allowlist); `tools/ext-host/test/installed.test.js` (descoberta + portão),
+  `capabilities.test.js`, `src/extensions/{compatibility,catalog}.test.ts`.
+  Rede real (só leitura): `npm run ext-host:catalog-check [-- --managed
+  <pasta>]`. Instalação REAL numa pasta temporária (baixa, confere o SHA-256,
+  extrai, indexa, descobre e remove):
+  `cargo test --lib real_openvsx_install -- --ignored --nocapture`.
 - Headless pelo protocolo real: `npm run ext-host:check` (ativa, resolve a
   view, HTML + assets 200, round trip).
 - **Fluxos com a extensão real do Claude Code**:

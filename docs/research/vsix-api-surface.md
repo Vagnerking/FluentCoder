@@ -6,6 +6,8 @@
   - `static-scan.js <main.js>` — varredura estática do bundle: acha os identificadores ligados a `require("vscode")` e conta os caminhos `vscode.a.b`.
   - `run.js <pasta-da-extensão>` — descoberta dinâmica: ativa a extensão real no shim, embrulhado num `Proxy` de gravação (`record.js`), resolve as webview views contribuídas e simula a 1ª mensagem do webview (`init` no Claude, `ready` no Codex). Caminhos que não existem no shim seriam marcados `missing` e devolvem um stub chamável que segue gravando.
   - `coverage.js <main.js>…` — cruza a varredura estática com o shim (tabela abaixo).
+  - `capabilities.js` — gera `src/extensions/capabilities.json` (existe/parcial/stub de cada membro do shim + pontos de contribuição e eventos de ativação honrados), usado pelo classificador de compatibilidade da view Extensões. Regenerar ao mudar o shim (o teste `capabilities.test.js` cobra).
+  - `api-scan.js <pasta>` — varredura de uma extensão instalada para o classificador (vários arquivos, apelidos de namespace, chamadas × leituras); espelho do `scan_extension` do Rust.
 
 > Sem prompts a modelos: a descoberta só chama `activate()`, `resolveWebviewView()` e o handshake do webview. Rodamos com `CLAUDE_CONFIG_DIR`/`CODEX_HOME` apontando para pastas temporárias para não tocar a configuração real do usuário.
 

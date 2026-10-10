@@ -75,6 +75,10 @@ pub fn normalize_source_url(raw: &str) -> Result<String, String> {
     if hostname.is_empty() || !hostname.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.') || !hostname.contains('.') {
         return Err("URL de fonte inválida: host ausente ou malformado.".into());
     }
+    // IP literal (ex.: 127.0.0.1, 10.x): só nomes de domínio, como os registros reais.
+    if hostname.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        return Err("URL de fonte inválida: use o nome de domínio do registro, não um IP.".into());
+    }
     if rest.split('/').skip(1).any(|seg| seg == ".." || seg == ".") {
         return Err("URL de fonte inválida.".into());
     }
@@ -489,6 +493,8 @@ mod tests {
         assert!(normalize_source_url("https:///api").is_err());
         assert!(normalize_source_url("https://localhost/api").is_err());
         assert!(normalize_source_url("file:///etc").is_err());
+        assert!(normalize_source_url("https://127.0.0.1/api").is_err());
+        assert!(normalize_source_url("https://10.0.0.5:8443/api").is_err());
         assert_eq!(host_of("https://Open-VSX.org:443/api").as_deref(), Some("open-vsx.org"));
     }
 

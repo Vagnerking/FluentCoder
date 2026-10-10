@@ -89,6 +89,8 @@ conversas do Claude Code/Codex). Comandos próprios, montados em
   sidecar (as extensões fazem `deactivate`), sobe de novo e reativa as que
   estavam ativas; as views se re-resolvem sozinhas.
 - **"Extensões: Mostrar Saída do Host"** — aba Saída, canal "Extensões".
+- **"Extensões: Mostrar Extensões"** / **"Extensões: Checar Atualizações"** —
+  abrem a view Extensões (a 2ª força a checagem no catálogo).
 - **Comandos contribuídos** pelas extensões suportadas (`contributes.commands`,
   sem os escondidos por `menus.commandPalette` com `when: false`), com o
   título do `package.json` (ex.: "Claude Code: Open in Terminal", "Codex: New
