@@ -1,0 +1,593 @@
+{
+  "$comment": "GERADO por tools/ext-host/discovery/capabilities.js — não editar à mão.",
+  "hostVersion": "1.106.0",
+  "proposedPrefixes": [
+    "chat.",
+    "lm.",
+    "languageModels.",
+    "interactive.",
+    "ai.",
+    "speech."
+  ],
+  "apis": {
+    "CancellationError": "implemented",
+    "CancellationTokenSource": "implemented",
+    "CodeLens": "implemented",
+    "ColorThemeKind": "implemented",
+    "CommentMode": "implemented",
+    "CommentThreadCollapsibleState": "implemented",
+    "CommentThreadState": "implemented",
+    "CompletionItemKind": "implemented",
+    "ConfigurationTarget": "implemented",
+    "CustomExecution": "implemented",
+    "DecorationRangeBehavior": "implemented",
+    "Diagnostic": "implemented",
+    "DiagnosticSeverity": "implemented",
+    "Disposable": "implemented",
+    "EndOfLine": "implemented",
+    "EnvironmentVariableMutatorType": "implemented",
+    "EventEmitter": "implemented",
+    "ExtensionKind": "implemented",
+    "ExtensionMode": "implemented",
+    "FileChangeType": "implemented",
+    "FilePermission": "implemented",
+    "FileSystemError": "implemented",
+    "FileType": "implemented",
+    "InputBoxValidationSeverity": "implemented",
+    "LogLevel": "implemented",
+    "MarkdownString": "implemented",
+    "NotebookCellData": "implemented",
+    "NotebookCellKind": "implemented",
+    "NotebookCellOutputItem": "implemented",
+    "NotebookData": "implemented",
+    "NotebookEdit": "implemented",
+    "NotebookEditorRevealType": "implemented",
+    "NotebookRange": "implemented",
+    "OverviewRulerLane": "implemented",
+    "Position": "implemented",
+    "ProcessExecution": "implemented",
+    "ProgressLocation": "implemented",
+    "QuickInputButtons": "implemented",
+    "QuickPickItemKind": "implemented",
+    "Range": "implemented",
+    "RelativePattern": "implemented",
+    "Selection": "implemented",
+    "ShellExecution": "implemented",
+    "ShellExecutionKind": "implemented",
+    "ShellQuoting": "implemented",
+    "StatusBarAlignment": "implemented",
+    "SymbolKind": "implemented",
+    "TabInputCustom": "implemented",
+    "TabInputNotebook": "implemented",
+    "TabInputTerminal": "implemented",
+    "TabInputText": "implemented",
+    "TabInputTextDiff": "implemented",
+    "TabInputWebview": "implemented",
+    "Task": "implemented",
+    "TaskGroup": "implemented",
+    "TaskPanelKind": "implemented",
+    "TaskRevealKind": "implemented",
+    "TaskScope": "implemented",
+    "TerminalExitReason": "implemented",
+    "TerminalLocation": "implemented",
+    "TerminalShellExecutionCommandLineConfidence": "implemented",
+    "TextDocumentChangeReason": "implemented",
+    "TextDocumentSaveReason": "implemented",
+    "TextEdit": "implemented",
+    "TextEditorRevealType": "implemented",
+    "TextEditorSelectionChangeKind": "implemented",
+    "ThemeColor": "implemented",
+    "ThemeIcon": "implemented",
+    "TreeItem": "implemented",
+    "TreeItemCollapsibleState": "implemented",
+    "UIKind": "implemented",
+    "Uri": "implemented",
+    "ViewColumn": "implemented",
+    "WorkspaceEdit": "implemented",
+    "authentication.getAccounts": "implemented",
+    "authentication.getSession": "stub",
+    "authentication.onDidChangeSessions": "stub",
+    "authentication.registerAuthenticationProvider": "stub",
+    "commands.executeCommand": "implemented",
+    "commands.getCommands": "partial",
+    "commands.registerCommand": "implemented",
+    "commands.registerTextEditorCommand": "implemented",
+    "comments.createCommentController": "implemented",
+    "debug.activeDebugSession": "implemented",
+    "debug.breakpoints": "implemented",
+    "debug.onDidChangeActiveDebugSession": "stub",
+    "debug.onDidChangeBreakpoints": "stub",
+    "debug.onDidStartDebugSession": "stub",
+    "debug.onDidTerminateDebugSession": "stub",
+    "debug.registerDebugAdapterDescriptorFactory": "stub",
+    "debug.registerDebugConfigurationProvider": "stub",
+    "debug.startDebugging": "stub",
+    "env.appHost": "implemented",
+    "env.appName": "implemented",
+    "env.appRoot": "implemented",
+    "env.asExternalUri": "implemented",
+    "env.clipboard": "implemented",
+    "env.createTelemetryLogger": "implemented",
+    "env.isNewAppInstall": "implemented",
+    "env.isTelemetryEnabled": "implemented",
+    "env.language": "implemented",
+    "env.logLevel": "implemented",
+    "env.machineId": "implemented",
+    "env.onDidChangeLogLevel": "stub",
+    "env.onDidChangeShell": "stub",
+    "env.onDidChangeTelemetryEnabled": "stub",
+    "env.openExternal": "implemented",
+    "env.remoteName": "implemented",
+    "env.sessionId": "implemented",
+    "env.shell": "implemented",
+    "env.uiKind": "implemented",
+    "env.uriScheme": "implemented",
+    "extensions.all": "implemented",
+    "extensions.getExtension": "implemented",
+    "extensions.onDidChange": "stub",
+    "l10n.bundle": "implemented",
+    "l10n.t": "implemented",
+    "l10n.uri": "implemented",
+    "languages.createDiagnosticCollection": "implemented",
+    "languages.getDiagnostics": "implemented",
+    "languages.getLanguages": "implemented",
+    "languages.match": "implemented",
+    "languages.onDidChangeDiagnostics": "implemented",
+    "languages.registerCodeActionsProvider": "stub",
+    "languages.registerCodeLensProvider": "implemented",
+    "languages.registerCompletionItemProvider": "stub",
+    "languages.registerDefinitionProvider": "stub",
+    "languages.registerDocumentLinkProvider": "stub",
+    "languages.registerDocumentSymbolProvider": "stub",
+    "languages.registerHoverProvider": "stub",
+    "languages.registerInlineCompletionItemProvider": "stub",
+    "languages.setTextDocumentLanguage": "implemented",
+    "notebooks.createNotebookController": "stub",
+    "notebooks.createRendererMessaging": "implemented",
+    "notebooks.registerNotebookCellStatusBarItemProvider": "stub",
+    "scm.createSourceControl": "stub",
+    "tasks.executeTask": "implemented",
+    "tasks.fetchTasks": "implemented",
+    "tasks.onDidEndTask": "implemented",
+    "tasks.onDidEndTaskProcess": "implemented",
+    "tasks.onDidStartTask": "implemented",
+    "tasks.onDidStartTaskProcess": "implemented",
+    "tasks.registerTaskProvider": "implemented",
+    "tasks.taskExecutions": "implemented",
+    "version": "implemented",
+    "window.activeColorTheme": "implemented",
+    "window.activeNotebookEditor": "stub",
+    "window.activeTerminal": "partial",
+    "window.activeTextEditor": "implemented",
+    "window.createInputBox": "implemented",
+    "window.createOutputChannel": "implemented",
+    "window.createQuickPick": "implemented",
+    "window.createStatusBarItem": "implemented",
+    "window.createTerminal": "implemented",
+    "window.createTextEditorDecorationType": "implemented",
+    "window.createTreeView": "stub",
+    "window.createWebviewPanel": "implemented",
+    "window.onDidChangeActiveColorTheme": "stub",
+    "window.onDidChangeActiveNotebookEditor": "stub",
+    "window.onDidChangeActiveTerminal": "implemented",
+    "window.onDidChangeActiveTextEditor": "implemented",
+    "window.onDidChangeNotebookEditorSelection": "stub",
+    "window.onDidChangeNotebookEditorVisibleRanges": "stub",
+    "window.onDidChangeTerminalShellIntegration": "implemented",
+    "window.onDidChangeTerminalState": "implemented",
+    "window.onDidChangeTextEditorOptions": "stub",
+    "window.onDidChangeTextEditorSelection": "implemented",
+    "window.onDidChangeTextEditorViewColumn": "stub",
+    "window.onDidChangeTextEditorVisibleRanges": "implemented",
+    "window.onDidChangeVisibleNotebookEditors": "stub",
+    "window.onDidChangeVisibleTextEditors": "implemented",
+    "window.onDidChangeWindowState": "implemented",
+    "window.onDidCloseTerminal": "implemented",
+    "window.onDidEndTerminalShellExecution": "implemented",
+    "window.onDidOpenTerminal": "implemented",
+    "window.onDidStartTerminalShellExecution": "implemented",
+    "window.registerCustomEditorProvider": "implemented",
+    "window.registerFileDecorationProvider": "stub",
+    "window.registerTerminalLinkProvider": "stub",
+    "window.registerTerminalProfileProvider": "stub",
+    "window.registerTreeDataProvider": "stub",
+    "window.registerUriHandler": "implemented",
+    "window.registerWebviewPanelSerializer": "implemented",
+    "window.registerWebviewViewProvider": "implemented",
+    "window.setStatusBarMessage": "implemented",
+    "window.showErrorMessage": "implemented",
+    "window.showInformationMessage": "implemented",
+    "window.showInputBox": "implemented",
+    "window.showNotebookDocument": "implemented",
+    "window.showOpenDialog": "implemented",
+    "window.showQuickPick": "implemented",
+    "window.showSaveDialog": "implemented",
+    "window.showTextDocument": "implemented",
+    "window.showWarningMessage": "implemented",
+    "window.showWorkspaceFolderPick": "implemented",
+    "window.state": "implemented",
+    "window.tabGroups": "partial",
+    "window.terminals": "partial",
+    "window.visibleNotebookEditors": "implemented",
+    "window.visibleTextEditors": "implemented",
+    "window.withProgress": "implemented",
+    "window.withScmProgress": "implemented",
+    "workspace.applyEdit": "implemented",
+    "workspace.asRelativePath": "implemented",
+    "workspace.createFileSystemWatcher": "implemented",
+    "workspace.findFiles": "implemented",
+    "workspace.fs": "implemented",
+    "workspace.getConfiguration": "implemented",
+    "workspace.getWorkspaceFolder": "implemented",
+    "workspace.isTrusted": "implemented",
+    "workspace.name": "implemented",
+    "workspace.notebookDocuments": "implemented",
+    "workspace.onDidChangeConfiguration": "implemented",
+    "workspace.onDidChangeNotebookDocument": "stub",
+    "workspace.onDidChangeTextDocument": "implemented",
+    "workspace.onDidChangeWorkspaceFolders": "implemented",
+    "workspace.onDidCloseNotebookDocument": "implemented",
+    "workspace.onDidCloseTextDocument": "implemented",
+    "workspace.onDidCreateFiles": "implemented",
+    "workspace.onDidDeleteFiles": "implemented",
+    "workspace.onDidGrantWorkspaceTrust": "stub",
+    "workspace.onDidOpenNotebookDocument": "implemented",
+    "workspace.onDidOpenTextDocument": "implemented",
+    "workspace.onDidRenameFiles": "implemented",
+    "workspace.onDidSaveNotebookDocument": "stub",
+    "workspace.onDidSaveTextDocument": "implemented",
+    "workspace.onWillCreateFiles": "stub",
+    "workspace.onWillDeleteFiles": "stub",
+    "workspace.onWillRenameFiles": "stub",
+    "workspace.onWillSaveTextDocument": "implemented",
+    "workspace.openNotebookDocument": "implemented",
+    "workspace.openTextDocument": "implemented",
+    "workspace.registerFileSystemProvider": "implemented",
+    "workspace.registerNotebookSerializer": "stub",
+    "workspace.registerTaskProvider": "implemented",
+    "workspace.registerTextDocumentContentProvider": "implemented",
+    "workspace.rootPath": "implemented",
+    "workspace.save": "implemented",
+    "workspace.saveAll": "implemented",
+    "workspace.textDocuments": "implemented",
+    "workspace.updateWorkspaceFolders": "implemented",
+    "workspace.workspaceFile": "implemented",
+    "workspace.workspaceFolders": "implemented"
+  },
+  "notes": {
+    "authentication.getSession": "sem provedores de autenticação (sempre indefinido)",
+    "authentication.onDidChangeSessions": "evento que nunca dispara neste host",
+    "authentication.registerAuthenticationProvider": "provedores de autenticação não são expostos",
+    "commands.getCommands": "só comandos registrados por extensões (sem os internos do VS Code)",
+    "comments.createCommentController": "threads no Monaco (view zone + overlay Fluent) com as ações dos menus comments/*; \"+\" nas faixas do commentingRangeProvider, responder, editar/apagar; barra de hunks do Claude no diff",
+    "debug.onDidChangeActiveDebugSession": "evento que nunca dispara neste host",
+    "debug.onDidChangeBreakpoints": "evento que nunca dispara neste host",
+    "debug.onDidStartDebugSession": "evento que nunca dispara neste host",
+    "debug.onDidTerminateDebugSession": "evento que nunca dispara neste host",
+    "debug.registerDebugAdapterDescriptorFactory": "sem adaptadores de depuração de extensões",
+    "debug.registerDebugConfigurationProvider": "sem adaptadores de depuração de extensões",
+    "debug.startDebugging": "sem adaptadores de depuração de extensões",
+    "env.onDidChangeLogLevel": "evento que nunca dispara neste host",
+    "env.onDidChangeShell": "evento que nunca dispara neste host",
+    "env.onDidChangeTelemetryEnabled": "evento que nunca dispara neste host",
+    "extensions.onDidChange": "evento que nunca dispara neste host",
+    "languages.registerCodeActionsProvider": "registrar não tem efeito neste host",
+    "languages.registerCodeLensProvider": "lentes no Monaco; clique executa o comando da extensão",
+    "languages.registerCompletionItemProvider": "registrar não tem efeito neste host",
+    "languages.registerDefinitionProvider": "registrar não tem efeito neste host",
+    "languages.registerDocumentLinkProvider": "registrar não tem efeito neste host",
+    "languages.registerDocumentSymbolProvider": "registrar não tem efeito neste host",
+    "languages.registerHoverProvider": "registrar não tem efeito neste host",
+    "languages.registerInlineCompletionItemProvider": "registrar não tem efeito neste host",
+    "notebooks.createNotebookController": "sem editor de notebook (execução inerte)",
+    "notebooks.registerNotebookCellStatusBarItemProvider": "registrar não tem efeito neste host",
+    "scm.createSourceControl": "controle de código-fonte de extensões não aparece no app",
+    "tasks.executeTask": "Shell/ProcessExecution num terminal integrado (\"Tarefa: …\"); CustomExecution no pseudoterminal da extensão",
+    "tasks.onDidEndTaskProcess": "exitCode do PTY",
+    "window.activeNotebookEditor": "sem editor de notebook (indefinido); openNotebookDocument lê o .ipynb só leitura e showNotebookDocument avisa em pt-BR",
+    "window.activeTerminal": "só os terminais criados por extensões",
+    "window.createTextEditorDecorationType": "cores/bordas, ícone de gutter, régua (lane), isWholeLine, before/after com texto/ícone e renderOptions por faixa",
+    "window.createTreeView": "tree views não são renderizadas (só webview views)",
+    "window.createWebviewPanel": "aba da grade de editores (viewColumn/Beside/preserveFocus, onDidChangeViewState, dispose)",
+    "window.onDidChangeActiveColorTheme": "evento que nunca dispara neste host",
+    "window.onDidChangeActiveNotebookEditor": "evento que nunca dispara neste host",
+    "window.onDidChangeNotebookEditorSelection": "evento que nunca dispara neste host",
+    "window.onDidChangeNotebookEditorVisibleRanges": "evento que nunca dispara neste host",
+    "window.onDidChangeTerminalShellIntegration": "ao ver as sequências OSC 633 e a cada mudança de cwd; fallback simulado em 2,5 s",
+    "window.onDidChangeTextEditorOptions": "evento que nunca dispara neste host",
+    "window.onDidChangeTextEditorViewColumn": "evento que nunca dispara neste host",
+    "window.onDidChangeVisibleNotebookEditors": "evento que nunca dispara neste host",
+    "window.onDidEndTerminalShellExecution": "OSC 633 real (bash/zsh/fish) com exitCode; outros shells: integração simulada",
+    "window.onDidStartTerminalShellExecution": "OSC 633 real (comandos digitados e executeCommand); execution.read() com a saída",
+    "window.registerCustomEditorProvider": "abre como aba da grade de editores (TabInputCustom)",
+    "window.registerFileDecorationProvider": "decorações de arquivo no Explorador não aparecem",
+    "window.registerTerminalLinkProvider": "links de terminal contribuídos não aparecem",
+    "window.registerTerminalProfileProvider": "perfis de terminal contribuídos não aparecem",
+    "window.registerTreeDataProvider": "tree views não são renderizadas (só webview views)",
+    "window.registerWebviewPanelSerializer": "painéis (e custom editors) restaurados ao reiniciar o app: deserializeWebviewPanel com o estado do setState",
+    "window.showInputBox": "validateInput ao vivo (síncrono/assíncrono, severidade)",
+    "window.showQuickPick": "canPickMany, separadores, onDidSelectItem, token (sobre createQuickPick)",
+    "window.tabGroups": "um grupo lógico: abas de arquivo do app + diffs + painéis de webview",
+    "window.terminals": "só os terminais criados por extensões",
+    "window.withProgress": "Notification = aviso com barra e Cancelar; Window/SCM = barra de status; CancellationToken real",
+    "workspace.onDidChangeNotebookDocument": "evento que nunca dispara neste host",
+    "workspace.onDidGrantWorkspaceTrust": "evento que nunca dispara neste host",
+    "workspace.onDidSaveNotebookDocument": "evento que nunca dispara neste host",
+    "workspace.onWillCreateFiles": "evento que nunca dispara neste host",
+    "workspace.onWillDeleteFiles": "evento que nunca dispara neste host",
+    "workspace.onWillRenameFiles": "evento que nunca dispara neste host",
+    "workspace.registerNotebookSerializer": "sem editor de notebook"
+  },
+  "contributionPoints": {
+    "commands": {
+      "state": "supported",
+      "note": "Paleta de Comandos (com o título do package.json)"
+    },
+    "configuration": {
+      "state": "supported",
+      "note": "defaults + overrides próprios do host (nunca o settings do VS Code)"
+    },
+    "configurationDefaults": {
+      "state": "ignored"
+    },
+    "keybindings": {
+      "state": "partial",
+      "note": "best effort: no editor só os de editorTextFocus; no webview, todos"
+    },
+    "menus": {
+      "state": "partial",
+      "note": "só commandPalette, editor/title (diffs) e comments/*"
+    },
+    "views": {
+      "state": "partial",
+      "note": "só views de webview (no Fluent Chat); tree views não são renderizadas"
+    },
+    "viewsContainers": {
+      "state": "partial",
+      "note": "metadados (as views de webview viram uma aba no Fluent Chat)"
+    },
+    "viewsWelcome": {
+      "state": "ignored"
+    },
+    "customEditors": {
+      "state": "supported",
+      "note": "abas da grade de editores (registerCustomEditorProvider)"
+    },
+    "walkthroughs": {
+      "state": "ignored"
+    },
+    "icons": {
+      "state": "ignored"
+    },
+    "colors": {
+      "state": "ignored",
+      "note": "cores contribuídas não entram no tema do app"
+    },
+    "jsonValidation": {
+      "state": "ignored",
+      "note": "esquemas JSON contribuídos não validam arquivos no editor"
+    },
+    "languages": {
+      "state": "unsupported",
+      "note": "linguagens contribuídas não são registradas no Monaco"
+    },
+    "grammars": {
+      "state": "unsupported",
+      "note": "gramáticas TextMate contribuídas não são carregadas"
+    },
+    "snippets": {
+      "state": "unsupported",
+      "note": "snippets contribuídos não são carregados"
+    },
+    "themes": {
+      "state": "unsupported",
+      "note": "temas de cor de extensões não são aplicados"
+    },
+    "iconThemes": {
+      "state": "unsupported",
+      "note": "temas de ícones de extensões não são aplicados"
+    },
+    "productIconThemes": {
+      "state": "unsupported",
+      "note": "temas de ícones de produto não são aplicados"
+    },
+    "debuggers": {
+      "state": "unsupported",
+      "note": "sem adaptadores de depuração de extensões"
+    },
+    "breakpoints": {
+      "state": "unsupported",
+      "note": "sem adaptadores de depuração de extensões"
+    },
+    "notebooks": {
+      "state": "unsupported",
+      "note": "sem editor de notebook"
+    },
+    "notebookRenderer": {
+      "state": "unsupported",
+      "note": "sem editor de notebook"
+    },
+    "taskDefinitions": {
+      "state": "partial",
+      "note": "tasks.registerTaskProvider/executeTask funcionam; a UI de tarefas do app não lista as contribuídas"
+    },
+    "problemMatchers": {
+      "state": "ignored"
+    },
+    "problemPatterns": {
+      "state": "ignored"
+    },
+    "terminal": {
+      "state": "unsupported",
+      "note": "perfis de terminal contribuídos não aparecem"
+    },
+    "authentication": {
+      "state": "unsupported",
+      "note": "provedores de autenticação não são expostos"
+    },
+    "resourceLabelFormatters": {
+      "state": "unsupported",
+      "note": "workspaces virtuais/remotos de extensões não existem aqui"
+    },
+    "semanticTokenTypes": {
+      "state": "ignored"
+    },
+    "semanticTokenModifiers": {
+      "state": "ignored"
+    },
+    "semanticTokenScopes": {
+      "state": "ignored"
+    },
+    "submenus": {
+      "state": "ignored"
+    },
+    "typescriptServerPlugins": {
+      "state": "unsupported",
+      "note": "o servidor TypeScript do app não carrega plugins de extensões"
+    },
+    "html": {
+      "state": "ignored"
+    },
+    "css": {
+      "state": "ignored"
+    },
+    "markdown": {
+      "state": "ignored"
+    },
+    "markdown.previewStyles": {
+      "state": "ignored"
+    },
+    "markdown.previewScripts": {
+      "state": "ignored"
+    },
+    "markdown.markdownItPlugins": {
+      "state": "ignored"
+    },
+    "remoteHelp": {
+      "state": "ignored"
+    },
+    "continueEditSession": {
+      "state": "ignored"
+    },
+    "chatParticipants": {
+      "state": "unsupported",
+      "note": "API proposta de chat do VS Code (ausente)"
+    },
+    "languageModelTools": {
+      "state": "unsupported",
+      "note": "API proposta de modelos de linguagem (ausente)"
+    },
+    "mcpServerDefinitionProviders": {
+      "state": "unsupported",
+      "note": "provedores MCP do VS Code não são expostos"
+    }
+  },
+  "activationEvents": {
+    "*": {
+      "state": "supported",
+      "note": "ativada ao subir o host"
+    },
+    "onStartupFinished": {
+      "state": "supported",
+      "note": "ativada ao subir o host"
+    },
+    "onCommand": {
+      "state": "supported",
+      "note": "ao executar um comando contribuído (Paleta)"
+    },
+    "onView": {
+      "state": "partial",
+      "note": "só views de webview (ao abrir a aba no Fluent Chat)"
+    },
+    "onWebviewPanel": {
+      "state": "supported",
+      "note": "painéis restaurados ao reiniciar"
+    },
+    "onCustomEditor": {
+      "state": "supported"
+    },
+    "onUri": {
+      "state": "supported",
+      "note": "deep link fluent-coder://<publisher.nome>/…"
+    },
+    "onLanguage": {
+      "state": "unsupported",
+      "note": "o host não ativa extensões ao abrir um arquivo da linguagem"
+    },
+    "workspaceContains": {
+      "state": "unsupported",
+      "note": "o host não ativa extensões pelo conteúdo do workspace"
+    },
+    "onFileSystem": {
+      "state": "unsupported",
+      "note": "sistemas de arquivos de extensões não são montados no Explorador"
+    },
+    "onDebug": {
+      "state": "unsupported",
+      "note": "sem adaptadores de depuração de extensões"
+    },
+    "onDebugResolve": {
+      "state": "unsupported",
+      "note": "sem adaptadores de depuração de extensões"
+    },
+    "onDebugInitialConfigurations": {
+      "state": "unsupported",
+      "note": "sem adaptadores de depuração de extensões"
+    },
+    "onDebugDynamicConfigurations": {
+      "state": "unsupported",
+      "note": "sem adaptadores de depuração de extensões"
+    },
+    "onDebugAdapterProtocolTracker": {
+      "state": "unsupported",
+      "note": "sem adaptadores de depuração de extensões"
+    },
+    "onNotebook": {
+      "state": "unsupported",
+      "note": "sem editor de notebook"
+    },
+    "onNotebookSerializer": {
+      "state": "unsupported",
+      "note": "sem editor de notebook"
+    },
+    "onRenderer": {
+      "state": "unsupported",
+      "note": "sem editor de notebook"
+    },
+    "onAuthenticationRequest": {
+      "state": "unsupported",
+      "note": "provedores de autenticação não são expostos"
+    },
+    "onTerminalProfile": {
+      "state": "unsupported",
+      "note": "perfis de terminal contribuídos não aparecem"
+    },
+    "onSearch": {
+      "state": "unsupported"
+    },
+    "onWalkthrough": {
+      "state": "ignored"
+    },
+    "onOpenExternalUri": {
+      "state": "unsupported"
+    },
+    "onIssueReporterOpened": {
+      "state": "ignored"
+    },
+    "onChatParticipant": {
+      "state": "unsupported",
+      "note": "API proposta de chat do VS Code (ausente)"
+    },
+    "onLanguageModelTool": {
+      "state": "unsupported",
+      "note": "API proposta de modelos de linguagem (ausente)"
+    },
+    "onTaskType": {
+      "state": "unsupported",
+      "note": "a UI de tarefas do app não dispara a ativação"
+    },
+    "onEditSession": {
+      "state": "ignored"
+    }
+  }
+}

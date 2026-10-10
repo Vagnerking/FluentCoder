@@ -13,7 +13,9 @@
     "test:ext-host": "node --test \"tools/ext-host/test/*.test.js\"",
     "ext-host:check": "node tools/ext-host/scripts/headless-check.js",
     "ext-host:flows": "node tools/ext-host/scripts/flows-check.js",
-    "ext-host:orphan-check": "node tools/ext-host/scripts/orphan-check.js"
+    "ext-host:orphan-check": "node tools/ext-host/scripts/orphan-check.js",
+    "ext-host:capabilities": "node tools/ext-host/discovery/capabilities.js",
+    "ext-host:catalog-check": "node --experimental-strip-types tools/ext-host/scripts/catalog-check.mts"
   },
   "dependencies": {
     "@codingame/monaco-vscode-api": "^25.1.2",

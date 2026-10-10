@@ -537,6 +537,8 @@ pub struct ApiScan {
     /// Identificadores ligados a `require("vscode")`.
     pub bindings: usize,
     pub paths: Vec<(String, u32)>,
+    /// Caminhos vistos sendo CHAMADOS (`x.y(`): ausente + chamado = erro certo.
+    pub called: Vec<String>,
     /// A varredura parou no teto de bytes (resultado incompleto).
     pub truncated: bool,
     /// Não foi possível ler/analisar (motivo).
@@ -552,6 +554,7 @@ struct ScanAcc {
     files: usize,
     paths: BTreeMap<String, u32>,
     writes: std::collections::BTreeSet<String>,
+    called: std::collections::BTreeSet<String>,
 }
 
 fn scan_into(src: &str, acc: &mut ScanAcc) {
@@ -595,6 +598,11 @@ fn scan_into(src: &str, acc: &mut ScanAcc) {
             if is_write {
                 acc.writes.insert(key);
             } else {
+                // Próximo caractere útil depois do caminho é `(`? → chamada.
+                let end = c.get(2).or(c.get(1)).map(|m| m.end()).unwrap_or(0);
+                if src[end..].trim_start().starts_with('(') {
+                    acc.called.insert(key.clone());
+                }
                 *acc.paths.entry(key).or_insert(0) += 1;
             }
         }
@@ -679,6 +687,7 @@ pub fn scan_extension(ext_dir: &Path, pkg: &Value) -> ApiScan {
         file: shown,
         files_with_api: acc.files,
         bindings: acc.bindings,
+        called: acc.called.into_iter().filter(|k| !writes.contains(k)).collect(),
         paths: acc.paths.into_iter().filter(|(k, _)| !writes.contains(k)).collect(),
         truncated,
         error: None,
@@ -815,6 +824,10 @@ mod tests {
         assert_eq!(m.get("window.createOutputChannel"), Some(&1));
         assert!(!m.contains_key("window.outputChannel"));
         assert!(!m.contains_key("window.statusBarItem"));
+        let mut acc = ScanAcc::default();
+        scan_into("const v = require('vscode'); v.window.showX ('a'); if (v.window.flag) {}", &mut acc);
+        assert!(acc.called.contains("window.showX"));
+        assert!(!acc.called.contains("window.flag"));
     }
 
     #[test]
