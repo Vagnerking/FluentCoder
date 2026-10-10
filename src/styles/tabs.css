@@ -247,6 +247,17 @@
 
 .tab:hover .tab-close.dirty .tab-close-glyph { display: inline-block; }
 
+/* Trailing gutter: scrolled fully right, the last tab clears the right scroll
+   arrow and fade instead of sitting under them. */
+.tab-bar::after {
+  content: "";
+  display: block;
+  flex-shrink: 0;
+  width: var(--space-xl);
+  min-width: var(--space-xl);
+  height: 1px;
+}
+
 /* Same-name tabs: dim parent-folder suffix (`index.ts  …/git`). */
 .tab-description {
   max-width: 160px;

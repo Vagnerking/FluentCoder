@@ -48,7 +48,8 @@ export function useTabOverflow(barRef: RefObject<HTMLDivElement>, activePath: st
       if (!el || !path) return;
       const tab = Array.from(el.querySelectorAll<HTMLElement>(".tab")).find((t) => t.dataset.path === path);
       if (!tab) return;
-      const pad = 24;
+      // Folga = largura do fade + seta, para a aba não ficar sob eles.
+      const pad = 44;
       if (tab.offsetLeft < el.scrollLeft + pad) {
         el.scrollLeft = Math.max(0, tab.offsetLeft - pad);
       } else if (tab.offsetLeft + tab.offsetWidth > el.scrollLeft + el.clientWidth - pad) {
@@ -58,7 +59,11 @@ export function useTabOverflow(barRef: RefObject<HTMLDivElement>, activePath: st
     [barRef]
   );
 
-  useEffect(() => revealTab(activePath), [activePath, revealTab]);
+  useEffect(() => {
+    // Próximo frame: a aba recém-aberta já tem largura final.
+    const raf = requestAnimationFrame(() => revealTab(activePath));
+    return () => cancelAnimationFrame(raf);
+  }, [activePath, revealTab]);
 
   useEffect(() => {
     syncOverflow();
