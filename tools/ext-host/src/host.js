@@ -9,6 +9,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const Module = require('module');
+const { encodeBinary, decodeBinary } = require('./bincodec');
 
 const types = require('./shim/types');
 const { ConfigurationStore } = require('./shim/configuration');
@@ -644,6 +645,7 @@ class ExtensionHost {
     await reg.provider.resolveWebviewView(view, { state: undefined }, cts.token);
     const info = this._webviewInfo(entry);
     info.resolveMs = Date.now() - t0;
+    this.log(`view ${viewId} resolvida em ${info.resolveMs}ms (${info.handle}, HTML ${info.url ? 'definido' : 'pendente'})`);
     return info;
   }
 
@@ -687,6 +689,9 @@ class ExtensionHost {
   _onWebviewHtml(webview) {
     const entry = this.webviews.get(webview.handle);
     if (!entry) return; // ainda dentro do construtor; resolveView reporta a URL
+    // Ciclo de vida na Saída "Extensões": HTML → iframe montado → UI carregada.
+    // Uma UI que não chega a "carregada" fica diagnosticável sem DevTools.
+    this.log(`webview ${webview.handle} (${webview.viewType}): HTML definido`);
     this.emit({ event: 'webviewHtml', ...this._webviewInfo(entry) });
   }
 
@@ -707,7 +712,7 @@ class ExtensionHost {
   _postToWebview(handle, message) {
     if (!this.webviews.has(handle)) return false;
     if (this.debugWebviews) this.log(`ext→webview ${handle}:`, summarize(message));
-    this.emit({ event: 'postMessage', handle, message });
+    this.emit({ event: 'postMessage', handle, message: encodeBinary(message) });
     return true;
   }
 
@@ -716,7 +721,7 @@ class ExtensionHost {
     const entry = this.webviews.get(handle);
     if (!entry) return false;
     if (this.debugWebviews) this.log(`webview→ext ${handle}:`, summarize(message));
-    entry.webview._receive(message);
+    entry.webview._receive(decodeBinary(message));
     return true;
   }
 

@@ -195,6 +195,10 @@ struct Shared {
     clients: HashMap<u64, mpsc::UnboundedSender<Message>>,
     pending: HashMap<String, PendingUi>,
     server: Option<Server>,
+    /// `false` enquanto outra integração do mesmo app atende o CLI (a extensão
+    /// Claude Code hospedada publica o próprio lock "Fluent Coder"): o servidor
+    /// segue no ar, mas sem lock file — o `/ide` não lista duas entradas.
+    advertised: bool,
 }
 
 pub struct Bridge {
@@ -228,6 +232,7 @@ impl Bridge {
                 clients: HashMap::new(),
                 pending: HashMap::new(),
                 server: None,
+                advertised: true,
             }),
             ui,
             lock_dir,
@@ -258,6 +263,9 @@ impl Bridge {
         std_listener.set_nonblocking(true)?;
         let port = std_listener.local_addr()?.port();
         let token = random_token()?;
+        if let Some(dir) = &self.lock_dir {
+            sweep_stale_locks(dir);
+        }
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         {
             let mut shared = self.lock();
@@ -328,6 +336,19 @@ impl Bridge {
         self.start()
     }
 
+    /// Liga/desliga a publicação do lock file sem derrubar o servidor (CLIs já
+    /// conectados continuam atendidos).
+    pub fn set_advertised(&self, advertised: bool) {
+        {
+            let mut shared = self.lock();
+            if shared.advertised == advertised {
+                return;
+            }
+            shared.advertised = advertised;
+        }
+        self.sync_lock_file();
+    }
+
     /// União das pastas de workspace de todas as janelas (ordem estável: a
     /// janela focada por último primeiro).
     fn workspace_folders(shared: &Shared) -> Vec<String> {
@@ -351,11 +372,12 @@ impl Bridge {
         };
         let mut shared = self.lock();
         let folders = Self::workspace_folders(&shared);
+        let advertised = shared.advertised;
         let Some(server) = shared.server.as_mut() else {
             return;
         };
         let path = dir.join(format!("{}.lock", server.port));
-        if folders.is_empty() {
+        if folders.is_empty() || !advertised {
             if server.lock_path.take().is_some() {
                 let _ = std::fs::remove_file(&path);
             }
@@ -852,6 +874,59 @@ fn check_handshake(req: &Request, token: &str) -> Result<(), StatusCode> {
     }
 }
 
+/// Remove locks "Fluent Coder" deixados por processos que já morreram (app
+/// encerrado à força, reinício do `tauri dev`). Locks de outras IDEs e de
+/// processos vivos nunca são tocados.
+fn sweep_stale_locks(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let me = std::process::id();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("lock") {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if is_stale_fluent_lock(&raw, me, pid_alive) {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
+fn is_stale_fluent_lock(raw: &str, me: u32, alive: impl Fn(u32) -> bool) -> bool {
+    let Ok(v) = serde_json::from_str::<Value>(raw) else {
+        return false;
+    };
+    if v.get("ideName").and_then(Value::as_str) != Some(IDE_NAME) {
+        return false;
+    }
+    match v.get("pid").and_then(Value::as_u64).and_then(|p| u32::try_from(p).ok()) {
+        Some(pid) => pid != me && !alive(pid),
+        None => false,
+    }
+}
+
+#[cfg(unix)]
+fn pid_alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return true;
+    };
+    // kill(pid, 0): só checa existência. EPERM = existe, mas é de outro usuário.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Sem checagem barata de pid fora do Unix: nunca considera o lock órfão.
+#[cfg(not(unix))]
+fn pid_alive(_pid: u32) -> bool {
+    true
+}
+
 pub fn lock_file_content(pid: u32, folders: &[String], token: &str) -> Value {
     json!({
         "pid": pid,
@@ -1141,6 +1216,15 @@ pub fn ide_bridge_status(state: State<'_, IdeBridgeState>) -> IdeBridgeStatus {
             port: None,
             clients: 0,
         },
+    }
+}
+
+/// Publica ou retira o lock file da ponte (o frontend desliga enquanto a
+/// extensão Claude Code hospedada está ativa, que publica o próprio).
+#[tauri::command]
+pub fn ide_bridge_set_advertised(advertised: bool, state: State<'_, IdeBridgeState>) {
+    if let Some(b) = state.get() {
+        b.set_advertised(advertised);
     }
 }
 
@@ -1471,6 +1555,18 @@ mod tests {
             ),
             Err(StatusCode::FORBIDDEN)
         );
+    }
+
+    #[test]
+    fn stale_lock_detection_only_targets_dead_fluent_locks() {
+        let lock = |name: &str, pid: u32| json!({ "ideName": name, "pid": pid }).to_string();
+        let dead = |_: u32| false;
+        let alive = |_: u32| true;
+        assert!(is_stale_fluent_lock(&lock(IDE_NAME, 42), 1, dead));
+        assert!(!is_stale_fluent_lock(&lock(IDE_NAME, 42), 1, alive));
+        assert!(!is_stale_fluent_lock(&lock(IDE_NAME, 1), 1, dead), "o próprio processo");
+        assert!(!is_stale_fluent_lock(&lock("Visual Studio Code", 42), 1, dead));
+        assert!(!is_stale_fluent_lock("não é json", 1, dead));
     }
 
     #[test]

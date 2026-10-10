@@ -117,6 +117,7 @@ pub fn run() {
             agents::ide_bridge::ide_bridge_respond,
             agents::ide_bridge::ide_bridge_status,
             agents::ide_bridge::ide_bridge_restart,
+            agents::ide_bridge::ide_bridge_set_advertised,
             fs_commands::read_dir,
             fs_commands::read_file,
             fs_commands::read_file_with_encoding,

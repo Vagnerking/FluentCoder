@@ -45,6 +45,14 @@ PARENT_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8">
 </head><body><iframe id="f" sandbox="allow-scripts allow-same-origin allow-forms allow-pointer-lock allow-downloads"></iframe>
 <script>
 let HANDLE = null; const THEME = __THEME__;
+// Mesmo codec binário do app (src/extensions/bincodec.ts): o host manda binário
+// como {__fluentBin, b64} e espera o mesmo de volta.
+const BIN = '__fluentBin';
+const b64e = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, Array.from(u8.subarray(i, i + 0x8000))); return btoa(s); };
+const b64d = (b) => { const s = atob(b); const o = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) o[i] = s.charCodeAt(i); return o; };
+const walk = (v, fn) => Array.isArray(v) ? v.map(fn) : Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fn(x)]));
+const enc = (v) => v === null || typeof v !== 'object' ? v : v instanceof ArrayBuffer ? {[BIN]: 'ArrayBuffer', b64: b64e(new Uint8Array(v))} : ArrayBuffer.isView(v) ? {[BIN]: v.constructor.name, b64: b64e(new Uint8Array(v.buffer, v.byteOffset, v.byteLength))} : walk(v, enc);
+const dec = (v) => { if (v === null || typeof v !== 'object') return v; if (!Array.isArray(v) && typeof v[BIN] === 'string') { const u = b64d(v.b64); return v[BIN] === 'ArrayBuffer' ? u.buffer : v[BIN] === 'Uint8Array' ? u : new globalThis[v[BIN]](u.buffer); } return walk(v, dec); };
 const f = document.getElementById('f');
 const toPy = (o) => window.webkit.messageHandlers.relay.postMessage(JSON.stringify(o));
 let ready = false; const queue = [];
@@ -55,16 +63,18 @@ window.addEventListener('message', (e) => {
     f.contentWindow.postMessage({__fluentCtl: 1, type: 'theme', vars: THEME, kind: 'dark'}, '*');
     ready = true; queue.splice(0).forEach((m) => f.contentWindow.postMessage(m, '*'));
   }
+  if (d.type === 'message') d.message = enc(d.message);
   toPy(d);
 });
 window.openView = (url, handle) => { HANDLE = handle; f.src = url; };
-window.deliver = (m) => { if (ready) f.contentWindow.postMessage(m, '*'); else queue.push(m); };
+window.deliver = (m) => { m = dec(m); if (ready) f.contentWindow.postMessage(m, '*'); else queue.push(m); };
 </script></body></html>"""
 
 
 class Harness:
     def __init__(self, target, seconds, png, theme, warm_ms=1500, data_dir=None):
         self.data_dir = data_dir or os.path.join("/tmp", "fluent-ext-harness-%d" % os.getpid())
+        self.cross_origin = False
         self.warm_ms = warm_ms
         self.ext_id, self.view_ids = TARGETS[target]
         self.seconds = seconds
@@ -136,6 +146,11 @@ class Harness:
         # Página pai já carregada (o app já está aberto) na MESMA origem do
         # iframe: permite inspecionar o DOM dele.
         origin = msg["result"]["origin"] + "/"
+        # --cross-origin: página pai em OUTRA origem, como no app (localhost:1420 /
+        # tauri://) — pega UIs que filtram mensagens por event.origin (o Codex).
+        # O DOM do iframe fica inacessível nesse modo (só contadores/erros).
+        if self.cross_origin:
+            origin = "http://localhost:1420/"
         self.view.load_html(PARENT_HTML.replace("__THEME__", json.dumps(self.theme)), origin)
         # Host "quente": o app sobe o sidecar no startup; o clique na aba vem depois.
         GLib.timeout_add(self.warm_ms, self._click)
@@ -179,6 +194,9 @@ class Harness:
             self.send({"method": "webviewMessage", "params": {"handle": self.handle, "message": d.get("message")}})
         elif d.get("type") == "setState":
             self.send({"method": "webviewState", "params": {"handle": self.handle, "state": d.get("state")}})
+        elif d.get("type") == "log":
+            # Erros/avisos do JS do webview (repassados pelo preâmbulo).
+            self.report["errors"].append("[%s] %s" % (d.get("level"), d.get("text")))
         elif d.get("type") == "ready":
             self.report["iframeReady"] = True
             self.mark("iframeReady")
@@ -265,12 +283,14 @@ def main():
     ap.add_argument("--theme-file", help="arquivo JSON com as variáveis --vscode-* (ex.: gerado de src/extensions/theme.ts)")
     ap.add_argument("--data-dir", help="pasta de dados do host (reutilizar = cache de compilação quente)")
     ap.add_argument("--warm-ms", type=int, default=1500, help="espera após o initialize antes do 'clique' (host quente)")
+    ap.add_argument("--cross-origin", action="store_true", help="página pai em outra origem, como no app (o DOM do iframe fica inacessível)")
     args = ap.parse_args()
     theme = json.loads(args.theme) if args.theme else {}
     if args.theme_file:
         with open(args.theme_file, encoding="utf-8") as fh:
             theme.update(json.load(fh))
     h = Harness(args.target, args.seconds, args.png, theme, args.warm_ms, args.data_dir)
+    h.cross_origin = args.cross_origin
     h.start()
     GLib.timeout_add_seconds(args.seconds + 30, lambda: (h.fail("timeout"), False)[1])
     Gtk.main()

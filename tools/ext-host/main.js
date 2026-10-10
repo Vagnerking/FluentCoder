@@ -22,7 +22,28 @@ const { ExtensionHost } = require('./src/host');
 const { listInstalled } = require('./src/installed');
 const { validateMessage } = require('./src/protocol');
 
+// Pipes para o app: quando o app morre, escrever neles dá EPIPE. Sem esta
+// guarda, o erro caía no `uncaughtException`, que escrevia de novo — um loop
+// quente (CPU alta) que nunca deixava o host encerrar e o deixava órfão.
+let protocolBroken = false;
+process.stdout.on('error', (err) => {
+  protocolBroken = true;
+  void shutdown(`stdout indisponível (${err && err.code})`);
+});
+process.stderr.on('error', () => {
+  /* stderr só tem logs: perder é aceitável, travar não */
+});
+
+function logErr(text) {
+  try {
+    process.stderr.write(text);
+  } catch {
+    /* stderr fechado */
+  }
+}
+
 function send(obj) {
+  if (protocolBroken) return;
   let line;
   try {
     line = JSON.stringify(obj);
@@ -107,6 +128,10 @@ const handlers = {
   },
   webviewVisible(p) {
     host.setWebviewVisible(p.handle, p.visible);
+  },
+  webviewLog(p) {
+    const text = String(p && p.text).slice(0, 4000);
+    logErr(`[ext-host] [webview ${p && p.handle}] ${p && p.level === 'warn' ? 'aviso' : 'erro'}: ${text}\n`);
   },
   disposeWebview(p) {
     host.disposeWebview(p.handle);
@@ -225,21 +250,58 @@ rl.on('line', (line) => {
   }
   dispatch(msg);
 });
-rl.on('close', async () => {
-  // App fechou o stdin: encerra as extensões (elas matam seus filhos no deactivate).
+// Teto do deactivate() no encerramento: uma extensão que não responde (o Codex
+// esperando o app-server, por ex.) não pode segurar o processo vivo — era o
+// que deixava hosts órfãos depois de o app morrer.
+const STOP_TIMEOUT_MS = 2000;
+let shuttingDown = false;
+
+async function shutdown(reason) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logErr(`[ext-host] encerrando: ${reason}\n`);
   try {
-    if (host) await host.stop();
-  } finally {
-    process.exit(0);
+    if (host) await Promise.race([host.stop(), new Promise((r) => setTimeout(r, STOP_TIMEOUT_MS))]);
+  } catch {
+    /* encerra de qualquer jeito */
   }
-});
+  killProcessGroup();
+  process.exit(0);
+}
+
+// O app nos inicia como líder de grupo (Unix): sinalizar o grupo derruba os
+// filhos que as extensões não encerraram (claude, codex app-server) — e o
+// próprio host. Fora do grupo (ex.: rodando à mão), `-pid` não existe e é no-op.
+function killProcessGroup() {
+  if (process.platform === 'win32') return;
+  try {
+    process.kill(-process.pid, 'SIGTERM');
+  } catch {
+    /* não somos líder de grupo */
+  }
+}
+
+// App fechou o stdin: encerra as extensões (elas matam seus filhos no deactivate).
+rl.on('close', () => void shutdown('stdin fechado'));
+
+// Rede de segurança: se o app morrer sem fechar o stdin, o host é adotado por
+// outro processo (o ppid muda) — encerra em vez de ficar órfão.
+const parentPid = process.ppid;
+setInterval(() => {
+  if (process.ppid !== parentPid) void shutdown('app encerrado');
+}, 2000).unref();
 
 process.on('uncaughtException', (err) => {
-  process.stderr.write(`[ext-host] exceção não tratada: ${err && err.stack ? err.stack : err}\n`);
+  if (err && err.code === 'EPIPE') {
+    protocolBroken = true;
+    void shutdown('pipe do app fechado');
+    return;
+  }
+  logErr(`[ext-host] exceção não tratada: ${err && err.stack ? err.stack : err}\n`);
   send({ event: 'log', level: 'error', message: `exceção não tratada: ${err && err.message}` });
 });
 process.on('unhandledRejection', (err) => {
-  process.stderr.write(`[ext-host] promise rejeitada: ${err && err.stack ? err.stack : err}\n`);
+  logErr(`[ext-host] promise rejeitada: ${err && err.stack ? err.stack : err}\n`);
 });
 
 send({ event: 'hello', pid: process.pid, node: process.version });

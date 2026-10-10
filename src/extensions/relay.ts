@@ -27,7 +27,11 @@ export type IframeUpMessage =
       repeat: boolean;
     }
   | { type: "clipboard"; handle: string; op: "write"; text: string }
-  | { type: "clipboard"; handle: string; op: "read"; nonce: number };
+  | { type: "clipboard"; handle: string; op: "read"; nonce: number }
+  | { type: "log"; handle: string; level: "error" | "warn"; text: string };
+
+/** Limite de uma linha de log vinda do webview. */
+const MAX_LOG = 4000;
 
 /** Limite de texto aceito do iframe para a área de transferência. */
 const MAX_CLIPBOARD = 16 * 1024 * 1024;
@@ -83,6 +87,9 @@ export function parseIframeMessage(
         return { type: "clipboard", handle: expected.handle, op: "read", nonce: d.nonce };
       }
       return null;
+    case "log":
+      if ((d.level !== "error" && d.level !== "warn") || typeof d.text !== "string") return null;
+      return { type: "log", handle: expected.handle, level: d.level, text: d.text.slice(0, MAX_LOG) };
     default:
       return null;
   }

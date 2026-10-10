@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { EXT_DEBUG, extHost, extLog } from "./client";
+import { EXT_DEBUG, extHost, extLog, hostOutput } from "./client";
 import type { WebviewInfo } from "./protocol";
 import { controlMessage, isExternalLink, originOf, parseIframeMessage } from "./relay";
 import { readFluentThemeVars } from "./theme";
@@ -55,6 +55,7 @@ export function ExtensionWebview({ info, visible }: Props) {
 
   useEffect(() => {
     if (!url) return;
+    hostOutput(`iframe montado: ${infoRef.current.viewType} (${handle})`);
     const origin = originOf(url);
     let detach: (() => void) | null = null;
     const onMessage = (e: MessageEvent) => {
@@ -68,6 +69,7 @@ export function ExtensionWebview({ info, visible }: Props) {
       switch (msg.type) {
         case "ready":
           extLog(`iframe pronto ${handle}`);
+          hostOutput(`UI carregada: ${infoRef.current.viewType} (${handle})`);
           win?.postMessage(controlMessage("theme", { vars: readFluentThemeVars(), kind: "dark" }), origin);
           detach?.();
           detach = extHost.attachSink(handle, (m) => iframeRef.current?.contentWindow?.postMessage(m, origin));
@@ -95,6 +97,10 @@ export function ExtensionWebview({ info, visible }: Props) {
               .catch(() => "")
               .then((text) => iframeRef.current?.contentWindow?.postMessage(controlMessage("clipboardText", { nonce, text }), origin));
           }
+          break;
+        case "log":
+          hostOutput(`[${infoRef.current.viewType}] ${msg.level === "error" ? "erro" : "aviso"}: ${msg.text}`);
+          void extHost.notify("webviewLog", { handle, level: msg.level, text: msg.text });
           break;
         default:
           break;

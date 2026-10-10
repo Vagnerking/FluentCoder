@@ -14,6 +14,7 @@
  * os ids das chamadas levam um prefixo aleatório por janela, então uma janela
  * nunca resolve a promise de outra.
  */
+import { decodeBinary, encodeBinary } from "./bincodec";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
@@ -213,7 +214,7 @@ class ExtHostClient {
       this.stats.down++;
       this.stats.lastDown = describe(message);
       extLog(`ext→webview ${handle}`, this.stats.lastDown);
-      this.queueFor(handle).push(message);
+      this.queueFor(handle).push(decodeBinary(message));
     } else if (ev.event === "log") {
       const e = ev as { message: string; level?: string };
       extLog(e.message);
@@ -304,7 +305,7 @@ class ExtHostClient {
     this.stats.up++;
     this.stats.lastUp = describe(message);
     extLog(`webview→ext ${handle}`, this.stats.lastUp);
-    void this.notify("webviewMessage", { handle, message });
+    void this.notify("webviewMessage", { handle, message: encodeBinary(message) });
   }
 
   private queueFor(handle: string): PendingQueue<unknown> {

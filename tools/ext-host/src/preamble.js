@@ -58,6 +58,16 @@ function buildPreamble(o) {
 var HANDLE=${jsonForScript(o.handle)},VIEW_TYPE=${jsonForScript(o.viewType)},DEBUG=${o.debug ? 'true' : 'false'};
 var state=${jsonForScript(o.state)},acquired=false;
 function up(d){d.__fluentExt=1;d.handle=HANDLE;try{window.parent.postMessage(d,'*')}catch(e){}}
+// Erros da UI da extensão sobem ao app (saída "Extensões"): sem isso, uma falha
+// de JS ou de recurso no webview era silenciosa. Teto para não inundar.
+var logCount=0;
+function fwd(level,text){if(++logCount>200)return;try{up({type:'log',level:level,text:String(text).slice(0,4000)})}catch(_){}}
+function fmt(a){try{return typeof a==='string'?a:(a&&a.stack)||(a&&a.message)||JSON.stringify(a)}catch(_){return String(a)}}
+window.addEventListener('error',function(e){var t=e.target;
+ if(t&&t!==window&&(t.src||t.href)){fwd('error','falha ao carregar recurso: '+(t.tagName||'')+' '+(t.src||t.href));return}
+ fwd('error',(e.message||'erro')+(e.filename?' @ '+e.filename+':'+e.lineno+':'+e.colno:'')+(e.error&&e.error.stack?'\\n'+e.error.stack:''))},true);
+window.addEventListener('unhandledrejection',function(e){fwd('error','promise rejeitada: '+fmt(e.reason))});
+['error','warn'].forEach(function(l){var o=console[l];console[l]=function(){try{fwd(l,Array.prototype.map.call(arguments,fmt).join(' '))}catch(_){}return o.apply(console,arguments)}});
 var api=Object.freeze({
  postMessage:function(m){if(DEBUG)console.debug('[fluent-ext] webview→ext',m);up({type:'message',message:m});return true},
  getState:function(){return state},
@@ -74,6 +84,16 @@ window.addEventListener('message',function(e){var d=e.data;if(!d||d.__fluentCtl!
  if(d.type==='theme'){if(document.body)applyTheme(d.vars||{},d.kind);else pendingTheme=d}
  else if(d.type==='ping'){up({type:'pong',nonce:d.nonce})}
  else if(d.type==='clipboardText'){var cb=clipWaiters[d.nonce];if(cb){delete clipWaiters[d.nonce];cb(typeof d.text==='string'?d.text:'')}}
+},true);
+// No VS Code o conteúdo do webview recebe as mensagens de um frame da MESMA
+// origem; aqui elas vêm do app (outra origem: localhost:1420 / tauri://).
+// UIs que filtram por event.origin (o Codex) ignoravam tudo e travavam no
+// handshake. Reemite só o que vem do pai (o app) com a origem desta página —
+// outro frame não consegue se passar pelo pai.
+var SELF_ORIGIN=typeof location!=='undefined'?location.origin:'';
+window.addEventListener('message',function(e){if(!SELF_ORIGIN||typeof MessageEvent==='undefined'||e.source!==window.parent||e.origin===SELF_ORIGIN)return;
+ e.stopImmediatePropagation();
+ window.dispatchEvent(new MessageEvent('message',{data:e.data,origin:SELF_ORIGIN,source:window.parent,ports:Array.prototype.slice.call(e.ports||[])}));
 },true);
 // Área de transferência: tenta a API nativa; se o WebKitGTK recusar (iframe de
 // outra origem, sem gesto), o app faz a operação por nós.

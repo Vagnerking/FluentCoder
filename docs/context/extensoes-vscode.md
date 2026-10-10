@@ -257,6 +257,26 @@ de esperar 3 s.
 
 ## Robustez
 
+- **Mensagens app → webview chegam com a origem da própria página.** No VS
+  Code o conteúdo recebe mensagens de um frame da mesma origem; aqui o pai é
+  o app (outra origem). O preâmbulo reemite o que vem de `window.parent` com
+  `origin = location.origin` — o Codex filtra por `event.origin` e, sem isso,
+  travava no handshake ("Codex could not start its user interface"). Só o
+  pai é reemitido (outro frame não se passa pelo app). Regressão:
+  `webkit-harness.py codex --cross-origin` (pai em `localhost:1420`, como no
+  app) tem de passar do handshake.
+- **Nunca deixar órfãos.** No Unix o host sobe como líder de grupo
+  (`process_group(0)`); ao encerrar ele sinaliza o grupo inteiro, levando os
+  filhos das extensões (`claude`, `codex app-server`). O `deactivate()` tem
+  teto de 2 s (uma extensão travada não segura o processo); erro de escrita no
+  stdout (EPIPE: o app morreu) encerra o host em vez de cair em loop no
+  `uncaughtException`; e um vigia encerra se o `ppid` mudar. Regressão:
+  `npm run ext-host:orphan-check` (fecha todos os pipes com as extensões
+  ativas e exige o grupo vazio em ≤ 6 s).
+- A ponte IDE nativa **não publica o lock** enquanto a extensão Claude Code
+  está ativa no host (ela publica o próprio "Fluent Coder"): o `/ide` lista uma
+  entrada só. Volta a publicar quando o host cai. Ao iniciar, a ponte remove
+  locks "Fluent Coder" de processos mortos.
 - Queda do sidecar não pedida → reinício automático com backoff (1 s, 2 s,
   4 s… 30 s; desiste após 5 quedas em 2 min), extensões ativas são reativadas
   e as views re-resolvidas (`hostRestarted`).

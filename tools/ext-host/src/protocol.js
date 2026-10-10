@@ -24,6 +24,7 @@ const SCHEMAS = {
   webviewMessage: (p) => isObj(p) && isStr(p.handle, 64),
   webviewState: (p) => isObj(p) && isStr(p.handle, 64),
   webviewVisible: (p) => isObj(p) && isStr(p.handle, 64),
+  webviewLog: (p) => isObj(p) && isStr(p.handle, 64) && (p.level === 'error' || p.level === 'warn') && isStr(p.text, 4000),
   webviewUrl: (p) => isObj(p) && isStr(p.handle, 64),
   disposeWebview: (p) => isObj(p) && isStr(p.handle, 64),
   setTheme: (p) => isObj(p) && (p.vars === undefined || isObj(p.vars)) && isOptStr(p.kind, 32),

@@ -89,6 +89,11 @@ which = "6"
 russh = { version = "0.61", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "2.3.0"
 
+# Unix: checar pid vivo (locks órfãos da ponte IDE) e sinalizar o grupo de
+# processos do host de extensões. Já estava no lock (transitivo).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # Win11 Snap Layouts on our frameless title bar (our own implementation in
 # src/snap.rs). Same `windows` version tao already builds, so it's reused.
 [target.'cfg(windows)'.dependencies]

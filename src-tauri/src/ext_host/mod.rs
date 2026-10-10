@@ -55,12 +55,26 @@ impl ExtHostState {
                     }
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
+                kill_process_group(child.id());
                 let _ = child.kill();
                 let _ = child.wait();
             }
         }
     }
 }
+
+/// SIGKILL no grupo do host (ele é o líder: `process_group(0)` no spawn).
+#[cfg(unix)]
+fn kill_process_group(pid: u32) {
+    if let Ok(pgid) = libc::pid_t::try_from(pid) {
+        unsafe {
+            libc::killpg(pgid, libc::SIGKILL);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(_pid: u32) {}
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -180,6 +194,14 @@ pub fn ext_host_start(app: AppHandle, state: State<'_, ExtHostState>) -> Result<
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    // Unix: o host lidera um grupo de processos próprio, para que encerrar o
+    // grupo leve junto os filhos das extensões (claude, codex app-server) —
+    // sem isso eles ficavam órfãos quando o host era morto.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
     }
     let mut child = cmd
         .spawn()

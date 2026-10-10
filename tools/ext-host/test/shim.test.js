@@ -240,3 +240,33 @@ test('estado com </script> não quebra o preâmbulo', () => {
 test('cssVars descarta chaves/valores inseguros', () => {
   assert.equal(cssVars({ '--a': 'red', 'b': 'x', '--c': 'x;}body{', '--d': 1 }), '--a:red');
 });
+
+test('preâmbulo gerado é JavaScript válido (escapes do template não quebram o script)', () => {
+  const vm = require('node:vm');
+  for (const debug of [false, true]) {
+    const html = buildPreamble({ handle: 'wv1', viewType: 'v', state: { s: "a'b\n</script>" }, themeVars: { '--vscode-foreground': '#fff' }, themeKind: 'dark', debug });
+    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+    assert.ok(scripts.length > 0);
+    // Só compila (não executa): um `\n` literal dentro de string vira SyntaxError aqui.
+    for (const src of scripts) assert.doesNotThrow(() => new vm.Script(src), SyntaxError);
+  }
+});
+
+test('bincodec: binário sobrevive ao JSON nos dois sentidos (como o structured clone do VS Code)', () => {
+  const { encodeBinary, decodeBinary } = require('../src/bincodec');
+  const msg = { type: 'rpc', message: ['bytes', Buffer.from('{"a":1}')], ab: new Uint8Array([1, 2, 3]).buffer, f: new Float32Array([1.5]), keep: { n: 1, s: 'x', d: null } };
+  const wire = JSON.parse(JSON.stringify(encodeBinary(msg)));
+  assert.equal(wire.message[1].__fluentBin, 'Uint8Array');
+  const back = decodeBinary(wire);
+  assert.ok(back.message[1] instanceof Uint8Array);
+  assert.equal(Buffer.from(back.message[1]).toString(), '{"a":1}');
+  assert.ok(back.ab instanceof ArrayBuffer);
+  assert.deepEqual([...new Uint8Array(back.ab)], [1, 2, 3]);
+  assert.ok(back.f instanceof Float32Array);
+  assert.equal(back.f[0], 1.5);
+  assert.deepEqual(back.keep, msg.keep);
+  // Sem binário: a mesma referência (nada de cópia à toa no caminho quente).
+  const plain = { a: [1, { b: 'c' }] };
+  assert.equal(encodeBinary(plain), plain);
+  assert.equal(decodeBinary(plain), plain);
+});

@@ -62,6 +62,8 @@ interface PendingRequest {
 }
 
 const UI_REQUESTS = new Set(["showMessage", "quickPick", "inputBox", "openDialog", "saveDialog"]);
+/** Extensão que traz a própria ponte IDE do `claude` (lock em ~/.claude/ide). */
+const CLAUDE_CODE_EXTENSION = "anthropic.claude-code";
 /** Espera após o startup antes de subir o Node (não disputa CPU com a UI). */
 const PREWARM_DELAY_MS = 1200;
 
@@ -217,7 +219,13 @@ export function ExtensionHostRuntime(props: ExtensionHostRuntimeProps) {
         }
         case "extensionLoaded":
         case "extensionActivated": {
-          const ext = (ev as { extension: { keybindings?: ContributedKeybinding[] } }).extension;
+          const ext = (ev as { extension: { id?: string; keybindings?: ContributedKeybinding[] } }).extension;
+          // A extensão Claude Code publica o próprio lock "Fluent Coder" em
+          // ~/.claude/ide: a ponte nativa sai de cena para o `/ide` não listar
+          // duas entradas (volta quando o host cai — ver `hostExit`).
+          if (ev.event === "extensionActivated" && ext.id === CLAUDE_CODE_EXTENSION) {
+            void invoke("ide_bridge_set_advertised", { advertised: false }).catch(() => {});
+          }
           if (ext.keybindings?.length) {
             const merged = [...keybindingsRef.current, ...ext.keybindings.filter((k) => !keybindingsRef.current.some((x) => x.command === k.command && x.key === k.key))];
             keybindingsRef.current = merged;
@@ -226,6 +234,7 @@ export function ExtensionHostRuntime(props: ExtensionHostRuntimeProps) {
           break;
         }
         case "hostExit":
+          void invoke("ide_bridge_set_advertised", { advertised: true }).catch(() => {});
           clearExtDiffs();
           clearStatusItems();
           setRequest(null);
