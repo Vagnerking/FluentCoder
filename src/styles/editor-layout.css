@@ -188,10 +188,10 @@
 }
 
 /* ---- Tabs ---- */
-/* Tab strip = scrolling tab row + group actions (split). Sits ABOVE the
-   breadcrumbs (CSS order — the DOM keeps breadcrumbs first). */
+/* Tab strip = scrolling tab row + editor-title actions. The DOM order is the
+   visual/focus order (EditorGroupHeader): tabs + actions → breadcrumbs →
+   content — no CSS `order` flip. */
 .tab-strip {
-  order: -1;
   display: flex;
   align-items: stretch;
   background: var(--tabbar-bg);

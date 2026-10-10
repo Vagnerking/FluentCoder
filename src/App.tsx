@@ -256,6 +256,7 @@ import {
 } from "./workspace/workspaceFile";
 import { useWorkbenchDrag } from "./workbench/useWorkbenchDrag";
 import { diffSideLabel, diffTabName } from "./editor/openRouting";
+import type { BreadcrumbRoot } from "./editor/breadcrumbs";
 
 /** Abas nativas do Fluent Chat na sidebar secundária. */
 const FLUENT_CHAT_TAB = "fluent-chat";
@@ -1313,6 +1314,22 @@ export default function App() {
       }),
     [activeWorkspace, workspaceSshConnections]
   );
+
+  // Raízes para os breadcrumbs: as pastas do workspace (multi-root, inclusive
+  // SSH) ou a pasta única aberta (local ou sessão SSH da janela).
+  const breadcrumbRoots = useMemo<BreadcrumbRoot[]>(() => {
+    if (explorerWorkspaceRoots?.length) {
+      return explorerWorkspaceRoots.map((folder) => ({
+        id: folder.id,
+        name: folder.name,
+        path: folder.path,
+        connId: folder.connId,
+      }));
+    }
+    return rootPath
+      ? [{ id: "root", name: rootName ?? baseName(rootPath) ?? rootPath, path: rootPath }]
+      : [];
+  }, [explorerWorkspaceRoots, rootPath, rootName]);
 
   const explorerIsWorkspace = useMemo(
     () =>
@@ -6092,6 +6109,7 @@ export default function App() {
         group={g}
         isActive={groupIsActive}
         rootPath={rootPath}
+        breadcrumbRoots={breadcrumbRoots}
         decorationFor={decorationFor}
         onFocusGroup={() => focusGroup(groupId)}
         onSelect={(p) => selectInGroup(groupId, p)}

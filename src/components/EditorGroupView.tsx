@@ -10,8 +10,10 @@ import type {
 } from "../types";
 import type { Edge, EditorGroup } from "../editorGroups";
 import { isDropMeaningful } from "../editorGroups";
-import { Breadcrumbs } from "./Breadcrumbs";
-import { TabBar, TAB_DRAG_MIME, type TabDragPayload } from "./TabBar";
+import { TAB_DRAG_MIME, type TabDragPayload } from "./TabBar";
+import { EditorGroupHeader } from "./editor/EditorGroupHeader";
+import type { BreadcrumbRoot } from "../editor/breadcrumbs";
+import type { editor } from "monaco-editor";
 import { EditorPane } from "./EditorPane";
 import { ImagePreview } from "./ImagePreview";
 import { MediaPreview } from "./MediaPreview";
@@ -25,6 +27,8 @@ export interface EditorGroupViewProps {
   group: EditorGroup;
   isActive: boolean;
   rootPath: string | null;
+  /** Raízes do workspace para os breadcrumbs (multi-root/SSH). */
+  breadcrumbRoots: readonly BreadcrumbRoot[];
   decorationFor: (path: string) => FileDecoration | undefined;
   onFocusGroup: () => void;
   // Tab actions (already bound to this group's id by the grid).
@@ -153,6 +157,8 @@ export function EditorGroupView(props: EditorGroupViewProps) {
   const active = group.files.find((f) => f.path === group.activePath) ?? null;
   const mode = active?.mode ?? "text";
   const [dropEdge, setDropEdge] = useState<Edge | null>(null);
+  // Editor Monaco do grupo (breadcrumbs: símbolos sob o cursor).
+  const [editorInstance, setEditorInstance] = useState<editor.IStandaloneCodeEditor | null>(null);
   // Anotações Git por editor (arquivo deste grupo): toggles explícitos, nunca
   // persistidos — fechar a aba (ou reabrir pelo Explorer) volta a "off".
   const [annotationModes, setAnnotationModes] = useState<Record<string, GitAnnotationMode>>({});
@@ -227,24 +233,36 @@ export function EditorGroupView(props: EditorGroupViewProps) {
       className={`editor-group${isActive ? " active" : ""}`}
       onMouseDownCapture={props.onFocusGroup}
     >
-      {mode !== "graph" && mode !== "webview" && (
-        <Breadcrumbs filePath={group.activePath} rootPath={props.rootPath} />
-      )}
-      <TabBar
-        files={group.files}
-        activePath={group.activePath}
-        groupId={group.id}
-        onSelect={props.onSelect}
-        onClose={props.onClose}
-        onCloseAll={props.onCloseAll}
-        onCloseOthers={props.onCloseOthers}
-        onCloseLeft={props.onCloseLeft}
-        onCloseRight={props.onCloseRight}
-        onMoveToNewWindow={props.onMoveToNewWindow}
-        onDetach={props.onDetach}
-        onReorder={props.onReorder}
-        externalDragActive={props.externalDragActive}
-        onTabStripDrop={props.onTabStripDrop}
+      <EditorGroupHeader
+        tabs={{
+        files: group.files,
+        activePath: group.activePath,
+        groupId: group.id,
+        onSelect: props.onSelect,
+        onClose: props.onClose,
+        onCloseAll: props.onCloseAll,
+        onCloseOthers: props.onCloseOthers,
+        onCloseLeft: props.onCloseLeft,
+        onCloseRight: props.onCloseRight,
+        onMoveToNewWindow: props.onMoveToNewWindow,
+        onDetach: props.onDetach,
+        onReorder: props.onReorder,
+        externalDragActive: props.externalDragActive,
+        onTabStripDrop: props.onTabStripDrop,
+        onDragStateChange: (d) => (d ? props.onTabDragStart(d) : props.onTabDragEnd()),
+        onDragMove: props.onDragMove,
+        decorationFor: props.decorationFor,
+        }}
+        breadcrumbs={
+          active && mode !== "graph" && mode !== "webview"
+            ? {
+                file: active,
+                roots: props.breadcrumbRoots,
+                editor: mode === "text" ? editorInstance : null,
+                onOpenFile: props.onOpenPath,
+              }
+            : null
+        }
         actions={
           <EditorActions
             ctx={actionCtx}
@@ -266,11 +284,6 @@ export function EditorGroupView(props: EditorGroupViewProps) {
             ]}
           />
         }
-        onDragStateChange={(d) =>
-          d ? props.onTabDragStart(d) : props.onTabDragEnd()
-        }
-        onDragMove={props.onDragMove}
-        decorationFor={props.decorationFor}
       />
       <div className="editor-group-body">
         {!active && props.welcome ? (
@@ -315,6 +328,7 @@ export function EditorGroupView(props: EditorGroupViewProps) {
             fileDecoration={active ? props.decorationFor(active.path) : undefined}
             onCurrentBlameChange={props.onCurrentBlameChange}
             gitAnnotationMode={annotationMode}
+            onEditorReady={setEditorInstance}
             onGitAnnotationsAvailable={handleAnnotationsAvailable}
           />
         )}

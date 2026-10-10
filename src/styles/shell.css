@@ -705,31 +705,79 @@ html.platform-linux:not(.window-maximized) .caption-close {
   outline-offset: -1px;
 }
 
-/* ---- Breadcrumbs ---- */
-/* Under the tab strip, on the editor's own background so the path reads as
-   part of the document, not of the chrome. */
+/* ---- Breadcrumbs (src/components/Breadcrumbs.tsx) ----
+   Under the tab strip, on the editor's own background so the path reads as
+   part of the document, not of the chrome. Every segment is a compact button
+   (opens a sibling picker); the row scrolls horizontally instead of wrapping,
+   and long paths are already collapsed with "…" by the component. */
 .breadcrumbs {
   height: 24px;
   min-height: 24px;
   display: flex;
   align-items: center;
-  padding: 0 var(--space-md);
-  gap: 0;
+  padding: 0 var(--space-sm);
   background: var(--editor-bg);
   font-size: var(--font-caption);
   overflow: hidden;
   white-space: nowrap;
 }
 
-.crumb {
+.breadcrumb-list {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.breadcrumb-list::-webkit-scrollbar { display: none; }
+
+.breadcrumb-item {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.breadcrumb-segment {
   display: inline-flex;
   align-items: center;
   gap: var(--space-xs);
   min-width: 0;
+  max-width: 280px;
+  height: 20px;
+  padding: 0 var(--space-xs);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
 }
 
-.crumb.last { color: var(--text-secondary); }
+.breadcrumb-segment:hover {
+  background: var(--fill-subtle-hover);
+  color: var(--text);
+}
+
+.breadcrumb-segment:active,
+.breadcrumb-segment.open {
+  background: var(--fill-subtle-active);
+  color: var(--text);
+}
+
+.breadcrumb-segment.last,
+.breadcrumb-segment[aria-current="page"] {
+  color: var(--text-secondary);
+}
+
+.breadcrumb-segment[data-kind="root"] { color: var(--text-secondary); }
 
 .crumb-label {
   overflow: hidden;
@@ -738,10 +786,54 @@ html.platform-linux:not(.window-maximized) .caption-close {
 
 .crumb-icon { flex-shrink: 0; }
 
+.breadcrumb-segment[data-kind="root"] .crumb-icon { color: var(--text-muted); }
+
+.crumb-symbol-icon { color: var(--accent); }
+
 .crumb-sep {
+  flex-shrink: 0;
   color: var(--text-disabled);
   margin: 0 var(--space-xxs);
 }
+
+/* ---- Breadcrumb picker (src/components/editor/BreadcrumbPicker.tsx) ----
+   A `ui-menu` flyout with a filter field on top and a listbox of siblings. */
+.breadcrumb-picker {
+  width: 300px;
+  max-height: min(420px, calc(100vh - 8px));
+  gap: var(--space-xs);
+}
+
+.breadcrumb-picker-filter {
+  flex: 0 0 auto;
+  height: var(--control-h-sm);
+  padding: 0 var(--space-sm);
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-sm);
+  background: var(--fill-recessed);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--font-base);
+  outline: none;
+}
+
+.breadcrumb-picker-filter:focus-visible {
+  border-color: var(--stroke-focus);
+  box-shadow: inset 0 -1px 0 0 var(--stroke-focus);
+}
+
+.breadcrumb-picker-item.is-current .ui-menu-label {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.breadcrumb-picker-status {
+  padding: var(--space-xs) var(--space-sm);
+  color: var(--text-muted);
+  font-size: var(--font-caption);
+}
+
+.breadcrumb-picker-status.is-error { color: var(--error); white-space: normal; }
 
 @keyframes fadeIn {
   from { opacity: 0; }

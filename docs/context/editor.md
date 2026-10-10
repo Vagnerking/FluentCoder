@@ -204,3 +204,15 @@ O Roslyn usado pelo app aceita `textDocument/diagnostic`, mas pode omitir
   preparado = HEAD ↔ Index; não preparado = Index ↔ Working tree quando também
   há stage, senão HEAD ↔ Working tree; conflito/não rastreado abre o arquivo.
   Abrir pelo Explorer mostra o editor normal.
+
+## Cabeçalho do grupo e breadcrumbs
+
+- `EditorGroupHeader` renderiza na ordem real do DOM: abas + ações →
+  breadcrumbs → conteúdo (sem `order` no CSS; ordem de foco = ordem visual).
+- Breadcrumbs (`Breadcrumbs.tsx` + `src/editor/breadcrumbs.ts`): `raiz ›
+  pasta › … › arquivo › símbolo`, com a raiz mais específica do workspace
+  (multi-root e SSH; `workspaceRemote.folderId` desambigua). Arquivo na raiz
+  mostra `raiz › arquivo`. Cada segmento abre o `BreadcrumbPicker`.
+- Símbolos vêm do `IOutlineModelService` do Monaco — o mesmo agregador de
+  `DocumentSymbolProvider`s do outline (Ctrl+Shift+O). Não registrar provider
+  novo nem criar outra instância do Monaco para isso.

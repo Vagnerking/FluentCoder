@@ -103,6 +103,8 @@ interface EditorPaneProps {
   gitAnnotationMode?: GitAnnotationMode;
   /** Informa se este arquivo tem blame (está rastreado num repositório). */
   onGitAnnotationsAvailable?: (path: string, available: boolean) => void;
+  /** Entrega a instância do editor (null ao desmontar) — breadcrumbs/símbolos. */
+  onEditorReady?: (editor: editor.IStandaloneCodeEditor | null) => void;
 }
 
 /** Maps a Monaco marker severity (1/2/4/8) to our Problem severity. */
@@ -950,6 +952,7 @@ export function EditorPane({
   onCurrentBlameChange,
   gitAnnotationMode = "off",
   onGitAnnotationsAvailable,
+  onEditorReady,
 }: EditorPaneProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
@@ -1053,6 +1056,9 @@ export function EditorPane({
     },
   });
   const blameRef = gitAnnotations.blameRef;
+  const onEditorReadyRef = useRef(onEditorReady);
+  onEditorReadyRef.current = onEditorReady;
+  useEffect(() => () => onEditorReadyRef.current?.(null), []);
   const loadBlame = gitAnnotations.loadBlame;
   useEffect(() => {
     if (file?.path) onGitAnnotationsAvailable?.(file.path, gitAnnotations.hasBlame);
@@ -2001,6 +2007,7 @@ export function EditorPane({
   const handleMount: OnMount = (editorInstance, monaco) => {
     editorRef.current = editorInstance;
     monacoRef.current = monaco;
+    onEditorReadyRef.current?.(editorInstance);
 
     // Breakpoint toggling: click on the glyph margin (left of the line numbers).
     // The path comes from the CURRENT model uri (not the `file` prop) so the
