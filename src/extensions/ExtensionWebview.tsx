@@ -4,12 +4,26 @@ import { EXT_DEBUG, extHost, extLog } from "./client";
 import type { WebviewInfo } from "./protocol";
 import { controlMessage, isExternalLink, originOf, parseIframeMessage } from "./relay";
 import { readFluentThemeVars } from "./theme";
+import { handleForwardedKey } from "./keys";
 
 interface Props {
   /** Webview já resolvido (view da sidebar ou painel). */
   info: WebviewInfo;
   /** Se a aba está visível (repassado a `WebviewView.visible`). */
   visible: boolean;
+}
+
+/**
+ * `sandbox` do iframe — o conjunto do VS Code, sem popups/modais (links e
+ * `window.open` saem pelo relay → navegador do sistema). `allow-forms` só se a
+ * extensão não desligou (`enableForms: false`). `allow-same-origin` é seguro:
+ * a origem do iframe (127.0.0.1:<porta>) é diferente da do app, então ele não
+ * alcança `window.__TAURI__` nem o DOM do app.
+ */
+export function sandboxFor(info: Pick<WebviewInfo, "enableForms">): string {
+  return ["allow-scripts", "allow-same-origin", info.enableForms === false ? "" : "allow-forms", "allow-pointer-lock", "allow-downloads"]
+    .filter(Boolean)
+    .join(" ");
 }
 
 /**
@@ -23,6 +37,8 @@ export function ExtensionWebview({ info, visible }: Props) {
   const [url, setUrl] = useState(info.url);
   const [stats, setStats] = useState({ up: 0, down: 0, lastUp: "", lastDown: "" });
   const handle = info.handle;
+  const infoRef = useRef(info);
+  infoRef.current = info;
 
   // O HTML pode ser reatribuído pela extensão (webview.html = …) → nova URL.
   useEffect(() => {
@@ -67,6 +83,19 @@ export function ExtensionWebview({ info, visible }: Props) {
             void invoke("ext_host_open_external", { url: msg.href }).catch((err) => extLog("openExternal falhou", err));
           }
           break;
+        case "key":
+          void handleForwardedKey(msg, { viewType: infoRef.current.viewType, kind: infoRef.current.kind });
+          break;
+        case "clipboard":
+          if (msg.op === "write") {
+            void navigator.clipboard?.writeText(msg.text).catch((err) => extLog("clipboard write falhou", err));
+          } else {
+            const nonce = msg.nonce;
+            void (navigator.clipboard?.readText() ?? Promise.resolve(""))
+              .catch(() => "")
+              .then((text) => iframeRef.current?.contentWindow?.postMessage(controlMessage("clipboardText", { nonce, text }), origin));
+          }
+          break;
         default:
           break;
       }
@@ -102,10 +131,9 @@ export function ExtensionWebview({ info, visible }: Props) {
         className="ext-webview-frame"
         src={url}
         title={info.title ?? info.viewType}
-        // Mesmo conjunto do VS Code. `allow-same-origin` é seguro aqui porque a
-        // origem do iframe (127.0.0.1:<porta>) é diferente da do app.
-        sandbox="allow-scripts allow-same-origin allow-forms allow-pointer-lock allow-downloads allow-popups allow-modals"
+        sandbox={sandboxFor(info)}
         allow="clipboard-read; clipboard-write"
+        referrerPolicy="no-referrer"
       />
       {EXT_DEBUG && (
         <div className="ext-webview-debug" title="Relay webview ↔ extensão (somente em desenvolvimento)">

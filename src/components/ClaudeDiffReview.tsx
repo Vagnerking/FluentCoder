@@ -19,6 +19,8 @@ interface Props {
   rootPath: string | null;
   onAccept: (id: string, finalText: string) => Promise<void> | void;
   onReject: (id: string) => void;
+  /** Quem propôs (padrão: a ponte IDE do Claude Code; extensões passam o nome delas). */
+  sourceLabel?: string;
 }
 
 function baseName(path: string): string {
@@ -34,7 +36,7 @@ function displayPath(path: string, root: string | null): string {
   return p.startsWith(`${r}/`) ? p.slice(r.length + 1) : path;
 }
 
-export function ClaudeDiffReview({ diff, queued, rootPath, onAccept, onReject }: Props) {
+export function ClaudeDiffReview({ diff, queued, rootPath, onAccept, onReject, sourceLabel = "Claude Code" }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
   const acceptRef = useRef<HTMLButtonElement>(null);
@@ -127,7 +129,7 @@ export function ClaudeDiffReview({ diff, queued, rootPath, onAccept, onReject }:
           <span className="claude-diff-path" title={diff.newPath}>
             {displayPath(diff.newPath, rootPath)}
             {diff.isNewFile ? " · novo arquivo" : ""}
-            {" · "}Alteração proposta pelo Claude Code. Você pode editar o lado
+            {" · "}Alteração proposta pelo {sourceLabel}. Você pode editar o lado
             direito antes de aceitar.
           </span>
         </div>

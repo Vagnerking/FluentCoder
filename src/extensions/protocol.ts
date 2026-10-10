@@ -1,8 +1,23 @@
 /**
  * Tipos do protocolo app ↔ host de extensões (`tools/ext-host/main.js`).
  * Transporte: linhas JSON pelo stdio do sidecar, relayadas pelo backend Rust
- * (`ext_host_send` / evento `ext-host://message`).
+ * (`ext_host_send` / evento `ext-host://message`). O host valida toda mensagem
+ * recebida (`tools/ext-host/src/protocol.js`).
  */
+
+export interface ContributedCommand {
+  command: string;
+  title: string;
+  category?: string;
+  paletteWhen?: string;
+}
+
+export interface ContributedKeybinding {
+  command: string;
+  /** Normalizada em minúsculas, ex.: "ctrl+shift+escape". */
+  key: string;
+  when?: string;
+}
 
 export interface InstalledExtension {
   id: string;
@@ -14,6 +29,9 @@ export interface InstalledExtension {
   label: string;
   /** Views de webview preferidas (a primeira registrada é usada). */
   viewIds: string[];
+  /** Só para as suportadas: comandos/atalhos do `contributes`. */
+  commands?: ContributedCommand[];
+  keybindings?: ContributedKeybinding[];
 }
 
 export interface LoadedExtension {
@@ -22,6 +40,9 @@ export interface LoadedExtension {
   version: string;
   isActive: boolean;
   views: { id: string; name: string; container: string }[];
+  commands?: ContributedCommand[];
+  keybindings?: ContributedKeybinding[];
+  activationMs?: number;
 }
 
 export interface WebviewInfo {
@@ -32,6 +53,9 @@ export interface WebviewInfo {
   title?: string;
   /** URL do HTML servido pelo host (127.0.0.1 + token), ou null antes do 1º `html`. */
   url: string | null;
+  /** `webview.options.enableForms` (sandbox `allow-forms`). */
+  enableForms?: boolean;
+  resolveMs?: number;
 }
 
 export interface InitializeResult {
@@ -40,19 +64,30 @@ export interface InitializeResult {
   dataDir: string;
   pid: number;
   node: string;
+  compileCache?: string | null;
   extensions: InstalledExtension[];
 }
 
+export interface PlainPosition {
+  line: number;
+  character: number;
+}
+export interface PlainRange {
+  start: PlainPosition;
+  end: PlainPosition;
+}
+export interface PlainSelection {
+  anchor: PlainPosition;
+  active: PlainPosition;
+}
+
+/** @deprecated snapshot do editor do PoC (substituído pelo editorBridge). */
 export interface EditorStatePayload {
   path: string | null;
   languageId?: string;
-  selection?: {
-    start: { line: number; character: number };
-    end: { line: number; character: number };
-  };
+  selection?: PlainRange;
   openFiles?: string[];
   dirty?: boolean;
-  /** Conteúdo do buffer (só quando sujo). */
   text?: string;
 }
 
@@ -61,13 +96,58 @@ export type HostRequestKind =
   | "quickPick"
   | "inputBox"
   | "openDialog"
-  | "saveDialog";
+  | "saveDialog"
+  | "applyEdit"
+  | "saveDocument"
+  | "clipboardRead";
+
+export interface DiffSide {
+  uri: string;
+  path?: string;
+  content: string;
+  readonly?: boolean;
+}
+
+/** `vscode.diff` aberto por uma extensão (ex.: edição proposta do Claude Code). */
+export interface ExtensionDiffEvent {
+  event: "diff";
+  diffId: string;
+  title: string;
+  extensionId?: string;
+  extensionName?: string;
+  /** Arquivo real afetado (lado esquerdo `file://`, senão o caminho do direito). */
+  filePath: string;
+  isNewFile: boolean;
+  /** A extensão contribui aceitar/rejeitar (menu `editor/title`). */
+  reviewable: boolean;
+  left: DiffSide;
+  right: DiffSide;
+  preserveFocus?: boolean;
+}
+
+export interface StatusBarItemEvent {
+  event: "statusBarItem";
+  id: string;
+  extensionId: string;
+  visible: boolean;
+  alignment: "left" | "right";
+  priority: number;
+  text: string;
+  tooltip?: string;
+  name?: string;
+  command?: { command: string; title?: string; arguments?: unknown[] };
+  color?: string | { themeColor: string };
+  backgroundColor?: { themeColor: string };
+}
 
 /** Eventos emitidos pelo host (campo `event`). */
 export type HostEvent =
   | { event: "hello"; pid: number; node: string }
+  | { event: "hostExit" }
+  | { event: "hostRestarted" }
+  | { event: "hostReady" }
   | { event: "log"; message: string; level?: string }
-  | { event: "extensionLoaded" | "extensionActivated"; extension: LoadedExtension }
+  | { event: "extensionLoaded" | "extensionActivated"; extension: LoadedExtension; ms?: number }
   | { event: "viewProviderRegistered"; extensionId: string; viewId: string }
   | ({ event: "webviewHtml" | "webviewPanelCreated" } & WebviewInfo)
   | { event: "postMessage"; handle: string; message: unknown }
@@ -85,8 +165,9 @@ export type HostEvent =
   | {
       event: "openFile";
       path: string;
-      selection?: EditorStatePayload["selection"];
+      selection?: PlainRange;
       preview?: boolean;
+      preserveFocus?: boolean;
     }
   | {
       event: "openVirtualDocument";
@@ -95,20 +176,42 @@ export type HostEvent =
       languageId: string;
       content: string;
     }
-  | {
-      event: "diff";
-      title: string;
-      left: { uri: string; path?: string; content: string };
-      right: { uri: string; path?: string; content: string };
-    }
-  | { event: "closeDiff"; left: string; right: string }
+  | ExtensionDiffEvent
+  | { event: "closeDiff"; diffId: string; left: string; right: string }
   | { event: "openExternal"; url: string }
   | { event: "clipboardWrite"; text: string }
   | { event: "filesChanged"; paths: string[] }
-  | { event: "terminalShow" | "terminalSendText"; name: string; text?: string }
+  | { event: "setSelection"; path: string; selections: PlainSelection[] }
+  | { event: "revealRange"; path: string; range: PlainRange; revealType: number }
+  | { event: "decorationType"; key: string; options: Record<string, unknown> }
+  | { event: "decorationTypeDisposed"; key: string }
+  | { event: "decorations"; path: string; key: string; items: { range: PlainRange; hoverMessage?: string; renderOptions?: Record<string, unknown> }[] }
+  | { event: "extDiagnostics"; owner: string; path: string; diagnostics: { range: PlainRange; message: string; severity: number; source?: string }[] }
+  | StatusBarItemEvent
+  | { event: "statusMessage"; id: string; extensionId: string; text: string | null; progress?: boolean }
+  | { event: "output"; channel: string; text: string }
+  | { event: "outputShow"; channel: string; preserveFocus: boolean }
+  | {
+      event: "terminalCreate";
+      id: string;
+      name: string;
+      cwd?: string;
+      env?: Record<string, string>;
+      strictEnv?: boolean;
+      shellPath?: string;
+      shellArgs?: string[];
+      hideFromUser?: boolean;
+      isTransient?: boolean;
+      extensionId?: string;
+    }
+  | { event: "terminalShow"; id: string; preserveFocus: boolean }
+  | { event: "terminalSendText"; id: string; text: string }
+  | { event: "terminalDispose"; id: string }
+  | { event: "closeEditor"; path: string }
+  | { event: "appCommand"; command: string; args: unknown[] }
   | { event: string; [key: string]: unknown };
 
 /** Linha do host: resposta a uma chamada OU evento. */
 export type HostLine =
-  | { id: number; result?: unknown; error?: { message: string } }
+  | { id: number | string; result?: unknown; error?: { message: string } }
   | HostEvent;

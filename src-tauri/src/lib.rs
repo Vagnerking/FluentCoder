@@ -40,9 +40,19 @@ pub fn run() {
     }
 
     let initial_workspace_files = workspace_open::workspace_files_from_args(&args);
+    // Deep link `fluent-coder://<extensão>/…` (Linux/Windows abrem um processo
+    // novo com a URL no argv): repassa à instância já aberta e sai. Sem
+    // instância aberta, este processo sobe e entrega o link ao frontend.
+    let deep_link_url = ext_host::deep_link::url_from_args(&args);
+    if let Some(url) = &deep_link_url {
+        if ext_host::deep_link::forward_to_running(url) {
+            return;
+        }
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
             // Explicitly stamp every window with a crisp, high-resolution icon so
             // the Windows taskbar / Alt-Tab show the app logo (a frameless,
@@ -72,6 +82,7 @@ pub fn run() {
             // (ou em qualquer terminal na pasta do workspace) enxerga o editor.
             app.state::<agents::ide_bridge::IdeBridgeState>()
                 .start(app.handle());
+            setup_deep_links(app);
             Ok(())
         })
         .manage(terminal::TerminalState::new())
@@ -81,6 +92,7 @@ pub fn run() {
         .manage(agents::AcpState::new())
         .manage(agents::ide_bridge::IdeBridgeState::new())
         .manage(ext_host::ExtHostState::new())
+        .manage(ext_host::deep_link::DeepLinkState::new(deep_link_url))
         .manage(razor::commands::RazorState::new())
         .manage(ssh::SshState::new())
         .manage(window::WindowPlacementState::new())
@@ -113,6 +125,8 @@ pub fn run() {
             ext_host::ext_host_send,
             ext_host::ext_host_stop,
             ext_host::ext_host_open_external,
+            ext_host::deep_link::deep_link_take_pending,
+            ext_host::deep_link::deep_link_ack,
             fs_commands::write_file,
             fs_commands::create_file,
             fs_commands::create_folder,
@@ -374,6 +388,7 @@ pub fn run() {
                     app.state::<agents::AcpState>().shutdown_all();
                     app.state::<agents::ide_bridge::IdeBridgeState>().shutdown();
                     app.state::<ext_host::ExtHostState>().shutdown_all();
+                    ext_host::deep_link::cleanup(app);
                     app.state::<lsp::LspState>().shutdown_all();
                     app.state::<dap::DapState>().shutdown_all();
                     app.state::<razor::commands::RazorState>()
@@ -389,6 +404,7 @@ pub fn run() {
                     app.state::<agents::AcpState>().shutdown_all();
                     app.state::<agents::ide_bridge::IdeBridgeState>().shutdown();
                     app.state::<ext_host::ExtHostState>().shutdown_all();
+                    ext_host::deep_link::cleanup(app);
                     app.state::<lsp::LspState>().shutdown_all();
                     app.state::<dap::DapState>().shutdown_all();
                     app.state::<razor::commands::RazorState>()
@@ -400,4 +416,27 @@ pub fn run() {
                 _ => {}
             }
         });
+}
+
+/// Deep links das extensões hospedadas: receptor local (Linux/Windows), eventos
+/// do plugin (macOS) e, fora do dev, o registro do esquema para AppImage e
+/// instalações que não gravaram o `.desktop`/registro.
+fn setup_deep_links(app: &mut tauri::App) {
+    use tauri_plugin_deep_link::DeepLinkExt;
+    ext_host::deep_link::start_receiver(app.handle());
+    let handle = app.handle().clone();
+    app.deep_link().on_open_url(move |event| {
+        for url in event.urls() {
+            ext_host::deep_link::deliver(&handle, url.as_str());
+        }
+    });
+    #[cfg(any(target_os = "linux", windows))]
+    {
+        let dev = cfg!(debug_assertions) && std::env::var_os("FLUENT_REGISTER_DEEP_LINK").is_none();
+        if !dev && !app.deep_link().is_registered(ext_host::deep_link::SCHEME).unwrap_or(false) {
+            if let Err(e) = app.deep_link().register(ext_host::deep_link::SCHEME) {
+                eprintln!("[deep-link] falha ao registrar {}://: {e}", ext_host::deep_link::SCHEME);
+            }
+        }
+    }
 }

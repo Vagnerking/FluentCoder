@@ -77,6 +77,24 @@ Todo provedor novo entra pelo registro (`src-tauri/src/agents/registry.rs`) e
 fica coberto automaticamente por esse comando. O servidor MCP de conhecimento
 (`fluent-coder --mcp`) é filho de cada CLI e morre com ele.
 
+### Exceção: host de extensões VS Code
+
+O host de extensões (`tools/ext-host` + `src-tauri/src/ext_host/`, ver
+[Extensões VS Code](extensoes-vscode.md)) também **não** é servidor de
+linguagem: fica fora do "Resetar Servidores de Código" (derrubaria as
+conversas do Claude Code/Codex). Comandos próprios, montados em
+`paletteCommands` no `App.tsx`:
+
+- **"Reiniciar Host de Extensões"** (`extensions.restartHost`) — encerra o
+  sidecar (as extensões fazem `deactivate`), sobe de novo e reativa as que
+  estavam ativas; as views se re-resolvem sozinhas.
+- **"Extensões: Mostrar Saída do Host"** — aba Saída, canal "Extensões".
+- **Comandos contribuídos** pelas extensões suportadas (`contributes.commands`,
+  sem os escondidos por `menus.commandPalette` com `when: false`), com o
+  título do `package.json` (ex.: "Claude Code: Open in Terminal", "Codex: New
+  Chat…"). Executar ativa a extensão se preciso (como o `onCommand` do VS
+  Code). Gerados por `extensionPaletteCommands()` (`src/extensions/index.ts`).
+
 ## Como estender com novos comandos
 
 Adicione uma entrada ao array `commands` em `App.tsx`:

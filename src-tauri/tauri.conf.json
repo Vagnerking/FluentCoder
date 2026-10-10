@@ -42,7 +42,11 @@
     ],
     "resources": {
       "../tools/razor-sidecar/RazorSidecar.csproj": "tools/razor-sidecar/RazorSidecar.csproj",
-      "../tools/razor-sidecar/Program.cs": "tools/razor-sidecar/Program.cs"
+      "../tools/razor-sidecar/Program.cs": "tools/razor-sidecar/Program.cs",
+      "../tools/ext-host/main.js": "tools/ext-host/main.js",
+      "../tools/ext-host/package.json": "tools/ext-host/package.json",
+      "../tools/ext-host/src/*.js": "tools/ext-host/src/",
+      "../tools/ext-host/src/shim/*.js": "tools/ext-host/src/shim/"
     },
     "fileAssociations": [
       {
@@ -57,5 +61,13 @@
       }
     ]
   },
-  "plugins": {}
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "fluent-coder"
+        ]
+      }
+    }
+  }
 }

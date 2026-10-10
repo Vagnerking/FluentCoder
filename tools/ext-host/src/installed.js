@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { readContributions } = require('./contributions');
 
 /** Extensões que o PoC sabe hospedar (as demais são listadas como não suportadas). */
 const SUPPORTED = new Map([
@@ -74,6 +75,12 @@ function listInstalled(dirs = extensionDirs()) {
         label: SUPPORTED.has(id) ? SUPPORTED.get(id).label : pkg.displayName || pkg.name,
         viewIds: SUPPORTED.has(id) ? SUPPORTED.get(id).viewIds : [],
       };
+      if (info.supported) {
+        // Comandos/atalhos contribuídos: a Paleta do app os lista antes da ativação.
+        const c = readContributions(pkg, extPath);
+        info.commands = c.commands.filter((x) => !x.hidden).map(({ command, title, category, paletteWhen }) => ({ command, title, category, paletteWhen }));
+        info.keybindings = c.keybindings;
+      }
       const prev = best.get(id);
       if (!prev || compareVersions(info.version, prev.version) > 0) best.set(id, info);
     }

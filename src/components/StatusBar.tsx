@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Codicon } from "../icons/codicons/Codicon";
 import type { IconAction } from "../icons/codicons/codicon-map";
@@ -99,6 +99,9 @@ interface StatusBarProps {
   onSelectEol?: () => void;
   /** CLIs do Claude Code conectados à ponte IDE (0 ⇒ indicador oculto). */
   claudeClients?: number;
+  /** Itens das extensões VS Code hospedadas (createStatusBarItem), por lado. */
+  extensionItemsLeft?: ReactNode;
+  extensionItemsRight?: ReactNode;
 }
 
 /** Maps an LSP status to a codicon + label. */
@@ -179,6 +182,8 @@ export function StatusBar({
   onSelectEncoding,
   onSelectEol,
   claudeClients = 0,
+  extensionItemsLeft,
+  extensionItemsRight,
 }: StatusBarProps) {
   // Friendly language name (VSCode-style), shared with the language-mode picker.
   const langDisplay = languageLabel(language);
@@ -408,8 +413,10 @@ export function StatusBar({
               </span>
             );
           })}
+        {extensionItemsLeft}
       </div>
       <div className="status-right">
+        {extensionItemsRight}
         {claudeClients > 0 && (
           <span
             className="status-item status-claude"

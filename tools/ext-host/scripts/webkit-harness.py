@@ -20,6 +20,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 
 # Offscreen sem GL: renderização por software (evita "GDK is not able to create a GL context").
 os.environ.setdefault("WEBKIT_DISABLE_COMPOSITING_MODE", "1")
@@ -41,9 +42,9 @@ TARGETS = {
 
 PARENT_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>html,body{margin:0;height:100%;background:#1f2630}iframe{border:0;width:100%;height:100%;background:transparent}</style>
-</head><body><iframe id="f" src="__URL__" sandbox="allow-scripts allow-same-origin allow-forms allow-pointer-lock allow-downloads allow-popups allow-modals"></iframe>
+</head><body><iframe id="f" sandbox="allow-scripts allow-same-origin allow-forms allow-pointer-lock allow-downloads"></iframe>
 <script>
-const HANDLE = __HANDLE__, THEME = __THEME__;
+let HANDLE = null; const THEME = __THEME__;
 const f = document.getElementById('f');
 const toPy = (o) => window.webkit.messageHandlers.relay.postMessage(JSON.stringify(o));
 let ready = false; const queue = [];
@@ -56,12 +57,15 @@ window.addEventListener('message', (e) => {
   }
   toPy(d);
 });
+window.openView = (url, handle) => { HANDLE = handle; f.src = url; };
 window.deliver = (m) => { if (ready) f.contentWindow.postMessage(m, '*'); else queue.push(m); };
 </script></body></html>"""
 
 
 class Harness:
-    def __init__(self, target, seconds, png, theme):
+    def __init__(self, target, seconds, png, theme, warm_ms=1500, data_dir=None):
+        self.data_dir = data_dir or os.path.join("/tmp", "fluent-ext-harness-%d" % os.getpid())
+        self.warm_ms = warm_ms
         self.ext_id, self.view_ids = TARGETS[target]
         self.seconds = seconds
         self.png = png
@@ -69,7 +73,8 @@ class Harness:
         self.next_id = 0
         self.waiters = {}
         self.handle = None
-        self.report = {"target": target, "up": [], "down": [], "console": [], "errors": []}
+        self.report = {"target": target, "up": [], "down": [], "console": [], "errors": [], "timings": {}}
+        self.t_click = None
         self.proc = subprocess.Popen(
             ["node", MAIN], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1
         )
@@ -88,6 +93,7 @@ class Harness:
         if "id" in msg and msg["id"] in self.waiters:
             self.waiters.pop(msg["id"])(msg)
         elif msg.get("event") == "postMessage" and msg.get("handle") == self.handle:
+            self.mark("firstDown")
             self.report["down"].append(summarize(msg["message"]))
             self.view.evaluate_javascript("window.deliver(%s)" % json.dumps(msg["message"]), -1, None, None, None, None, None)
         elif msg.get("event") == "request":
@@ -119,7 +125,7 @@ class Harness:
         self.window.show_all()
         self.call(
             "initialize",
-            {"workspaceFolders": [os.getcwd()], "appConnected": True, "dataDir": os.path.join("/tmp", "fluent-ext-harness-%d" % os.getpid())},
+            {"workspaceFolders": [os.getcwd()], "appConnected": True, "dataDir": self.data_dir},
             self._after_init,
         )
 
@@ -127,11 +133,26 @@ class Harness:
         if "error" in msg:
             return self.fail("initialize: " + msg["error"]["message"])
         self.send({"method": "setTheme", "params": {"vars": self.theme, "kind": "dark"}})
+        # Página pai já carregada (o app já está aberto) na MESMA origem do
+        # iframe: permite inspecionar o DOM dele.
+        origin = msg["result"]["origin"] + "/"
+        self.view.load_html(PARENT_HTML.replace("__THEME__", json.dumps(self.theme)), origin)
+        # Host "quente": o app sobe o sidecar no startup; o clique na aba vem depois.
+        GLib.timeout_add(self.warm_ms, self._click)
+
+    def _click(self):
+        self.t_click = time.monotonic()
         self.call("loadExtension", {"id": self.ext_id}, self._after_load)
+        return False
+
+    def mark(self, name):
+        if self.t_click is not None and name not in self.report["timings"]:
+            self.report["timings"][name] = round((time.monotonic() - self.t_click) * 1000)
 
     def _after_load(self, msg):
         if "error" in msg:
             return self.fail("loadExtension: " + msg["error"]["message"])
+        self.mark("activated")
         views = [v["id"] for v in msg["result"]["views"]]
         view_id = next((v for v in self.view_ids if v in views), views[0] if views else None)
         self.report["viewId"] = view_id
@@ -141,16 +162,10 @@ class Harness:
         if "error" in msg:
             return self.fail("resolveView: " + msg["error"]["message"])
         info = msg["result"]
+        self.mark("resolved")
         self.handle = info["handle"]
         self.report["url"] = info["url"]
-        origin = "/".join(info["url"].split("/")[:3]) + "/"
-        html = (
-            PARENT_HTML.replace("__URL__", info["url"])
-            .replace("__HANDLE__", json.dumps(self.handle))
-            .replace("__THEME__", json.dumps(self.theme))
-        )
-        # Página pai na MESMA origem do iframe: permite inspecionar o DOM dele.
-        self.view.load_html(html, origin)
+        self.view.evaluate_javascript("window.openView(%s, %s)" % (json.dumps(info["url"]), json.dumps(self.handle)), -1, None, None, None, None, None)
         GLib.timeout_add_seconds(self.seconds, self._inspect)
 
     def _on_relay(self, _manager, js_result):
@@ -166,6 +181,26 @@ class Harness:
             self.send({"method": "webviewState", "params": {"handle": self.handle, "state": d.get("state")}})
         elif d.get("type") == "ready":
             self.report["iframeReady"] = True
+            self.mark("iframeReady")
+            GLib.timeout_add(25, self._poll_interactive)
+
+    def _poll_interactive(self):
+        # Interativo = a UI da extensão montou controles (login ou chat).
+        js = """(() => { const d = document.getElementById('f').contentDocument;
+          return d ? d.querySelectorAll('button,textarea,input,[contenteditable=true]').length : 0 })()"""
+
+        def done(view, result):
+            try:
+                n = int(view.evaluate_javascript_finish(result).to_double())
+            except Exception:  # noqa: BLE001
+                n = 0
+            if n > 0:
+                self.mark("interactive")
+            elif self.t_click is not None and time.monotonic() - self.t_click < 20:
+                GLib.timeout_add(25, self._poll_interactive)
+
+        self.view.evaluate_javascript(js, -1, None, None, None, done)
+        return False
 
     def _inspect(self):
         js = """(() => { const d = document.getElementById('f').contentDocument; if (!d) return JSON.stringify({noDoc: true});
@@ -173,6 +208,9 @@ class Harness:
           return JSON.stringify({ title: d.title, bodyClass: b && b.className, text: (b ? b.innerText : '').slice(0, 1500),
             elements: d.querySelectorAll('*').length, claudeError: err ? err.textContent.slice(0, 500) : null,
             fg: getComputedStyle(d.documentElement).getPropertyValue('--vscode-foreground'),
+            perf: (() => { const w = document.getElementById('f').contentWindow; const n = w.performance.getEntriesByType('navigation')[0] || {};
+              return { nav: { responseEnd: Math.round(n.responseEnd || 0), domInteractive: Math.round(n.domInteractive || 0), dcl: Math.round(n.domContentLoadedEventEnd || 0) },
+                res: w.performance.getEntriesByType('resource').slice(0, 12).map((r) => [r.name.split('/').pop().slice(0, 40), Math.round(r.startTime), Math.round(r.responseEnd)]) }; })(),
             accent: getComputedStyle(d.documentElement).getPropertyValue('--vscode-focusBorder') }); })()"""
         self.view.evaluate_javascript(js, -1, None, None, None, self._on_inspect)
         return False
@@ -224,9 +262,15 @@ def main():
     ap.add_argument("--seconds", type=int, default=15)
     ap.add_argument("--png")
     ap.add_argument("--theme", help="JSON com variáveis --vscode-* (padrão: nenhuma)")
+    ap.add_argument("--theme-file", help="arquivo JSON com as variáveis --vscode-* (ex.: gerado de src/extensions/theme.ts)")
+    ap.add_argument("--data-dir", help="pasta de dados do host (reutilizar = cache de compilação quente)")
+    ap.add_argument("--warm-ms", type=int, default=1500, help="espera após o initialize antes do 'clique' (host quente)")
     args = ap.parse_args()
     theme = json.loads(args.theme) if args.theme else {}
-    h = Harness(args.target, args.seconds, args.png, theme)
+    if args.theme_file:
+        with open(args.theme_file, encoding="utf-8") as fh:
+            theme.update(json.load(fh))
+    h = Harness(args.target, args.seconds, args.png, theme, args.warm_ms, args.data_dir)
     h.start()
     GLib.timeout_add_seconds(args.seconds + 30, lambda: (h.fail("timeout"), False)[1])
     Gtk.main()

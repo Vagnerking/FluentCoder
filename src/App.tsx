@@ -71,7 +71,15 @@ import { FluentChatView, type FluentChatViewHandle } from "./components/chat/Flu
 import { AgentsManager } from "./components/chat/AgentsManager";
 import { useFluentChat } from "./chat/useFluentChat";
 import { startTerminalTap } from "./chat/terminalTap";
-import { ExtensionDock } from "./extensions/ExtensionDock";
+import {
+  ExtensionDock,
+  ExtensionHostRuntime,
+  ExtensionStatusItems,
+  extensionPaletteCommands,
+  restartExtensionHost,
+  useExtensionDiffs,
+  useHostedExtensions,
+} from "./extensions";
 import type { EditorStatePayload } from "./extensions/protocol";
 import { BranchPicker } from "./components/BranchPicker";
 import { SshConnectDialog } from "./components/SshConnectDialog";
@@ -5695,6 +5703,8 @@ export default function App() {
 
   // Full command-palette list (issue #12 + #8): the curated commands + the
   // remote-SSH entry + every runnable menu action, in the palette's shape.
+  const hostedExtensions = useHostedExtensions();
+  const extensionDiffs = useExtensionDiffs();
   const paletteCommands = useMemo<Command[]>(() => {
     const fromMenus: Command[] = menus.flatMap((menu) =>
       menu.items
@@ -5714,8 +5724,31 @@ export default function App() {
         run: () => void openSshFlow(),
       },
     ];
-    return [...commands, ...ssh, ...fromMenus];
-  }, [commands, menus, openSshFlow]);
+    // Host de extensões VS Code: reinício manual + comandos contribuídos
+    // (Claude Code, Codex) com os títulos do package.json delas.
+    const extensions: Command[] = [
+      {
+        id: "extensions.restartHost",
+        title: "Reiniciar Host de Extensões",
+        detail: "Extensões",
+        run: () => {
+          restartExtensionHost().catch((err) =>
+            alert(`Não foi possível reiniciar o host de extensões:\n${err}`)
+          );
+        },
+      },
+      {
+        id: "extensions.showOutput",
+        title: "Extensões: Mostrar Saída do Host",
+        detail: "Extensões",
+        run: () => showPanelTab("output"),
+      },
+      ...extensionPaletteCommands(hostedExtensions, (message) =>
+        alert(`Falha ao executar o comando da extensão:\n${message}`)
+      ),
+    ];
+    return [...commands, ...extensions, ...ssh, ...fromMenus];
+  }, [commands, menus, openSshFlow, hostedExtensions, showPanelTab]);
 
   const titleWorkspaceSegment = workspaceContextDisplay
     ? workspaceContextDisplay.name
@@ -6130,15 +6163,29 @@ export default function App() {
                 renderGroup={renderGroup}
                 onResize={resizeGroupBranch}
               />
-              {ideBridge.diffs.length > 0 && (
+              {ideBridge.diffs.length > 0 ? (
                 <ClaudeDiffReview
                   key={ideBridge.diffs[0].id}
                   diff={ideBridge.diffs[0]}
-                  queued={ideBridge.diffs.length}
+                  queued={ideBridge.diffs.length + extensionDiffs.diffs.length}
                   rootPath={rootPath}
                   onAccept={ideBridge.acceptDiff}
                   onReject={ideBridge.rejectDiff}
                 />
+              ) : (
+                extensionDiffs.diffs.length > 0 && (
+                  // Diff proposto por uma extensão hospedada (vscode.diff): a
+                  // mesma revisão; Aceitar/Rejeitar chamam os comandos dela.
+                  <ClaudeDiffReview
+                    key={`ext-${extensionDiffs.diffs[0].id}`}
+                    diff={extensionDiffs.diffs[0]}
+                    queued={extensionDiffs.diffs.length}
+                    rootPath={rootPath}
+                    sourceLabel={extensionDiffs.diffs[0].sourceLabel}
+                    onAccept={extensionDiffs.accept}
+                    onReject={extensionDiffs.reject}
+                  />
+                )
               )}
             </div>
             {panelOpen && (
@@ -6262,6 +6309,60 @@ export default function App() {
         />
       )}
 
+      {/* Host de extensões VS Code (global): editor, diffs, terminais,
+          diálogos, saída, barra de status e deep links. */}
+      <ExtensionHostRuntime
+        rootPath={rootPath}
+        enabled={remoteSession == null}
+        files={ideFiles}
+        activePath={activePath}
+        openFile={async (path, opts) => {
+          const sel = opts?.selection;
+          await handleOpenFileRef.current(
+            { name: baseName(path), path, isDir: false },
+            sel ? sel.start.line + 1 : undefined,
+            undefined,
+            sel && sel.start.line === sel.end.line
+              ? { startColumn: sel.start.character + 1, endColumn: sel.end.character + 1 }
+              : undefined
+          );
+        }}
+        bufferChanged={(path, content) =>
+          setLayout((l) => patchFileEverywhere(l, path, { content, dirty: true }))
+        }
+        saveFile={async (path) => {
+          const file = Object.values(layoutRef.current.groups)
+            .flatMap((g) => g.files)
+            .find((f) => samePath(f.path, path));
+          if (!file) return false;
+          await saveFile(file);
+          return true;
+        }}
+        closeFile={(path) => void handleCloseTab(path)}
+        showTerminalPanel={() => setPanelOpen(true)}
+        showOutput={(channel) => {
+          showPanelTab("output");
+          void channel;
+        }}
+        revealInExplorer={() => {
+          setSidebarOpen(true);
+          setActiveView("explorer");
+        }}
+        filesChanged={() => {
+          void refreshExplorerRoot();
+          invalidateGraph();
+          invalidateIndex();
+        }}
+        revealAgentsSidebar={() => setAgentsSidebarOpen(true)}
+        appCommand={(command) => {
+          if (command === "terminal.focus" || command === "terminal.new") setPanelOpen(true);
+          else if (command === "workbench.action.showCommands") setCommandPaletteOpen(true);
+          else if (command === "workbench.action.quickOpen") setQuickOpenOpen(true);
+          else if (command === "formatDocument") editorActionsRef.current?.run("editor.action.formatDocument");
+          else if (command === "focusEditor") editorActionsRef.current?.focus?.();
+        }}
+      />
+
       <StatusBar
         language={
           activeFile ? languageForFile(activeFile.name, activeFile.path) : ""
@@ -6347,6 +6448,8 @@ export default function App() {
         }
         onSelectEol={activeFile ? handleSelectEol : undefined}
         claudeClients={ideBridge.clients}
+        extensionItemsLeft={<ExtensionStatusItems alignment="left" />}
+        extensionItemsRight={<ExtensionStatusItems alignment="right" />}
       />
 
 

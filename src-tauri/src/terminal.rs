@@ -2,7 +2,7 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 pub struct PtySession {
     writer: Box<dyn Write + Send>,
@@ -41,6 +41,57 @@ impl TerminalState {
 /// With `command`, the shell runs it and then stays open (like `-NoExit`).
 fn shell_command(command: Option<&str>) -> CommandBuilder {
     let line = command.filter(|l| !l.trim().is_empty());
+    shell_command_inner(line)
+}
+
+/// Opções de um terminal criado por uma extensão VS Code
+/// (`window.createTerminal`, ver `src/extensions/terminalBridge.ts`).
+#[derive(serde::Deserialize, Default, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TermSpawnOptions {
+    /// Executável no lugar do shell padrão (`shellPath`).
+    pub shell_path: Option<String>,
+    pub shell_args: Option<Vec<String>>,
+    /// Variáveis extras (já com o `environmentVariableCollection` aplicado).
+    pub env: Option<std::collections::HashMap<String, String>>,
+    /// `strictEnv`: o ambiente é exatamente `env` (sem herdar o do app).
+    pub strict_env: Option<bool>,
+}
+
+/// Monta o comando de um terminal de extensão: `shellPath`/`shellArgs` quando
+/// informados (executável que precisa existir), senão o shell padrão.
+fn extension_command(opts: &TermSpawnOptions) -> Result<CommandBuilder, String> {
+    let mut cmd = match opts.shell_path.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(shell) => {
+            let resolved = which::which(shell)
+                .map_err(|_| format!("Executável do terminal não encontrado: {shell}"))?;
+            let mut c = CommandBuilder::new(resolved);
+            for a in opts.shell_args.iter().flatten() {
+                c.arg(a);
+            }
+            c
+        }
+        None => shell_command_inner(None),
+    };
+    if opts.strict_env.unwrap_or(false) {
+        cmd.env_clear();
+    }
+    for (k, v) in opts.env.iter().flatten() {
+        // Nomes inválidos (vazios, com `=` ou NUL) seriam recusados pelo SO.
+        if k.is_empty() || k.contains('=') || k.contains('\0') || v.contains('\0') {
+            continue;
+        }
+        cmd.env(k, v);
+    }
+    #[cfg(not(windows))]
+    {
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
+    }
+    Ok(cmd)
+}
+
+fn shell_command_inner(line: Option<&str>) -> CommandBuilder {
     #[cfg(windows)]
     {
         let mut cmd = CommandBuilder::new("powershell.exe");
@@ -84,10 +135,12 @@ pub fn term_create(
     // the session open afterwards (so the program's output stays visible). When
     // None, it's a plain interactive PowerShell — the original behavior.
     command: Option<String>,
+    // Terminal pedido por uma extensão VS Code (shell/args/env próprios).
+    spawn: Option<TermSpawnOptions>,
     state: State<'_, TerminalState>,
     ide_bridge: State<'_, crate::agents::ide_bridge::IdeBridgeState>,
     app: AppHandle,
-) -> Result<(), String> {
+) -> Result<Option<u32>, String> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -98,16 +151,26 @@ pub fn term_create(
         })
         .map_err(|e| e.to_string())?;
 
-    let mut cmd = shell_command(command.as_deref());
+    let strict = spawn.as_ref().and_then(|s| s.strict_env).unwrap_or(false);
+    let mut cmd = match &spawn {
+        Some(opts) => extension_command(opts)?,
+        None => shell_command(command.as_deref()),
+    };
     cmd.cwd(&cwd);
     // Igual ao terminal do VS Code: o `claude` iniciado aqui conecta sozinho na
-    // ponte IDE (src/agents/ide_bridge.rs). Só com a ponte no ar.
+    // ponte IDE (src/agents/ide_bridge.rs). Só com a ponte no ar. Num terminal
+    // de extensão, o env dela (ex.: CLAUDE_CODE_SSE_PORT da própria extensão)
+    // tem precedência.
     if let Some(port) = ide_bridge.port() {
-        cmd.env("CLAUDE_CODE_SSE_PORT", port.to_string());
-        cmd.env("ENABLE_IDE_INTEGRATION", "true");
+        let ext_env = spawn.as_ref().and_then(|s| s.env.as_ref());
+        if !strict && !ext_env.is_some_and(|e| e.contains_key("CLAUDE_CODE_SSE_PORT")) {
+            cmd.env("CLAUDE_CODE_SSE_PORT", port.to_string());
+            cmd.env("ENABLE_IDE_INTEGRATION", "true");
+        }
     }
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    let pid = child.process_id();
 
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
@@ -129,6 +192,30 @@ pub fn term_create(
                 }
             }
         }
+        // Fim da saída = o processo do terminal saiu (ou foi encerrado). Colhe
+        // o código de saída se a sessão ainda existe (term_close já a removeu).
+        // `try_wait` em poucas tentativas: nunca segura o lock bloqueado.
+        let mut code: Option<u32> = None;
+        if let Some(st) = app_handle.try_state::<TerminalState>() {
+            for _ in 0..20 {
+                let status = match st.sessions.lock() {
+                    Ok(mut sessions) => match sessions.get_mut(&session_id) {
+                        Some(s) => s.child.try_wait().ok().flatten(),
+                        None => break,
+                    },
+                    Err(_) => break,
+                };
+                if let Some(status) = status {
+                    code = Some(status.exit_code());
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+        }
+        let _ = app_handle.emit(
+            "term-exit",
+            serde_json::json!({ "id": session_id, "code": code }),
+        );
     });
 
     let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
@@ -141,7 +228,7 @@ pub fn term_create(
         },
     );
 
-    Ok(())
+    Ok(pid)
 }
 
 #[tauri::command]

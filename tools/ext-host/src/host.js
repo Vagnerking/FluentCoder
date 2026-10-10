@@ -1,7 +1,8 @@
 // ExtensionHost: carrega extensões VS Code instaladas localmente, intercepta
 // `require('vscode')` e mantém o estado compartilhado do shim (comandos,
-// webviews, documentos, editor ativo). Independe de transporte: os eventos para
-// o app saem por `emit(obj)`; o main.js liga isso ao stdio (JSON por linha).
+// webviews, documentos, editores, abas, terminais, diagnósticos). Independe de
+// transporte: os eventos para o app saem por `emit(obj)`; o main.js liga isso
+// ao stdio (JSON por linha).
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -11,12 +12,16 @@ const Module = require('module');
 
 const types = require('./shim/types');
 const { ConfigurationStore } = require('./shim/configuration');
-const { JsonMemento, FileSecretStorage } = require('./shim/memento');
+const { JsonMemento, FileSecretStorage, KeyringSecretStorage } = require('./shim/memento');
 const { WebviewView } = require('./shim/webview');
-const { TextDocument, TextEditor } = require('./shim/documents');
+const { TextDocument, TextEditor, toRange } = require('./shim/documents');
+const { Terminal } = require('./shim/terminal');
+const { WatchService } = require('./shim/watcher');
 const { createVscodeApi, toUri } = require('./shim/api');
 const { ResourceServer } = require('./server');
 const { buildPreamble, injectPreamble } = require('./preamble');
+const { readContributions } = require('./contributions');
+const { evaluateWhen } = require('./when');
 
 const { Disposable, EventEmitter, Uri, Position, Range, Selection } = types;
 
@@ -45,10 +50,33 @@ function sanitizeId(id) {
   return String(id).replace(/[^\w.-]+/g, '_');
 }
 
+function plainRange(r) {
+  return { start: { line: r.start.line, character: r.start.character }, end: { line: r.end.line, character: r.end.character } };
+}
+
+function toSelection(s) {
+  if (!s) return new Selection(0, 0, 0, 0);
+  const a = s.anchor || s.start;
+  const b = s.active || s.end;
+  return new Selection(new Position(a.line, a.character), new Position(b.line, b.character));
+}
+
+/** Caminho comparável (Windows: sem diferenciar maiúsculas). */
+function pathKey(p) {
+  const n = path.resolve(p);
+  return process.platform === 'win32' ? n.toLowerCase() : n;
+}
+
+/** Tempo mínimo entre abrir um diff e executar aceitar/rejeitar da extensão. */
+const DIFF_SETTLE_MS = 400;
+
+const SEVERITY = { error: 0, warning: 1, info: 2, information: 2, hint: 3 };
+
 class ExtensionHost {
   /**
    * @param {{dataDir:string, workspaceFolders?:string[], language?:string, appRoot?:string,
-   *   emit?:(evt:object)=>void, verbose?:boolean, debugWebviews?:boolean, wrapApi?:(api:object, ext:object)=>object}} opts
+   *   emit?:(evt:object)=>void, verbose?:boolean, debugWebviews?:boolean, wrapApi?:(api:object, ext:object)=>object,
+   *   appConnected?:boolean, secretsBackend?:'keyring'|'file', serverPort?:number}} opts
    */
   constructor(opts) {
     this.dataDir = opts.dataDir;
@@ -59,6 +87,7 @@ class ExtensionHost {
     this.wrapApi = opts.wrapApi;
     this.language = opts.language || 'pt-br';
     this.appRoot = opts.appRoot || path.resolve(__dirname, '..');
+    this.secretsBackend = opts.secretsBackend === 'keyring' ? 'keyring' : 'file';
     this.sessionId = crypto.randomUUID();
     this.machineId = this._machineId();
     this.clipboard = '';
@@ -74,37 +103,56 @@ class ExtensionHost {
     this.fsProviders = new Map();
     this.contentProviders = new Map();
     this.documents = new Map(); // uri.toString() → TextDocument
-    this.diagnostics = new Map();
+    this.diagnostics = new Map(); // uri.toString() → Diagnostic[] (markers do app)
+    this.diagnosticCollections = new Set();
     this.terminals = [];
+    this._activeTerminal = undefined;
+    this.statusBarItems = new Map();
+    this.decorationTypes = new Map();
     this.windowState = { focused: true, active: true };
     this.themeVars = {};
     this.themeKind = 'dark';
     this.pending = new Map();
     this.nextRequest = 1;
     this.appConnected = !!opts.appConnected;
+    this.watchers = new WatchService((m) => this.log(m));
     this._activeEditor = undefined;
     this._visibleEditors = [];
-    this._openFiles = [];
-    this._diffTabs = [];
+    this._appTabs = []; // [{path, dirty, active, preview}]
+    this._diffTabs = []; // [{id, left, right, title, ext, editors}]
+    this._activeDiff = null; // id do diff com foco (aba ativa do grupo)
+    this._nextDiff = 1;
+    this._outputBuf = new Map();
+    this._outputTimer = null;
     this.events = {
       never: new EventEmitter(),
       activeTextEditor: new EventEmitter(),
       visibleTextEditors: new EventEmitter(),
       textEditorSelection: new EventEmitter(),
+      textEditorVisibleRanges: new EventEmitter(),
       windowState: new EventEmitter(),
       openTerminal: new EventEmitter(),
       closeTerminal: new EventEmitter(),
+      activeTerminal: new EventEmitter(),
+      terminalState: new EventEmitter(),
+      terminalShellIntegration: new EventEmitter(),
+      startShellExecution: new EventEmitter(),
+      endShellExecution: new EventEmitter(),
       workspaceFolders: new EventEmitter(),
       openDocument: new EventEmitter(),
       closeDocument: new EventEmitter(),
       changeDocument: new EventEmitter(),
+      willSaveDocument: new EventEmitter(),
       saveDocument: new EventEmitter(),
       diagnostics: new EventEmitter(),
       tabs: new EventEmitter(),
       tabGroups: new EventEmitter(),
+      createFiles: new EventEmitter(),
+      deleteFiles: new EventEmitter(),
+      renameFiles: new EventEmitter(),
     };
     this.setWorkspaceFolders(opts.workspaceFolders || []);
-    this.server = new ResourceServer({ getWebviewHtml: (h) => this.getWebviewHtml(h), log: (m) => this.log(m) });
+    this.server = new ResourceServer({ getWebviewHtml: (h) => this.getWebviewHtml(h), log: (m) => this.log(m), preferredPort: opts.serverPort });
     const server = this.server;
     this.webviewBridge = {
       resourceUrl: (uri) => this.resourceUrl(uri),
@@ -136,6 +184,8 @@ class ExtensionHost {
 
   async stop() {
     for (const ext of this.extensions.values()) await this.deactivate(ext.id);
+    this.watchers.closeAll();
+    this._flushOutput();
     await this.server.close();
   }
 
@@ -187,22 +237,19 @@ class ExtensionHost {
       extensionUri: Uri.file(extensionPath),
       mainPath,
       isActive: false,
+      activating: null,
       exports: undefined,
       module: null,
       context: null,
       api: null,
+      contributions: readContributions(packageJSON, extensionPath, this.language),
     };
     this.config.addDefaults(packageJSON);
-    this.server.allowRoot(extensionPath);
+    this.server.allowRoot(extensionPath, id);
     const api = createVscodeApi(this, ext);
     ext.api = this.wrapApi ? this.wrapApi(api, ext) : api;
     this.extensions.set(id, ext);
-    const views = [];
-    const contributed = (packageJSON.contributes && packageJSON.contributes.views) || {};
-    for (const [container, list] of Object.entries(contributed)) {
-      for (const v of list || []) if (v.type === 'webview') views.push({ id: v.id, name: v.name, container, when: v.when });
-    }
-    ext.views = views;
+    ext.views = ext.contributions.views.filter((v) => v.type === 'webview').map((v) => ({ id: v.id, name: v.name, container: v.container, when: v.when }));
     this.emit({ event: 'extensionLoaded', extension: this.describe(ext) });
     return ext;
   }
@@ -217,6 +264,9 @@ class ExtensionHost {
       path: ext.extensionPath,
       isActive: ext.isActive,
       views: ext.views,
+      commands: ext.contributions.commands,
+      keybindings: ext.contributions.keybindings,
+      viewsContainers: ext.contributions.viewsContainers,
     };
   }
 
@@ -243,11 +293,23 @@ class ExtensionHost {
       [Symbol.iterator]: () => envVars.entries(),
       getScoped: () => envCollection,
     };
+    ext.envVars = envVars;
+    const secretsFile = path.join(storeDir, 'secrets.json');
+    const secrets =
+      this.secretsBackend === 'keyring'
+        ? new KeyringSecretStorage({
+            extensionId: ext.id,
+            indexFile: path.join(storeDir, 'secret-keys.json'),
+            legacyFile: secretsFile,
+            backend: (op, account, value) => this.rustRequest('secrets', { op, account, value }),
+            log: (m) => this.log(m),
+          })
+        : new FileSecretStorage(secretsFile);
     return {
       subscriptions: [],
       workspaceState,
       globalState,
-      secrets: new FileSecretStorage(path.join(storeDir, 'secrets.json')),
+      secrets,
       extensionUri: ext.extensionUri,
       extensionPath: ext.extensionPath,
       environmentVariableCollection: envCollection,
@@ -265,21 +327,33 @@ class ExtensionHost {
     };
   }
 
-  async activate(id) {
+  /** Ativa uma vez (chamadas concorrentes esperam a mesma ativação). */
+  activate(id) {
     const ext = this.extensions.get(id);
-    if (!ext) throw new Error(`Extensão não carregada: ${id}`);
-    if (ext.isActive) return ext.exports;
+    if (!ext) return Promise.reject(new Error(`Extensão não carregada: ${id}`));
+    if (ext.isActive) return Promise.resolve(ext.exports);
+    if (!ext.activating) {
+      ext.activating = this._activate(ext).finally(() => {
+        ext.activating = null;
+      });
+    }
+    return ext.activating;
+  }
+
+  async _activate(ext) {
     if (!ext.mainPath) {
       ext.isActive = true;
       return undefined;
     }
     const t0 = Date.now();
     ext.module = require(ext.mainPath);
+    const tRequire = Date.now() - t0;
     ext.context = this.createContext(ext);
     if (typeof ext.module.activate === 'function') ext.exports = await ext.module.activate(ext.context);
     ext.isActive = true;
-    this.log(`ativada ${id} em ${Date.now() - t0}ms`);
-    this.emit({ event: 'extensionActivated', extension: this.describe(ext) });
+    ext.activationMs = Date.now() - t0;
+    this.log(`ativada ${ext.id} em ${ext.activationMs}ms (require ${tRequire}ms)`);
+    this.emit({ event: 'extensionActivated', extension: this.describe(ext), ms: ext.activationMs });
     return ext.exports;
   }
 
@@ -347,16 +421,30 @@ class ExtensionHost {
       this.emit({ event: 'revealView', container: id.slice('workbench.view.extension.'.length) });
       return undefined;
     }
+    // Comando contribuído por extensão ainda não ativa: ativa (onCommand) e tenta de novo.
+    for (const ext of this.extensions.values()) {
+      if (!ext.isActive && ext.contributions.commands.some((x) => x.command === id)) {
+        await this.activate(ext.id);
+        const again = this.commands.get(id);
+        if (again) return again.cb.apply(again.thisArg, args);
+      }
+    }
+    // Comandos do workbench (ex.: Ctrl+Shift+P) vão ao app.
+    if (/^workbench\.action\./.test(id)) {
+      this.emit({ event: 'appCommand', command: id, args: safeArgs(args) });
+      return undefined;
+    }
     this.log(`executeCommand sem implementação (ignorado): ${id}`);
     return undefined;
   }
 
   _installBuiltinCommands() {
     const noop = () => undefined;
+    const app = (command) => (...args) => this.emit({ event: 'appCommand', command, args: safeArgs(args) });
     this.builtins = {
       setContext: (key, value) => {
         this.contexts.set(key, value);
-        this.emit({ event: 'context', key, value });
+        this.emit({ event: 'context', key, value: safeArgs([value])[0] });
       },
       'vscode.open': (uri, opts) => {
         uri = toUri(uri);
@@ -371,43 +459,149 @@ class ExtensionHost {
       'vscode.changes': noop,
       'workbench.action.openSettings': (q) => this.emit({ event: 'openSettings', query: q }),
       'workbench.action.reloadWindow': () => this.emit({ event: 'reloadRequested' }),
-      'workbench.action.closeActiveEditor': noop,
-      'workbench.action.focusActiveEditorGroup': noop,
+      'workbench.action.closeActiveEditor': () => {
+        const tab = this.tabGroups.activeTabGroup.activeTab;
+        return tab ? this.tabGroups.close(tab) : undefined;
+      },
+      'workbench.action.files.save': () => (this._activeEditor ? this._activeEditor.document.save() : undefined),
+      'workbench.action.files.saveAll': () => this.saveAll(),
+      'workbench.action.focusActiveEditorGroup': app('focusEditor'),
+      'workbench.action.focusFirstEditorGroup': app('focusEditor'),
       'workbench.action.focusSideBar': noop,
       'workbench.action.focusAuxiliaryBar': noop,
       'workbench.action.lockEditorGroup': noop,
       'workbench.action.unlockEditorGroup': noop,
-      'workbench.action.files.save': noop,
+      'workbench.action.moveEditorToNewWindow': noop,
       'workbench.files.action.refreshFilesExplorer': () => this.emit({ event: 'filesChanged', paths: [] }),
       revealInExplorer: (uri) => this.emit({ event: 'revealInExplorer', path: toUri(uri).fsPath }),
-      revealFileInOS: noop,
+      revealFileInOS: (uri) => this.emit({ event: 'revealInExplorer', path: toUri(uri).fsPath, os: true }),
       'vscode.executeDocumentSymbolProvider': () => Promise.resolve([]),
       'vscode.executeWorkspaceSymbolProvider': () => Promise.resolve([]),
       'vscode.executeDefinitionProvider': () => Promise.resolve([]),
       'vscode.executeReferenceProvider': () => Promise.resolve([]),
       'vscode.executeHoverProvider': () => Promise.resolve([]),
-      'editor.action.formatDocument': noop,
-      'workbench.action.terminal.focus': noop,
+      'editor.action.formatDocument': app('formatDocument'),
+      'workbench.action.terminal.focus': () => this.emit({ event: 'appCommand', command: 'terminal.focus', args: [] }),
+      'workbench.action.terminal.new': () => this.emit({ event: 'appCommand', command: 'terminal.new', args: [] }),
       'workbench.action.chat.open': noop,
       'workbench.extensions.installExtension': () => Promise.reject(new Error('Instalação de extensões não suportada.')),
       'workbench.extensions.search': noop,
       'workbench.action.openWalkthrough': noop,
       'markdown.showPreview': (uri) => this.showTextDocument(toUri(uri)),
       'git.openChange': noop,
+      'default:type': noop,
+      cursorMove: noop,
+      'editor.action.revealDefinition': noop,
     };
   }
 
+  /** Comandos contribuídos (Paleta do app), com o estado de ativação. */
+  contributedCommands() {
+    const out = [];
+    for (const ext of this.extensions.values()) {
+      for (const c of ext.contributions.commands) {
+        if (c.hidden) continue;
+        if (c.paletteWhen && !this.evaluateWhen(c.paletteWhen)) continue;
+        out.push({ extensionId: ext.id, command: c.command, title: c.title, category: c.category });
+      }
+    }
+    return out;
+  }
+
+  /** Valor de uma chave de contexto (`config.*`, setContext, foco publicado pelo app). */
+  contextValue(key, extra) {
+    if (extra && Object.prototype.hasOwnProperty.call(extra, key)) return extra[key];
+    if (key.startsWith('config.')) return this.config.lookup(key.slice(7));
+    if (this.contexts.has(key)) return this.contexts.get(key);
+    switch (key) {
+      case 'isLinux':
+        return process.platform === 'linux';
+      case 'isWindows':
+        return process.platform === 'win32';
+      case 'isMac':
+        return process.platform === 'darwin';
+      case 'isWeb':
+        return false;
+      case 'workspaceFolderCount':
+        return this.workspaceFolders.length;
+      case 'activeEditor':
+        return this._activeDiff ? 'workbench.editors.textDiffEditor' : this._activeEditor ? 'workbench.editors.files.textFileEditor' : undefined;
+      case 'isInDiffEditor':
+        return !!this._activeDiff;
+      case 'resourceScheme': {
+        const d = this._diffById(this._activeDiff);
+        if (d) return d.right.scheme;
+        return this._activeEditor ? this._activeEditor.document.uri.scheme : undefined;
+      }
+      case 'resourceLangId':
+        return this._activeEditor ? this._activeEditor.document.languageId : undefined;
+      default:
+        return undefined;
+    }
+  }
+
+  evaluateWhen(expr, extra) {
+    return evaluateWhen(expr, (k) => this.contextValue(k, extra));
+  }
+
+  /**
+   * Atalho contribuído (best effort): o app manda a tecla normalizada
+   * ("ctrl+escape") e o contexto de foco; executa o 1º binding cujo `when` vale.
+   */
+  async runKeybinding(key, focusContext) {
+    const k = String(key || '').toLowerCase();
+    for (const ext of this.extensions.values()) {
+      for (const kb of ext.contributions.keybindings) {
+        if (kb.key !== k) continue;
+        if (!this.evaluateWhen(kb.when, focusContext || {})) continue;
+        await this.executeCommand(kb.command, ...(kb.args !== undefined ? [kb.args] : []));
+        return { handled: true, command: kb.command };
+      }
+    }
+    return { handled: false };
+  }
+
   // ------------------------------------------------------ pedidos ao app
-  /** Pede algo ao app (diálogo, quick pick…). Sem app conectado → undefined. */
-  request(kind, params) {
+  /** Pede algo ao app (diálogo, quick pick, edição…). Sem app conectado → undefined. */
+  request(kind, params, timeoutMs) {
     if (!this.appConnected) {
       this.log(`request '${kind}' sem app conectado → undefined`, params && (params.message || params.title || ''));
       return Promise.resolve(undefined);
     }
     const requestId = this.nextRequest++;
     return new Promise((resolve) => {
-      this.pending.set(requestId, resolve);
+      let timer = null;
+      if (timeoutMs) {
+        timer = setTimeout(() => {
+          this.pending.delete(requestId);
+          resolve(undefined);
+        }, timeoutMs);
+      }
+      this.pending.set(requestId, (v) => {
+        if (timer) clearTimeout(timer);
+        resolve(v);
+      });
       this.emit({ event: 'request', requestId, kind, params });
+    });
+  }
+
+  /**
+   * Pedido atendido pelo backend Rust (não pelo frontend): a linha começa com
+   * `{"event":"<tipo>"` e o Rust a desvia (ex.: segredos no cofre do SO).
+   */
+  rustRequest(event, payload, timeoutMs = 20000) {
+    const requestId = this.nextRequest++;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(requestId);
+        resolve({ ok: false, error: 'tempo esgotado esperando o backend' });
+      }, timeoutMs);
+      this.pending.set(requestId, (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      });
+      // A ordem das chaves importa: o Rust reconhece pelo prefixo.
+      this.emit({ event, requestId, ...payload });
     });
   }
 
@@ -436,6 +630,7 @@ class ExtensionHost {
 
   /** O app abriu a view: cria o WebviewView e chama resolveWebviewView. */
   async resolveView(viewId) {
+    const t0 = Date.now();
     const reg = this.viewProviders.get(viewId);
     if (!reg) throw new Error(`Nenhum provider registrado para a view ${viewId}`);
     for (const entry of this.webviews.values()) {
@@ -447,7 +642,9 @@ class ExtensionHost {
     view.webview.options = { ...(reg.options.webviewOptions || {}) };
     const cts = new types.CancellationTokenSource();
     await reg.provider.resolveWebviewView(view, { state: undefined }, cts.token);
-    return this._webviewInfo(entry);
+    const info = this._webviewInfo(entry);
+    info.resolveMs = Date.now() - t0;
+    return info;
   }
 
   createWebviewPanel(ext, panel) {
@@ -482,6 +679,8 @@ class ExtensionHost {
       extensionId: entry.ext.id,
       title: entry.panel ? entry.panel.title : entry.view && entry.view.title ? entry.view.title : entry.title,
       url: entry.webview.html ? this.server.webviewUrl(entry.webview.handle, entry.webview._htmlVersion) : null,
+      // Flags de sandbox que o iframe precisa (só o necessário; ver docs).
+      enableForms: entry.webview.options.enableForms !== false,
     };
   }
 
@@ -560,6 +759,7 @@ class ExtensionHost {
   async openTextDocument(arg) {
     if (arg && typeof arg === 'object' && !Uri.isUri(arg) && !arg.scheme) {
       const doc = new TextDocument(Uri.parse(`untitled:Untitled-${this.documents.size + 1}`), arg.content || '', arg.language);
+      this._bindDocument(doc);
       this.documents.set(doc.uri.toString(), doc);
       this.events.openDocument.fire(doc);
       return doc;
@@ -568,11 +768,11 @@ class ExtensionHost {
     const key = uri.toString();
     const existing = this.documents.get(key);
     if (existing) {
-      // Sem watcher no PoC: documento limpo é relido do disco a cada abertura
-      // (o CLI do agente edita arquivos por fora).
-      if (uri.scheme === 'file' && !existing.isDirty) {
+      // Documento que o app não espelha: o disco é a verdade (o CLI do agente
+      // edita por fora). O watcher também atualiza; reler aqui cobre a corrida.
+      if (uri.scheme === 'file' && !existing._appOwned && !existing.isDirty) {
         try {
-          if (existing._update(await fs.promises.readFile(uri.fsPath, 'utf8'))) this.events.changeDocument.fire({ document: existing, contentChanges: [], reason: undefined });
+          this._replaceText(existing, await fs.promises.readFile(uri.fsPath, 'utf8'));
         } catch {
           /* mantém o conteúdo conhecido */
         }
@@ -584,18 +784,32 @@ class ExtensionHost {
       text = await fs.promises.readFile(uri.fsPath, 'utf8');
     } else if (this.contentProviders.has(uri.scheme)) {
       const cts = new types.CancellationTokenSource();
-      text = await this.contentProviders.get(uri.scheme).provideTextDocumentContent(uri, cts.token);
+      text = await this.contentProviders.get(uri.scheme).provider.provideTextDocumentContent(uri, cts.token);
     } else if (this.fsProviders.has(uri.scheme)) {
-      text = Buffer.from(await this.fsProviders.get(uri.scheme).readFile(uri)).toString('utf8');
+      text = Buffer.from(await this.fsProviders.get(uri.scheme).provider.readFile(uri)).toString('utf8');
     } else if (uri.scheme === 'untitled') {
       text = '';
     } else {
       throw new Error(`Não é possível abrir documento com esquema '${uri.scheme}'`);
     }
+    // Pode ter sido aberto em paralelo (await acima).
+    if (this.documents.has(key)) return this.documents.get(key);
     const doc = new TextDocument(uri, text);
+    this._bindDocument(doc);
     this.documents.set(key, doc);
     this.events.openDocument.fire(doc);
     return doc;
+  }
+
+  _bindDocument(doc) {
+    doc._saveHandler = (d) => this.saveDocument(d);
+  }
+
+  /** Troca o texto e dispara onDidChangeTextDocument com a mudança mínima. */
+  _replaceText(doc, text, version, reason) {
+    const changes = doc._update(text, version);
+    if (changes) this.events.changeDocument.fire({ document: doc, contentChanges: changes, reason });
+    return !!changes;
   }
 
   async _textOf(uri) {
@@ -608,39 +822,165 @@ class ExtensionHost {
     }
   }
 
-  async showTextDocument(docOrUri, columnOrOptions, _preserveFocus) {
-    const doc = Uri.isUri(docOrUri) || typeof docOrUri === 'string' ? await this.openTextDocument(docOrUri) : docOrUri;
+  // ---- espelho dos modelos do Monaco (o app manda; ver editorBridge.ts)
+  _docForPath(p) {
+    return this.documents.get(Uri.file(path.resolve(p)).toString());
+  }
+
+  /** App abriu um modelo `file://` no Monaco. */
+  documentOpened({ path: p, languageId, version, text, dirty }) {
+    const uri = Uri.file(path.resolve(p));
+    let doc = this.documents.get(uri.toString());
+    if (doc) {
+      doc._appOwned = true;
+      doc.isDirty = !!dirty;
+      if (languageId) doc.languageId = languageId;
+      this._replaceText(doc, text, version);
+      return;
+    }
+    doc = new TextDocument(uri, text, languageId, version || 1);
+    doc._appOwned = true;
+    doc.isDirty = !!dirty;
+    this._bindDocument(doc);
+    this.documents.set(uri.toString(), doc);
+    this.events.openDocument.fire(doc);
+  }
+
+  /** Mudanças incrementais do modelo (contentChanges do Monaco, 0-based). */
+  documentChanged({ path: p, version, changes, dirty, reason, text }) {
+    const doc = this._docForPath(p);
+    if (!doc) return;
+    if (dirty !== undefined) doc.isDirty = !!dirty;
+    const why = reason === 'undo' ? types.TextDocumentChangeReason.Undo : reason === 'redo' ? types.TextDocumentChangeReason.Redo : undefined;
+    if (typeof text === 'string') {
+      this._replaceText(doc, text, version, why);
+      return;
+    }
+    if (version !== undefined && version <= doc.version) return; // repetido
+    const contentChanges = doc._applyChanges(changes, version);
+    this.events.changeDocument.fire({ document: doc, contentChanges, reason: why });
+  }
+
+  documentClosed({ path: p }) {
+    const doc = this._docForPath(p);
+    if (!doc) return;
+    // Continua conhecido (como no VS Code, o documento só some quando ninguém o
+    // referencia); passa a seguir o disco.
+    doc._appOwned = false;
+    doc.isDirty = false;
+    this.events.closeDocument.fire(doc);
+  }
+
+  /** O app salvou (Ctrl+S ou o nosso save()). */
+  documentSaved({ path: p, text }) {
+    const doc = this._docForPath(p);
+    if (!doc) return;
+    if (typeof text === 'string') this._replaceText(doc, text);
+    doc.isDirty = false;
+    this.events.saveDocument.fire(doc);
+    this.watchers.notify('change', path.resolve(p));
+  }
+
+  async saveDocument(doc) {
+    if (doc.uri.scheme !== 'file') {
+      // Lado direito de um diff (esquema virtual): "salvar" no VS Code dispara
+      // onWillSave/onDidSave — o Claude Code aceita o diff assim.
+      this._fireWillSave(doc);
+      this.events.saveDocument.fire(doc);
+      return true;
+    }
+    this._fireWillSave(doc);
+    if (doc._appOwned && this.appConnected) {
+      const r = await this.request('saveDocument', { path: doc.uri.fsPath });
+      return !!(r && r.saved);
+    }
+    await fs.promises.writeFile(doc.uri.fsPath, doc.getText());
+    doc.isDirty = false;
+    this.events.saveDocument.fire(doc);
+    return true;
+  }
+
+  _fireWillSave(doc) {
+    const waits = [];
+    this.events.willSaveDocument.fire({ document: doc, reason: types.TextDocumentSaveReason.Manual, waitUntil: (p) => waits.push(p) });
+    return waits;
+  }
+
+  async saveAll() {
+    const dirty = [...this.documents.values()].filter((d) => d.isDirty);
+    for (const d of dirty) await this.saveDocument(d);
+    return true;
+  }
+
+  async showTextDocument(docOrUri, columnOrOptions, preserveFocusArg) {
+    const doc = Uri.isUri(docOrUri) || typeof docOrUri === 'string' || (docOrUri && docOrUri.scheme && !docOrUri.getText) ? await this.openTextDocument(docOrUri) : docOrUri;
     const opts = columnOrOptions && typeof columnOrOptions === 'object' ? columnOrOptions : {};
-    const sel = opts.selection ? new Selection(opts.selection.start, opts.selection.end) : undefined;
+    const preserveFocus = opts.preserveFocus !== undefined ? !!opts.preserveFocus : !!preserveFocusArg;
+    const sel = opts.selection ? toSelection(opts.selection) : undefined;
     if (doc.uri.scheme === 'file') {
-      this.emit({
-        event: 'openFile',
-        path: doc.uri.fsPath,
-        selection: sel ? { start: { line: sel.start.line, character: sel.start.character }, end: { line: sel.end.line, character: sel.end.character } } : undefined,
-        preview: opts.preview,
-      });
+      this.emit({ event: 'openFile', path: doc.uri.fsPath, selection: sel ? plainRange(sel) : undefined, preview: opts.preview, preserveFocus });
     } else {
       // Documento virtual: mostra como somente leitura no app.
       this.emit({ event: 'openVirtualDocument', uri: doc.uri.toString(), title: path.basename(doc.uri.path), languageId: doc.languageId, content: doc.getText() });
     }
-    const editor = new TextEditor(doc, sel, typeof columnOrOptions === 'number' ? columnOrOptions : opts.viewColumn || 1);
-    this._setActiveEditor(editor);
+    let editor = this._visibleEditors.find((e) => e.document === doc);
+    if (!editor) editor = new TextEditor(doc, sel, typeof columnOrOptions === 'number' ? columnOrOptions : opts.viewColumn || 1, this);
+    else if (sel) editor._acceptSelections([sel]);
+    if (!preserveFocus || !this._activeEditor) this._setActiveEditor(editor);
     return editor;
   }
 
-  async openDiff(left, right, title, opts) {
-    const [leftContent, rightContent] = await Promise.all([this._textOf(left), this._textOf(right)]);
-    this.emit({
-      event: 'diff',
-      title: title || `${path.basename(left.path)} ↔ ${path.basename(right.path)}`,
-      left: { uri: left.toString(), path: left.scheme === 'file' ? left.fsPath : undefined, content: leftContent },
-      right: { uri: right.toString(), path: right.scheme === 'file' ? right.fsPath : undefined, content: rightContent },
-      preview: opts && opts.preview,
-    });
-    // O diff aparece como aba TabInputTextDiff (as extensões consultam tabGroups).
-    this._diffTabs.push({ left, right, title });
-    this.events.tabs.fire({ opened: [], closed: [], changed: [] });
-    return undefined;
+  // ---- edições (TextEditor.edit / workspace.applyEdit)
+  /**
+   * Aplica edições num documento. Arquivo aberto/abrível no app → o app aplica
+   * no modelo do Monaco (com undo, sem gravar no disco). Sem app → disco.
+   */
+  async applyTextEdits(doc, edits, opts = {}) {
+    const r = await this._applyEditsBatch([{ uri: doc.uri, edits }], opts);
+    return r;
+  }
+
+  async _applyEditsBatch(batch, opts = {}) {
+    const appEdits = [];
+    for (const { uri, edits } of batch) {
+      const doc = this.documents.get(uri.toString()) || (await this.openTextDocument(uri));
+      if (uri.scheme === 'file' && this.appConnected) {
+        appEdits.push({ path: uri.fsPath, edits: edits.map((e) => ({ range: plainRange(toRange(e.range)), text: e.text !== undefined ? e.text : e.newText })) });
+        continue;
+      }
+      // Documento virtual ou sem app: aplica aqui (de trás para frente).
+      let text = doc.getText();
+      const sorted = edits
+        .map((e) => ({ s: doc.offsetAt(toRange(e.range).start), e: doc.offsetAt(toRange(e.range).end), t: e.text !== undefined ? e.text : e.newText }))
+        .sort((a, b) => b.s - a.s);
+      for (const e of sorted) text = text.slice(0, e.s) + e.t + text.slice(e.e);
+      if (uri.scheme === 'file') {
+        await fs.promises.writeFile(uri.fsPath, text);
+        this.emit({ event: 'filesChanged', paths: [uri.fsPath] });
+      } else if (this.fsProviders.has(uri.scheme) && !this.fsProviders.get(uri.scheme).options.isReadonly) {
+        try {
+          await this.fsProviders.get(uri.scheme).provider.writeFile(uri, Buffer.from(text), { create: true, overwrite: true });
+        } catch {
+          /* provider só leitura: o documento em memória basta */
+        }
+      }
+      this._replaceText(doc, text);
+      if (uri.scheme !== 'file') doc.isDirty = true;
+    }
+    if (!appEdits.length) return true;
+    const r = await this.request('applyEdit', { edits: appEdits, undoStopBefore: opts.undoStopBefore !== false, undoStopAfter: opts.undoStopAfter !== false });
+    if (!r || !r.applied) return false;
+    // O app devolve o texto final dos modelos: garante que o documento já está
+    // atualizado quando a promise resolve (como no VS Code).
+    for (const d of r.docs || []) {
+      const doc = this._docForPath(d.path);
+      if (doc) {
+        doc._appOwned = true;
+        doc.isDirty = d.dirty !== false;
+        if (typeof d.text === 'string' && (d.version === undefined || d.version > doc.version || doc.getText() !== d.text)) this._replaceText(doc, d.text, d.version);
+      }
+    }
+    return true;
   }
 
   async applyWorkspaceEdit(edit) {
@@ -649,27 +989,28 @@ class ExtensionHost {
       for (const op of edit._edits || []) {
         if (op.kind === 'create') {
           await fs.promises.mkdir(path.dirname(op.uri.fsPath), { recursive: true });
-          if (!(op.options && op.options.ignoreIfExists && fs.existsSync(op.uri.fsPath))) await fs.promises.writeFile(op.uri.fsPath, '');
+          const exists = fs.existsSync(op.uri.fsPath);
+          if (exists && !(op.options && (op.options.overwrite || op.options.ignoreIfExists))) throw new Error(`Arquivo já existe: ${op.uri.fsPath}`);
+          if (!(exists && op.options && op.options.ignoreIfExists)) await fs.promises.writeFile(op.uri.fsPath, op.options && op.options.contents ? Buffer.from(op.options.contents) : '');
           touched.push(op.uri.fsPath);
+          this.events.createFiles.fire({ files: [op.uri] });
         } else if (op.kind === 'delete') {
           await fs.promises.rm(op.uri.fsPath, { recursive: !!(op.options && op.options.recursive), force: !!(op.options && op.options.ignoreIfNotExists) });
           touched.push(op.uri.fsPath);
+          this.events.deleteFiles.fire({ files: [op.uri] });
         } else if (op.kind === 'rename') {
+          if (fs.existsSync(op.newUri.fsPath) && !(op.options && op.options.overwrite)) {
+            if (op.options && op.options.ignoreIfExists) continue;
+            throw new Error(`Destino já existe: ${op.newUri.fsPath}`);
+          }
+          await fs.promises.mkdir(path.dirname(op.newUri.fsPath), { recursive: true });
           await fs.promises.rename(op.uri.fsPath, op.newUri.fsPath);
           touched.push(op.uri.fsPath, op.newUri.fsPath);
+          this.events.renameFiles.fire({ files: [{ oldUri: op.uri, newUri: op.newUri }] });
         }
       }
-      for (const [uri, edits] of edit.entries()) {
-        const doc = await this.openTextDocument(uri);
-        let text = doc.getText();
-        const sorted = edits.map((e) => ({ s: doc.offsetAt(e.range.start), e: doc.offsetAt(e.range.end), t: e.newText })).sort((a, b) => b.s - a.s);
-        for (const e of sorted) text = text.slice(0, e.s) + e.t + text.slice(e.e);
-        if (uri.scheme === 'file') {
-          await fs.promises.writeFile(uri.fsPath, text);
-          touched.push(uri.fsPath);
-        }
-        if (doc._update(text)) this.events.changeDocument.fire({ document: doc, contentChanges: [], reason: undefined });
-      }
+      const batch = edit.entries().map(([uri, edits]) => ({ uri, edits }));
+      if (batch.length && !(await this._applyEditsBatch(batch))) return false;
     } catch (err) {
       this.log('applyEdit falhou:', err);
       return false;
@@ -682,6 +1023,17 @@ class ExtensionHost {
     this.emit({ event: 'filesChanged', paths: [fsPath] });
   }
 
+  /** Watcher viu mudança num arquivo: documentos não espelhados seguem o disco. */
+  async _onDiskChange(kind, abs) {
+    const doc = this._docForPath(abs);
+    if (!doc || doc._appOwned || doc.isDirty || kind === 'delete') return;
+    try {
+      this._replaceText(doc, await fs.promises.readFile(abs, 'utf8'));
+    } catch {
+      /* sumiu */
+    }
+  }
+
   // ------------------------------------------------------ editor (do app)
   get activeTextEditor() {
     return this._activeEditor;
@@ -691,77 +1043,293 @@ class ExtensionHost {
   }
 
   _setActiveEditor(editor) {
+    if (this._activeEditor === editor) return;
     this._activeEditor = editor;
-    this._visibleEditors = editor ? [editor, ...this._visibleEditors.filter((e) => e.document !== editor.document)] : [];
+    if (editor && !this._visibleEditors.includes(editor)) this._setVisibleEditors([editor, ...this._visibleEditors.filter((e) => e.document !== editor.document)]);
     this.events.activeTextEditor.fire(editor);
-    this.events.visibleTextEditors.fire(this._visibleEditors);
+  }
+
+  _setVisibleEditors(list) {
+    const same = list.length === this._visibleEditors.length && list.every((e, i) => e === this._visibleEditors[i]);
+    this._visibleEditors = list;
+    if (!same) this.events.visibleTextEditors.fire(list);
+  }
+
+  _editorFor(doc, viewColumn) {
+    return this._visibleEditors.find((e) => e.document === doc) || new TextEditor(doc, undefined, viewColumn || 1, this);
   }
 
   /**
-   * Estado do editor publicado pelo Fluent Coder (Monaco):
-   * { path, languageId?, text?, selection?:{start:{line,character},end:{…}}, openFiles?:string[] }
-   * `path: null` = nenhum editor de texto ativo.
+   * Estado dos editores publicado pelo app (eventos do Monaco, sem polling):
+   * { active: {path, selections, visibleRanges?, viewColumn?} | null,
+   *   visible: [{path, selections?, viewColumn?}], tabs: [{path, dirty, active, preview?}] }
+   * Documentos citados já foram enviados por `documentOpened`.
    */
-  async setEditorState(state) {
-    this._openFiles = Array.isArray(state.openFiles) ? state.openFiles : this._openFiles || [];
-    if (!state.path) {
-      if (this._activeEditor) this._setActiveEditor(undefined);
-      this.events.tabs.fire({ opened: [], closed: [], changed: [] });
-      return;
+  editorsChanged(state) {
+    const visible = [];
+    for (const v of state.visible || []) {
+      const doc = this._docForPath(v.path);
+      if (!doc) continue;
+      const ed = this._editorFor(doc, v.viewColumn);
+      if (v.selections) ed._acceptSelections(v.selections.map(toSelection));
+      visible.push(ed);
     }
-    const uri = Uri.file(state.path);
-    let doc = this.documents.get(uri.toString());
-    if (!doc) {
-      let text = state.text;
-      if (typeof text !== 'string') {
-        try {
-          text = await fs.promises.readFile(state.path, 'utf8');
-        } catch {
-          text = '';
-        }
+    let active;
+    if (state.active && state.active.path) {
+      const doc = this._docForPath(state.active.path);
+      if (doc) {
+        active = visible.find((e) => e.document === doc) || this._editorFor(doc, state.active.viewColumn);
+        if (state.active.selections) active._acceptSelections(state.active.selections.map(toSelection));
+        if (!visible.includes(active)) visible.unshift(active);
       }
-      doc = new TextDocument(uri, text, state.languageId);
-      this.documents.set(uri.toString(), doc);
-      this.events.openDocument.fire(doc);
-    } else if (typeof state.text === 'string') {
-      doc.isDirty = !!state.dirty;
-      if (doc._update(state.text)) this.events.changeDocument.fire({ document: doc, contentChanges: [], reason: undefined });
-    } else if (doc.isDirty) {
-      // Buffer voltou a ficar limpo (salvo): o disco é a verdade de novo.
-      doc.isDirty = false;
-      try {
-        if (doc._update(await fs.promises.readFile(state.path, 'utf8'))) this.events.changeDocument.fire({ document: doc, contentChanges: [], reason: undefined });
-      } catch {
-        /* arquivo sumiu */
-      }
-      this.events.saveDocument.fire(doc);
     }
-    const s = state.selection;
-    const sel = s ? new Selection(new Position(s.start.line, s.start.character), new Position(s.end.line, s.end.character)) : new Selection(0, 0, 0, 0);
-    const cur = this._activeEditor;
-    if (cur && cur.document === doc) {
-      if (!cur.selection.isEqual(sel)) {
-        cur.selections = [sel];
-        this.events.textEditorSelection.fire({ textEditor: cur, selections: cur.selections, kind: types.TextEditorSelectionChangeKind.Mouse });
-      }
-    } else {
-      this._setActiveEditor(new TextEditor(doc, sel, 1));
-      this.events.textEditorSelection.fire({ textEditor: this._activeEditor, selections: this._activeEditor.selections, kind: undefined });
+    // Editores dos diffs abertos continuam visíveis (o Claude depende disso).
+    for (const d of this._diffTabs) for (const e of d.editors) if (!visible.includes(e)) visible.push(e);
+    if (Array.isArray(state.tabs)) this._appTabs = state.tabs.filter((t) => t && typeof t.path === 'string');
+    // O usuário voltou para um arquivo: o diff deixa de ser a aba ativa.
+    if (active) this._activeDiff = null;
+    this._setVisibleEditors(visible);
+    if (active !== this._activeEditor) {
+      this._activeEditor = active;
+      this.events.activeTextEditor.fire(active);
+      if (active) this.events.textEditorSelection.fire({ textEditor: active, selections: active.selections, kind: undefined });
     }
     this.events.tabs.fire({ opened: [], closed: [], changed: [] });
   }
 
+  selectionChanged({ path: p, selections, kind }) {
+    const doc = this._docForPath(p);
+    const ed = doc && this._visibleEditors.find((e) => e.document === doc);
+    if (!ed) return;
+    const sels = (selections || []).map(toSelection);
+    if (sels.length === ed.selections.length && sels.every((s, i) => s.isEqual(ed.selections[i]))) return;
+    ed._acceptSelections(sels);
+    const k = kind === 'keyboard' ? types.TextEditorSelectionChangeKind.Keyboard : kind === 'mouse' ? types.TextEditorSelectionChangeKind.Mouse : kind === 'command' ? types.TextEditorSelectionChangeKind.Command : undefined;
+    this.events.textEditorSelection.fire({ textEditor: ed, selections: sels, kind: k });
+  }
+
+  visibleRangesChanged({ path: p, ranges }) {
+    const doc = this._docForPath(p);
+    const ed = doc && this._visibleEditors.find((e) => e.document === doc);
+    if (!ed || !Array.isArray(ranges)) return;
+    ed.visibleRanges = ranges.map(toRange);
+    this.events.textEditorVisibleRanges.fire({ textEditor: ed, visibleRanges: ed.visibleRanges });
+  }
+
+  // ---- extensão → editor do app
+  setEditorSelections(editor, selections) {
+    if (editor.document.uri.scheme !== 'file') return;
+    this.emit({ event: 'setSelection', path: editor.document.uri.fsPath, selections: selections.map((s) => ({ anchor: { line: s.anchor.line, character: s.anchor.character }, active: { line: s.active.line, character: s.active.character } })) });
+    this.events.textEditorSelection.fire({ textEditor: editor, selections, kind: types.TextEditorSelectionChangeKind.Command });
+  }
+
+  revealRange(editor, range, revealType) {
+    if (editor.document.uri.scheme !== 'file') return;
+    this.emit({ event: 'revealRange', path: editor.document.uri.fsPath, range: plainRange(range), revealType: revealType || 0 });
+  }
+
+  createDecorationType(ext, options) {
+    const key = `d${crypto.randomBytes(6).toString('hex')}`;
+    const opts = sanitizeDecorationOptions(options || {});
+    this.decorationTypes.set(key, { ext, options: opts });
+    this.emit({ event: 'decorationType', key, options: opts });
+    return {
+      key,
+      dispose: () => {
+        if (this.decorationTypes.delete(key)) this.emit({ event: 'decorationTypeDisposed', key });
+      },
+    };
+  }
+
+  setDecorations(editor, type, rangesOrOptions) {
+    if (!type || !this.decorationTypes.has(type.key) || editor.document.uri.scheme !== 'file') return;
+    const items = (rangesOrOptions || []).slice(0, 5000).map((r) => {
+      if (r instanceof Range || (r && r.start && r.end && !r.range)) return { range: plainRange(toRange(r)) };
+      const o = { range: plainRange(toRange(r.range)) };
+      if (r.hoverMessage) o.hoverMessage = markdownText(r.hoverMessage);
+      if (r.renderOptions) o.renderOptions = sanitizeDecorationOptions(r.renderOptions);
+      return o;
+    });
+    this.emit({ event: 'decorations', path: editor.document.uri.fsPath, key: type.key, items });
+  }
+
+  // ---------------------------------------------------------- diagnósticos
+  /** Markers do Monaco publicados pelo app: [{path, diagnostics:[{range,message,severity,source,code}]}]. */
+  setDiagnostics(entries) {
+    const uris = [];
+    for (const e of entries || []) {
+      if (!e || typeof e.path !== 'string') continue;
+      const uri = Uri.file(path.resolve(e.path));
+      const list = (e.diagnostics || []).map((d) => {
+        const diag = new types.Diagnostic(toRange(d.range), String(d.message || ''), typeof d.severity === 'number' ? d.severity : SEVERITY[String(d.severity).toLowerCase()] ?? 0);
+        if (d.source) diag.source = String(d.source);
+        if (d.code !== undefined) diag.code = d.code;
+        return diag;
+      });
+      if (list.length) this.diagnostics.set(uri.toString(), list);
+      else this.diagnostics.delete(uri.toString());
+      uris.push(uri);
+    }
+    if (uris.length) this.events.diagnostics.fire({ uris });
+  }
+
+  /** getDiagnostics: markers do app + coleções criadas pelas extensões. */
+  getDiagnostics(uri) {
+    const merged = new Map(this.diagnostics);
+    for (const coll of this.diagnosticCollections) {
+      coll.forEach((u, list) => {
+        const k = u.toString();
+        merged.set(k, [...(merged.get(k) || []), ...list]);
+      });
+    }
+    if (uri) return merged.get(toUri(uri).toString()) || [];
+    return [...merged.entries()].map(([k, v]) => [Uri.parse(k), v]);
+  }
+
+  /** Coleção de diagnósticos de uma extensão mudou: espelha como markers no app. */
+  publishCollection(name, uri, list) {
+    if (!uri || uri.scheme !== 'file') return;
+    this.emit({
+      event: 'extDiagnostics',
+      owner: `ext:${name}`,
+      path: uri.fsPath,
+      diagnostics: (list || []).slice(0, 1000).map((d) => ({ range: plainRange(d.range), message: String(d.message), severity: d.severity, source: d.source })),
+    });
+    this.events.diagnostics.fire({ uris: [uri] });
+  }
+
+  // ---------------------------------------------------------------- diffs
+  _diffById(id) {
+    return id ? this._diffTabs.find((d) => d.id === id) : undefined;
+  }
+
+  async openDiff(left, right, title, opts = {}) {
+    const [leftDoc, rightDoc] = await Promise.all([this.openTextDocument(left).catch(() => null), this.openTextDocument(right).catch(() => null)]);
+    const leftContent = leftDoc ? leftDoc.getText() : '';
+    const rightContent = rightDoc ? rightDoc.getText() : '';
+    // Mesmo par já aberto: só reativa.
+    let diff = this._diffTabs.find((d) => d.left.toString() === left.toString() && d.right.toString() === right.toString());
+    const ext = this._ownerOfScheme(right.scheme) || this._ownerOfScheme(left.scheme);
+    if (!diff) {
+      const editors = [leftDoc, rightDoc].filter(Boolean).map((d) => new TextEditor(d, undefined, 1, this));
+      diff = { id: `diff${this._nextDiff++}`, left, right, title: title || `${path.basename(left.path)} ↔ ${path.basename(right.path)}`, ext, editors, openedAt: Date.now() };
+      this._diffTabs.push(diff);
+    }
+    this._activeDiff = diff.id;
+    const filePath = left.scheme === 'file' ? left.fsPath : right.scheme === 'file' ? right.fsPath : right.path;
+    const isNewFile = left.scheme === 'file' ? !fs.existsSync(left.fsPath) : !leftContent;
+    const reviewable = !!(ext && ext.contributions.editorTitle.some((m) => /accept/i.test(m.command)));
+    this.emit({
+      event: 'diff',
+      diffId: diff.id,
+      title: diff.title,
+      extensionId: ext ? ext.id : undefined,
+      extensionName: ext ? ext.packageJSON.displayName || ext.packageJSON.name : undefined,
+      filePath,
+      isNewFile,
+      reviewable,
+      left: { uri: left.toString(), path: left.scheme === 'file' ? left.fsPath : undefined, content: leftContent },
+      right: { uri: right.toString(), path: right.scheme === 'file' ? right.fsPath : undefined, content: rightContent, readonly: !!(this.fsProviders.get(right.scheme) && this.fsProviders.get(right.scheme).options.isReadonly) },
+      preview: opts && opts.preview,
+      preserveFocus: !!(opts && opts.preserveFocus),
+    });
+    // Diff = aba TabInputTextDiff ativa + dois editores visíveis (o Claude Code
+    // liga `claude-code.viewingProposedDiff` pelos visibleTextEditors).
+    this._setVisibleEditors([...this._visibleEditors.filter((e) => !diff.editors.includes(e)), ...diff.editors]);
+    if (!(opts && opts.preserveFocus) && diff.editors.length) {
+      const modified = diff.editors[diff.editors.length - 1];
+      this._activeEditor = modified;
+      this.events.activeTextEditor.fire(modified);
+    }
+    this.events.tabs.fire({ opened: [], closed: [], changed: [] });
+    return undefined;
+  }
+
+  _ownerOfScheme(scheme) {
+    const reg = this.fsProviders.get(scheme) || this.contentProviders.get(scheme);
+    return reg ? reg.ext : undefined;
+  }
+
+  _closeDiff(diff, fromApp) {
+    if (!this._diffTabs.includes(diff)) return;
+    this._diffTabs = this._diffTabs.filter((d) => d !== diff);
+    if (this._activeDiff === diff.id) this._activeDiff = null;
+    this._setVisibleEditors(this._visibleEditors.filter((e) => !diff.editors.includes(e)));
+    if (this._activeEditor && diff.editors.includes(this._activeEditor)) {
+      this._activeEditor = this._visibleEditors.find((e) => e.document.uri.scheme === 'file');
+      this.events.activeTextEditor.fire(this._activeEditor);
+    }
+    if (!fromApp) this.emit({ event: 'closeDiff', diffId: diff.id, left: diff.left.toString(), right: diff.right.toString() });
+    this.events.tabs.fire({ opened: [], closed: [], changed: [] });
+  }
+
+  /**
+   * Aceitar/Rejeitar no overlay do app, com a semântica do VS Code:
+   * 1. comando do menu `editor/title` da extensão cujo `when` vale (ex.:
+   *    `claude-code.acceptProposedDiff` com `claude-code.viewingProposedDiff`);
+   * 2. aceitar sem comando aplicável = "salvar" o lado direito
+   *    (onWillSave/onDidSave — o Claude aceita assim com files.autoSave off);
+   *    rejeitar = fechar a aba do diff.
+   * `text` = conteúdo final do lado direito (o usuário pode editar).
+   */
+  async diffAction(diffId, action, text) {
+    const diff = this._diffById(diffId);
+    if (!diff) return { ok: false, error: 'diff não está mais aberto' };
+    // A extensão só passa a escutar aceitar/rejeitar depois de ver a aba
+    // (o Claude Code confere a cada 100 ms): um clique instantâneo se perderia.
+    const settle = DIFF_SETTLE_MS - (Date.now() - diff.openedAt);
+    if (settle > 0) await new Promise((r) => setTimeout(r, settle));
+    const rightDoc = this.documents.get(diff.right.toString());
+    if (typeof text === 'string' && rightDoc && text !== rightDoc.getText()) {
+      this._replaceText(rightDoc, text);
+      rightDoc.isDirty = true;
+    }
+    // A aba do diff passa a ser a ativa (os comandos leem activeTab).
+    this._activeDiff = diff.id;
+    this.events.tabs.fire({ opened: [], closed: [], changed: [] });
+    const want = action === 'accept' ? /accept/i : /reject/i;
+    const ext = diff.ext;
+    const candidates = ext ? ext.contributions.editorTitle.filter((m) => want.test(m.command)) : [];
+    const match = candidates.find((m) => this.commands.has(m.command) && this.evaluateWhen(m.when));
+    if (match) {
+      await this.executeCommand(match.command);
+      return { ok: true, via: match.command };
+    }
+    if (action === 'accept') {
+      if (rightDoc && this.config.lookup('files.autoSave') === 'off') {
+        await this.saveDocument(rightDoc);
+        return { ok: true, via: 'save' };
+      }
+      const any = candidates.find((m) => this.commands.has(m.command));
+      if (any) {
+        await this.executeCommand(any.command);
+        return { ok: true, via: any.command };
+      }
+      return { ok: false, error: 'a extensão não oferece um comando para aceitar este diff' };
+    }
+    this._closeDiff(diff, false);
+    return { ok: true, via: 'close' };
+  }
+
+  /** Usuário fechou o diff no app (Esc/fechar): como fechar a aba no VS Code. */
+  diffClosed(diffId) {
+    const diff = this._diffById(diffId);
+    if (diff) this._closeDiff(diff, true);
+  }
+
   get tabGroups() {
     const host = this;
-    const tabs = (this._openFiles || []).map((p) => ({
-      label: path.basename(p),
-      input: new types.TabInputText(Uri.file(p)),
-      isActive: !!(host._activeEditor && host._activeEditor.document.uri.fsPath === p),
-      isDirty: false,
+    const tabs = (this._appTabs || []).map((t) => ({
+      label: path.basename(t.path),
+      input: new types.TabInputText(Uri.file(t.path)),
+      isActive: !host._activeDiff && !!t.active,
+      isDirty: !!t.dirty,
       isPinned: false,
-      isPreview: false,
+      isPreview: !!t.preview,
     }));
-    for (const d of this._diffTabs) tabs.push({ label: d.title || 'diff', input: new types.TabInputTextDiff(d.left, d.right), isActive: false, isDirty: false, isPinned: false, isPreview: false });
+    for (const d of this._diffTabs) {
+      tabs.push({ label: d.title || 'diff', input: new types.TabInputTextDiff(d.left, d.right), isActive: host._activeDiff === d.id, isDirty: false, isPinned: false, isPreview: false, _diffId: d.id });
+    }
     const group = { isActive: true, viewColumn: 1, tabs, activeTab: tabs.find((t) => t.isActive) };
     for (const t of tabs) t.group = group;
     return {
@@ -770,11 +1338,16 @@ class ExtensionHost {
       onDidChangeTabs: this.events.tabs.event,
       onDidChangeTabGroups: this.events.tabGroups.event,
       close: async (tabOrTabs) => {
-        const list = Array.isArray(tabOrTabs) ? tabOrTabs : [tabOrTabs];
+        const list = (Array.isArray(tabOrTabs) ? tabOrTabs : [tabOrTabs]).filter(Boolean);
         for (const t of list) {
-          if (t && t.input instanceof types.TabInputTextDiff) {
-            host._diffTabs = host._diffTabs.filter((d) => d.left.toString() !== t.input.original.toString() || d.right.toString() !== t.input.modified.toString());
-            host.emit({ event: 'closeDiff', left: t.input.original.toString(), right: t.input.modified.toString() });
+          if (t.input instanceof types.TabInputTextDiff) {
+            const d = host._diffTabs.find((x) => x.left.toString() === t.input.original.toString() && x.right.toString() === t.input.modified.toString());
+            if (d) host._closeDiff(d, false);
+          } else if (t.input instanceof types.TabInputText && t.input.uri.scheme === 'file') {
+            host.emit({ event: 'closeEditor', path: t.input.uri.fsPath });
+          } else if (t.group && Array.isArray(t.tabs)) {
+            // Fechar um grupo inteiro.
+            for (const x of t.tabs) if (x.input instanceof types.TabInputTextDiff && x._diffId) host.diffClosed(x._diffId);
           }
         }
         host.events.tabs.fire({ opened: [], closed: list, changed: [] });
@@ -785,50 +1358,196 @@ class ExtensionHost {
 
   // ---------------------------------------------------------- terminal
   createTerminal(ext, options) {
-    const host = this;
-    const em = new EventEmitter();
-    const term = {
-      name: options.name || 'Terminal',
-      creationOptions: options,
-      processId: Promise.resolve(undefined),
-      exitStatus: undefined,
-      state: { isInteractedWith: false },
-      shellIntegration: undefined,
-      sendText(text, addNewLine = true) {
-        host.emit({ event: 'terminalSendText', name: term.name, text: addNewLine ? text + '\n' : text });
-      },
-      show() {
-        host.emit({ event: 'terminalShow', name: term.name, options: safeOptions(options) });
-      },
-      hide() {},
-      dispose() {
-        host.terminals = host.terminals.filter((t) => t !== term);
-        host.events.closeTerminal.fire(term);
-      },
-      onDidWrite: em.event,
-    };
+    const term = new Terminal(this, { ...options, _extensionId: ext.id }, [ext.envVars]);
     this.terminals.push(term);
     this.events.openTerminal.fire(term);
-    this.log(`createTerminal (stub, sem PTY no PoC): ${term.name}`);
+    if (!this.appConnected) term._onOpened(undefined);
     return term;
   }
 
-  handleUri(uri) {
-    for (const [id, handler] of this.uriHandlers) {
-      if (uri.authority && uri.authority.toLowerCase() !== id) continue;
+  _terminal(id) {
+    return this.terminals.find((t) => t.id === id);
+  }
+
+  _setActiveTerminal(term) {
+    if (this._activeTerminal === term) return;
+    this._activeTerminal = term;
+    this.events.activeTerminal.fire(term);
+  }
+
+  get activeTerminal() {
+    return this._activeTerminal;
+  }
+
+  /** App criou o PTY do terminal. */
+  terminalOpened(id, pid) {
+    const t = this._terminal(id);
+    if (t) t._onOpened(pid);
+  }
+
+  /** PTY encerrou (processo saiu ou o usuário fechou a aba). */
+  terminalClosed(id, exitCode, reason) {
+    const t = this._terminal(id);
+    if (!t) return;
+    this.terminals = this.terminals.filter((x) => x !== t);
+    t.exitStatus = { code: typeof exitCode === 'number' ? exitCode : undefined, reason: reason || (typeof exitCode === 'number' ? types.TerminalExitReason.Process : types.TerminalExitReason.User) };
+    t._disposed = true;
+    if (this._activeTerminal === t) this._setActiveTerminal(this.terminals[this.terminals.length - 1]);
+    this.events.closeTerminal.fire(t);
+  }
+
+  // ------------------------------------------------------------- CodeLens
+  /** `languages.registerCodeLensProvider` → lentes no Monaco (o app pede por documento). */
+  registerCodeLensProvider(ext, selector, provider) {
+    const reg = { ext, selector, provider };
+    this.codeLensProviders = this.codeLensProviders || new Set();
+    this.codeLensProviders.add(reg);
+    const sub = provider && typeof provider.onDidChangeCodeLenses === 'function' ? provider.onDidChangeCodeLenses(() => this.emit({ event: 'codeLensChanged' })) : null;
+    this.emit({ event: 'codeLensProviders', count: this.codeLensProviders.size });
+    return new Disposable(() => {
+      this.codeLensProviders.delete(reg);
+      if (sub) sub.dispose();
+      this.emit({ event: 'codeLensProviders', count: this.codeLensProviders.size });
+    });
+  }
+
+  async provideCodeLenses(p) {
+    const doc = this._docForPath(p) || (await this.openTextDocument(Uri.file(path.resolve(p))).catch(() => null));
+    if (!doc || !this.codeLensProviders) return [];
+    this._lensCommands = this._lensCommands || new Map();
+    // Comandos das lentes anteriores deste arquivo saem (o app pede de novo a cada mudança).
+    for (const [id, c] of this._lensCommands) if (c.path === p) this._lensCommands.delete(id);
+    const out = [];
+    for (const reg of this.codeLensProviders) {
+      if (!matchSelector(reg.selector, doc)) continue;
+      let lenses = [];
       try {
-        handler.handleUri(uri);
-        return true;
+        const cts = new types.CancellationTokenSource();
+        lenses = (await reg.provider.provideCodeLenses(doc, cts.token)) || [];
+        for (let i = 0; i < lenses.length; i++) {
+          if (!lenses[i].command && typeof reg.provider.resolveCodeLens === 'function') lenses[i] = (await reg.provider.resolveCodeLens(lenses[i], cts.token)) || lenses[i];
+        }
       } catch (err) {
-        this.log('handleUri falhou:', err);
+        this.log(`provideCodeLenses (${reg.ext.id}) falhou:`, err);
+        continue;
+      }
+      for (const lens of lenses.slice(0, 500)) {
+        if (!lens || !lens.range || !lens.command || !lens.command.title) continue;
+        const id = `lens${(this._nextLens = (this._nextLens || 0) + 1)}`;
+        this._lensCommands.set(id, { path: p, command: lens.command.command, args: lens.command.arguments || [] });
+        out.push({ id, range: plainRange(toRange(lens.range)), title: String(lens.command.title), tooltip: lens.command.tooltip ? String(lens.command.tooltip) : undefined, hasCommand: !!lens.command.command });
       }
     }
-    return false;
+    return out;
+  }
+
+  executeCodeLens(id) {
+    const c = this._lensCommands && this._lensCommands.get(id);
+    if (!c || !c.command) return undefined;
+    return this.executeCommand(c.command, ...c.args);
+  }
+
+  // ------------------------------------------------------------ URI handler
+  /**
+   * Deep link `fluent-coder://<publisher.nome>/…` (ou `vscode://`, ex.:
+   * openExternal da própria extensão). Ativa a extensão dona da autoridade se
+   * preciso (onUri) e chama o handler registrado.
+   */
+  async handleUri(uriOrString) {
+    const uri = typeof uriOrString === 'string' ? Uri.parse(uriOrString) : uriOrString;
+    const id = String(uri.authority || '').toLowerCase();
+    const ext = this.extensions.get(id);
+    if (ext && !ext.isActive) await this.activate(ext.id);
+    const handler = this.uriHandlers.get(id);
+    if (!handler) {
+      this.log(`handleUri: nenhuma extensão trata ${uri.toString(true)}`);
+      return false;
+    }
+    try {
+      await handler.handleUri(uri);
+      return true;
+    } catch (err) {
+      this.log('handleUri falhou:', err);
+      return false;
+    }
+  }
+
+  // ------------------------------------------------------------ saída (Output)
+  /** Espelha os output channels das extensões na aba "Saída" do app (em lote). */
+  outputAppend(channel, text) {
+    if (!this.appConnected) return;
+    const cur = this._outputBuf.get(channel) || '';
+    // Teto por janela de envio: canais muito verbosos não afogam o protocolo.
+    if (cur.length > 256 * 1024) return;
+    this._outputBuf.set(channel, cur + text);
+    if (!this._outputTimer) this._outputTimer = setTimeout(() => this._flushOutput(), 250);
+  }
+
+  _flushOutput() {
+    clearTimeout(this._outputTimer);
+    this._outputTimer = null;
+    for (const [channel, text] of this._outputBuf) if (text) this.emit({ event: 'output', channel, text });
+    this._outputBuf.clear();
   }
 }
 
-function safeOptions(o) {
-  return { name: o.name, cwd: o.cwd ? String(o.cwd.fsPath || o.cwd) : undefined, shellPath: o.shellPath, shellArgs: o.shellArgs };
+/** `DocumentSelector` (string de linguagem, filtro ou lista) casa com o documento? */
+function matchSelector(selector, doc) {
+  if (!selector) return false;
+  if (Array.isArray(selector)) return selector.some((s) => matchSelector(s, doc));
+  if (typeof selector === 'string') return selector === '*' || selector === doc.languageId;
+  if (selector.language && selector.language !== '*' && selector.language !== doc.languageId) return false;
+  if (selector.scheme && selector.scheme !== '*' && selector.scheme !== doc.uri.scheme) return false;
+  if (selector.pattern) {
+    const pat = typeof selector.pattern === 'string' ? selector.pattern : selector.pattern.pattern;
+    const base = typeof selector.pattern === 'object' && selector.pattern.baseUri ? selector.pattern.baseUri.fsPath : null;
+    const { globToRegExp } = require('./shim/api');
+    const target = base ? path.relative(base, doc.uri.fsPath).split(path.sep).join('/') : doc.uri.fsPath.split(path.sep).join('/');
+    if (!globToRegExp(pat).test(target) && !globToRegExp(`**/${pat}`).test(target)) return false;
+  }
+  return true;
+}
+
+/** Só propriedades de estilo conhecidas e valores sem `;{}<` (viram CSS no app). */
+function sanitizeDecorationOptions(o) {
+  const ALLOWED = ['backgroundColor', 'border', 'borderColor', 'borderRadius', 'borderStyle', 'borderWidth', 'color', 'fontStyle', 'fontWeight', 'opacity', 'outline', 'outlineColor', 'textDecoration', 'cursor', 'letterSpacing', 'isWholeLine', 'overviewRulerColor', 'rangeBehavior'];
+  const out = {};
+  const clean = (v) => {
+    if (v && typeof v === 'object' && typeof v.id === 'string') return { themeColor: v.id };
+    if (typeof v === 'string' && !/[;{}<>]/.test(v) && v.length < 200) return v;
+    if (typeof v === 'number' || typeof v === 'boolean') return v;
+    return undefined;
+  };
+  for (const k of ALLOWED) if (o[k] !== undefined && clean(o[k]) !== undefined) out[k] = clean(o[k]);
+  for (const side of ['before', 'after']) {
+    if (o[side] && typeof o[side] === 'object') {
+      const s = {};
+      for (const k of ['contentText', 'color', 'backgroundColor', 'fontStyle', 'fontWeight', 'margin', 'textDecoration', 'border']) {
+        if (o[side][k] !== undefined) {
+          const c = k === 'contentText' ? (typeof o[side][k] === 'string' ? o[side][k].slice(0, 500) : undefined) : clean(o[side][k]);
+          if (c !== undefined) s[k] = c;
+        }
+      }
+      out[side] = s;
+    }
+  }
+  for (const theme of ['light', 'dark']) if (o[theme] && typeof o[theme] === 'object') out[theme] = sanitizeDecorationOptions(o[theme]);
+  return out;
+}
+
+function markdownText(m) {
+  if (Array.isArray(m)) return m.map(markdownText).join('\n\n');
+  if (m && typeof m === 'object') return String(m.value || '');
+  return String(m || '');
+}
+
+/** Argumentos serializáveis (Uris viram string) para eventos ao app. */
+function safeArgs(args) {
+  try {
+    return JSON.parse(JSON.stringify(args, (_k, v) => (v instanceof Uri ? v.toString() : v)));
+  } catch {
+    return [];
+  }
 }
 
 function safeJson(v) {
@@ -844,4 +1563,4 @@ function summarize(m) {
   return s.length > 300 ? s.slice(0, 300) + '…' : s;
 }
 
-module.exports = { ExtensionHost, installRequireHook, os, Range };
+module.exports = { ExtensionHost, installRequireHook, sanitizeDecorationOptions, matchSelector, pathKey, os, Range };

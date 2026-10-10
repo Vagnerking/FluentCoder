@@ -73,11 +73,32 @@ var pendingTheme=null;
 window.addEventListener('message',function(e){var d=e.data;if(!d||d.__fluentCtl!==1)return;e.stopImmediatePropagation();
  if(d.type==='theme'){if(document.body)applyTheme(d.vars||{},d.kind);else pendingTheme=d}
  else if(d.type==='ping'){up({type:'pong',nonce:d.nonce})}
+ else if(d.type==='clipboardText'){var cb=clipWaiters[d.nonce];if(cb){delete clipWaiters[d.nonce];cb(typeof d.text==='string'?d.text:'')}}
 },true);
+// Área de transferência: tenta a API nativa; se o WebKitGTK recusar (iframe de
+// outra origem, sem gesto), o app faz a operação por nós.
+var clipWaiters={},clipSeq=0,nc=typeof navigator!=='undefined'&&navigator.clipboard;
+function viaApp(op,text){if(op==='write'){up({type:'clipboard',op:'write',text:String(text)});return Promise.resolve()}
+ return new Promise(function(res){var n=++clipSeq;clipWaiters[n]=res;up({type:'clipboard',op:'read',nonce:n});setTimeout(function(){if(clipWaiters[n]){delete clipWaiters[n];res('')}},3000)})}
+try{if(nc){var w0=nc.writeText&&nc.writeText.bind(nc),r0=nc.readText&&nc.readText.bind(nc);
+ Object.defineProperty(nc,'writeText',{configurable:true,value:function(t){return w0?w0(t).catch(function(){return viaApp('write',t)}):viaApp('write',t)}});
+ Object.defineProperty(nc,'readText',{configurable:true,value:function(){return r0?r0().catch(function(){return viaApp('read')}):viaApp('read')}});
+}}catch(e){}
+document.addEventListener('copy',function(e){try{var s=String(window.getSelection()||'');if(s&&!e.defaultPrevented)up({type:'clipboard',op:'write',text:s})}catch(_){}} ,false);
+document.addEventListener('cut',function(e){try{var s=String(window.getSelection()||'');if(s&&!e.defaultPrevented)up({type:'clipboard',op:'write',text:s})}catch(_){}} ,false);
+// Atalhos do app (Paleta Ctrl+Shift+P, Ctrl+P, alternar barras…) digitados
+// dentro do webview sobem ao app, como no VS Code. Edição de texto e o que a
+// própria extensão tratou (defaultPrevented) ficam no iframe.
+var EDIT_KEYS=/^(a|c|v|x|z|y|arrowleft|arrowright|arrowup|arrowdown|home|end|backspace|delete|enter|tab| )$/;
+window.addEventListener('keydown',function(e){if(e.defaultPrevented||e.isComposing)return;var k=String(e.key||'').toLowerCase();
+ var fkey=/^f([1-9]|1[0-2])$/.test(k),mod=e.ctrlKey||e.metaKey;
+ if(!fkey&&!(mod&&!EDIT_KEYS.test(k)))return;if(/^(control|shift|alt|meta)$/.test(k))return;
+ up({type:'key',key:e.key,code:e.code,ctrl:e.ctrlKey,meta:e.metaKey,shift:e.shiftKey,alt:e.altKey,repeat:!!e.repeat});},false);
 document.addEventListener('DOMContentLoaded',function(){applyTheme({}, ${jsonForScript(kind)});if(pendingTheme){applyTheme(pendingTheme.vars||{},pendingTheme.kind);pendingTheme=null}up({type:'ready'})});
+// Sem popups no sandbox: window.open de link web vira "abrir no navegador".
+window.open=function(u){u=String(u||'');if(/^(https?|mailto):/i.test(u))up({type:'link',href:u});return null};
 document.addEventListener('click',function(e){if(e.defaultPrevented)return;var a=e.target&&e.target.closest&&e.target.closest('a[href]');if(!a)return;var h=a.getAttribute('href')||'';
  if(/^(https?|mailto|vscode|command):/i.test(h)){e.preventDefault();up({type:'link',href:h})}},false);
-window.addEventListener('keydown',function(e){if((e.ctrlKey||e.metaKey)&&!e.altKey&&/^[pP]$/.test(e.key)&&e.shiftKey){up({type:'key',key:e.key,ctrl:e.ctrlKey,meta:e.metaKey,shift:e.shiftKey})}});
 })();`;
   const vars = cssVars(o.themeVars);
   return (

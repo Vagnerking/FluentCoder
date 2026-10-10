@@ -7,16 +7,20 @@
 //                { event, ... }                                  (eventos)
 // O stdout é EXCLUSIVO do protocolo: tudo que as extensões escrevem no
 // stdout/console é desviado para o stderr (que o backend Rust só registra).
+// Toda mensagem recebida é validada (src/protocol.js) antes de ser tratada.
 'use strict';
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 const readline = require('readline');
+const Module = require('module');
 
 const protoWrite = process.stdout.write.bind(process.stdout);
 process.stdout.write = process.stderr.write.bind(process.stderr);
 
 const { ExtensionHost } = require('./src/host');
 const { listInstalled } = require('./src/installed');
+const { validateMessage } = require('./src/protocol');
 
 function send(obj) {
   let line;
@@ -31,22 +35,51 @@ function send(obj) {
 let host = null;
 let installed = [];
 
+/** Cache de compilação do V8 (Node 22.1+): `require` dos bundles grandes fica mais rápido da 2ª vez. */
+function enableCompileCache(dataDir) {
+  if (typeof Module.enableCompileCache !== 'function') return null;
+  try {
+    const r = Module.enableCompileCache(path.join(dataDir, 'compile-cache'));
+    return r && r.directory ? r.directory : null;
+  } catch {
+    return null;
+  }
+}
+
+function readPort(dataDir) {
+  try {
+    const n = parseInt(fs.readFileSync(path.join(dataDir, 'server-port'), 'utf8'), 10);
+    return n > 1024 && n < 65536 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
 const handlers = {
   async initialize(p = {}) {
     if (host) return { origin: host.server.origin, extensions: installed };
     const dataDir = p.dataDir || path.join(os.homedir(), '.fluent-coder', 'ext-host');
+    fs.mkdirSync(dataDir, { recursive: true });
+    const compileCache = enableCompileCache(dataDir);
     host = new ExtensionHost({
       dataDir,
       workspaceFolders: (p.workspaceFolders || []).filter(Boolean),
       language: p.language || 'pt-br',
       emit: send,
       appConnected: p.appConnected !== false,
+      secretsBackend: p.secrets === 'keyring' ? 'keyring' : 'file',
+      serverPort: readPort(dataDir),
       debugWebviews: !!p.debugWebviews || process.env.FLUENT_EXT_HOST_DEBUG === '1',
       verbose: process.env.FLUENT_EXT_HOST_DEBUG === '1',
     });
     const { origin, port } = await host.start();
+    try {
+      fs.writeFileSync(path.join(dataDir, 'server-port'), String(port));
+    } catch {
+      /* ignora */
+    }
     installed = listInstalled();
-    return { origin, port, dataDir, pid: process.pid, node: process.version, extensions: installed };
+    return { origin, port, dataDir, pid: process.pid, node: process.version, compileCache, extensions: installed };
   },
   listInstalled() {
     installed = listInstalled();
@@ -57,7 +90,7 @@ const handlers = {
     if (!target) throw new Error(`Extensão não encontrada: ${p.id || p.path}`);
     const ext = host.loadExtension(target);
     if (p.activate !== false) await host.activate(ext.id);
-    return host.describe(ext);
+    return { ...host.describe(ext), activationMs: ext.activationMs };
   },
   async activate(p) {
     await host.activate(p.id);
@@ -85,9 +118,6 @@ const handlers = {
   setTheme(p) {
     host.setTheme(p.vars, p.kind);
   },
-  editorState(p) {
-    return host.setEditorState(p || {});
-  },
   setWorkspaceFolders(p) {
     host.setWorkspaceFolders(p.folders || []);
   },
@@ -97,6 +127,64 @@ const handlers = {
   executeCommand(p) {
     return host.executeCommand(p.command, ...(p.args || []));
   },
+  listCommands() {
+    return host.contributedCommands();
+  },
+  runKeybinding(p) {
+    return host.runKeybinding(p.key, p.context);
+  },
+  // ---- espelho do editor do app
+  documentOpened(p) {
+    host.documentOpened(p);
+  },
+  documentChanged(p) {
+    host.documentChanged(p);
+  },
+  documentClosed(p) {
+    host.documentClosed(p);
+  },
+  documentSaved(p) {
+    host.documentSaved(p);
+  },
+  editorsChanged(p) {
+    host.editorsChanged(p);
+  },
+  selectionChanged(p) {
+    host.selectionChanged(p);
+  },
+  visibleRangesChanged(p) {
+    host.visibleRangesChanged(p);
+  },
+  diagnostics(p) {
+    host.setDiagnostics(p.entries);
+  },
+  windowState(p) {
+    if (host.windowState.focused === p.focused) return;
+    host.windowState = { focused: p.focused, active: p.focused };
+    host.events.windowState.fire(host.windowState);
+  },
+  // ---- terminais / diffs / URIs
+  terminalOpened(p) {
+    host.terminalOpened(p.id, p.pid);
+  },
+  terminalClosed(p) {
+    host.terminalClosed(p.id, p.exitCode);
+  },
+  diffAction(p) {
+    return host.diffAction(p.diffId, p.action, p.text);
+  },
+  diffClosed(p) {
+    host.diffClosed(p.diffId);
+  },
+  handleUri(p) {
+    return host.handleUri(p.uri);
+  },
+  provideCodeLenses(p) {
+    return host.provideCodeLenses(p.path);
+  },
+  executeCodeLens(p) {
+    return host.executeCodeLens(p.id);
+  },
   async shutdown() {
     if (host) await host.stop();
     setTimeout(() => process.exit(0), 50);
@@ -105,11 +193,13 @@ const handlers = {
 };
 
 async function dispatch(msg) {
-  const fn = handlers[msg.method];
-  if (!fn) {
-    if (msg.id !== undefined) send({ id: msg.id, error: { message: `método desconhecido: ${msg.method}` } });
+  const invalid = validateMessage(msg);
+  if (invalid) {
+    process.stderr.write(`[ext-host] mensagem recusada: ${invalid}\n`);
+    if (msg && msg.id !== undefined) send({ id: msg.id, error: { message: invalid } });
     return;
   }
+  const fn = handlers[msg.method];
   if (!host && msg.method !== 'initialize' && msg.method !== 'listInstalled' && msg.method !== 'shutdown') {
     if (msg.id !== undefined) send({ id: msg.id, error: { message: 'host não inicializado' } });
     return;

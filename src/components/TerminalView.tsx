@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { listen } from "@tauri-apps/api/event";
-import { termCreate, termWrite, termResize, termClose } from "../api";
+import { termCreate, termWrite, termResize, termClose, type TermSpawnOptions } from "../api";
 import { terminalTheme } from "../theme/palette";
 import "@xterm/xterm/css/xterm.css";
 
@@ -13,6 +13,12 @@ interface TerminalViewProps {
   connId?: string;
   /** When set, the PTY runs this command line on start (used by "Run"). */
   command?: string | null;
+  /** Shell/env of a terminal requested by a hosted VS Code extension. */
+  spawn?: TermSpawnOptions | null;
+  /** The PTY exists (pid when known). */
+  onReady?: (pid: number | null) => void;
+  /** The PTY process exited (exit code when known). */
+  onExit?: (code: number | null) => void;
 }
 
 interface TermDataPayload {
@@ -20,8 +26,12 @@ interface TermDataPayload {
   data: string;
 }
 
-export function TerminalView({ id, cwd, connId, command }: TerminalViewProps) {
+export function TerminalView({ id, cwd, connId, command, spawn, onReady, onExit }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  // Callbacks lidos por ref: não recriam o PTY quando o pai re-renderiza.
+  const cbRef = useRef({ onReady, onExit });
+  cbRef.current = { onReady, onExit };
+  const spawnRef = useRef(spawn);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -69,7 +79,15 @@ export function TerminalView({ id, cwd, connId, command }: TerminalViewProps) {
       }
       created = true;
       const { cols, rows } = term;
-      termCreate(id, cwd, cols, rows, command, connId).catch(console.error);
+      termCreate(id, cwd, cols, rows, command, spawnRef.current, connId)
+        .then((pid) => {
+          if (!disposed) cbRef.current.onReady?.(pid ?? null);
+        })
+        .catch((err) => {
+          console.error(err);
+          term.write(`\r\n\x1b[31m${String(err)}\x1b[0m\r\n`);
+          cbRef.current.onExit?.(null);
+        });
     };
 
     // Register the output listener BEFORE creating the PTY so no early bytes
@@ -86,6 +104,13 @@ export function TerminalView({ id, cwd, connId, command }: TerminalViewProps) {
       unlistenFn = fn;
       requestAnimationFrame(startWhenSized);
     });
+    let unlistenExit: (() => void) | undefined;
+    listen<{ id: string; code: number | null }>("term-exit", (event) => {
+      if (event.payload.id === id) cbRef.current.onExit?.(event.payload.code ?? null);
+    }).then((fn) => {
+      if (disposed) fn();
+      else unlistenExit = fn;
+    });
 
     const ro = new ResizeObserver(() => {
       if (!created || !safeFit()) return;
@@ -98,6 +123,7 @@ export function TerminalView({ id, cwd, connId, command }: TerminalViewProps) {
       disposed = true;
       onData.dispose();
       unlistenFn?.();
+      unlistenExit?.();
       ro.disconnect();
       if (created) termClose(id).catch(console.error);
       term.dispose();

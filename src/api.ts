@@ -1769,14 +1769,26 @@ export function gitSnapshotRestore(
 // id is what we have at write/resize/close time, so remember which ids are remote.
 const remoteTerminals = new Set<string>();
 
+/** Shell/env próprios de um terminal pedido por extensão VS Code (`window.createTerminal`). */
+export interface TermSpawnOptions {
+  shellPath?: string;
+  shellArgs?: string[];
+  env?: Record<string, string>;
+  strictEnv?: boolean;
+}
+
+/** Cria o PTY; resolve com o pid do processo (null se o SO não informar / remoto). */
 export function termCreate(
   id: string,
   cwd: string,
   cols: number,
   rows: number,
   command?: string | null,
+  spawn?: TermSpawnOptions | null,
+  /** Conexão SSH explícita (raiz SSH de um Fluent Workspace); tem precedência
+   *  sobre a sessão remota ativa da janela. */
   connId?: string
-): Promise<void> {
+): Promise<number | null> {
   if (connId) {
     remoteTerminals.add(id);
     return invoke<void>("ssh_term_create", {
@@ -1785,10 +1797,12 @@ export function termCreate(
       cwd,
       cols,
       rows,
-    }).catch((error) => {
-      remoteTerminals.delete(id);
-      throw error;
-    });
+    })
+      .then(() => null)
+      .catch((error) => {
+        remoteTerminals.delete(id);
+        throw error;
+      });
   }
   const remote = getActiveRemote();
   if (remote) {
@@ -1799,12 +1813,21 @@ export function termCreate(
       cwd,
       cols,
       rows,
-    }).catch((error) => {
-      remoteTerminals.delete(id);
-      throw error;
-    });
+    })
+      .then(() => null)
+      .catch((error) => {
+        remoteTerminals.delete(id);
+        throw error;
+      });
   }
-  return invoke("term_create", { id, cwd, cols, rows, command: command ?? null });
+  return invoke<number | null>("term_create", {
+    id,
+    cwd,
+    cols,
+    rows,
+    command: command ?? null,
+    spawn: spawn ?? null,
+  });
 }
 export function termWrite(id: string, data: string): Promise<void> {
   if (remoteTerminals.has(id)) return invoke("ssh_term_write", { id, data });

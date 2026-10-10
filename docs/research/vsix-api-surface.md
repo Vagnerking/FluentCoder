@@ -31,20 +31,26 @@ Limitação do gravador: os bundles usam o `__toESM` do esbuild, que copia só a
 - **Claude Code:** HTML gerado em `getHtmlForWebview` com CSP `default-src 'none'; style-src ${cspSource} 'unsafe-inline'; font-src ${cspSource}; img-src ${cspSource} data:; script-src 'nonce-…'; worker-src ${cspSource}` e assets `webview/index.js` + `webview/index.css` via `asWebviewUri`. Mensagens: webview → extensão `{type:"request", requestId, channelId, request:{type:"init"|…}}`, `launch_claude`, `io_message`…; extensão → webview **embrulhadas** em `{type:"from-extension", message:{…}}`. Lê `--vscode-editor-font-*` e `--vscode-chat-font-*` (a própria extensão injeta) e as cores `--vscode-*` do tema. `getState/setState` via `acquireVsCodeApi()`.
 - **Codex:** lê `webview/index.html` com `workspace.fs.readFile`, troca `<!-- PROD_BASE_TAG_HERE -->` por `<base href="${asWebviewUri(webview)}/">` e injeta um CSP próprio (`cspSource` + origem do Sentry). Módulos ES (`type="module" crossorigin`) relativos ao `<base>` — o servidor responde com `Access-Control-Allow-Origin: *`. Handshake: webview → `{type:"ready"}`; extensão → `chat-font-settings`, estado do app-server, prompts, estado persistido. RPC "capn" por `{type:"vscode-capn-rpc-connect"|"vscode-capn-rpc-message", sessionId, message}` e mensagens grandes em pedaços (`chunked-message-ack`).
 
-## O que é stub / lacuna no shim (PoC)
+## Estado do shim (hardening, 10/10/2026)
 
-| Área | Estado | Impacto |
+Re-descoberta dinâmica (`run.js`) após o hardening: **nenhum caminho ausente**
+tocado na ativação + resolve + handshake das duas extensões.
+
+| Área | Estado | Detalhe |
 |---|---|---|
-| `window.createTerminal` | stub (sem PTY); `sendText`/`show` viram eventos `terminalSendText`/`terminalShow` | comando "Abrir no terminal" do Claude não abre terminal real |
-| `window.showMessage` (com botões)/`showQuickPick`/`showInputBox`/`showOpenDialog`/`showSaveDialog` | encaminhados ao app como `request`; o app usa `ConfirmDialog`, `QuickPick`, `QuickInput` e o diálogo nativo do Tauri. Sem o dock montado, o pedido fica pendente | `canPickMany`, botões/validação do input box não suportados |
-| `TextEditor.edit`, `insertSnippet`, decorações | não suportados (retornam `false`/no-op) | inserção direta no editor indisponível |
-| `workspace.applyEdit` | aplica no **disco** e emite `filesChanged` (o app recarrega) | buffers sujos no Monaco podem divergir |
-| `workspace.createFileSystemWatcher` | eventos nunca disparam | extensões não percebem mudanças externas |
-| `languages.getDiagnostics` | sempre vazio (o app ainda não publica diagnósticos) | contexto de erros não chega ao agente |
-| `authentication`, `tasks`, `debug`, `notebooks`, `scm`, `comments` | stubs inertes | — |
-| `secrets` | JSON 0600 no dataDir do host (não usa keyring do SO) | aceitável só para PoC |
-| propostas `chat.*`, `lm.*` | **ausentes de propósito** (`enabledApiProposals` não é honrado) | Codex registra "chat session item provider not registered" e segue |
-| `vscode.diff` | resolve os dois lados (inclusive esquemas virtuais via providers da extensão) e emite `diff` com conteúdo; fechar via `tabGroups.close` emite `closeDiff` | aceitar/rejeitar diff do Claude depende de comandos da extensão (`claude-vscode.acceptProposedDiff`) |
+| Editor (`TextDocument`/`TextEditor`) | implementado | espelho dos modelos do Monaco por eventos (texto incremental, versão, dirty, undo/redo), `edit`/`insertSnippet`/`applyEdit` no modelo com undo, seleção/reveal, decorações (subconjunto de estilos) |
+| `vscode.diff` + aceitar/rejeitar | implementado | revisão do Monaco (`ClaudeDiffReview`); comandos `editor/title` da extensão com `when`; fallback "salvar"/fechar aba. Validado com o Claude Code real (`flows-check.js`) |
+| `window.createTerminal` | implementado | terminal integrado real (PTY), env/`environmentVariableCollection`, `processId`, `onDidCloseTerminal`/`exitStatus`; shell integration simulada (sem `onDidEndTerminalShellExecution`) |
+| `registerUriHandler` / `env.uriScheme` | implementado | `fluent-coder://<extensão>/…` via `tauri-plugin-deep-link` + repasse à instância aberta |
+| `context.secrets` | implementado | cofre do SO (`keyring`), migração do JSON, fallback 0600 |
+| `createFileSystemWatcher` | implementado | `fs.watch` sem polling, glob, pastas pesadas puladas |
+| `languages.getDiagnostics` | implementado | markers do Monaco + coleções das extensões (viram markers) |
+| `languages.registerCodeLensProvider` | implementado | lentes no Monaco |
+| status bar / `withProgress` / output channels | implementado / parcial | itens na barra do app; progresso como texto; canais na aba Saída |
+| diálogos (`showMessage`/`QuickPick`/`InputBox`/arquivo) | parcial | sem `canPickMany`/`validateInput`/botões |
+| `createWebviewPanel` / custom editor | parcial | abas na sidebar de agentes (não no grid de editores) |
+| `tasks`, notebooks, `comments` | stub | tarefas rejeitam (só o instalador WSL do Codex no Windows usa); sem notebooks; hunks inline do Claude (comments) não aparecem |
+| propostas `chat.*`, `lm.*` | ausentes de propósito | `enabledApiProposals` não é honrado |
 
 ## Validação (10/10/2026, config. temporária = usuário deslogado)
 
@@ -54,136 +60,145 @@ Limitação do gravador: os bundles usam o `__toESM` do esbuild, que copia só a
 | Round trip sintético webview → extensão → webview | `request/init` → `from-extension/response/init_response` em ~135 ms | `ready` → `chat-font-settings` |
 | `webkit-harness.py` (WebKitGTK offscreen, iframe real + relay igual ao do app) | renderiza a tela de login; 14 ↑ / 27 ↓ (init, get_claude_state, list_sessions, `launch_claude`, io_message…) | renderiza "Sign in with ChatGPT"; 151 ↑ / 124 ↓ (capn-rpc, persisted-atom, mcp-request/response, fetch) |
 | Tema | `body.vscode-dark`, `--vscode-foreground`/`--vscode-focusBorder` = tokens Fluent | idem |
+| **Hardening:** tempo até interativo após o "clique" (host + página quentes, cache de compilação quente; `webkit-harness.py` → `timings`) | ativada 181 ms, iframe pronto 514 ms, **interativo 608 ms** (antes: 247 / 1178 / 1253 ms com a página fria; 666 ms com a página quente) | ativada 213 ms, iframe pronto 940 ms; botões do login após a animação de abertura da própria UI (~5,4 s) |
+| **Hardening:** `flows-check.js` (extensão real, CLI simulado no WebSocket MCP dela) | **19/19**: editor espelhado visto pelas ferramentas MCP, diff aceito (texto editado) e rejeitado pelos comandos da extensão, `close_tab`, terminal com shell integration, URI handler | — (o Codex não usa `vscode.diff`) |
 
-Não validado aqui (fica para o teste no app): estado logado/conversa real (exigiria a configuração real do usuário e chamadas pagas), fluxos de login OAuth (Claude usa `env.openExternal` + URI handler `vscode://` — nosso `uriScheme` é `fluent-coder` e o SO não roteia esse esquema; o login do Codex usa callback em localhost pelo app-server), diff proposto do Claude (`vscode.diff` → modal).
+Não validado aqui (fica para o teste no app): estado logado/conversa real (exigiria a configuração real do usuário e chamadas pagas) e o diff vindo do CHAT do Claude (fluxo `claude-vscode`, aceito via "salvar" o lado direito — coberto por teste unitário com extensão falsa). Login: o Claude **não** usa `vscode://` para login (o URI handler dele só trata `/open` e `/install-plugin`; o `claude` faz o OAuth com callback local/código); o Codex monta o callback dos conectores com `env.uriScheme` (`fluent-coder://openai.chatgpt/connector/oauth_callback`, roteado pelo deep link) e o login do ChatGPT usa callback em localhost do app-server.
 
-## Varredura estática × shim
+## Varredura estática × shim (cobertura)
 
-Contagem de referências no bundle (não de chamadas em tempo de execução). "ok" = existe no shim (pode ser stub, ver tabela acima).
+Gerada por `node tools/ext-host/discovery/coverage.js <claude>/extension.js <codex>/out/extension.js`.
+Contagem de referências no bundle (não de chamadas em tempo de execução).
+Estados: **implementado** · **parcial** (funciona com limitação) · **stub**
+(existe, inerte) · **proposta** (fora de escopo) · **ausente**. Tipos de valor
+e enums (Task, Notebook*) contam como implementados — o stub é o recurso que os
+consome.
 
-| API | anthropic.claude-code | openai.chatgpt | shim |
-|---|---:|---:|---|
-| `chat.registerChatSessionItemProvider` | – | 1 | ausente |
-| `CodeLens` | – | 1 | ok |
-| `commands.executeCommand` | 54 | 26 | ok |
-| `commands.getCommands` | 1 | – | ok |
-| `commands.registerCommand` | 32 | 10 | ok |
-| `comments.createCommentController` | 1 | – | ok |
-| `CommentThreadCollapsibleState` | 2 | – | ok |
-| `CommentThreadState` | 1 | – | ok |
-| `ConfigurationTarget` | 5 | 3 | ok |
-| `DiagnosticSeverity` | 1 | 9 | ok |
-| `Disposable` | 7 | 3 | ok |
-| `EndOfLine` | 1 | – | ok |
-| `env.appName` | 5 | 6 | ok |
-| `env.clipboard` | 4 | 3 | ok |
-| `env.isTelemetryEnabled` | 1 | – | ok |
-| `env.language` | – | 1 | ok |
-| `env.machineId` | 3 | – | ok |
-| `env.openExternal` | 3 | 1 | ok |
-| `env.remoteName` | 4 | 5 | ok |
-| `env.sessionId` | 2 | – | ok |
-| `env.shell` | 3 | – | ok |
-| `env.uiKind` | 1 | – | ok |
-| `env.uriScheme` | – | 1 | ok |
-| `EventEmitter` | 10 | 6 | ok |
-| `ExtensionMode` | 2 | – | ok |
-| `extensions.all` | 1 | – | ok |
-| `extensions.getExtension` | 4 | 2 | ok |
-| `FileChangeType` | 1 | – | ok |
-| `FileSystemError` | 6 | – | ok |
-| `FileType` | 1 | 2 | ok |
-| `l10n.t` | – | 3 | ok |
-| `languages.getDiagnostics` | 2 | 2 | ok |
-| `languages.onDidChangeDiagnostics` | 1 | – | ok |
-| `languages.registerCodeLensProvider` | – | 1 | ok |
-| `lm.getModelProxy` | – | 1 | ausente |
-| `lm.isModelProxyAvailable` | – | 2 | ausente |
-| `lm.onDidChangeModelProxyAvailability` | – | 1 | ausente |
-| `NotebookCellData` | 1 | – | ok |
-| `NotebookCellKind` | 1 | – | ok |
-| `NotebookCellOutputItem` | 2 | – | ok |
-| `NotebookEdit` | 1 | – | ok |
-| `NotebookEditorRevealType` | 1 | – | ok |
-| `NotebookRange` | 1 | – | ok |
-| `Position` | 5 | 4 | ok |
-| `ProgressLocation` | 1 | – | ok |
-| `Range` | 11 | 7 | ok |
-| `RelativePattern` | – | 1 | ok |
-| `Selection` | 6 | 2 | ok |
-| `ShellExecution` | – | 1 | ok |
-| `StatusBarAlignment` | 1 | – | ok |
-| `SymbolKind` | – | 26 | ok |
-| `TabInputCustom` | – | 2 | ok |
-| `TabInputText` | 2 | 1 | ok |
-| `TabInputTextDiff` | 8 | – | ok |
-| `TabInputWebview` | 2 | – | ok |
-| `Task` | – | 1 | ok |
-| `tasks.executeTask` | – | 1 | ok |
-| `tasks.onDidEndTaskProcess` | – | 1 | ok |
-| `TaskScope` | – | 1 | ok |
-| `TextDocumentChangeReason` | 4 | – | ok |
-| `TextEditorRevealType` | 6 | 1 | ok |
-| `ThemeColor` | 1 | – | ok |
-| `UIKind` | 1 | – | ok |
-| `Uri` | 43 | 32 | ok |
-| `version` | 2 | 4 | ok |
-| `version.split` | 1 | – | ok |
-| `ViewColumn` | 8 | 6 | ok |
-| `window.activeNotebookEditor` | 1 | – | ok |
-| `window.activeTerminal` | 1 | – | ok |
-| `window.activeTextEditor` | 11 | 6 | ok |
-| `window.createOutputChannel` | 1 | 1 | ok |
-| `window.createStatusBarItem` | 1 | – | ok |
-| `window.createTerminal` | 2 | 1 | ok |
-| `window.createTextEditorDecorationType` | 1 | 2 | ok |
-| `window.createWebviewPanel` | 2 | 1 | ok |
-| `window.onDidChangeActiveTextEditor` | 1 | 1 | ok |
-| `window.onDidChangeTerminalShellIntegration` | 2 | 1 | ok |
-| `window.onDidChangeTextEditorSelection` | 2 | 1 | ok |
-| `window.onDidChangeVisibleTextEditors` | 3 | – | ok |
-| `window.onDidChangeWindowState` | – | 1 | ok |
-| `window.onDidEndTerminalShellExecution` | 1 | – | ok |
-| `window.onDidStartTerminalShellExecution` | 1 | – | ok |
-| `window.registerCustomEditorProvider` | – | 1 | ok |
-| `window.registerUriHandler` | 1 | 1 | ok |
-| `window.registerWebviewPanelSerializer` | 1 | – | ok |
-| `window.registerWebviewViewProvider` | 3 | 2 | ok |
-| `window.setStatusBarMessage` | 6 | – | ok |
-| `window.showErrorMessage` | 12 | 2 | ok |
-| `window.showInformationMessage` | 19 | 5 | ok |
-| `window.showInputBox` | 3 | – | ok |
-| `window.showOpenDialog` | – | 1 | ok |
-| `window.showQuickPick` | 2 | – | ok |
-| `window.showSaveDialog` | – | 1 | ok |
-| `window.showTextDocument` | 6 | 1 | ok |
-| `window.showWarningMessage` | 4 | 1 | ok |
-| `window.state` | 1 | 1 | ok |
-| `window.tabGroups` | 27 | 2 | ok |
-| `window.terminals` | 2 | – | ok |
-| `window.visibleTextEditors` | 6 | 1 | ok |
-| `window.withProgress` | 1 | – | ok |
-| `workspace.applyEdit` | 3 | – | ok |
-| `workspace.asRelativePath` | 3 | 3 | ok |
-| `workspace.createFileSystemWatcher` | – | 1 | ok |
-| `workspace.findFiles` | 2 | 2 | ok |
-| `workspace.fs` | 1 | 8 | ok |
-| `workspace.getConfiguration` | 23 | 3 | ok |
-| `workspace.getWorkspaceFolder` | 2 | 5 | ok |
-| `workspace.isTrusted` | – | 1 | ok |
-| `workspace.name` | – | 1 | ok |
-| `workspace.onDidChangeConfiguration` | 10 | 3 | ok |
-| `workspace.onDidChangeTextDocument` | 3 | 1 | ok |
-| `workspace.onDidChangeWorkspaceFolders` | 2 | 1 | ok |
-| `workspace.onDidCloseTextDocument` | 2 | – | ok |
-| `workspace.onDidOpenTextDocument` | 1 | – | ok |
-| `workspace.onDidSaveTextDocument` | 1 | – | ok |
-| `workspace.onWillSaveTextDocument` | 3 | – | ok |
-| `workspace.openTextDocument` | 12 | 4 | ok |
-| `workspace.registerFileSystemProvider` | 4 | – | ok |
-| `workspace.registerTextDocumentContentProvider` | 1 | – | ok |
-| `workspace.rootPath` | 1 | – | ok |
-| `workspace.textDocuments` | 7 | – | ok |
-| `workspace.workspaceFile` | 1 | – | ok |
-| `workspace.workspaceFolders` | 22 | 12 | ok |
-| `WorkspaceEdit` | 3 | – | ok |
+Caminhos: 123 (119 não propostos) · implementado 101 · parcial 14 · stub 4 · ausente 0 · proposta 4
+Cobertura funcional (implementado+parcial / não propostos): 96.6% · presentes no shim: 100.0%
+
+| API | anthropic.claude-code | openai.chatgpt | estado | observação |
+|---|---:|---:|---|---|
+| `chat.registerChatSessionItemProvider` | – | 1 | proposta | API proposta (enabledApiProposals não é honrado) |
+| `CodeLens` | – | 1 | implementado |  |
+| `commands.executeCommand` | 54 | 26 | implementado |  |
+| `commands.getCommands` | 1 | – | parcial | só comandos registrados por extensões (sem os internos do VS Code) |
+| `commands.registerCommand` | 32 | 10 | implementado |  |
+| `comments.createCommentController` | 1 | – | stub | threads de comentário não aparecem no editor |
+| `CommentThreadCollapsibleState` | 2 | – | implementado |  |
+| `CommentThreadState` | 1 | – | implementado |  |
+| `ConfigurationTarget` | 5 | 3 | implementado |  |
+| `DiagnosticSeverity` | 1 | 9 | implementado |  |
+| `Disposable` | 7 | 3 | implementado |  |
+| `EndOfLine` | 1 | – | implementado |  |
+| `env.appName` | 5 | 6 | implementado |  |
+| `env.clipboard` | 4 | 3 | implementado |  |
+| `env.isTelemetryEnabled` | 1 | – | implementado |  |
+| `env.language` | – | 1 | implementado |  |
+| `env.machineId` | 3 | – | implementado |  |
+| `env.openExternal` | 3 | 1 | implementado |  |
+| `env.remoteName` | 4 | 5 | implementado |  |
+| `env.sessionId` | 2 | – | implementado |  |
+| `env.shell` | 3 | – | implementado |  |
+| `env.uiKind` | 1 | – | implementado |  |
+| `env.uriScheme` | – | 1 | implementado |  |
+| `EventEmitter` | 10 | 6 | implementado |  |
+| `ExtensionMode` | 2 | – | implementado |  |
+| `extensions.all` | 1 | – | implementado |  |
+| `extensions.getExtension` | 4 | 2 | implementado |  |
+| `FileChangeType` | 1 | – | implementado |  |
+| `FileSystemError` | 6 | – | implementado |  |
+| `FileType` | 1 | 2 | implementado |  |
+| `l10n.t` | – | 3 | implementado |  |
+| `languages.getDiagnostics` | 2 | 2 | implementado |  |
+| `languages.onDidChangeDiagnostics` | 1 | – | implementado |  |
+| `languages.registerCodeLensProvider` | – | 1 | implementado | lentes no Monaco; clique executa o comando da extensão |
+| `lm.getModelProxy` | – | 1 | proposta | API proposta (enabledApiProposals não é honrado) |
+| `lm.isModelProxyAvailable` | – | 2 | proposta | API proposta (enabledApiProposals não é honrado) |
+| `lm.onDidChangeModelProxyAvailability` | – | 1 | proposta | API proposta (enabledApiProposals não é honrado) |
+| `NotebookCellData` | 1 | – | implementado |  |
+| `NotebookCellKind` | 1 | – | implementado |  |
+| `NotebookCellOutputItem` | 2 | – | implementado |  |
+| `NotebookEdit` | 1 | – | implementado |  |
+| `NotebookEditorRevealType` | 1 | – | implementado |  |
+| `NotebookRange` | 1 | – | implementado |  |
+| `Position` | 5 | 4 | implementado |  |
+| `ProgressLocation` | 1 | – | implementado |  |
+| `Range` | 11 | 7 | implementado |  |
+| `RelativePattern` | – | 1 | implementado |  |
+| `Selection` | 6 | 2 | implementado |  |
+| `ShellExecution` | – | 1 | implementado |  |
+| `StatusBarAlignment` | 1 | – | implementado |  |
+| `SymbolKind` | – | 26 | implementado |  |
+| `TabInputCustom` | – | 2 | implementado |  |
+| `TabInputText` | 2 | 1 | implementado |  |
+| `TabInputTextDiff` | 8 | – | implementado |  |
+| `TabInputWebview` | 2 | – | implementado |  |
+| `Task` | – | 1 | implementado |  |
+| `tasks.executeTask` | – | 1 | stub | rejeita: tarefas não suportadas |
+| `tasks.onDidEndTaskProcess` | – | 1 | stub | nunca dispara |
+| `TaskScope` | – | 1 | implementado |  |
+| `TextDocumentChangeReason` | 4 | – | implementado |  |
+| `TextEditorRevealType` | 6 | 1 | implementado |  |
+| `ThemeColor` | 1 | – | implementado |  |
+| `UIKind` | 1 | – | implementado |  |
+| `Uri` | 43 | 32 | implementado |  |
+| `version` | 2 | 4 | implementado |  |
+| `ViewColumn` | 8 | 6 | implementado |  |
+| `window.activeNotebookEditor` | 1 | – | stub | sem notebooks |
+| `window.activeTerminal` | 1 | – | parcial | só os terminais criados por extensões |
+| `window.activeTextEditor` | 11 | 6 | implementado |  |
+| `window.createOutputChannel` | 1 | 1 | implementado |  |
+| `window.createStatusBarItem` | 1 | – | implementado |  |
+| `window.createTerminal` | 2 | 1 | implementado |  |
+| `window.createTextEditorDecorationType` | 1 | 2 | parcial | cores/bordas/texto antes-depois; sem ícones de gutter |
+| `window.createWebviewPanel` | 2 | 1 | parcial | aba na sidebar de agentes (não no grid de editores) |
+| `window.onDidChangeActiveTextEditor` | 1 | 1 | implementado |  |
+| `window.onDidChangeTerminalShellIntegration` | 2 | 1 | parcial | integração simulada ao criar o PTY (executeCommand = digitar a linha) |
+| `window.onDidChangeTextEditorSelection` | 2 | 1 | implementado |  |
+| `window.onDidChangeVisibleTextEditors` | 3 | – | implementado |  |
+| `window.onDidChangeWindowState` | – | 1 | implementado |  |
+| `window.onDidEndTerminalShellExecution` | 1 | – | parcial | nunca dispara (sem integração real de shell) |
+| `window.onDidStartTerminalShellExecution` | 1 | – | parcial | dispara ao executeCommand da integração simulada |
+| `window.registerCustomEditorProvider` | – | 1 | parcial | abre como painel na sidebar de agentes |
+| `window.registerUriHandler` | 1 | 1 | implementado |  |
+| `window.registerWebviewPanelSerializer` | 1 | – | parcial | registrado; painéis não são restaurados ao reiniciar o app |
+| `window.registerWebviewViewProvider` | 3 | 2 | implementado |  |
+| `window.setStatusBarMessage` | 6 | – | implementado |  |
+| `window.showErrorMessage` | 12 | 2 | implementado |  |
+| `window.showInformationMessage` | 19 | 5 | implementado |  |
+| `window.showInputBox` | 3 | – | parcial | sem validateInput |
+| `window.showOpenDialog` | – | 1 | implementado |  |
+| `window.showQuickPick` | 2 | – | parcial | sem canPickMany/botões |
+| `window.showSaveDialog` | – | 1 | implementado |  |
+| `window.showTextDocument` | 6 | 1 | implementado |  |
+| `window.showWarningMessage` | 4 | 1 | implementado |  |
+| `window.state` | 1 | 1 | implementado |  |
+| `window.tabGroups` | 27 | 2 | parcial | um grupo: abas de arquivo do app + abas de diff |
+| `window.terminals` | 2 | – | parcial | só os terminais criados por extensões |
+| `window.visibleTextEditors` | 6 | 1 | implementado |  |
+| `window.withProgress` | 1 | – | parcial | texto na barra de status; sem cancelamento |
+| `workspace.applyEdit` | 3 | – | implementado |  |
+| `workspace.asRelativePath` | 3 | 3 | implementado |  |
+| `workspace.createFileSystemWatcher` | – | 1 | implementado |  |
+| `workspace.findFiles` | 2 | 2 | implementado |  |
+| `workspace.fs` | 1 | 8 | implementado |  |
+| `workspace.getConfiguration` | 23 | 3 | implementado |  |
+| `workspace.getWorkspaceFolder` | 2 | 5 | implementado |  |
+| `workspace.isTrusted` | – | 1 | implementado |  |
+| `workspace.name` | – | 1 | implementado |  |
+| `workspace.onDidChangeConfiguration` | 10 | 3 | implementado |  |
+| `workspace.onDidChangeTextDocument` | 3 | 1 | implementado |  |
+| `workspace.onDidChangeWorkspaceFolders` | 2 | 1 | implementado |  |
+| `workspace.onDidCloseTextDocument` | 2 | – | implementado |  |
+| `workspace.onDidOpenTextDocument` | 1 | – | implementado |  |
+| `workspace.onDidSaveTextDocument` | 1 | – | implementado |  |
+| `workspace.onWillSaveTextDocument` | 3 | – | implementado |  |
+| `workspace.openTextDocument` | 12 | 4 | implementado |  |
+| `workspace.registerFileSystemProvider` | 4 | – | implementado |  |
+| `workspace.registerTextDocumentContentProvider` | 1 | – | implementado |  |
+| `workspace.rootPath` | 1 | – | implementado |  |
+| `workspace.textDocuments` | 7 | – | implementado |  |
+| `workspace.workspaceFile` | 1 | – | implementado |  |
+| `workspace.workspaceFolders` | 22 | 12 | implementado |  |
+| `WorkspaceEdit` | 3 | – | implementado |  |

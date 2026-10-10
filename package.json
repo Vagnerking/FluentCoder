@@ -11,7 +11,8 @@
     "tauri": "tauri",
     "test:unit": "node --experimental-strip-types --test \"src/**/*.test.ts\" \"tools/ext-host/test/*.test.js\"",
     "test:ext-host": "node --test \"tools/ext-host/test/*.test.js\"",
-    "ext-host:check": "node tools/ext-host/scripts/headless-check.js"
+    "ext-host:check": "node tools/ext-host/scripts/headless-check.js",
+    "ext-host:flows": "node tools/ext-host/scripts/flows-check.js"
   },
   "dependencies": {
     "@codingame/monaco-vscode-api": "^25.1.2",

@@ -64,3 +64,20 @@
 .status-claude { color: var(--text); }
 
 .status-claude .codicon { color: var(--accent); }
+
+/* ---- Extensões VS Code hospedadas: itens de barra de status e avisos globais ---- */
+button.status-ext {
+  font: inherit;
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+}
+
+button.status-ext:hover {
+  background: var(--acrylic-control-hover);
+}
+
+button.status-ext:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}

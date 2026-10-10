@@ -7,6 +7,13 @@
 //! escreve linhas no stdin via `ext_host_send`. O protocolo em si (initialize,
 //! loadExtension, resolveView, webviewMessage…) é documentado em
 //! `tools/ext-host/main.js` e em `docs/context/extensoes-vscode.md`.
+//!
+//! Exceção ao "só transporte": linhas `{"event":"secrets",…}` são atendidas
+//! aqui (cofre do SO, `secrets.rs`) e nunca chegam ao frontend.
+
+pub mod deep_link;
+pub mod node;
+pub mod secrets;
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -22,6 +29,7 @@ pub const EXIT_EVENT: &str = "ext-host://exit";
 struct Running {
     child: Child,
     stdin: ChildStdin,
+    node: String,
 }
 
 #[derive(Default)]
@@ -36,7 +44,7 @@ impl ExtHostState {
 
     pub fn shutdown_all(&self) {
         if let Ok(mut guard) = self.running.lock() {
-            if let Some(Running { mut child, stdin }) = guard.take() {
+            if let Some(Running { mut child, stdin, .. }) = guard.take() {
                 // Fechar o stdin faz o host chamar deactivate() das extensões,
                 // que encerram os filhos delas (claude / codex app-server).
                 drop(stdin);
@@ -62,6 +70,10 @@ pub struct ExtHostInfo {
     pub pid: u32,
     pub data_dir: String,
     pub script: String,
+    /// Executável do Node usado (diagnóstico na saída "Extensões").
+    pub node: String,
+    /// Backend de `context.secrets`: "keyring" (cofre do SO via Rust).
+    pub secrets: &'static str,
 }
 
 /// Localiza `tools/ext-host/main.js`: variável `FLUENT_EXT_HOST_SCRIPT`,
@@ -89,17 +101,42 @@ fn find_script(app: &AppHandle) -> Result<PathBuf, String> {
         .find(|p| p.is_file())
         .map(|p| p.canonicalize().unwrap_or(p))
         .ok_or_else(|| {
-            "Host de extensões não encontrado (tools/ext-host/main.js). Este recurso só está disponível em modo de desenvolvimento.".to_string()
+            "Host de extensões não encontrado (tools/ext-host/main.js). A instalação do Fluent Coder parece incompleta: reinstale o app ou defina FLUENT_EXT_HOST_SCRIPT.".to_string()
         })
 }
 
-fn find_node() -> Result<PathBuf, String> {
-    if let Ok(p) = std::env::var("FLUENT_NODE") {
-        return Ok(PathBuf::from(p));
+/// Escreve uma linha no stdin do sidecar em execução (se houver).
+fn write_line(running: &Arc<Mutex<Option<Running>>>, line: &str) -> Result<(), String> {
+    let mut guard = running
+        .lock()
+        .map_err(|e| format!("Falha ao acessar o host de extensões: {e}"))?;
+    let r = guard
+        .as_mut()
+        .ok_or("Host de extensões não está em execução")?;
+    r.stdin
+        .write_all(line.as_bytes())
+        .and_then(|_| r.stdin.write_all(b"\n"))
+        .and_then(|_| r.stdin.flush())
+        .map_err(|e| format!("Falha ao escrever no host de extensões: {e}"))
+}
+
+/// Linhas do stdout que o Rust atende sozinho (não vão ao frontend).
+fn intercept_line(line: &str, running: &Arc<Mutex<Option<Running>>>) -> bool {
+    if !line.starts_with(secrets::LINE_PREFIX) {
+        return false;
     }
-    which::which("node").map_err(|_| {
-        "Node.js não encontrado no PATH. Instale o Node.js 20+ para usar extensões do VS Code.".to_string()
-    })
+    match serde_json::from_str::<secrets::SecretRequest>(line) {
+        Ok(req) => {
+            let running = running.clone();
+            // O cofre pode demorar (desbloqueio do keyring): fora do leitor.
+            std::thread::spawn(move || {
+                let result = secrets::handle(&req);
+                let _ = write_line(&running, &secrets::respond_line(req.request_id, result));
+            });
+        }
+        Err(e) => eprintln!("[ext-host] pedido de segredo inválido: {e}"),
+    }
+    true
 }
 
 #[tauri::command]
@@ -124,12 +161,14 @@ pub fn ext_host_start(app: AppHandle, state: State<'_, ExtHostState>) -> Result<
                 pid: r.child.id(),
                 data_dir: data_dir.to_string_lossy().into_owned(),
                 script: script.to_string_lossy().into_owned(),
+                node: r.node.clone(),
+                secrets: "keyring",
             });
         }
         *guard = None;
     }
 
-    let node = find_node()?;
+    let node = node::find_node()?;
     let mut cmd = Command::new(&node);
     cmd.arg(&script)
         .current_dir(script.parent().unwrap_or(&data_dir))
@@ -157,8 +196,11 @@ pub fn ext_host_start(app: AppHandle, state: State<'_, ExtHostState>) -> Result<
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
             match line {
-                Ok(line) if !line.trim().is_empty() => {
-                    let _ = app_out.emit(MESSAGE_EVENT, line);
+                // Só objetos JSON (o protocolo); o resto é ruído e é descartado.
+                Ok(line) if line.starts_with('{') => {
+                    if !intercept_line(&line, &running) {
+                        let _ = app_out.emit(MESSAGE_EVENT, line);
+                    }
                 }
                 Ok(_) => {}
                 Err(_) => break,
@@ -180,33 +222,40 @@ pub fn ext_host_start(app: AppHandle, state: State<'_, ExtHostState>) -> Result<
         }
     });
 
-    *guard = Some(Running { child, stdin });
+    let node_str = node.to_string_lossy().into_owned();
+    *guard = Some(Running { child, stdin, node: node_str.clone() });
     Ok(ExtHostInfo {
         started: true,
         pid,
         data_dir: data_dir.to_string_lossy().into_owned(),
         script: script.to_string_lossy().into_owned(),
+        node: node_str,
+        secrets: "keyring",
     })
 }
 
-/// Envia uma linha JSON (sem `\n`) ao stdin do host.
+/// Envia uma linha JSON (sem `\n`) ao stdin do host. O frontend só manda
+/// objetos JSON de protocolo (`{"id"?, "method", "params"}`).
 #[tauri::command]
 pub fn ext_host_send(line: String, state: State<'_, ExtHostState>) -> Result<(), String> {
-    if line.contains('\n') {
+    validate_outgoing(&line)?;
+    write_line(&state.running, &line)
+}
+
+/// Limite por mensagem app → host (webviews mandam anexos/imagens em base64).
+const MAX_LINE: usize = 64 * 1024 * 1024;
+
+fn validate_outgoing(line: &str) -> Result<(), String> {
+    if line.contains('\n') || line.contains('\r') {
         return Err("mensagem do host de extensões não pode conter quebra de linha".into());
     }
-    let mut guard = state
-        .running
-        .lock()
-        .map_err(|e| format!("Falha ao acessar o host de extensões: {e}"))?;
-    let r = guard
-        .as_mut()
-        .ok_or("Host de extensões não está em execução")?;
-    r.stdin
-        .write_all(line.as_bytes())
-        .and_then(|_| r.stdin.write_all(b"\n"))
-        .and_then(|_| r.stdin.flush())
-        .map_err(|e| format!("Falha ao escrever no host de extensões: {e}"))
+    if line.len() > MAX_LINE {
+        return Err("mensagem grande demais para o host de extensões".into());
+    }
+    if !line.starts_with('{') || !line.contains("\"method\"") {
+        return Err("mensagem inválida para o host de extensões".into());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -271,6 +320,14 @@ mod tests {
         assert!(!is_safe_external_url("file:///etc/passwd"));
         assert!(!is_safe_external_url("javascript:alert(1)"));
         assert!(!is_safe_external_url("https://x\n--flag"));
+    }
+
+    #[test]
+    fn outgoing_lines_are_validated() {
+        assert!(validate_outgoing(r#"{"id":1,"method":"initialize","params":{}}"#).is_ok());
+        assert!(validate_outgoing("{\"method\":\"x\"}\n{\"method\":\"y\"}").is_err());
+        assert!(validate_outgoing("not json").is_err());
+        assert!(validate_outgoing(r#"{"event":"secrets"}"#).is_err());
     }
 
     #[test]

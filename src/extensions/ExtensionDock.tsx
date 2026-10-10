@@ -1,11 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { ConfirmDialog } from "../components/ConfirmDialog";
-import { QuickPick } from "../components/QuickPick";
-import { QuickInput } from "../components/QuickInput";
 import { extHost, extLog } from "./client";
-import { ExtensionDiffDialog, type ExtDocumentView } from "./ExtensionDiffDialog";
 import { ExtensionWebview } from "./ExtensionWebview";
 import type { EditorStatePayload, HostEvent, InstalledExtension, WebviewInfo } from "./protocol";
 
@@ -27,16 +21,16 @@ interface Props {
   nativeTabs?: NativeDockTab[];
   /** Pedido externo para focar uma aba (ex.: Paleta → "Gerenciar agentes"). */
   requestedTab?: { key: string; nonce: number } | null;
-  /** Abre um arquivo no editor (linha 1-based opcional). */
-  onOpenFile: (path: string, line?: number) => void;
-  /** Snapshot do editor ativo publicado como `activeTextEditor` às extensões. */
-  readEditorState: () => EditorStatePayload;
-}
-
-interface PendingRequest {
-  requestId: number;
-  kind: string;
-  params: Record<string, unknown>;
+  /**
+   * @deprecated Abrir arquivos agora é do `ExtensionHostRuntime` (global).
+   * Mantido para estabilidade da API do componente.
+   */
+  onOpenFile?: (path: string, line?: number) => void;
+  /**
+   * @deprecated O editor é espelhado por eventos do Monaco (editorBridge), sem
+   * snapshot/polling. Mantido para estabilidade da API do componente.
+   */
+  readEditorState?: () => EditorStatePayload;
 }
 
 interface Tab {
@@ -60,8 +54,11 @@ function readTab(): string {
  * Sidebar secundária com abas: "Agentes" (chat nativo) + a UI REAL das
  * extensões VS Code instaladas (Claude Code, Codex), hospedadas pelo
  * mini extension host (`tools/ext-host`). Ver docs/context/extensoes-vscode.md.
+ *
+ * Diálogos, diffs, terminais, editor e deep links ficam no
+ * `ExtensionHostRuntime` (global): funcionam com a sidebar fechada.
  */
-export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab, onOpenFile, readEditorState }: Props) {
+export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab }: Props) {
   const natives: NativeDockTab[] =
     nativeTabs ?? [{ key: AGENTS_TAB, label: "Agentes", node: agentsNode }];
   const defaultTab = natives[0]?.key ?? AGENTS_TAB;
@@ -70,13 +67,6 @@ export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab, 
   const [hostError, setHostError] = useState<string | null>(null);
   const [views, setViews] = useState<Record<string, WebviewInfo | { error: string } | "loading">>({});
   const [panels, setPanels] = useState<WebviewInfo[]>([]);
-  const [request, setRequest] = useState<PendingRequest | null>(null);
-  const [toast, setToast] = useState<{ severity: string; message: string } | null>(null);
-  const [docView, setDocView] = useState<ExtDocumentView | null>(null);
-  const readEditorRef = useRef(readEditorState);
-  readEditorRef.current = readEditorState;
-  const onOpenFileRef = useRef(onOpenFile);
-  onOpenFileRef.current = onOpenFile;
   // Dedupe síncrono (ref): o StrictMode roda os efeitos 2× antes do setState valer.
   const requestedRef = useRef(new Set<string>());
 
@@ -93,7 +83,7 @@ export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab, 
     if (requestedTab) selectTab(requestedTab.key);
   }, [requestedTab, selectTab]);
 
-  // Sobe o host (barato: só Node + servidor HTTP; nada é ativado ainda).
+  // Sobe o host (normalmente já está quente: o runtime o inicia no startup).
   const start = useCallback(() => {
     setHostError(null);
     extHost
@@ -106,39 +96,10 @@ export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab, 
   }, [rootPath]);
   useEffect(start, [start]);
 
-  // Eventos globais do host.
+  // Eventos de webview/painel do host.
   useEffect(() => {
     return extHost.on((ev: HostEvent) => {
       switch (ev.event) {
-        case "request":
-          setRequest(ev as unknown as PendingRequest);
-          break;
-        case "openFile": {
-          const e = ev as { path: string; selection?: { start: { line: number } } };
-          onOpenFileRef.current(e.path, e.selection ? e.selection.start.line + 1 : undefined);
-          break;
-        }
-        case "diff": {
-          const e = ev as unknown as Extract<HostEvent, { event: "diff" }>;
-          setDocView({ kind: "diff", title: e.title, left: e.left, right: e.right });
-          break;
-        }
-        case "closeDiff":
-          setDocView((d) => (d && d.kind === "diff" ? null : d));
-          break;
-        case "openVirtualDocument": {
-          const e = ev as unknown as Extract<HostEvent, { event: "openVirtualDocument" }>;
-          setDocView({ kind: "document", title: e.title, content: e.content, path: e.uri });
-          break;
-        }
-        case "openExternal":
-          void invoke("ext_host_open_external", { url: (ev as { url: string }).url }).catch((err) =>
-            setToast({ severity: "error", message: String(err) }),
-          );
-          break;
-        case "clipboardWrite":
-          void navigator.clipboard?.writeText((ev as { text: string }).text).catch(() => {});
-          break;
         case "webviewPanelCreated": {
           const info = ev as unknown as WebviewInfo;
           setPanels((p) => (p.some((x) => x.handle === info.handle) ? p : [...p, info]));
@@ -160,6 +121,14 @@ export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab, 
           setPanels((p) => p.filter((x) => x.handle !== h));
           break;
         }
+        case "revealWebview": {
+          const h = (ev as { handle: string }).handle;
+          setPanels((p) => {
+            if (p.some((x) => x.handle === h)) selectTab(`panel:${h}`);
+            return p;
+          });
+          break;
+        }
         case "revealView": {
           const viewId = (ev as { viewId?: string }).viewId;
           const owner = viewId && installed.find((e) => e.viewIds.includes(viewId));
@@ -167,16 +136,23 @@ export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab, 
           break;
         }
         case "hostExit":
-          setHostError("O host de extensões foi encerrado.");
+          setHostError("O host de extensões foi encerrado. Reiniciando…");
           requestedRef.current.clear();
           setViews({});
           setPanels([]);
+          break;
+        case "hostRestarted":
+          // As views voltam sozinhas (o efeito abaixo re-resolve a aba ativa).
+          setHostError(null);
+          requestedRef.current.clear();
+          setViews({});
+          start();
           break;
         default:
           break;
       }
     });
-  }, [installed, selectTab]);
+  }, [installed, selectTab, start]);
 
   // Resolve a view da aba selecionada (ativa a extensão na 1ª vez).
   useEffect(() => {
@@ -184,73 +160,19 @@ export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab, 
     if (!ext || requestedRef.current.has(ext.id)) return;
     requestedRef.current.add(ext.id);
     setViews((v) => ({ ...v, [ext.id]: "loading" }));
+    const t0 = performance.now();
     (async () => {
       const loaded = await extHost.loadExtension(ext.id);
       const viewId = ext.viewIds.find((id) => loaded.views.some((v) => v.id === id)) ?? loaded.views[0]?.id;
       if (!viewId) throw new Error("A extensão não contribui nenhuma view de webview.");
       const info = await extHost.resolveView(viewId);
+      extHost.timings[`resolve:${ext.id}`] = Math.round(performance.now() - t0);
       setViews((v) => ({ ...v, [ext.id]: info }));
     })().catch((err) => {
       requestedRef.current.delete(ext.id);
       setViews((v) => ({ ...v, [ext.id]: { error: String(err instanceof Error ? err.message : err) } }));
     });
   }, [tab, installed]);
-
-  // Publica o editor ativo (arquivo + seleção) enquanto o host roda.
-  useEffect(() => {
-    let last = "";
-    const t = window.setInterval(() => {
-      if (!extHost.running) return;
-      const state = readEditorRef.current();
-      const key = JSON.stringify(state);
-      if (key === last) return;
-      last = key;
-      extHost.publishEditorState(state);
-    }, 400);
-    return () => window.clearInterval(t);
-  }, []);
-
-  const respond = (result: unknown) => {
-    if (!request) return;
-    void extHost.notify("respond", { requestId: request.requestId, result });
-    setRequest(null);
-  };
-
-  // Diálogos de arquivo vão direto ao plugin de diálogo do Tauri.
-  useEffect(() => {
-    if (!request || (request.kind !== "openDialog" && request.kind !== "saveDialog")) return;
-    const p = request.params;
-    const done = (result: unknown) => {
-      void extHost.notify("respond", { requestId: request.requestId, result });
-      setRequest(null);
-    };
-    if (request.kind === "openDialog") {
-      openDialog({ directory: !!p.canSelectFolders, multiple: !!p.canSelectMany, title: p.title as string | undefined })
-        .then((r) => done({ paths: r == null ? [] : Array.isArray(r) ? r : [r] }))
-        .catch(() => done({ paths: [] }));
-    } else {
-      saveDialog({ title: p.title as string | undefined, defaultPath: p.defaultPath as string | undefined })
-        .then((r) => done({ path: r ?? null }))
-        .catch(() => done({ path: null }));
-    }
-  }, [request]);
-
-  // Mensagens sem botões não bloqueiam: viram aviso e respondem na hora.
-  useEffect(() => {
-    if (!request || request.kind !== "showMessage") return;
-    const items = (request.params.items as string[]) ?? [];
-    if (items.length === 0 && !request.params.modal) {
-      setToast({ severity: String(request.params.severity), message: String(request.params.message) });
-      void extHost.notify("respond", { requestId: request.requestId, result: null });
-      setRequest(null);
-    }
-  }, [request]);
-
-  useEffect(() => {
-    if (!toast) return;
-    const t = window.setTimeout(() => setToast(null), 6000);
-    return () => window.clearTimeout(t);
-  }, [toast]);
 
   const tabs: Tab[] = [
     ...installed.map((e) => ({ key: e.id, label: e.label, extensionId: e.id, viewIds: e.viewIds })),
@@ -281,6 +203,9 @@ export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab, 
                 aria-selected={activeTab === t.key}
                 className={`ext-dock-tab${activeTab === t.key ? " active" : ""}`}
                 title={t.panel ? t.label : `${t.label} — extensão do VS Code instalada`}
+                // Ponteiro sobre a aba: ativa em segundo plano (o clique já encontra pronto).
+                onPointerEnter={t.panel ? undefined : () => extHost.prewarm(t.extensionId)}
+                onFocus={t.panel ? undefined : () => extHost.prewarm(t.extensionId)}
                 onClick={() => selectTab(t.key)}
               >
                 {t.label}
@@ -317,7 +242,9 @@ export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab, 
           return (
             <div key={t.key} className="ext-dock-pane" hidden={!isActive}>
               {state === "loading" ? (
-                <div className="ext-webview-status">Iniciando {t.label}…</div>
+                <div className="ext-webview-status" role="status">
+                  Iniciando {t.label}…
+                </div>
               ) : "error" in state ? (
                 <div className="ext-webview-status error" role="alert">
                   Não foi possível abrir {t.label}: {state.error}
@@ -331,59 +258,12 @@ export function ExtensionDock({ rootPath, agentsNode, nativeTabs, requestedTab, 
         {hostError && !isNative(activeTab) && (
           <div className="ext-webview-status error" role="alert">
             {hostError}{" "}
-            <button className="ext-dock-retry" onClick={start}>
+            <button className="ext-dock-retry" onClick={() => void extHost.restart().catch(() => {})}>
               Tentar novamente
             </button>
           </div>
         )}
-        {toast && (
-          <div className={`ext-dock-toast ${toast.severity}`} role="status" onClick={() => setToast(null)}>
-            {toast.message}
-          </div>
-        )}
       </div>
-
-      {request?.kind === "showMessage" && ((request.params.items as string[])?.length > 0 || !!request.params.modal) && (
-        <ConfirmDialog<number>
-          title={request.params.severity === "error" ? "Erro" : request.params.severity === "warning" ? "Aviso" : "Informação"}
-          message={[request.params.message, request.params.detail].filter(Boolean).join("\n\n")}
-          buttons={[
-            ...((request.params.items as string[]) ?? []).map((label, index) => ({
-              label,
-              variant: (index === 0 ? "primary" : "secondary") as "primary" | "secondary",
-              value: index,
-              default: index === 0,
-            })),
-            { label: "Fechar", variant: "secondary" as const, value: -1 },
-          ]}
-          onChoice={(v) => respond({ index: v ?? -1 })}
-        />
-      )}
-      {request?.kind === "quickPick" && (
-        <QuickPick
-          title={(request.params.title as string) || undefined}
-          placeholder={(request.params.placeHolder as string) || "Selecione uma opção"}
-          items={((request.params.items as { label: string; description?: string; detail?: string }[]) ?? []).map((it, i) => ({
-            id: String(i),
-            label: it.label,
-            description: it.description,
-            detail: it.detail,
-          }))}
-          onPick={(item) => respond({ index: Number(item.id) })}
-          onClose={() => respond(null)}
-        />
-      )}
-      {request?.kind === "inputBox" && (
-        <QuickInput
-          title={(request.params.title as string) || undefined}
-          placeholder={(request.params.placeHolder as string) || undefined}
-          prompt={(request.params.prompt as string) || undefined}
-          password={!!request.params.password}
-          onSubmit={(value) => respond({ value })}
-          onClose={() => respond(null)}
-        />
-      )}
-      {docView && <ExtensionDiffDialog view={docView} onClose={() => setDocView(null)} />}
     </div>
   );
 }

@@ -101,8 +101,12 @@ test('host: ativa a extensão, resolve a view, serve HTML/recursos e ecoa mensag
     assert.equal(host.tabGroups.all[0].tabs.length, 1);
 
     // estado do editor publicado pelo app → activeTextEditor
-    await host.setEditorState({ path: path.join(workspace, 'b.ts'), selection: { start: { line: 0, character: 1 }, end: { line: 0, character: 3 } }, openFiles: [path.join(workspace, 'b.ts')] });
+    const b = path.join(workspace, 'b.ts');
+    host.documentOpened({ path: b, text: 'depois', version: 1, languageId: 'typescript' });
+    host.editorsChanged({ active: { path: b, selections: [{ start: { line: 0, character: 1 }, end: { line: 0, character: 3 } }] }, visible: [{ path: b }], tabs: [{ path: b, active: true }] });
     assert.equal(host.activeTextEditor.document.getText(host.activeTextEditor.selection), 'ep');
+    // aba do arquivo + aba do diff
+    assert.equal(host.tabGroups.all[0].tabs.length, 2);
   } finally {
     process.stdout.write = stdoutWrite;
     await host.stop();

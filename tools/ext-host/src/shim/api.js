@@ -94,12 +94,179 @@ async function walkFind(root, include, exclude, max) {
   return out;
 }
 
+let statusSeq = 0;
+
+/**
+ * StatusBarItem: cada mudança (texto, tooltip, comando…) vai ao app num lote
+ * por microtask (`statusBarItem`); hide/dispose removem (`visible:false`).
+ */
+function createStatusBarItem(host, ext, id, alignment, priority) {
+  const state = { text: '', tooltip: undefined, command: undefined, name: undefined, color: undefined, backgroundColor: undefined, accessibilityInformation: undefined };
+  let visible = false;
+  let disposed = false;
+  let queued = false;
+  const flush = () => {
+    queued = false;
+    if (disposed) return;
+    const cmd = state.command;
+    host.emit({
+      event: 'statusBarItem',
+      id,
+      extensionId: ext.id,
+      visible,
+      alignment: alignment === 2 ? 'right' : 'left',
+      priority: typeof priority === 'number' ? priority : 0,
+      text: String(state.text || ''),
+      tooltip: typeof state.tooltip === 'string' ? state.tooltip : state.tooltip && state.tooltip.value ? String(state.tooltip.value) : undefined,
+      name: state.name,
+      command: typeof cmd === 'string' ? { command: cmd } : cmd && cmd.command ? { command: cmd.command, title: cmd.title, arguments: safeCommandArgs(cmd.arguments) } : undefined,
+      color: state.color && state.color.id ? { themeColor: state.color.id } : typeof state.color === 'string' ? state.color : undefined,
+      backgroundColor: state.backgroundColor && state.backgroundColor.id ? { themeColor: state.backgroundColor.id } : undefined,
+    });
+  };
+  const schedule = () => {
+    if (!queued) {
+      queued = true;
+      queueMicrotask(flush);
+    }
+  };
+  const item = {
+    get id() {
+      return id;
+    },
+    get alignment() {
+      return alignment;
+    },
+    get priority() {
+      return priority;
+    },
+    show() {
+      visible = true;
+      schedule();
+    },
+    hide() {
+      visible = false;
+      schedule();
+    },
+    dispose() {
+      if (disposed) return;
+      visible = false;
+      flush();
+      disposed = true;
+      host.statusBarItems.delete(id);
+    },
+  };
+  for (const key of Object.keys(state)) {
+    Object.defineProperty(item, key, {
+      enumerable: true,
+      get: () => state[key],
+      set: (v) => {
+        state[key] = v;
+        if (visible) schedule();
+      },
+    });
+  }
+  host.statusBarItems.set(id, item);
+  return item;
+}
+
+function safeCommandArgs(args) {
+  if (!Array.isArray(args)) return undefined;
+  try {
+    return JSON.parse(JSON.stringify(args));
+  } catch {
+    return undefined;
+  }
+}
+
+/** FileSystemWatcher sobre o WatchService do host (sem polling). */
+function createWatcher(host, globPattern, ignoreCreate, ignoreChange, ignoreDelete) {
+  const created = new EventEmitter();
+  const changed = new EventEmitter();
+  const deleted = new EventEmitter();
+  const subs = [];
+  let base;
+  let pattern;
+  if (typeof globPattern === 'string') pattern = globPattern;
+  else if (globPattern && typeof globPattern === 'object') {
+    base = globPattern.baseUri ? toUri(globPattern.baseUri).fsPath : typeof globPattern.base === 'string' ? globPattern.base : undefined;
+    pattern = globPattern.pattern;
+  }
+  pattern = String(pattern || '**/*');
+  const recursive = pattern.includes('**') || pattern.includes('/');
+  const roots = base ? [base] : path.isAbsolute(pattern) ? [] : host.workspaceFolders.map((f) => f.uri.fsPath);
+  const matcher = globToRegExp(pattern);
+  const cb = (kind, abs) => {
+    host._onDiskChange(kind, abs);
+    const uri = Uri.file(abs);
+    if (kind === 'create' && !ignoreCreate) created.fire(uri);
+    else if (kind === 'change' && !ignoreChange) changed.fire(uri);
+    else if (kind === 'delete' && !ignoreDelete) deleted.fire(uri);
+  };
+  for (const r of roots) subs.push(host.watchers.subscribe(r, matcher, recursive, cb));
+  return {
+    ignoreCreateEvents: ignoreCreate,
+    ignoreChangeEvents: ignoreChange,
+    ignoreDeleteEvents: ignoreDelete,
+    onDidCreate: created.event,
+    onDidChange: changed.event,
+    onDidDelete: deleted.event,
+    dispose() {
+      subs.splice(0).forEach((u) => u());
+    },
+  };
+}
+
+/** DiagnosticCollection: entra em getDiagnostics e vira markers no app. */
+function createDiagnosticCollection(host, name) {
+  const map = new Map();
+  const coll = {
+    name,
+    set(uriOrEntries, diags) {
+      if (Array.isArray(uriOrEntries)) {
+        for (const [u, d] of uriOrEntries) coll.set(u, d);
+        return;
+      }
+      if (!uriOrEntries) return;
+      const uri = toUri(uriOrEntries);
+      map.set(uri.toString(), { uri, list: diags || [] });
+      host.publishCollection(name, uri, diags || []);
+    },
+    delete(uri) {
+      uri = toUri(uri);
+      if (map.delete(uri.toString())) host.publishCollection(name, uri, []);
+    },
+    clear() {
+      for (const { uri } of map.values()) host.publishCollection(name, uri, []);
+      map.clear();
+    },
+    forEach(cb, thisArg) {
+      map.forEach(({ uri, list }) => cb.call(thisArg, uri, list, coll));
+    },
+    get: (uri) => (map.get(toUri(uri).toString()) || {}).list,
+    has: (uri) => map.has(toUri(uri).toString()),
+    [Symbol.iterator]: function* () {
+      for (const { uri, list } of map.values()) yield [uri, list];
+    },
+    dispose() {
+      coll.clear();
+      host.diagnosticCollections.delete(coll);
+    },
+  };
+  host.diagnosticCollections.add(coll);
+  return coll;
+}
+
 /**
  * @param {import('../host').ExtensionHost} host
  * @param {object} ext descritor da extensão carregada ({ id, packageJSON, extensionPath, ... })
  */
 function createVscodeApi(host, ext) {
   const log = (...a) => host.log(`[${ext.id}]`, ...a);
+  const providerFor = (uri) => {
+    const reg = uri && uri.scheme !== 'file' ? host.fsProviders.get(uri.scheme) : undefined;
+    return reg ? reg.provider : undefined;
+  };
 
   // ------------------------------------------------------------- commands
   const commands = {
@@ -107,7 +274,24 @@ function createVscodeApi(host, ext) {
       return host.registerCommand(id, cb, thisArg);
     },
     registerTextEditorCommand(id, cb, thisArg) {
-      return host.registerCommand(id, (...args) => cb.call(thisArg, host.activeTextEditor, { replace() {}, insert() {}, delete() {} }, ...args));
+      return host.registerCommand(id, (...args) => {
+        const editor = host.activeTextEditor;
+        if (!editor) {
+          log(`comando de editor sem editor ativo: ${id}`);
+          return undefined;
+        }
+        // As operações do builder são aplicadas como UMA edição ao final.
+        const ops = [];
+        const builder = {
+          replace: (loc, text) => ops.push((b) => b.replace(loc, text)),
+          insert: (pos, text) => ops.push((b) => b.insert(pos, text)),
+          delete: (range) => ops.push((b) => b.delete(range)),
+          setEndOfLine: (eol) => ops.push((b) => b.setEndOfLine(eol)),
+        };
+        const result = cb.call(thisArg, editor, builder, ...args);
+        if (ops.length) return editor.edit((b) => ops.forEach((op) => op(b))).then(() => result);
+        return result;
+      });
     },
     executeCommand(id, ...args) {
       return host.executeCommand(id, ...args);
@@ -130,6 +314,7 @@ function createVscodeApi(host, ext) {
     }
     const write = (s) => {
       stream && stream.write(s);
+      host.outputAppend(name, s);
       if (host.verbose) process.stderr.write(`[out:${name}] ${s}`);
     };
     const isLog = opts && typeof opts === 'object' && opts.log;
@@ -142,7 +327,9 @@ function createVscodeApi(host, ext) {
       appendLine: (v) => write(String(v) + '\n'),
       replace: (v) => write(String(v) + '\n'),
       clear() {},
-      show() {},
+      show(preserveFocus) {
+        host.emit({ event: 'outputShow', channel: name, preserveFocus: !!preserveFocus });
+      },
       hide() {},
       dispose() {
         stream && stream.end();
@@ -182,7 +369,7 @@ function createVscodeApi(host, ext) {
     onDidChangeActiveTextEditor: host.events.activeTextEditor.event,
     onDidChangeVisibleTextEditors: host.events.visibleTextEditors.event,
     onDidChangeTextEditorSelection: host.events.textEditorSelection.event,
-    onDidChangeTextEditorVisibleRanges: host.events.never.event,
+    onDidChangeTextEditorVisibleRanges: host.events.textEditorVisibleRanges.event,
     onDidChangeTextEditorOptions: host.events.never.event,
     onDidChangeTextEditorViewColumn: host.events.never.event,
     get tabGroups() {
@@ -192,21 +379,23 @@ function createVscodeApi(host, ext) {
       return host.windowState;
     },
     onDidChangeWindowState: host.events.windowState.event,
-    activeColorTheme: { kind: types.ColorThemeKind.Dark },
+    get activeColorTheme() {
+      return { kind: host.themeKind === 'light' ? types.ColorThemeKind.Light : host.themeKind === 'high-contrast' ? types.ColorThemeKind.HighContrast : types.ColorThemeKind.Dark };
+    },
     onDidChangeActiveColorTheme: host.events.never.event,
     get terminals() {
       return host.terminals;
     },
     get activeTerminal() {
-      return host.terminals[host.terminals.length - 1];
+      return host.activeTerminal;
     },
     onDidOpenTerminal: host.events.openTerminal.event,
     onDidCloseTerminal: host.events.closeTerminal.event,
-    onDidChangeActiveTerminal: host.events.never.event,
-    onDidChangeTerminalState: host.events.never.event,
-    onDidChangeTerminalShellIntegration: host.events.never.event,
-    onDidStartTerminalShellExecution: host.events.never.event,
-    onDidEndTerminalShellExecution: host.events.never.event,
+    onDidChangeActiveTerminal: host.events.activeTerminal.event,
+    onDidChangeTerminalState: host.events.terminalState.event,
+    onDidChangeTerminalShellIntegration: host.events.terminalShellIntegration.event,
+    onDidStartTerminalShellExecution: host.events.startShellExecution.event,
+    onDidEndTerminalShellExecution: host.events.endShellExecution.event,
     activeNotebookEditor: undefined,
     visibleNotebookEditors: [],
     onDidChangeActiveNotebookEditor: host.events.never.event,
@@ -273,25 +462,48 @@ function createVscodeApi(host, ext) {
       return host.showTextDocument(docOrUri, columnOrOptions, preserveFocus);
     },
     createOutputChannel,
-    createStatusBarItem(idOrAlignment, alignment, priority) {
-      return { id: typeof idOrAlignment === 'string' ? idOrAlignment : `${ext.id}.status`, alignment, priority, text: '', tooltip: undefined, command: undefined, name: undefined, backgroundColor: undefined, color: undefined, accessibilityInformation: undefined, show() {}, hide() {}, dispose() {} };
+    createStatusBarItem(idOrAlignment, alignmentOrPriority, priorityArg) {
+      const hasId = typeof idOrAlignment === 'string';
+      const id = hasId ? idOrAlignment : `${ext.id}.status${++statusSeq}`;
+      const alignment = (hasId ? alignmentOrPriority : idOrAlignment) || types.StatusBarAlignment.Left;
+      const priority = hasId ? priorityArg : alignmentOrPriority;
+      return createStatusBarItem(host, ext, `${ext.id}:${id}`, alignment, priority);
     },
-    setStatusBarMessage(text) {
-      log('statusBar:', text);
-      return noopDisposable();
+    setStatusBarMessage(text, hideAfterOrThenable) {
+      const id = `${ext.id}:msg${++statusSeq}`;
+      host.emit({ event: 'statusMessage', id, extensionId: ext.id, text: String(text) });
+      const clear = () => host.emit({ event: 'statusMessage', id, extensionId: ext.id, text: null });
+      if (typeof hideAfterOrThenable === 'number') setTimeout(clear, hideAfterOrThenable);
+      else if (hideAfterOrThenable && typeof hideAfterOrThenable.then === 'function') hideAfterOrThenable.then(clear, clear);
+      return new Disposable(clear);
     },
     withProgress(options, task) {
       const cts = new CancellationTokenSource();
-      return Promise.resolve(task({ report() {} }, cts.token));
+      const id = `${ext.id}:progress${++statusSeq}`;
+      const title = options && options.title ? String(options.title) : '';
+      // Notificação/janela: mostra na barra de status enquanto a tarefa roda.
+      const show = (msg) => host.emit({ event: 'statusMessage', id, extensionId: ext.id, text: [title, msg].filter(Boolean).join(': ') || null, progress: true });
+      if (title) show();
+      const progress = {
+        report(v) {
+          if (v && v.message) show(String(v.message));
+        },
+      };
+      const done = () => host.emit({ event: 'statusMessage', id, extensionId: ext.id, text: null });
+      return Promise.resolve()
+        .then(() => task(progress, cts.token))
+        .finally(done);
     },
     withScmProgress(task) {
       return Promise.resolve(task({ report() {} }));
     },
     createTextEditorDecorationType(opts) {
-      return { key: `deco${Math.random().toString(36).slice(2)}`, options: opts, dispose() {} };
+      return host.createDecorationType(ext, opts);
     },
     createTerminal(nameOrOptions, shellPath, shellArgs) {
-      return host.createTerminal(ext, typeof nameOrOptions === 'object' ? nameOrOptions : { name: nameOrOptions, shellPath, shellArgs });
+      const opts = typeof nameOrOptions === 'object' && nameOrOptions ? nameOrOptions : { name: nameOrOptions, shellPath, shellArgs };
+      if (opts.pty) log('createTerminal com pty de extensão não é suportado; abrindo um shell comum');
+      return host.createTerminal(ext, opts);
     },
     createInputBox() {
       const em = new EventEmitter();
@@ -307,18 +519,27 @@ function createVscodeApi(host, ext) {
   const fsApi = {
     async stat(uri) {
       uri = toUri(uri);
-      const prov = host.fsProviders.get(uri.scheme);
+      const prov = providerFor(uri);
       if (prov) return prov.stat(uri);
       try {
-        const st = await fs.promises.stat(uri.fsPath);
-        return { type: st.isDirectory() ? FileType.Directory : FileType.File, ctime: st.ctimeMs, mtime: st.mtimeMs, size: st.size };
+        const lst = await fs.promises.lstat(uri.fsPath);
+        const st = lst.isSymbolicLink() ? await fs.promises.stat(uri.fsPath) : lst;
+        let type = st.isDirectory() ? FileType.Directory : st.isFile() ? FileType.File : FileType.Unknown;
+        if (lst.isSymbolicLink()) type |= FileType.SymbolicLink;
+        let permissions;
+        try {
+          await fs.promises.access(uri.fsPath, fs.constants.W_OK);
+        } catch {
+          permissions = types.FilePermission.Readonly;
+        }
+        return { type, ctime: st.ctimeMs, mtime: st.mtimeMs, size: st.size, permissions };
       } catch (e) {
         throw fsErr(e, uri);
       }
     },
     async readFile(uri) {
       uri = toUri(uri);
-      const prov = host.fsProviders.get(uri.scheme);
+      const prov = providerFor(uri);
       if (prov) return prov.readFile(uri);
       try {
         return new Uint8Array(await fs.promises.readFile(uri.fsPath));
@@ -328,8 +549,8 @@ function createVscodeApi(host, ext) {
     },
     async writeFile(uri, content) {
       uri = toUri(uri);
-      const prov = host.fsProviders.get(uri.scheme);
-      if (prov) return prov.writeFile(uri, content, { create: true, overwrite: true });
+      const prov = providerFor(uri);
+      if (prov) return prov.writeFile(uri, content, { create: true, overwrite: true, unlock: false, atomic: false });
       try {
         await fs.promises.mkdir(path.dirname(uri.fsPath), { recursive: true });
         await fs.promises.writeFile(uri.fsPath, content);
@@ -340,35 +561,67 @@ function createVscodeApi(host, ext) {
     },
     async readDirectory(uri) {
       uri = toUri(uri);
-      const prov = host.fsProviders.get(uri.scheme);
+      const prov = providerFor(uri);
       if (prov) return prov.readDirectory(uri);
       try {
         const ents = await fs.promises.readdir(uri.fsPath, { withFileTypes: true });
-        return ents.map((e) => [e.name, e.isDirectory() ? FileType.Directory : e.isSymbolicLink() ? FileType.SymbolicLink : FileType.File]);
+        return ents.map((e) => [e.name, e.isDirectory() ? FileType.Directory : e.isSymbolicLink() ? FileType.SymbolicLink : e.isFile() ? FileType.File : FileType.Unknown]);
       } catch (e) {
         throw fsErr(e, uri);
       }
     },
     async createDirectory(uri) {
       uri = toUri(uri);
-      await fs.promises.mkdir(uri.fsPath, { recursive: true });
-    },
-    async delete(uri, options = {}) {
-      uri = toUri(uri);
+      const prov = providerFor(uri);
+      if (prov) return prov.createDirectory(uri);
       try {
-        await fs.promises.rm(uri.fsPath, { recursive: !!options.recursive, force: false });
+        await fs.promises.mkdir(uri.fsPath, { recursive: true });
       } catch (e) {
         throw fsErr(e, uri);
       }
     },
-    async rename(src, dst) {
-      await fs.promises.rename(toUri(src).fsPath, toUri(dst).fsPath);
+    async delete(uri, options = {}) {
+      uri = toUri(uri);
+      const prov = providerFor(uri);
+      if (prov) return prov.delete(uri, { recursive: !!options.recursive, useTrash: !!options.useTrash, atomic: false });
+      try {
+        await fs.promises.rm(uri.fsPath, { recursive: !!options.recursive, force: false });
+        host.notifyFileChanged(uri.fsPath);
+      } catch (e) {
+        throw fsErr(e, uri);
+      }
     },
-    async copy(src, dst) {
-      await fs.promises.cp(toUri(src).fsPath, toUri(dst).fsPath, { recursive: true });
+    async rename(src, dst, options = {}) {
+      src = toUri(src);
+      dst = toUri(dst);
+      const prov = providerFor(src);
+      if (prov) return prov.rename(src, dst, { overwrite: !!options.overwrite });
+      try {
+        if (!options.overwrite && fs.existsSync(dst.fsPath)) throw Object.assign(new Error('exists'), { code: 'EEXIST' });
+        await fs.promises.mkdir(path.dirname(dst.fsPath), { recursive: true });
+        await fs.promises.rename(src.fsPath, dst.fsPath);
+        host.notifyFileChanged(dst.fsPath);
+      } catch (e) {
+        throw fsErr(e, e && e.code === 'EEXIST' ? dst : src);
+      }
+    },
+    async copy(src, dst, options = {}) {
+      src = toUri(src);
+      dst = toUri(dst);
+      const prov = providerFor(src);
+      if (prov && typeof prov.copy === 'function') return prov.copy(src, dst, { overwrite: !!options.overwrite });
+      try {
+        if (!options.overwrite && fs.existsSync(dst.fsPath)) throw Object.assign(new Error('exists'), { code: 'EEXIST' });
+        await fs.promises.cp(src.fsPath, dst.fsPath, { recursive: true, force: !!options.overwrite });
+        host.notifyFileChanged(dst.fsPath);
+      } catch (e) {
+        throw fsErr(e, e && e.code === 'EEXIST' ? dst : src);
+      }
     },
     isWritableFileSystem(scheme) {
-      return scheme === 'file' ? true : host.fsProviders.has(scheme) ? true : undefined;
+      if (scheme === 'file') return true;
+      const reg = host.fsProviders.get(scheme);
+      return reg ? !reg.options.isReadonly : undefined;
     },
   };
 
@@ -415,10 +668,10 @@ function createVscodeApi(host, ext) {
     onDidCloseTextDocument: host.events.closeDocument.event,
     onDidChangeTextDocument: host.events.changeDocument.event,
     onDidSaveTextDocument: host.events.saveDocument.event,
-    onWillSaveTextDocument: host.events.never.event,
-    onDidCreateFiles: host.events.never.event,
-    onDidDeleteFiles: host.events.never.event,
-    onDidRenameFiles: host.events.never.event,
+    onWillSaveTextDocument: host.events.willSaveDocument.event,
+    onDidCreateFiles: host.events.createFiles.event,
+    onDidDeleteFiles: host.events.deleteFiles.event,
+    onDidRenameFiles: host.events.renameFiles.event,
     onWillCreateFiles: host.events.never.event,
     onWillDeleteFiles: host.events.never.event,
     onWillRenameFiles: host.events.never.event,
@@ -438,25 +691,47 @@ function createVscodeApi(host, ext) {
       }
       return out;
     },
-    createFileSystemWatcher() {
-      const c = new EventEmitter();
-      const ch = new EventEmitter();
-      const d = new EventEmitter();
-      return { ignoreCreateEvents: false, ignoreChangeEvents: false, ignoreDeleteEvents: false, onDidCreate: c.event, onDidChange: ch.event, onDidDelete: d.event, dispose() {} };
+    createFileSystemWatcher(globPattern, ignoreCreate, ignoreChange, ignoreDelete) {
+      return createWatcher(host, globPattern, !!ignoreCreate, !!ignoreChange, !!ignoreDelete);
     },
-    registerFileSystemProvider(scheme, provider) {
-      host.fsProviders.set(scheme, provider);
-      return new Disposable(() => host.fsProviders.delete(scheme));
+    registerFileSystemProvider(scheme, provider, options = {}) {
+      const reg = { provider, ext, options: { isCaseSensitive: !!options.isCaseSensitive, isReadonly: !!options.isReadonly } };
+      host.fsProviders.set(scheme, reg);
+      return new Disposable(() => {
+        if (host.fsProviders.get(scheme) === reg) host.fsProviders.delete(scheme);
+      });
     },
     registerTextDocumentContentProvider(scheme, provider) {
-      host.contentProviders.set(scheme, provider);
-      return new Disposable(() => host.contentProviders.delete(scheme));
+      const reg = { provider, ext };
+      host.contentProviders.set(scheme, reg);
+      // provider.onDidChange(uri) → relê o documento aberto e avisa as extensões.
+      const sub =
+        provider && typeof provider.onDidChange === 'function'
+          ? provider.onDidChange(async (uri) => {
+              const doc = host.documents.get(toUri(uri).toString());
+              if (!doc) return;
+              try {
+                const text = await provider.provideTextDocumentContent(toUri(uri), new CancellationTokenSource().token);
+                host._replaceText(doc, text);
+              } catch (err) {
+                log('provideTextDocumentContent falhou:', err);
+              }
+            })
+          : null;
+      return new Disposable(() => {
+        if (host.contentProviders.get(scheme) === reg) host.contentProviders.delete(scheme);
+        sub && sub.dispose();
+      });
     },
     applyEdit(edit) {
       return host.applyWorkspaceEdit(edit);
     },
     saveAll() {
-      return Promise.resolve(true);
+      return host.saveAll();
+    },
+    save(uri) {
+      const doc = host.documents.get(toUri(uri).toString());
+      return doc ? doc.save().then((ok) => (ok ? doc.uri : undefined)) : Promise.resolve(undefined);
     },
     registerTaskProvider: () => noopDisposable(),
     registerNotebookSerializer: () => noopDisposable(),
@@ -483,7 +758,9 @@ function createVscodeApi(host, ext) {
     logLevel: types.LogLevel.Info,
     onDidChangeLogLevel: host.events.never.event,
     clipboard: {
-      readText: () => Promise.resolve(host.clipboard),
+      // Área de transferência do SO via app (o sidecar não tem acesso); sem app
+      // ou sem resposta em 2 s, o último texto escrito por uma extensão.
+      readText: () => host.request('clipboardRead', {}, 2000).then((r) => (r && typeof r.text === 'string' ? r.text : host.clipboard)),
       writeText: (t) => {
         host.clipboard = String(t);
         host.emit({ event: 'clipboardWrite', text: host.clipboard });
@@ -492,7 +769,11 @@ function createVscodeApi(host, ext) {
     },
     openExternal(uri) {
       const s = typeof uri === 'string' ? uri : uri.toString(true);
-      if (s.startsWith('fluent-coder:') || s.startsWith('vscode:')) return Promise.resolve(host.handleUri(Uri.parse(s)));
+      if (s.startsWith('fluent-coder:') || s.startsWith('vscode:')) return host.handleUri(Uri.parse(s));
+      if (!/^(https?:|mailto:)/i.test(s)) {
+        log(`openExternal recusado (esquema não permitido): ${s.slice(0, 80)}`);
+        return Promise.resolve(false);
+      }
       host.emit({ event: 'openExternal', url: s });
       return Promise.resolve(true);
     },
@@ -518,19 +799,18 @@ function createVscodeApi(host, ext) {
   // ------------------------------------------------------------ languages
   const languages = {
     getDiagnostics(uri) {
-      if (uri) return host.diagnostics.get(toUri(uri).toString()) || [];
-      return [...host.diagnostics.entries()].map(([k, v]) => [Uri.parse(k), v]);
+      return host.getDiagnostics(uri);
     },
     onDidChangeDiagnostics: host.events.diagnostics.event,
     getLanguages: () => Promise.resolve(['plaintext', 'typescript', 'javascript', 'csharp', 'razor', 'json', 'markdown']),
     createDiagnosticCollection(name) {
-      const map = new Map();
-      return { name, set(uri, d) { if (uri) map.set(String(uri), d || []); }, delete(uri) { map.delete(String(uri)); }, clear() { map.clear(); }, forEach(cb) { map.forEach((v, k) => cb(Uri.parse(k), v)); }, get: (uri) => map.get(String(uri)), has: (uri) => map.has(String(uri)), dispose() { map.clear(); } };
+      return createDiagnosticCollection(host, name || ext.id);
     },
     match: () => 0,
     setTextDocumentLanguage: (doc) => Promise.resolve(doc),
   };
-  for (const k of ['registerCodeLensProvider', 'registerHoverProvider', 'registerCompletionItemProvider', 'registerCodeActionsProvider', 'registerDefinitionProvider', 'registerDocumentLinkProvider', 'registerInlineCompletionItemProvider', 'registerDocumentSymbolProvider']) {
+  languages.registerCodeLensProvider = (selector, provider) => host.registerCodeLensProvider(ext, selector, provider);
+  for (const k of ['registerHoverProvider', 'registerCompletionItemProvider', 'registerCodeActionsProvider', 'registerDefinitionProvider', 'registerDocumentLinkProvider', 'registerInlineCompletionItemProvider', 'registerDocumentSymbolProvider']) {
     languages[k] = () => noopDisposable();
   }
 

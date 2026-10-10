@@ -519,6 +519,7 @@ const enums = {
   ExtensionKind: { UI: 1, Workspace: 2 },
   FileType: { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 64 },
   FileChangeType: { Changed: 1, Created: 2, Deleted: 3 },
+  FilePermission: { Readonly: 1 },
   EndOfLine: { LF: 1, CRLF: 2 },
   ProgressLocation: { SourceControl: 1, Window: 10, Notification: 15 },
   TextEditorRevealType: { Default: 0, InCenter: 1, InCenterIfOutsideViewport: 2, AtTop: 3 },

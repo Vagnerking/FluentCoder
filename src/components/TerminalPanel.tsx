@@ -11,6 +11,8 @@ import { ProblemsPanel } from "./ProblemsPanel";
 import { OutputPanel } from "./OutputPanel";
 import { Codicon } from "../icons/codicons/Codicon";
 import type { Problem } from "../types";
+import type { TermSpawnOptions } from "../api";
+import { ptyClosed, ptyReady, subscribeExtTerminals } from "../extensions/terminalBridge";
 
 interface TerminalPanelProps {
   open: boolean;
@@ -79,6 +81,10 @@ interface TermInstance {
   cwd: string;
   connId?: string;
   command: string | null;
+  /** Terminal criado por uma extensão VS Code (shell/env próprios). */
+  spawn?: TermSpawnOptions;
+  /** Processo saiu (o terminal fica aberto mostrando a saída, como no VS Code). */
+  exited?: boolean;
 }
 
 export function TerminalPanel({
@@ -164,6 +170,8 @@ export function TerminalPanel({
 
   /** Closes a terminal, moving focus to the last remaining one (or none). */
   const closeTerminal = useCallback((id: string) => {
+    // Terminal de extensão: o host recebe onDidCloseTerminal (no-op nos demais).
+    ptyClosed(id, null);
     setTerminals((prev) => {
       const next = prev.filter((t) => t.id !== id);
       setActiveTermId((cur) =>
@@ -172,6 +180,38 @@ export function TerminalPanel({
       return next;
     });
   }, []);
+
+  // Terminais pedidos por extensões VS Code (window.createTerminal/show/dispose).
+  useEffect(
+    () =>
+      subscribeExtTerminals((a) => {
+        if (a.type === "create") {
+          const { spec } = a;
+          const dir = spec.cwd || cwd;
+          if (!dir) return;
+          setTerminals((prev) =>
+            prev.some((t) => t.id === spec.ptyId)
+              ? prev
+              : [
+                  ...prev,
+                  {
+                    id: spec.ptyId,
+                    title: spec.name,
+                    cwd: dir,
+                    command: null,
+                    spawn: { shellPath: spec.shellPath, shellArgs: spec.shellArgs, env: spec.env, strictEnv: spec.strictEnv },
+                  },
+                ]
+          );
+        } else if (a.type === "show") {
+          setActiveTermId(a.ptyId);
+          setActiveTab("terminal");
+        } else if (a.type === "dispose") {
+          closeTerminal(a.ptyId);
+        }
+      }),
+    [cwd, closeTerminal]
+  );
 
   // "Run ▶" → a fresh terminal that runs the command.
   useEffect(() => {
@@ -428,6 +468,16 @@ export function TerminalPanel({
                       cwd={t.cwd}
                       connId={t.connId}
                       command={t.command}
+                      spawn={t.spawn}
+                      onReady={t.spawn ? (pid) => ptyReady(t.id, pid) : undefined}
+                      onExit={
+                        t.spawn
+                          ? (code) => {
+                              ptyClosed(t.id, code);
+                              setTerminals((prev) => prev.map((x) => (x.id === t.id ? { ...x, exited: true } : x)));
+                            }
+                          : undefined
+                      }
                     />
                   </div>
                 ))}
@@ -493,7 +543,10 @@ export function TerminalPanel({
                         size={14}
                         className="terminal-list-icon"
                       />
-                      <span className="terminal-list-title">{t.title}</span>
+                      <span className="terminal-list-title">
+                        {t.title}
+                        {t.exited ? " (encerrado)" : ""}
+                      </span>
                       <button
                         type="button"
                         className="terminal-list-close"

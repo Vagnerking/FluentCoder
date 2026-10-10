@@ -14,7 +14,23 @@ export type IframeUpMessage =
   | { type: "setState"; handle: string; state: unknown }
   | { type: "ready"; handle: string }
   | { type: "link"; handle: string; href: string }
-  | { type: "pong"; handle: string; nonce: unknown };
+  | { type: "pong"; handle: string; nonce: unknown }
+  | {
+      type: "key";
+      handle: string;
+      key: string;
+      code?: string;
+      ctrl: boolean;
+      shift: boolean;
+      alt: boolean;
+      meta: boolean;
+      repeat: boolean;
+    }
+  | { type: "clipboard"; handle: string; op: "write"; text: string }
+  | { type: "clipboard"; handle: string; op: "read"; nonce: number };
+
+/** Limite de texto aceito do iframe para a área de transferência. */
+const MAX_CLIPBOARD = 16 * 1024 * 1024;
 
 /**
  * Valida um `MessageEvent` vindo de um iframe de webview. Só aceita mensagens
@@ -44,6 +60,29 @@ export function parseIframeMessage(
         : null;
     case "pong":
       return { type: "pong", handle: expected.handle, nonce: d.nonce };
+    case "key":
+      // Só o necessário para re-disparar o atalho; nada de texto livre longo.
+      if (typeof d.key !== "string" || d.key.length === 0 || d.key.length > 32) return null;
+      if (d.code !== undefined && (typeof d.code !== "string" || d.code.length > 32)) return null;
+      return {
+        type: "key",
+        handle: expected.handle,
+        key: d.key,
+        code: d.code as string | undefined,
+        ctrl: d.ctrl === true,
+        shift: d.shift === true,
+        alt: d.alt === true,
+        meta: d.meta === true,
+        repeat: d.repeat === true,
+      };
+    case "clipboard":
+      if (d.op === "write" && typeof d.text === "string" && d.text.length <= MAX_CLIPBOARD) {
+        return { type: "clipboard", handle: expected.handle, op: "write", text: d.text };
+      }
+      if (d.op === "read" && typeof d.nonce === "number" && Number.isFinite(d.nonce)) {
+        return { type: "clipboard", handle: expected.handle, op: "read", nonce: d.nonce };
+      }
+      return null;
     default:
       return null;
   }
@@ -51,7 +90,7 @@ export function parseIframeMessage(
 
 /** Mensagem de controle app → preâmbulo (nunca chega ao código da extensão). */
 export function controlMessage(
-  type: "theme" | "ping",
+  type: "theme" | "ping" | "clipboardText",
   payload: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return { __fluentCtl: 1, type, ...payload };

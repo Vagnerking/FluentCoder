@@ -44,10 +44,36 @@ function clone(v) {
   return v === undefined ? v : JSON.parse(JSON.stringify(v));
 }
 
+/**
+ * Padrões do próprio VS Code que as extensões consultam (o Claude Code lê
+ * `files.autoSave` para decidir se "salvar" o lado direito do diff aceita).
+ */
+const CORE_DEFAULTS = {
+  'files.autoSave': 'off',
+  'files.eol': 'auto',
+  'files.encoding': 'utf8',
+  'files.exclude': { '**/.git': true, '**/.svn': true, '**/.hg': true, '**/.DS_Store': true, '**/Thumbs.db': true },
+  'files.watcherExclude': { '**/.git/objects/**': true, '**/node_modules/*/**': true },
+  'editor.tabSize': 4,
+  'editor.insertSpaces': true,
+  'editor.fontSize': 14,
+  'editor.fontFamily': "'Cascadia Code', Consolas, 'Courier New', monospace",
+  'editor.wordWrap': 'off',
+  'workbench.colorTheme': 'Fluent Acrylic',
+  'terminal.integrated.defaultProfile.linux': null,
+  'terminal.integrated.defaultProfile.windows': null,
+  'terminal.integrated.defaultProfile.osx': null,
+  'search.exclude': { '**/node_modules': true, '**/bower_components': true },
+  'http.proxy': '',
+  'http.proxyStrictSSL': true,
+  'git.enabled': true,
+  'chat.agent.enabled': false,
+};
+
 class ConfigurationStore {
   constructor(settingsFile) {
     this.settingsFile = settingsFile;
-    this.defaults = {};
+    this.defaults = { ...CORE_DEFAULTS };
     this.user = {};
     this._onDidChange = new EventEmitter();
     this.onDidChangeConfiguration = this._onDidChange.event;
