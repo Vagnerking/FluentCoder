@@ -46,8 +46,12 @@ pub fn apply_platform_chrome(window: &tauri::WebviewWindow) {
         let _ = window.show();
         let _ = window.set_focus();
     }
+    // Linux draws the app's own title bar + rounded frame (CSS) over a
+    // transparent, decoration-less window; `tauri.linux.conf.json` declares the
+    // static main window that way since transparency is creation-only.
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
+        let _ = window.set_decorations(false);
         let _ = window.show();
     }
 }
@@ -328,7 +332,7 @@ pub async fn open_new_window(
         (None, Some(payload)) => format!("index.html?freshWindow=1&localAttach={payload}"),
         (None, None) => "index.html?freshWindow=1".to_string(),
     };
-    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    #[cfg_attr(target_os = "macos", allow(unused_mut))]
     let mut builder =
         tauri::WebviewWindowBuilder::new(&app, label, tauri::WebviewUrl::App(url.into()))
             .title("Fluent Coder")
@@ -342,9 +346,10 @@ pub async fn open_new_window(
             .resizable(true)
             .visible(false);
     // Windows draws its own frameless chrome over the transparent Mica backdrop;
-    // macOS/other keep the native title bar and an opaque surface, because a
-    // transparent decoration-less window fails to materialize on macOS. Keep this
-    // in sync with `apply_platform_chrome` (used for the static main window).
+    // Linux does the same over a plain transparent window (rounded by CSS); macOS
+    // keeps the native title bar and an opaque surface, because a transparent
+    // decoration-less window fails to materialize on macOS. Keep this in sync with
+    // `apply_platform_chrome` (used for the static main window).
     #[cfg(target_os = "windows")]
     {
         builder = builder.decorations(false).transparent(true).effects(
@@ -352,6 +357,10 @@ pub async fn open_new_window(
                 .effect(tauri::window::Effect::Mica)
                 .build(),
         );
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        builder = builder.decorations(false).transparent(true);
     }
     let new_window = builder
         .build()

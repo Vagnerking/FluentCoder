@@ -36,6 +36,10 @@ const platform =
     ?.platform ?? navigator.platform;
 if (/mac/i.test(platform ?? "")) {
   document.documentElement.classList.add("platform-macos");
+} else if (/linux/i.test(platform ?? "")) {
+  // Linux runs frameless + transparent like Windows, but with no Mica: the CSS
+  // paints a solid, rounded window surface itself (see `html.platform-linux`).
+  document.documentElement.classList.add("platform-linux");
 }
 
 // Kill the WebView's native right-click menu (Inspecionar / Recarregar / Salvar

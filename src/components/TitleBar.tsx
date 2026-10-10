@@ -55,6 +55,12 @@ export function TitleBar({
     return () => unlisten?.();
   }, [appWindow]);
 
+  // A maximized window has square corners (like Windows 11): the CSS frame
+  // drops its radius/border while this class is set.
+  useEffect(() => {
+    document.documentElement.classList.toggle("window-maximized", maximized);
+  }, [maximized]);
+
   return (
     <div className="titlebar">
       {/* Three grid zones (1fr auto 1fr): the menu lives in the LEFT zone and
