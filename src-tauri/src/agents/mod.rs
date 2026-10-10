@@ -11,6 +11,7 @@
 
 mod claude;
 mod codex;
+pub mod ide_bridge;
 
 use serde::Serialize;
 use serde_json::{json, Value};

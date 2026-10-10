@@ -482,3 +482,7 @@
     transition: none;
   }
 }
+
+/* ---- Revisão de diff do Claude Code (ponte IDE, ADR 0006) ----
+   Cobre a área do editor enquanto o CLI aguarda Aceitar/Rejeitar. */
+.editor-host { position: relative; }

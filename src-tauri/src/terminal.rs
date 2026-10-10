@@ -35,6 +35,45 @@ impl TerminalState {
     }
 }
 
+/// Builds the PTY shell. Windows runs PowerShell (the original behavior); Linux
+/// and macOS run the user's `$SHELL` as a login shell (so PATH entries from the
+/// profile — cargo, fnm, dotnet — are present), falling back to `/bin/bash`.
+/// With `command`, the shell runs it and then stays open (like `-NoExit`).
+fn shell_command(command: Option<&str>) -> CommandBuilder {
+    let line = command.filter(|l| !l.trim().is_empty());
+    #[cfg(windows)]
+    {
+        let mut cmd = CommandBuilder::new("powershell.exe");
+        if let Some(line) = line {
+            // -NoExit keeps the prompt after the command finishes; -Command runs it.
+            cmd.arg("-NoExit");
+            cmd.arg("-Command");
+            cmd.arg(line);
+        }
+        cmd
+    }
+    #[cfg(not(windows))]
+    {
+        let shell = std::env::var("SHELL")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "/bin/bash".to_string());
+        let mut cmd = CommandBuilder::new(&shell);
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
+        match line {
+            Some(line) => {
+                // Run the command, then replace the shell with an interactive one
+                // so the output stays visible and the session keeps going.
+                cmd.arg("-lc");
+                cmd.arg(format!("{line}\nexec \"$0\" -l"));
+            }
+            None => cmd.arg("-l"),
+        }
+        cmd
+    }
+}
+
 #[tauri::command]
 pub fn term_create(
     id: String,
@@ -46,6 +85,7 @@ pub fn term_create(
     // None, it's a plain interactive PowerShell — the original behavior.
     command: Option<String>,
     state: State<'_, TerminalState>,
+    ide_bridge: State<'_, crate::agents::ide_bridge::IdeBridgeState>,
     app: AppHandle,
 ) -> Result<(), String> {
     let pty_system = native_pty_system();
@@ -58,13 +98,13 @@ pub fn term_create(
         })
         .map_err(|e| e.to_string())?;
 
-    let mut cmd = CommandBuilder::new("powershell.exe");
+    let mut cmd = shell_command(command.as_deref());
     cmd.cwd(&cwd);
-    if let Some(line) = command.as_ref().filter(|l| !l.trim().is_empty()) {
-        // -NoExit keeps the prompt after the command finishes; -Command runs it.
-        cmd.arg("-NoExit");
-        cmd.arg("-Command");
-        cmd.arg(line);
+    // Igual ao terminal do VS Code: o `claude` iniciado aqui conecta sozinho na
+    // ponte IDE (src/agents/ide_bridge.rs). Só com a ponte no ar.
+    if let Some(port) = ide_bridge.port() {
+        cmd.env("CLAUDE_CODE_SSE_PORT", port.to_string());
+        cmd.env("ENABLE_IDE_INTEGRATION", "true");
     }
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;

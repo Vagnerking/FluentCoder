@@ -97,6 +97,8 @@ interface StatusBarProps {
   onSelectEncoding?: () => void;
   /** Opens the line-ending picker (LF/CRLF). Omitted ⇒ not clickable. */
   onSelectEol?: () => void;
+  /** CLIs do Claude Code conectados à ponte IDE (0 ⇒ indicador oculto). */
+  claudeClients?: number;
 }
 
 /** Maps an LSP status to a codicon + label. */
@@ -176,6 +178,7 @@ export function StatusBar({
   eol,
   onSelectEncoding,
   onSelectEol,
+  claudeClients = 0,
 }: StatusBarProps) {
   // Friendly language name (VSCode-style), shared with the language-mode picker.
   const langDisplay = languageLabel(language);
@@ -407,6 +410,19 @@ export function StatusBar({
           })}
       </div>
       <div className="status-right">
+        {claudeClients > 0 && (
+          <span
+            className="status-item status-claude"
+            role="status"
+            title={
+              claudeClients === 1
+                ? "O Claude Code está conectado a este editor: ele vê a seleção e os diagnósticos e propõe alterações como diff."
+                : `${claudeClients} sessões do Claude Code conectadas a este editor.`
+            }
+          >
+            <Codicon name="agents" /> Claude conectado
+          </span>
+        )}
         {fileName && (
           <span className="status-item status-cursor">
             Ln {line}, Col {column}

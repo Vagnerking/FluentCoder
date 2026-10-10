@@ -67,6 +67,10 @@ pub fn run() {
             if let Ok(dir) = app.path().app_data_dir() {
                 razor::diag::init(dir);
             }
+            // Ponte IDE do Claude Code: o `claude` rodando no terminal integrado
+            // (ou em qualquer terminal na pasta do workspace) enxerga o editor.
+            app.state::<agents::ide_bridge::IdeBridgeState>()
+                .start(app.handle());
             Ok(())
         })
         .manage(terminal::TerminalState::new())
@@ -74,6 +78,7 @@ pub fn run() {
         .manage(dap::DapState::new())
         .manage(search::SearchState::new())
         .manage(agents::AcpState::new())
+        .manage(agents::ide_bridge::IdeBridgeState::new())
         .manage(razor::commands::RazorState::new())
         .manage(ssh::SshState::new())
         .manage(window::WindowPlacementState::new())
@@ -89,6 +94,10 @@ pub fn run() {
             agents::acp_warm,
             agents::acp_cancel,
             agents::acp_stop_workspace,
+            agents::ide_bridge::ide_bridge_update,
+            agents::ide_bridge::ide_bridge_respond,
+            agents::ide_bridge::ide_bridge_status,
+            agents::ide_bridge::ide_bridge_restart,
             fs_commands::read_dir,
             fs_commands::read_file,
             fs_commands::read_file_with_encoding,
@@ -324,6 +333,12 @@ pub fn run() {
         .run(|app, event| {
             if let tauri::RunEvent::WindowEvent { label, event, .. } = &event {
                 window::record_main_window_event(app, label, event);
+                if let tauri::WindowEvent::Destroyed = event {
+                    // A janela some do lock file da ponte IDE (e seus diffs
+                    // pendentes contam como rejeitados).
+                    app.state::<agents::ide_bridge::IdeBridgeState>()
+                        .forget_window(label);
+                }
             }
             // Kill every child process (PTY shells + LSP servers) and their reader
             // threads, then force-quit. `portable-pty` doesn't kill its child on
@@ -346,6 +361,7 @@ pub fn run() {
                     eprintln!("[exit] last window destroyed — tearing down children");
                     app.state::<terminal::TerminalState>().shutdown_all();
                     app.state::<agents::AcpState>().shutdown_all();
+                    app.state::<agents::ide_bridge::IdeBridgeState>().shutdown();
                     app.state::<lsp::LspState>().shutdown_all();
                     app.state::<dap::DapState>().shutdown_all();
                     app.state::<razor::commands::RazorState>()
@@ -359,6 +375,7 @@ pub fn run() {
                     eprintln!("[exit] ExitRequested — tearing down children");
                     app.state::<terminal::TerminalState>().shutdown_all();
                     app.state::<agents::AcpState>().shutdown_all();
+                    app.state::<agents::ide_bridge::IdeBridgeState>().shutdown();
                     app.state::<lsp::LspState>().shutdown_all();
                     app.state::<dap::DapState>().shutdown_all();
                     app.state::<razor::commands::RazorState>()

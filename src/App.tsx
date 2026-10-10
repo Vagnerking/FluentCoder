@@ -238,6 +238,8 @@ import {
   type AgentStore,
 } from "./agents/types";
 import { acpResolveModel } from "./acp/providers";
+import { useIdeBridge } from "./agents/ideBridge";
+import { ClaudeDiffReview } from "./components/ClaudeDiffReview";
 import {
   DEFAULT_GIT_ASSIST_PREFERENCES,
   buildGitAssistPrompt,
@@ -1623,6 +1625,46 @@ export default function App() {
     [lspServers, activeServerId]
   );
 
+  // Ponte IDE do Claude Code (ADR 0006): publica pastas/abas/seleção/
+  // diagnósticos e atende openDiff/openFile/saveDocument do CLI. Os callbacks
+  // leem refs/handlers declarados mais abaixo — só rodam depois do render.
+  const ideFiles = useMemo(
+    () => Object.values(layout.groups).flatMap((g) => g.files),
+    [layout.groups]
+  );
+  const ideBridge = useIdeBridge({
+    enabled: remoteSession == null,
+    workspaceFolders: rootPath ? [rootPath] : [],
+    files: ideFiles,
+    activePath,
+    openFile: (path, range) =>
+      handleOpenFileRef.current(
+        { name: baseName(path), path, isDir: false },
+        range?.startLineNumber,
+        undefined,
+        range && range.startLineNumber === range.endLineNumber
+          ? { startColumn: range.startColumn, endColumn: range.endColumn }
+          : undefined
+      ),
+    saveFile: async (path) => {
+      const file = Object.values(layoutRef.current.groups)
+        .flatMap((g) => g.files)
+        .find((f) => samePath(f.path, path));
+      if (!file) throw new Error(`Documento não está aberto: ${path}`);
+      await saveFile(file);
+    },
+    fileWritten: (path, content) => {
+      const open = Object.values(layoutRef.current.groups)
+        .flatMap((g) => g.files)
+        .find((f) => samePath(f.path, path));
+      if (open) {
+        setLayout((l) => patchFileEverywhere(l, open.path, { content, dirty: false }));
+      }
+      invalidateGraph();
+      invalidateIndex();
+    },
+  });
+
   // Command Palette registry (Ctrl+Shift+P, issue #12). Extensible: add a command
   // by pushing another entry. The status bar already reflects the LSP restart
   // (servers flip to "starting" → "ready"), so resetting gives visible feedback.
@@ -1634,6 +1676,19 @@ export default function App() {
         detail: "LSP",
         run: () => {
           void restartAllLsp();
+        },
+      },
+      {
+        // A ponte IDE não é um servidor de linguagem: fica fora do reset de
+        // LSP (derrubaria a sessão do `claude` à toa). Reiniciar troca porta e
+        // token; o CLI reconecta com `/ide`.
+        id: "claude.restartIdeBridge",
+        title: "Reiniciar Integração com o Claude Code (IDE)",
+        detail: "Agentes",
+        run: () => {
+          ideBridge.restart().catch((err) =>
+            alert(`Não foi possível reiniciar a integração com o Claude Code:\n${err}`)
+          );
         },
       },
       {
@@ -1800,7 +1855,7 @@ export default function App() {
         },
       },
     ],
-    [restartAllLsp, rootPath]
+    [restartAllLsp, rootPath, ideBridge.restart]
   );
 
   /**
@@ -6649,6 +6704,16 @@ export default function App() {
                 renderGroup={renderGroup}
                 onResize={resizeGroupBranch}
               />
+              {ideBridge.diffs.length > 0 && (
+                <ClaudeDiffReview
+                  key={ideBridge.diffs[0].id}
+                  diff={ideBridge.diffs[0]}
+                  queued={ideBridge.diffs.length}
+                  rootPath={rootPath}
+                  onAccept={ideBridge.acceptDiff}
+                  onReject={ideBridge.rejectDiff}
+                />
+              )}
             </div>
             {panelOpen && (
               <div
@@ -6849,6 +6914,7 @@ export default function App() {
             : undefined
         }
         onSelectEol={activeFile ? handleSelectEol : undefined}
+        claudeClients={ideBridge.clients}
       />
 
 

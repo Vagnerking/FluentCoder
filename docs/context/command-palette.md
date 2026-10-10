@@ -55,6 +55,15 @@ Ao adicionar um servidor que **não** passe pelo `LspManager` (ex.: um processo
 iniciado por fora), é obrigatório incluí-lo explicitamente no `restartAll()`
 (parada + reinício), para que o reset continue cobrindo 100% dos servidores.
 
+### Exceção: ponte IDE do Claude Code
+
+A ponte IDE do Claude Code (`src-tauri/src/agents/ide_bridge.rs`, ver
+[ADR 0006](../adr/0006-claude-ide-bridge.md)) **não** é servidor de
+linguagem/linter e fica fora deste reset: reiniciá-la derrubaria a sessão do
+`claude` conectado sem ganho para os diagnósticos. Ela tem comando próprio,
+**"Reiniciar Integração com o Claude Code (IDE)"** (`claude.restartIdeBridge`),
+que troca porta e token e regrava o lock file.
+
 ## Como estender com novos comandos
 
 Adicione uma entrada ao array `commands` em `App.tsx`:

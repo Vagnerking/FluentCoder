@@ -95,6 +95,41 @@ claude -p --input-format stream-json --output-format stream-json \
   semente. Use essa visão para decidir quais `get_related_files` ou
   `get_context_bundle` chamar, em vez de expandir o projeto inteiro.
 
+## Ponte IDE do Claude Code (CLI interativo)
+
+Decisão e protocolo no [ADR 0006](../adr/0006-claude-ide-bridge.md). Faz o
+`claude` interativo (terminal integrado ou externo) tratar o Fluent Coder como
+IDE, igual à extensão do VS Code. Código: `src-tauri/src/agents/ide_bridge.rs`
+(servidor), `src/agents/ideBridge.ts` + `ideBridgeModel.ts` (estado/requests)
+e `src/components/ClaudeDiffReview.tsx` (diff).
+
+- **Não ligar ao chat da sidebar**: `claude -p` nunca conecta na IDE
+  (limitação do CLI). A ponte atende só o CLI interativo.
+- Um servidor WS por processo do app, em `127.0.0.1`. Lock file
+  `~/.claude/ide/<porta>.lock` (`$CLAUDE_CONFIG_DIR/ide` se definido) com
+  permissão **0600** e token de 128 bits do CSPRNG; existe só enquanto há
+  pasta aberta (união das janelas locais; janelas SSH não publicam).
+- Handshake: recusar token errado e **qualquer `Origin`**. Não afrouxar.
+- Estado é **empurrado** pelo frontend (`ide_bridge_update`): pastas, abas
+  (dirty/ativa), seleção do editor com foco (debounce 150ms → notificação
+  `selection_changed`) e diagnósticos dos markers `file://` do Monaco
+  (debounce 300ms). Linhas/colunas **0-based** no protocolo — converter só em
+  `ideBridgeModel.ts`.
+- `openDiff` bloqueia o CLI até Aceitar/Rejeitar: sem timeout no backend. Os
+  modelos do diff usam o esquema `fluent-diff:` para nunca entrarem no LSP, na
+  ponte nem em Problemas. Aceitar grava preservando encoding/EOL/BOM e
+  responde `FILE_SAVED` + conteúdo final; rejeitar/fechar responde
+  `DIFF_REJECTED`. `close_tab`/`closeAllDiffTabs` e queda da conexão
+  dispensam o diff da UI.
+- O terminal integrado exporta `CLAUDE_CODE_SSE_PORT` e
+  `ENABLE_IDE_INTEGRATION=true` quando a ponte está no ar.
+- A status bar mostra "Claude conectado" com ≥1 CLI conectado. Reiniciar
+  (porta/token novos) pela Paleta: "Reiniciar Integração com o Claude Code
+  (IDE)" — fora do reset de servidores de código.
+- Aceite: `node tools/claude-ide-probe/probe.mjs <pasta>` (todas as
+  verificações passando) + teste manual com o `claude` real (`/ide`, seleção,
+  diff com Aceitar/Rejeitar).
+
 ## Codex — `codex app-server` (JSON-RPC por stdio)
 
 Mesmo protocolo da extensão IDE oficial (validado no código da tag

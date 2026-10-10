@@ -61,6 +61,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
 uuid = { version = "1", features = ["v4"] }
+# CSPRNG do sistema para o token da ponte IDE do Claude Code
+# (src/agents/ide_bridge.rs). Já está no lock como dependência transitiva.
+getrandom = "0.2"
 # Roslyn/rzls acquisition (download + verify + extract).
 # `gzip`: the VS Marketplace `vspackage` endpoint serves the C# extension VSIX
 # with `Content-Encoding: gzip` (verified). Without this feature reqwest returns

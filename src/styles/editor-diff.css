@@ -75,3 +75,78 @@
 .editor-diff-shell .diffOverview {
   background: rgba(255,255,255,0.02);
 }
+
+.claude-diff {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  background: var(--editor-bg);
+}
+
+.claude-diff-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--acrylic-border);
+}
+
+.claude-diff-icon { color: var(--accent); flex: none; }
+
+.claude-diff-heading { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+
+.claude-diff-title {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.claude-diff-path {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.claude-diff-queue {
+  flex: none;
+  font-size: 12px;
+  line-height: 16px;
+  padding: 2px 8px;
+  border-radius: var(--radius-control);
+  background: var(--acrylic-control);
+  color: var(--text-secondary);
+}
+
+.claude-diff-actions { display: flex; gap: 8px; flex: none; }
+
+.claude-diff-actions .confirm-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: center;
+}
+
+.claude-diff-actions .confirm-button:disabled { opacity: 0.6; cursor: default; }
+
+.claude-diff-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--error);
+  border-bottom: 1px solid var(--acrylic-border);
+}
+
+.claude-diff-editor { flex: 1; min-height: 0; }
