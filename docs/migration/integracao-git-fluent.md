@@ -69,3 +69,19 @@ portar.
   executado** — o Roslyn não está em cache nesta máquina
   (`~/.local/share/com.fluentcoder.app/lsp/roslyn/` inexistente). O ramo não
   altera nada do pipeline C#/LSP do frontend (a `main` vence nesses arquivos).
+
+### Correções pós-merge (achadas no render headless do `dist/`)
+
+- **Build de produção não montava o app.** O `manualChunks` do `vite.config.ts`
+  (ramo do Rafael) mandava todo o resto de `node_modules` para um chunk
+  `vendor` genérico, criando ciclos `vendor ↔ vendor-react/monaco/markdown`
+  (os avisos “Circular chunk” do build). No WebKitGTK o `dist/` quebrava na
+  inicialização (`TypeError: Fst is not a function` em `vendor-monaco-vscode`)
+  e a janela ficava vazia — no `tauri dev` (sem chunks) não aparece. Correção:
+  o catch-all devolve `undefined` (o Rollup decide); os chunks nomeados
+  continuam. Sem avisos de ciclo e o app monta. ⚠ revisar: vale conferir o
+  `npm run tauri build` no Windows.
+- **`.git-link-btn` com largura fixa de 22px** (Git Fluent) espremia os botões
+  de TEXTO que usam a mesma classe fora do Git (“Cancelar” do RunPanel, ações
+  do NugetManager, “Checar versões”/“Audit segurança” do PackagesPanel). Agora
+  `min-width: 22px; padding: 0 3px` — os botões só-ícone continuam com 22px.

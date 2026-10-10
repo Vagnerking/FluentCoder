@@ -61,7 +61,11 @@ function vendorChunk(id: string): string | undefined {
   if (moduleId.includes("/@tauri-apps/")) {
     return "vendor-tauri";
   }
-  return "vendor";
+  // Sem chunk "vendor" genérico: o resto de node_modules fica com o Rollup.
+  // Um catch-all aqui cria ciclos vendor <-> vendor-react/monaco/markdown e,
+  // no build de produção, quebra a ordem de inicialização dos módulos
+  // ("Fst is not a function" no vendor-monaco-vscode: o app nem monta).
+  return undefined;
 }
 
 // https://vitejs.dev/config/
