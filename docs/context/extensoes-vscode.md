@@ -200,16 +200,24 @@ no lado virtual de um diff)/`decorationTypeDisposed`,
     índice; vale só para aquela versão e aquele shim (atualizar descarta) e o
     host só a aceita junto com um portão `unknown` da mesma versão.
     `loadExtension` por caminho só é aceito sem app (headless).
-21. **Confirmação antes de instalar** qualquer extensão não recomendada ou
-    classificada como Incompatível / Não avaliada (antes de instalar o código
-    ainda não foi analisado, então na prática toda instalação pede
-    confirmação), com o **publisher em destaque** (verificado ou não pelo
-    catálogo), versão, fonte, se há SHA-256 publicado e os motivos da
-    classificação. `.vsix` local: sempre confirma e avisa que não há hash de
-    referência.
+21. **Confirmação antes de instalar** (toda instalação pede), com o
+    **publisher em destaque** (verificado ou não pelo catálogo), versão, fonte,
+    se há SHA-256 publicado e o veredito da **prévia** com os motivos (ao vivo:
+    atualiza quando a análise do código termina). `.vsix` local: sempre
+    confirma e avisa que não há hash de referência.
 22. **README/CHANGELOG de terceiros**: markdown sem HTML cru (`skipHtml`),
     imagens não são carregadas (viram link) e links só `http(s)`/`mailto`,
     abertos no navegador do sistema (`ext_host_open_external`).
+23. **Pré-avaliação da loja é só informativa**: baixa o manifesto, a cadeia
+    NLS e o bundle `main` (+ `require("./…")`) pelos arquivos do pacote do
+    catálogo, só pelo Rust, só HTTPS, mesma allowlist (inclusive
+    redirecionamentos), caminhos validados como no VSIX (sem `..`, absoluto,
+    `\` ou NUL), tetos (8 MB por arquivo, 24 MB e 40 arquivos no total,
+    profundidade 8). Parsing estático em memória; **nada é executado nem
+    `require`-ado**; o cache (`<app_data>/extensions/.preflight/`) guarda só o
+    manifesto traduzido e o resultado da varredura, nunca o código. **Nunca
+    grava portão**: depois de instalar, o portão é recalculado sobre os
+    arquivos extraídos (hash conferido).
 
 ## Desempenho
 
@@ -722,10 +730,38 @@ Comandos Tauri: `extensions_paths`, `extensions_list`,
 `extensions_local_details` (README/CHANGELOG/ícone + varredura do código),
 `extensions_sources_list`/`_save`, `extensions_search`,
 `extensions_metadata` (+ `package.json` da versão), `extensions_fetch_text`,
-`extensions_fetch_icon`, `extensions_install`, `extensions_install_vsix`,
+`extensions_fetch_icon`, `extensions_preflight` (prévia da loja),
+`extensions_install`, `extensions_install_vsix`,
 `extensions_import_vscode`, `extensions_uninstall` (só gerenciadas),
-`extensions_set_enabled`, `extensions_set_gate`, `extensions_check_updates`;
+`extensions_set_enabled`, `extensions_set_gate`, `extensions_set_gates`
+(lote, uma escrita), `extensions_set_trust` (liberação de "Não avaliada"),
+`extensions_check_updates`;
 evento `extensions://progress` (`metadata`/`download`/`extract`/`commit`).
+
+### Pré-avaliação da loja (veredito antes de instalar)
+
+`extensions_preflight(fonte, ns, nome, versão?, includeCode)`
+(`src-tauri/src/extensions/preflight.rs`) + fila no `extensionsStore`
+(`requestPreview`: dedup, concorrência 3) + `src/extensions/preview.ts`
+(classificação da prévia, testada). Duas fases por resultado da loja
+(`StoreCard`, detalhes e confirmação):
+
+1. **Manifesto** (`includeCode: false`, rápido): temas/gramáticas/snippets e
+   bloqueios de manifesto (engine, plataforma, dependências) já saem
+   decididos; com `main`, o selo mostra "Analisando…".
+2. **Código** (`includeCode: true`): `main` + `require("./…")` relativos
+   varridos em memória (`scan::scan_sources`, o mesmo scanner do portão).
+   Dependência de `node_modules` que fala com a API (`vscode-*`, `@vscode/*`),
+   tetos ou profundidade → varredura `truncated` (Não avaliada, com "o que
+   ficou de fora"); `main` > 8 MB → Não avaliada (prévia).
+
+Selo "… (prévia)" com tooltip dos motivos; aba Compatibilidade com o aviso de
+prévia. Cache por `(ns, nome, versão, plataforma)` em
+`.preflight/<ns>.<nome>@<versão>-<plataforma>.json`: TTL 30 dias,
+`SCANNER_VERSION` diferente = refaz, poda nas 500 entradas mais recentes;
+falha de rede não fica no cache. Fontes cuja API não termina em `/api` (layout
+do Open VSX) não publicam os arquivos: prévia só pelo manifesto. Rede real:
+`cargo test --lib real_openvsx_preflight -- --ignored --nocapture`.
 
 ### Compatibilidade (`src/extensions/compatibility.ts`)
 

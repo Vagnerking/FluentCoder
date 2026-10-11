@@ -11,6 +11,7 @@
 //! Contratos e regras de segurança: docs/context/extensoes-vscode.md.
 
 pub mod openvsx;
+pub mod preflight;
 pub mod scan;
 pub mod semver;
 pub mod store;
@@ -438,6 +439,17 @@ pub async fn localize_remote_manifest(reg: &Registry, meta: &Value, manifest: Va
         }
     }
     out
+}
+
+/// Pré-avaliação de um resultado da loja (veredito ANTES de instalar):
+/// `include_code = false` → só manifesto (fase rápida); `true` → também o
+/// bundle `main` varrido em memória. Cacheado por versão + plataforma.
+/// Informativo: nunca grava portão (ver preflight.rs).
+#[tauri::command]
+pub async fn extensions_preflight(app: AppHandle, source_id: String, namespace: String, name: String, version: Option<String>, include_code: Option<bool>) -> Result<preflight::Preflight, String> {
+    let dir = managed_dir(&app)?;
+    let reg = Registry::new(source_by_id(&dir, &source_id)?)?;
+    preflight::preflight(&dir, &reg, &namespace, &name, version.as_deref(), include_code.unwrap_or(true)).await
 }
 
 #[tauri::command]

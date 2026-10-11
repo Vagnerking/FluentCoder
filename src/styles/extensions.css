@@ -356,6 +356,12 @@
   color: var(--text-secondary);
 }
 
+/* Prévia da loja ainda analisando o código. */
+.ext-verdict-pending {
+  color: var(--text-secondary);
+  border-style: dashed;
+}
+
 .ext-card-actions {
   grid-area: actions;
   display: flex;

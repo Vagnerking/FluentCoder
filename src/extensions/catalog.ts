@@ -123,6 +123,21 @@ export interface LocalDetails {
   };
 }
 
+/** Pré-avaliação de um resultado da loja (Rust `extensions_preflight`). */
+export interface Preflight {
+  scannerVersion: number;
+  id: string;
+  version: string;
+  targetPlatform: string;
+  manifest: Record<string, unknown> | null;
+  code: "not-requested" | "no-main" | "scanned" | "too-large" | "unavailable";
+  apiScan: LocalDetails["apiScan"] | null;
+  codeError: string | null;
+  codeGaps: string[];
+  savedAt: number;
+  cached: boolean;
+}
+
 export interface InstallOutcome {
   entry: { id: string; version: string; dir: string; targetPlatform: string; verified: boolean };
   sha256: string;
@@ -164,6 +179,8 @@ export const extensionsApi = {
   search: (sourceId: string, query: string, offset = 0, size = 20) => invoke<SearchResult>("extensions_search", { sourceId, query, offset, size }),
   metadata: (sourceId: string, namespace: string, name: string, version?: string, allowPreRelease = false) =>
     invoke<RegistryDetails>("extensions_metadata", { sourceId, namespace, name, version: version ?? null, allowPreRelease }),
+  preflight: (sourceId: string, namespace: string, name: string, version: string | null, includeCode: boolean) =>
+    invoke<Preflight>("extensions_preflight", { sourceId, namespace, name, version, includeCode }),
   fetchText: (sourceId: string, url: string) => invoke<string>("extensions_fetch_text", { sourceId, url }),
   fetchIcon: (sourceId: string, url: string) => invoke<string>("extensions_fetch_icon", { sourceId, url }),
   install: (sourceId: string, namespace: string, name: string, version?: string, allowPreRelease = false) =>

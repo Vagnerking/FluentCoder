@@ -43,6 +43,8 @@ import {
   restartHost,
   saveSources,
   isTrusted,
+  previewKey,
+  requestPreview,
   setExtensionEnabled,
   setUnverifiedAllowed,
   uninstallExtension,
@@ -110,6 +112,9 @@ interface PendingConfirm {
   report: CompatibilityReport | null;
   recommended: boolean;
   preRelease: boolean;
+  /** Prévia da loja (veredito com o código, antes de instalar). */
+  previewKey?: string;
+  previewPending?: boolean;
 }
 
 function InstallConfirmDialog({ pending, onConfirm, onCancel }: { pending: PendingConfirm; onConfirm: () => void; onCancel: () => void }) {
@@ -120,6 +125,7 @@ function InstallConfirmDialog({ pending, onConfirm, onCancel }: { pending: Pendi
   useModalFocus(surfaceRef, { onEscape: onCancel, initialFocus: cancelRef });
   const verdict = pending.report?.verdict ?? "unknown";
   const risky = verdict === "incompatible";
+  const isPreview = !!pending.request;
   const top = (pending.report?.reasons ?? []).filter((r) => r.severity !== "info").slice(0, 4);
   return createPortal(
     <div className="confirm-overlay" onMouseDown={onCancel}>
@@ -160,7 +166,7 @@ function InstallConfirmDialog({ pending, onConfirm, onCancel }: { pending: Pendi
                 {pending.request ? ` · ${pending.request.sourceLabel}` : ""} · {pending.request ? (pending.hasHash ? "SHA-256 publicado (será conferido)" : "o catálogo não publica SHA-256") : "sem hash de referência"}
               </p>
               <div className="ext-confirm-verdict">
-                <VerdictBadge verdict={verdict} reasons={pending.report?.reasons} />
+                <VerdictBadge verdict={verdict} reasons={pending.report?.reasons} preview={isPreview} pending={pending.previewPending} />
                 {top.length > 0 && (
                   <ul className="ext-reasons ext-reasons-compact">
                     {top.map((r, i) => (
@@ -179,7 +185,13 @@ function InstallConfirmDialog({ pending, onConfirm, onCancel }: { pending: Pendi
               <p className="ext-confirm-note">
                 Instalar não executa nada: o pacote é baixado por HTTPS, conferido e extraído na pasta do app. Ele só roda depois de analisado como Compatível ou Parcial
                 {pending.recommended ? "" : " e se continuar habilitado"}.
-                {risky ? " Esta versão foi classificada como Incompatível e não vai rodar neste host." : verdict === "unknown" ? " O código só é analisado depois da instalação." : ""}
+                {risky
+                  ? " Esta versão foi classificada como Incompatível e não vai rodar neste host."
+                  : verdict === "unknown"
+                    ? " Sem análise do código, ela fica bloqueada até você liberar esta versão explicitamente."
+                    : isPreview
+                      ? " O veredito acima é uma prévia: depois de instalar, os arquivos extraídos são analisados de novo."
+                      : ""}
               </p>
             </>
           )}
@@ -487,6 +499,13 @@ function StoreCard({ item, source, vm }: { item: RegistrySummary; source: Catalo
   const id = `${item.namespace}.${item.name}`.toLowerCase();
   const icon = useRemoteIcon(source.id, item.iconUrl);
   const installed = vm.st.installed.find((i) => i.id === id);
+  const key = previewKey(source.id, item.namespace, item.name);
+  const preview = vm.st.previews[key];
+  // Prévia ANTES de instalar (fila no store, concorrência 3, cache em disco no Rust).
+  useEffect(() => {
+    if (!installed) requestPreview(source.id, item.namespace, item.name);
+  }, [key, installed, source.id, item.namespace, item.name]);
+  const analyzing = !installed && (!preview || preview.stage === "manifest" || preview.stage === "code");
   const acts: CardAction[] = [];
   if (installed) acts.push({ label: installed.location === "vscode" ? "Instalada (VS Code)" : "Instalada", disabled: true, onClick: () => {} });
   else
@@ -506,9 +525,10 @@ function StoreCard({ item, source, vm }: { item: RegistrySummary; source: Catalo
       description={item.description}
       icon={icon}
       sourceLabel={source.label}
-      verdict={installed ? (vm.st.reports[id]?.verdict ?? null) : "unknown"}
-      reasons={installed ? vm.st.reports[id]?.reasons : undefined}
-      status={`${formatCount(item.downloadCount)} downloads${item.deprecated ? " · descontinuada" : ""}`}
+      verdict={installed ? (vm.st.reports[id]?.verdict ?? null) : (preview?.report?.verdict ?? "unknown")}
+      reasons={installed ? vm.st.reports[id]?.reasons : preview?.report?.reasons}
+      preview={!installed}
+      status={`${formatCount(item.downloadCount)} downloads${item.deprecated ? " · descontinuada" : ""}${analyzing ? " · analisando compatibilidade…" : preview?.stage === "error" ? " · prévia indisponível" : ""}`}
       busy={vm.st.busy[id]}
       progress={progress?.total ? progress.received / progress.total : null}
       actions={acts}
@@ -588,7 +608,9 @@ export function ExtensionsView() {
 
   const requestInstall = (request: InstallRequest, displayName: string, publisher: string) => {
     const id = `${request.namespace}.${request.name}`.toLowerCase();
-    const base: PendingConfirm = { request, loading: true, displayName, publisher, verified: false, version: null, hasHash: false, report: null, recommended: isRecommended(id), preRelease: false };
+    const pKey = request.version || request.allowPreRelease ? undefined : previewKey(request.sourceId, request.namespace, request.name);
+    if (pKey) requestPreview(request.sourceId, request.namespace, request.name);
+    const base: PendingConfirm = { request, loading: true, displayName, publisher, verified: false, version: null, hasHash: false, report: null, recommended: isRecommended(id), preRelease: false, previewKey: pKey };
     setConfirm(base);
     extensionsApi
       .metadata(request.sourceId, request.namespace, request.name, request.version, request.allowPreRelease)
@@ -630,7 +652,23 @@ export function ExtensionsView() {
     setConfirm({ request: null, vsixPath: picked, loading: false, displayName: picked.split(/[\\/]/).pop() ?? "pacote .vsix", publisher: "desconhecido (arquivo local)", verified: false, version: null, hasHash: false, report: null, recommended: false, preRelease: false });
   };
 
-  const vm: ViewModel = { st, updatesById, requestInstall, requestTrust: setTrustTarget, openDetails: setDetails };
+  const vm: ViewModel = {
+    st,
+    updatesById,
+    requestInstall,
+    requestTrust: setTrustTarget,
+    openDetails: (t) => {
+      if (t.kind === "registry") requestPreview(t.sourceId, t.namespace, t.name);
+      setDetails(t);
+    },
+  };
+  // Confirmação com a prévia AO VIVO (quando a análise do código termina, o veredito atualiza).
+  const liveConfirm: PendingConfirm | null = (() => {
+    if (!confirm?.previewKey) return confirm;
+    const p = st.previews[confirm.previewKey];
+    if (!p?.report || (confirm.version && p.version && p.version !== confirm.version)) return { ...confirm, previewPending: !!p && p.stage !== "done" && p.stage !== "error" };
+    return { ...confirm, report: p.report, previewPending: p.stage !== "done" && p.stage !== "error" };
+  })();
 
   const q = query.trim().toLowerCase();
   const installed = st.installed
@@ -663,7 +701,12 @@ export function ExtensionsView() {
           const det = st.details[info.id];
           return { kind: "installed", info, report: st.reports[info.id], readme: det?.readme, changelog: det?.changelog, icon: det?.icon };
         })()
-      : details;
+      : details
+        ? (() => {
+            const p = st.previews[previewKey(details.sourceId, details.namespace, details.name)];
+            return { ...details, report: p?.report ?? undefined, previewPending: !p || (p.stage !== "done" && p.stage !== "error") };
+          })()
+        : null;
   const detailsId = details ? (details.kind === "installed" ? details.info.id : `${details.namespace}.${details.name}`.toLowerCase()) : "";
 
   return (
@@ -803,7 +846,7 @@ export function ExtensionsView() {
           onClose={() => setDetails(null)}
         />
       )}
-      {confirm && <InstallConfirmDialog pending={confirm} onConfirm={confirmInstall} onCancel={() => setConfirm(null)} />}
+      {liveConfirm && <InstallConfirmDialog pending={liveConfirm} onConfirm={confirmInstall} onCancel={() => setConfirm(null)} />}
       {sourcesOpen && <SourcesDialog sources={st.sources} onClose={() => setSourcesOpen(false)} />}
       {trustTarget && (
         <TrustConfirmDialog

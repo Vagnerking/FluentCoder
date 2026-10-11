@@ -23,6 +23,7 @@ import {
   type UpdateInfo,
 } from "../../extensions/catalog";
 import { classify, type CompatibilityReport } from "../../extensions/compatibility";
+import { classifyPreview } from "../../extensions/preview";
 import { CAPABILITIES } from "../../extensions/capabilities";
 import { isExtensionActive, refreshHostedExtensions, restartExtensionHost } from "../../extensions";
 import { listen } from "@tauri-apps/api/event";
@@ -43,6 +44,8 @@ export interface ExtensionsState {
   progress: Record<string, InstallProgress>;
   /** Ativas no host que mudaram: precisam de "Reiniciar Host de Extensões". */
   needsRestart: string[];
+  /** Prévia de compatibilidade dos resultados da loja (antes de instalar), por `previewKey`. */
+  previews: Record<string, PreviewState>;
   error: string | null;
   notice: string | null;
 }
@@ -62,6 +65,7 @@ let state: ExtensionsState = {
   busy: {},
   progress: {},
   needsRestart: [],
+  previews: {},
   error: null,
   notice: null,
 };
@@ -197,6 +201,70 @@ async function run(id: string, label: string, op: () => Promise<string | void>):
       return { busy, progress };
     });
   }
+}
+
+// ------------------------------------------------- prévia da loja (pré-instalação)
+
+/**
+ * Veredito ANTES de instalar, em duas fases: `manifest` (rápida: temas,
+ * gramáticas e snippets já saem decididos) → `code` (bundle `main` varrido em
+ * memória pelo Rust). É PRÉVIA: nunca grava portão — depois de instalar, o
+ * portão é recalculado sobre os arquivos extraídos (hash conferido).
+ */
+export interface PreviewState {
+  stage: "manifest" | "code" | "done" | "error";
+  version: string | null;
+  report: CompatibilityReport | null;
+  error?: string;
+}
+
+export const previewKey = (sourceId: string, namespace: string, name: string): string => `${sourceId}|${namespace}.${name}`.toLowerCase();
+
+const PREVIEW_CONCURRENCY = 3;
+const previewQueue: (() => Promise<void>)[] = [];
+let previewActive = 0;
+
+function pumpPreviews(): void {
+  while (previewActive < PREVIEW_CONCURRENCY && previewQueue.length) {
+    const job = previewQueue.shift()!;
+    previewActive++;
+    void job().finally(() => {
+      previewActive--;
+      pumpPreviews();
+    });
+  }
+}
+
+function setPreview(key: string, patch: Partial<PreviewState>): void {
+  set((s) => ({ previews: { ...s.previews, [key]: { ...(s.previews[key] ?? { stage: "manifest", version: null, report: null }), ...patch } } }));
+}
+
+/** Pede a prévia de um resultado da loja (dedup; fila com concorrência 3). */
+export function requestPreview(sourceId: string, namespace: string, name: string): void {
+  const key = previewKey(sourceId, namespace, name);
+  if (state.previews[key]) return;
+  setPreview(key, { stage: "manifest" });
+  const ids = () => new Set(state.installed.map((i) => i.id));
+  previewQueue.push(async () => {
+    try {
+      const p1 = await extensionsApi.preflight(sourceId, namespace, name, null, false);
+      const hasCode = typeof p1.manifest?.main === "string";
+      setPreview(key, { stage: hasCode ? "code" : "done", version: p1.version, report: classifyPreview(p1, state.platform, ids(), CAPABILITIES) });
+      if (!hasCode) return;
+      previewQueue.push(async () => {
+        try {
+          const p2 = await extensionsApi.preflight(sourceId, namespace, name, p1.version, true);
+          setPreview(key, { stage: "done", version: p2.version, report: classifyPreview(p2, state.platform, ids(), CAPABILITIES) });
+        } catch (err) {
+          setPreview(key, { stage: "done", error: msg(err) });
+        }
+      });
+      pumpPreviews();
+    } catch (err) {
+      setPreview(key, { stage: "error", error: msg(err) });
+    }
+  });
+  pumpPreviews();
 }
 
 // ------------------------------------------------------------------ operações

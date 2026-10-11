@@ -29,6 +29,8 @@ export interface ExtensionCardProps {
   sourceLabel?: string | null;
   verdict?: Verdict | null;
   reasons?: Reason[];
+  /** Veredito de PRÉVIA (resultado da loja, antes de instalar). */
+  preview?: boolean;
   /** Linha extra (ex.: "1.0.0 → 1.1.0", "Desabilitada"). */
   status?: ReactNode;
   busy?: string | null;
@@ -46,23 +48,27 @@ const VERDICT_ICON: Record<Verdict, IconAction> = {
 };
 
 /** Texto do tooltip do selo: o veredito + os motivos principais. */
-export function verdictTooltip(verdict: Verdict, reasons: Reason[] = []): string {
-  const main = reasons.filter((r) => r.severity !== "info").slice(0, 3).map((r) => `• ${r.message}`);
+export function verdictTooltip(verdict: Verdict, reasons: Reason[] = [], preview = false): string {
+  const main = reasons.filter((r) => r.severity !== "info" || (verdict === "unknown" && (r.code.startsWith("code-") || r.code.startsWith("preview-")))).slice(0, 3).map((r) => `• ${r.message}`);
   const fallback =
     verdict === "unknown"
       ? "Ainda não avaliada: instale (ou abra os detalhes) para analisar o código."
       : verdict === "compatible"
         ? "Nada encontrado que falte neste host."
         : "";
-  return [`${VERDICT_LABEL[verdict]} com o host de extensões do Fluent Coder.`, ...(main.length ? main : [fallback])].filter(Boolean).join(" ");
+  const head = preview
+    ? `Prévia antes de instalar: ${VERDICT_LABEL[verdict]} com o host de extensões do Fluent Coder (o portão confirma depois de instalar).`
+    : `${VERDICT_LABEL[verdict]} com o host de extensões do Fluent Coder.`;
+  return [head, ...(main.length ? main : [fallback])].filter(Boolean).join(" ");
 }
 
-export function VerdictBadge({ verdict, reasons }: { verdict: Verdict; reasons?: Reason[] }) {
+export function VerdictBadge({ verdict, reasons, preview = false, pending = false }: { verdict: Verdict; reasons?: Reason[]; preview?: boolean; pending?: boolean }) {
+  const label = `${VERDICT_LABEL[verdict]}${preview ? " (prévia)" : ""}`;
   return (
-    <Tooltip label={verdictTooltip(verdict, reasons)} placement="bottom">
-      <span className={`ext-badge ext-verdict ext-verdict-${verdict}`} tabIndex={0} aria-label={`Compatibilidade: ${VERDICT_LABEL[verdict]}`}>
-        <Codicon name={VERDICT_ICON[verdict]} size={12} />
-        {VERDICT_LABEL[verdict]}
+    <Tooltip label={pending ? "Analisando o código antes de instalar…" : verdictTooltip(verdict, reasons, preview)} placement="bottom">
+      <span className={`ext-badge ext-verdict ext-verdict-${pending ? "pending" : verdict}`} tabIndex={0} aria-label={`Compatibilidade: ${pending ? "analisando" : label}`}>
+        <Codicon name={pending ? "sync" : VERDICT_ICON[verdict]} size={12} spin={pending} />
+        {pending ? "Analisando…" : label}
       </span>
     </Tooltip>
   );
@@ -79,7 +85,7 @@ export function ExtensionIcon({ src, name }: { src?: string | null; name: string
 
 /** Card de uma extensão (instalada, recomendada ou resultado da loja). */
 export function ExtensionCard(props: ExtensionCardProps) {
-  const { id, displayName, publisher, publisherVerified, version, description, icon, sourceLabel, verdict, reasons, status, busy, progress, actions, onOpen } = props;
+  const { id, displayName, publisher, publisherVerified, version, description, icon, sourceLabel, verdict, reasons, preview, status, busy, progress, actions, onOpen } = props;
   return (
     <li className={`ext-card${busy ? " is-busy" : ""}`} aria-busy={busy ? true : undefined}>
       <ExtensionIcon src={icon} name={displayName} />
@@ -102,7 +108,7 @@ export function ExtensionCard(props: ExtensionCardProps) {
         </div>
         {description && <p className="ext-card-desc">{description}</p>}
         <div className="ext-card-meta">
-          {verdict && <VerdictBadge verdict={verdict} reasons={reasons} />}
+          {verdict && <VerdictBadge verdict={verdict} reasons={reasons} preview={preview} />}
           {sourceLabel && <span className="ext-badge ext-source">{sourceLabel}</span>}
           {status && <span className="ext-card-status">{status}</span>}
         </div>

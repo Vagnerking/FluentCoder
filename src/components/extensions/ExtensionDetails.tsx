@@ -13,7 +13,18 @@ import { ActionButtons, ExtensionIcon, VerdictBadge, type CardAction } from "./E
 
 export type DetailsTarget =
   | { kind: "installed"; info: InstalledInfo; report?: CompatibilityReport; readme?: string | null; changelog?: string | null; icon?: string | null }
-  | { kind: "registry"; sourceId: string; sourceLabel: string; namespace: string; name: string; summary?: RegistrySummary; icon?: string | null };
+  | {
+      kind: "registry";
+      sourceId: string;
+      sourceLabel: string;
+      namespace: string;
+      name: string;
+      summary?: RegistrySummary;
+      icon?: string | null;
+      /** Prévia com o código (store da view), quando já existe. */
+      report?: CompatibilityReport;
+      previewPending?: boolean;
+    };
 
 type Tab = "readme" | "changelog" | "compat" | "contrib";
 
@@ -84,12 +95,18 @@ export const ExtensionMarkdown = memo(function ExtensionMarkdown({ content }: { 
 const SEVERITY_LABEL: Record<Reason["severity"], string> = { blocker: "Bloqueio", limit: "Limitação", info: "Informação" };
 const SEVERITY_ICON = { blocker: "error", limit: "warning", info: "info" } as const;
 
-function CompatibilityPanel({ report, loading }: { report: CompatibilityReport | null; loading: boolean }) {
+function CompatibilityPanel({ report, loading, preview = false, pending = false }: { report: CompatibilityReport | null; loading: boolean; preview?: boolean; pending?: boolean }) {
   if (!report) return <p className="ext-muted" role="status">{loading ? "Analisando…" : "Sem dados para avaliar."}</p>;
   return (
     <div className="ext-compat">
+      {preview && (
+        <p className="ext-callout" role="status">
+          <Codicon name="info" /> Prévia antes de instalar{pending ? " — analisando o código…" : ""}: o manifesto e o código principal foram lidos do catálogo, sem executar nada.
+          Depois de instalar, os arquivos extraídos são analisados de novo e só então o portão libera (ou não) a extensão.
+        </p>
+      )}
       <div className="ext-compat-head">
-        <VerdictBadge verdict={report.verdict} reasons={report.reasons} />
+        <VerdictBadge verdict={report.verdict} reasons={report.reasons} preview={preview} />
         <span className="ext-muted">
           API do host {report.hostVersion} · manifesto {report.analyzed.manifest ? "analisado" : "indisponível"} · código {report.analyzed.code ? "analisado" : "não analisado"}
         </span>
@@ -211,6 +228,7 @@ export function ExtensionDetails({ target, actions, busy, sourceLabel, platform,
 
   const report: CompatibilityReport | null = useMemo(() => {
     if (target.kind === "installed") return target.report ?? null;
+    if (target.report) return target.report;
     if (!remote) return null;
     return classify({ manifest: remote.manifest, targetPlatform: remote.metadata.targetPlatform, hostPlatform: platform, apiScan: null }, CAPABILITIES);
   }, [target, remote, platform]);
@@ -253,7 +271,9 @@ export function ExtensionDetails({ target, actions, busy, sourceLabel, platform,
             {description && <p className="ext-details-desc">{description}</p>}
             <p className="ext-details-facts">
               {sourceLabel && <span className="ext-badge ext-source">{sourceLabel}</span>}
-              {fixedReport && <VerdictBadge verdict={fixedReport.verdict} reasons={fixedReport.reasons} />}
+              {fixedReport && (
+                <VerdictBadge verdict={fixedReport.verdict} reasons={fixedReport.reasons} preview={target.kind === "registry"} pending={target.kind === "registry" && !!target.previewPending && !target.report} />
+              )}
               {meta?.preRelease && <span className="ext-badge">Pré-lançamento</span>}
               {meta?.downloadCount != null && <span className="ext-muted">{formatCount(meta.downloadCount)} downloads</span>}
               {meta?.license && <span className="ext-muted">Licença: {meta.license.length > 60 ? `${meta.license.slice(0, 60)}…` : meta.license}</span>}
@@ -281,7 +301,9 @@ export function ExtensionDetails({ target, actions, busy, sourceLabel, platform,
             (readme ? <ExtensionMarkdown content={readme} /> : <p className="ext-muted" role="status">{loading ? "Carregando…" : "A extensão não traz README."}</p>)}
           {tab === "changelog" &&
             (changelog ? <ExtensionMarkdown content={changelog} /> : <p className="ext-muted" role="status">{loading ? "Carregando…" : "A extensão não traz histórico de alterações."}</p>)}
-          {tab === "compat" && <CompatibilityPanel report={fixedReport} loading={loading} />}
+          {tab === "compat" && (
+            <CompatibilityPanel report={fixedReport} loading={loading} preview={target.kind === "registry"} pending={target.kind === "registry" && !!target.previewPending} />
+          )}
           {tab === "contrib" && <ContributionsPanel report={fixedReport} manifest={manifest} />}
         </div>
       </div>

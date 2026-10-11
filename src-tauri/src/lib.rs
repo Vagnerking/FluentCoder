@@ -158,6 +158,7 @@ pub fn run() {
             extensions::extensions_set_gate,
             extensions::extensions_set_gates,
             extensions::extensions_set_trust,
+            extensions::extensions_preflight,
             extensions::extensions_check_updates,
             ext_host::deep_link::deep_link_take_pending,
             ext_host::deep_link::deep_link_ack,
