@@ -136,6 +136,21 @@ export function collapseCrumbs<T>(crumbs: readonly T[], max: number): DisplayCru
   ];
 }
 
+/** Largura média reservada a um segmento visível do breadcrumb (px). */
+export const BREADCRUMB_SEGMENT_WIDTH = 80;
+
+/**
+ * Quantos segmentos de caminho cabem em `width` px (o resto colapsa em "…"),
+ * descontando até 2 símbolos. Sempre ≥ 3 (raiz › … › arquivo) e ≤ `max`.
+ * 0 = ainda não medido (usa `max`). Evita segmentos espremidos até virarem
+ * só separadores num grupo estreito.
+ */
+export function breadcrumbPathBudget(width: number, symbolCount: number, max: number): number {
+  if (!(width > 0)) return max;
+  const room = width - Math.min(symbolCount, 2) * BREADCRUMB_SEGMENT_WIDTH;
+  return Math.max(3, Math.min(max, Math.floor(room / BREADCRUMB_SEGMENT_WIDTH)));
+}
+
 /** Forma mínima de um DocumentSymbol do Monaco (1-based). */
 export interface SymbolRange {
   startLineNumber: number;

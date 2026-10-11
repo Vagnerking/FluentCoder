@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   arrangeEditorActions,
   contributedEditorActions,
+  editorActionBudget,
   registerEditorAction,
   type EditorActionContext,
   type EditorActionItem,
@@ -47,4 +48,20 @@ test("registro de contribuições: registrar, substituir e remover", () => {
   assert.equal(contributedEditorActions().find((i) => i.id === "codex")?.label, "Codex");
   dispose2();
   assert.equal(contributedEditorActions().some((i) => i.id === "codex"), false);
+});
+
+test("ações cedem espaço às abas conforme a largura do grupo", () => {
+  assert.equal(editorActionBudget(0, 5), 5);
+  assert.equal(editorActionBudget(1200, 5), 5);
+  // ~170 px (3 grupos lado a lado): só o "Mais ações" sobra.
+  assert.equal(editorActionBudget(170, 5), 0);
+  assert.equal(editorActionBudget(260, 5), 3);
+  assert.equal(editorActionBudget(340, 5), 5);
+  // Monotônico: mais largura nunca tira ação.
+  let prev = 0;
+  for (let w = 100; w <= 800; w += 10) {
+    const n = editorActionBudget(w, 5);
+    assert.ok(n >= prev);
+    prev = n;
+  }
 });

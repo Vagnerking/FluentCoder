@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  breadcrumbPathBudget,
   collapseCrumbs,
   isVirtualPath,
   parentPath,
@@ -120,4 +121,17 @@ test("pasta pai e ordenação de entradas", () => {
     { name: "A.md", isDir: false },
   ]);
   assert.deepEqual(names(sorted), ["src", "A.md", "b.ts"]);
+});
+
+test("orçamento de segmentos segue a largura (grupo estreito colapsa o meio)", () => {
+  assert.equal(breadcrumbPathBudget(0, 0, 5), 5);
+  assert.equal(breadcrumbPathBudget(170, 0, 5), 3);
+  assert.equal(breadcrumbPathBudget(330, 0, 5), 4);
+  assert.equal(breadcrumbPathBudget(900, 0, 5), 5);
+  // Símbolos ocupam parte do espaço.
+  assert.equal(breadcrumbPathBudget(400, 2, 5), 3);
+  // Nunca abaixo de raiz › … › arquivo.
+  assert.equal(breadcrumbPathBudget(40, 3, 5), 3);
+  const path = collapseCrumbs(["root", "src", "git", "gitFluent.ts"], breadcrumbPathBudget(170, 0, 5));
+  assert.deepEqual(path.map((d) => (d.kind === "ellipsis" ? "…" : d.crumb)), ["root", "…", "gitFluent.ts"]);
 });

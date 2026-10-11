@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { editor } from "monaco-editor";
 import type { FileNode, OpenFile } from "../types";
 import { readDir, sshListDir } from "../api";
@@ -7,6 +7,7 @@ import { FileIcon } from "../icon-theme/material/FileIcon";
 import { Codicon } from "../icons/codicons/Codicon";
 import type { IconAction } from "../icons/codicons/codicon-map";
 import {
+  breadcrumbPathBudget,
   collapseCrumbs,
   parentPath,
   pathCrumbs,
@@ -76,17 +77,32 @@ export function Breadcrumbs({ file, roots, editor: ed, onOpenFile }: Breadcrumbs
     [realPath, roots, remote?.folderId]
   );
 
+  // Largura da barra: num grupo estreito o meio do caminho colapsa em "…"
+  // (em vez de cada pasta encolher até sobrar só o separador).
+  const [navWidth, setNavWidth] = useState(0);
+  useLayoutEffect(() => {
+    const el = navRef.current;
+    if (!el) return;
+    const read = () => setNavWidth(Math.round(el.getBoundingClientRect().width));
+    read();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [realPath]);
+  const pathBudget = breadcrumbPathBudget(navWidth, chain.length, MAX_PATH_SEGMENTS);
+
   const segments = useMemo<Segment[]>(() => {
     if (!realPath) return [];
     const crumbs = pathCrumbs(realPath, roots, { preferRootId: remote?.folderId });
-    const out: Segment[] = collapseCrumbs(crumbs, MAX_PATH_SEGMENTS).map((d) =>
+    const out: Segment[] = collapseCrumbs(crumbs, pathBudget).map((d) =>
       d.kind === "ellipsis"
         ? { kind: "ellipsis", hidden: d.hidden }
         : { kind: "path", crumb: d.crumb, next: crumbs[d.index + 1] ?? null }
     );
     chain.forEach((symbol, depth) => out.push({ kind: "symbol", symbol, depth }));
     return out;
-  }, [realPath, roots, remote?.folderId, chain]);
+  }, [realPath, roots, remote?.folderId, chain, pathBudget]);
 
   // Mantém o índice focável válido quando o caminho muda.
   useEffect(() => {

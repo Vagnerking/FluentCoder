@@ -1,9 +1,10 @@
-import { useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { IconButton } from "../ui/IconButton";
 import { Menu, type MenuItemSpec } from "../ui/Menu";
 import {
   arrangeEditorActions,
   contributedEditorActions,
+  editorActionBudget,
   subscribeEditorActions,
   type EditorActionContext,
   type EditorActionItem,
@@ -37,9 +38,23 @@ export function EditorActions({ ctx, actions, moreItems = [], maxPrimary = 4 }: 
   );
   const [open, setOpen] = useState<OpenMenu>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  // Largura da faixa do grupo (abas + ações): as ações cedem espaço às abas
+  // num grupo estreito, transbordando para "Mais ações".
+  const [stripWidth, setStripWidth] = useState(0);
+  useLayoutEffect(() => {
+    const strip = rootRef.current?.closest<HTMLElement>(".tab-strip");
+    if (!strip) return;
+    const read = () => setStripWidth(Math.round(strip.getBoundingClientRect().width));
+    read();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(read);
+    ro.observe(strip);
+    return () => ro.disconnect();
+  }, []);
+  const budget = editorActionBudget(stripWidth, maxPrimary);
   const { primary, overflow } = useMemo(
-    () => arrangeEditorActions([...actions, ...contributed], ctx, maxPrimary),
-    [actions, contributed, ctx, maxPrimary]
+    () => arrangeEditorActions([...actions, ...contributed], ctx, budget),
+    [actions, contributed, ctx, budget]
   );
 
   const toMenuItem = (item: EditorActionItem): MenuItemSpec => {

@@ -766,7 +766,9 @@ html.platform-linux:not(.window-maximized) .caption-close {
   display: inline-flex;
   align-items: center;
   gap: var(--space-xs);
-  min-width: 0;
+  /* Nunca encolhe até sobrar só o separador: o colapso do meio em "…"
+     (breadcrumbPathBudget) cuida do excesso. */
+  min-width: 24px;
   max-width: 280px;
   height: 20px;
   padding: 0 var(--space-xs);

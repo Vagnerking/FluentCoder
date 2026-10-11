@@ -96,3 +96,21 @@ export function arrangeEditorActions(
     overflow: [...primaryAll.slice(limit), ...overflow],
   };
 }
+
+/** Largura mínima reservada às abas antes de as ações cederem espaço (px). */
+export const EDITOR_TABS_MIN_WIDTH = 140;
+/** Slot de um botão de ação `sm` (24 px) + gap (2 px). */
+export const EDITOR_ACTION_SLOT = 26;
+
+/**
+ * Quantos ícones primários cabem na faixa de um grupo com `stripWidth` px,
+ * reservando `EDITOR_TABS_MIN_WIDTH` para as abas e um slot para "Mais
+ * ações" (que nunca some). As abas têm prioridade: num grupo estreito as
+ * ações transbordam progressivamente para o menu. 0 = ainda não medido
+ * (usa `maxPrimary`). Pura (testada).
+ */
+export function editorActionBudget(stripWidth: number, maxPrimary: number): number {
+  if (!(stripWidth > 0)) return Math.max(0, maxPrimary);
+  const slots = Math.floor((stripWidth - EDITOR_TABS_MIN_WIDTH - 8) / EDITOR_ACTION_SLOT) - 1;
+  return Math.max(0, Math.min(maxPrimary, slots));
+}

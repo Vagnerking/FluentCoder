@@ -2,6 +2,13 @@
 .tab-bar-wrap {
   position: relative;
   min-width: 0;
+  container: tabwrap / inline-size;
+}
+
+/* Faixa de ~1 aba (grupos divididos): as setas cobririam o ícone e o fechar
+   da própria aba ativa — some; roda, fades e o tablist (←/→) seguem. */
+@container tabwrap (max-width: 180px) {
+  .tab-scroll { display: none; }
 }
 
 /* Soft gradient at each edge, shown only when tabs are hidden that way — a

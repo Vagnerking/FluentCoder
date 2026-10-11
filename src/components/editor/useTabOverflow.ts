@@ -49,7 +49,13 @@ export function useTabOverflow(barRef: RefObject<HTMLDivElement>, activePath: st
       const tab = Array.from(el.querySelectorAll<HTMLElement>(".tab")).find((t) => t.dataset.path === path);
       if (!tab) return;
       // Folga = largura do fade + seta, para a aba não ficar sob eles.
-      const pad = 44;
+      // Numa faixa estreita a folga encolhe para a aba inteira caber (a borda
+      // esquerda tem prioridade quando nem ela cabe).
+      const pad = Math.min(44, Math.max(0, Math.floor((el.clientWidth - tab.offsetWidth) / 2)));
+      if (tab.offsetWidth + 2 * pad >= el.clientWidth) {
+        el.scrollLeft = Math.max(0, tab.offsetLeft - pad);
+        return;
+      }
       if (tab.offsetLeft < el.scrollLeft + pad) {
         el.scrollLeft = Math.max(0, tab.offsetLeft - pad);
       } else if (tab.offsetLeft + tab.offsetWidth > el.scrollLeft + el.clientWidth - pad) {
@@ -65,14 +71,26 @@ export function useTabOverflow(barRef: RefObject<HTMLDivElement>, activePath: st
     return () => cancelAnimationFrame(raf);
   }, [activePath, revealTab]);
 
+  // A aba ativa volta à vista quando a faixa muda de largura (grupo dividido,
+  // barra lateral aberta…), não só quando a ativa muda.
+  const activeRef = useRef(activePath);
+  activeRef.current = activePath;
   useEffect(() => {
     syncOverflow();
     const el = barRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(syncOverflow);
+    let lastWidth = el.clientWidth;
+    const ro = new ResizeObserver(() => {
+      const width = el.clientWidth;
+      if (width !== lastWidth) {
+        lastWidth = width;
+        revealTab(activeRef.current);
+      }
+      syncOverflow();
+    });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [tabCount, syncOverflow, barRef]);
+  }, [tabCount, syncOverflow, revealTab, barRef]);
 
   const stopAutoScroll = useCallback(() => {
     if (autoScroll.current.raf) cancelAnimationFrame(autoScroll.current.raf);

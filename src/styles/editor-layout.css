@@ -198,10 +198,13 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.tab-strip .tab-bar-wrap { flex: 1; }
+/* As abas têm prioridade: a faixa nunca fica abaixo de ~1 aba; as ações
+   transbordam para "Mais ações" (editorActionBudget) antes disso. */
+.tab-strip .tab-bar-wrap { flex: 1; min-width: 120px; }
 
 .tab-bar-actions {
   flex: 0 0 auto;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--space-xxs);
