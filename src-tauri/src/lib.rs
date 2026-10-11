@@ -106,6 +106,7 @@ pub fn run() {
         .manage(ext_host::deep_link::DeepLinkState::new(deep_link_url))
         .manage(razor::commands::RazorState::new())
         .manage(ssh::SshState::new())
+        .manage(git::watcher::GitWatchState::new())
         .manage(window::WindowPlacementState::new())
         .manage(window::WindowHandoffState::new())
         .manage(window::ActiveEditorState::new())
@@ -193,6 +194,7 @@ pub fn run() {
             snap::snap_set_max_button_rect,
             git::git_branch,
             git::git_cancel,
+            git::watcher::git_watch_set,
             git::git_branches,
             git::git_remote_branches,
             git::git_remotes,

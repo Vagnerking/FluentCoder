@@ -129,7 +129,6 @@ import {
   gitLogFile,
   gitShowFileStaged,
   gitShowFileAtCommit,
-  gitStatus,
   isFreshWindow,
   listProjectFiles,
   dotnetNewList,
@@ -259,6 +258,8 @@ import type { AgentEditorContext } from "./agents/types";
 import { agentRunOptions, buildAgentPrompt, createLocalId } from "./agents/store";
 import { useIdeBridge } from "./agents/ideBridge";
 import { ClaudeDiffReview } from "./components/ClaudeDiffReview";
+import { getGitRefreshScheduler, onGitAutoFetched } from "./git/gitRefresh";
+import { requestGitRefresh, useGitStatuses } from "./git/useGitStatuses";
 import {
   DEFAULT_GIT_ASSIST_PREFERENCES,
   buildGitAssistPrompt,
@@ -1086,12 +1087,6 @@ export default function App() {
     return merged;
   }, [problems, diagVersion]);
 
-  // Git status of the open folder, used (with diagnostics) to decorate the
-  // explorer/tabs. Refreshed when the folder changes; null when not a repo.
-  const [gitState, setGitState] = useState<GitStatus | null>(null);
-  const [workspaceGitStates, setWorkspaceGitStates] = useState<
-    Record<string, WorkspaceGitState>
-  >({});
   const [recents, setRecents] = useState<string[]>(() => getRecentFolders());
   const [gitBusy, setGitBusy] = useState(false);
   const [lastFetch, setLastFetch] = useState<number | null>(null);
@@ -1218,92 +1213,50 @@ export default function App() {
     });
   }, [activeWorkspace, workspaceSshConnections]);
 
-  const refreshWorkspaceGitStatuses = useCallback(async () => {
-    if (!activeWorkspace || workspaceGitTargets.length === 0) {
-      setWorkspaceGitStates({});
-      return;
-    }
-
-    const entries = await Promise.all(
-      workspaceGitTargets.map(async (target) => {
-        try {
-          return {
-            ...target,
-            status: await gitStatus(target.rootPath, target.connId),
-          };
-        } catch {
-          return { ...target, status: null };
-        }
-      })
+  // Status de TODOS os alvos git vem de um agendador único (src/git/gitRefresh):
+  // watcher do backend para repos locais, polling adaptativo só para SSH /
+  // watcher degradado, pausado com a janela oculta. Antes havia dois
+  // setInterval(5s) (root ativa + todas as roots, incluindo a ativa de novo).
+  const gitStatusTargets = useMemo<WorkspaceGitTarget[]>(() => {
+    if (activeWorkspace) return workspaceGitTargets;
+    if (!rootPath) return [];
+    return [{ id: "__root__", rootPath, connId: remoteSession?.connId }];
+  }, [activeWorkspace, remoteSession?.connId, rootPath, workspaceGitTargets]);
+  const { states: gitStatusStates, refresh: requestGitStatusRefresh } =
+    useGitStatuses(gitStatusTargets);
+  const workspaceGitStates = useMemo<Record<string, WorkspaceGitState>>(
+    () => (activeWorkspace ? gitStatusStates : {}),
+    [activeWorkspace, gitStatusStates]
+  );
+  // Status do alvo ativo (status bar, decorações no modo pasta única).
+  const gitState = useMemo<GitStatus | null>(() => {
+    if (!activeGitTarget) return null;
+    const entry = Object.values(gitStatusStates).find(
+      (candidate) =>
+        candidate.rootPath === activeGitTarget.rootPath &&
+        (candidate.connId ?? null) === (activeGitTarget.connId ?? null)
     );
-
-    setWorkspaceGitStates(
-      Object.fromEntries(entries.map((entry) => [entry.id, entry]))
-    );
-  }, [activeWorkspace, workspaceGitTargets]);
+    return entry?.status ?? null;
+  }, [activeGitTarget, gitStatusStates]);
 
   useEffect(() => {
-    if (!activeWorkspace || workspaceGitTargets.length === 0) {
-      setWorkspaceGitStates({});
-      return;
-    }
-
-    void refreshWorkspaceGitStatuses();
-    const id = window.setInterval(() => {
-      void refreshWorkspaceGitStatuses();
-    }, 5000);
-    const onFocus = () => {
-      void refreshWorkspaceGitStatuses();
-    };
-    window.addEventListener("focus", onFocus);
-    return () => {
-      clearInterval(id);
-      window.removeEventListener("focus", onFocus);
-    };
-  }, [activeWorkspace, refreshWorkspaceGitStatuses, workspaceGitTargets.length]);
-
-  // Keep git status live while a repo is open, so the status bar's ahead/behind,
-  // conflicts and branch stay current (VS Code refreshes on focus + on a timer).
-  const refreshGitStatus = useCallback(() => {
     if (!activeGitTarget) {
-      setGitState(null);
       setBranch(null);
       return;
     }
-    gitStatus(activeGitTarget.rootPath, activeGitTarget.connId)
-      .then((s) => {
-        setGitState(s);
-        setBranch(s.isRepo ? s.branch : null);
-      })
-      .catch(() => {});
-  }, [activeGitTarget]);
+    if (gitState) setBranch(gitState.isRepo ? gitState.branch : null);
+  }, [activeGitTarget, gitState]);
 
-  useEffect(() => {
-    if (!activeGitTarget) return;
-    refreshGitStatus();
-    const id = window.setInterval(refreshGitStatus, 5000);
-    const onFocus = () => refreshGitStatus();
-    window.addEventListener("focus", onFocus);
-    return () => {
-      clearInterval(id);
-      window.removeEventListener("focus", onFocus);
-    };
-  }, [activeGitTarget, refreshGitStatus]);
+  const refreshWorkspaceGitStatuses = useCallback(async () => {
+    requestGitStatusRefresh(null, "manual");
+  }, [requestGitStatusRefresh]);
 
-  // Periodic background fetch (VS Code's git.autofetch), so behind-counts show up
-  // without a manual fetch. Toggleable + persisted in localStorage.
+  // Auto-fetch (git.autofetch): relógio por repo no agendador, com chave
+  // estável — trocar de aba/arquivo não o reinicia mais.
   useEffect(() => {
-    if (!activeGitTarget || !autoFetch) return;
-    const id = window.setInterval(() => {
-      gitFetch(activeGitTarget.rootPath, activeGitTarget.connId)
-        .then(() => {
-          setLastFetch(Date.now());
-          refreshGitStatus();
-        })
-        .catch(() => {});
-    }, 180_000);
-    return () => clearInterval(id);
-  }, [activeGitTarget, autoFetch, refreshGitStatus]);
+    getGitRefreshScheduler().setAutoFetch(autoFetch, 180_000);
+  }, [autoFetch]);
+  useEffect(() => onGitAutoFetched((at) => setLastFetch(at)), []);
 
   const toggleAutoFetch = useCallback(() => {
     setAutoFetch((v) => {
@@ -1324,11 +1277,11 @@ export default function App() {
         alert(`Git: ${err}`);
       } finally {
         setGitBusy(false);
-        refreshGitStatus();
-        void refreshWorkspaceGitStatuses();
+        // Notifica todos os assinantes do repo (status bar, SCM, grafo).
+        requestGitRefresh({ root: activeGitTarget.rootPath, connId: activeGitTarget.connId }, "op");
       }
     },
-    [activeGitTarget, gitBusy, refreshGitStatus, refreshWorkspaceGitStatuses]
+    [activeGitTarget, gitBusy]
   );
 
   const handleGitSync = useCallback(
@@ -2054,7 +2007,6 @@ export default function App() {
    */
   const resetWorkspaceState = useCallback(() => {
     setBranch(null);
-    setGitState(null);
     setProblems([]);
     clearAllDiagnostics();
     clearBuildDiagnostics();
@@ -2195,7 +2147,6 @@ export default function App() {
         // git routes to the host over SSH when remote, so branch + decorations
         // work for both local and remote workspaces.
         gitBranch(folder).then(setBranch).catch(() => setBranch(null));
-        gitStatus(folder).then(setGitState).catch(() => setGitState(null));
         if (!remote) {
           // Warm the search index so the first Ctrl+Shift+F is instant (remote
           // search uses live `grep`, so it needs no local index).
@@ -2513,7 +2464,6 @@ export default function App() {
     const entries = await readDir(rootPath);
     setRoots(entries);
     // git routes over SSH when remote, so decorations refresh either way.
-    gitStatus(rootPath).then(setGitState).catch(() => setGitState(null));
     void refreshWorkspaceGitStatuses();
   }, [refreshWorkspaceGitStatuses, rootPath]);
 

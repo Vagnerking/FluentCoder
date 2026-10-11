@@ -45,7 +45,6 @@ import {
   gitStashList,
   gitStashPop,
   gitStashPush,
-  gitStatus,
   gitUnstage,
   gitUnstageAll,
   gitWorktreeAdd,
@@ -80,6 +79,12 @@ import {
   type GitAssistPreferences,
 } from "../git/assist";
 import { fileName, joinRepoPath } from "../git/gitUi";
+import {
+  fetchGitStatusShared,
+  gitEventTouchesRefs,
+  requestGitRefresh,
+  useGitRefresh,
+} from "../git/useGitStatuses";
 import {
   GIT_FLUENT_PRIMARY_TABS,
   GIT_FLUENT_TABS,
@@ -1007,17 +1012,20 @@ function GitRepositoryPanel({
     writeStringSet(GIT_FLUENT_COLLAPSED_GROUPS_STORAGE_KEY, collapsedGitFluentGroups);
   }, [collapsedGitFluentGroups]);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (opts?: { refs?: boolean }) => {
     if (!rootPath) {
       setStatus(null);
       return;
     }
     try {
-      const s = await gitStatus(rootPath, connId);
+      const s = await fetchGitStatusShared(rootPath, connId);
       setStatus(s);
       setError(null);
-      gitStashList(rootPath, connId).then(setStashes).catch(() => {});
-      gitWorktrees(rootPath, connId).then(setWorktrees).catch(() => setWorktrees([]));
+      // Stash/worktrees só mudam com operações/refs — não a cada save.
+      if (opts?.refs !== false) {
+        gitStashList(rootPath, connId).then(setStashes).catch(() => {});
+        gitWorktrees(rootPath, connId).then(setWorktrees).catch(() => setWorktrees([]));
+      }
     } catch (err) {
       setError(String(err));
     }
@@ -1027,6 +1035,18 @@ function GitRepositoryPanel({
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Agendador único (watcher/polling/pedidos após operações): o SCM deixa de
+  // ficar velho quando um arquivo é salvo ou o terminal/um agente faz commit.
+  useGitRefresh(rootPath, connId, (event) => {
+    const refs = gitEventTouchesRefs(event);
+    void refresh({ refs });
+    if (!refs) return;
+    if (graphCommits.length > 0) void loadCommitGraph();
+    if (commits.length > 0) void loadHistory();
+    if (branches.length > 0 || remoteBranches.length > 0) void loadBranches();
+    if (upstreamComparison) void loadUpstreamComparison();
+  });
 
   useEffect(() => {
     setExpandedStashes(new Set());
@@ -1046,6 +1066,8 @@ function GitRepositoryPanel({
       setError(String(err));
     } finally {
       setBusy(false);
+      // Commit/checkout/pull/stash: avisa todos (status bar, decorações, grafo).
+      requestGitRefresh({ root: rootPath, connId }, "op");
     }
   }
 

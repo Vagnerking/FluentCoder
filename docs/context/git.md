@@ -52,3 +52,24 @@ espelhos `ssh_git_*` de `ssh.rs`, em `src/git/*`, `GitPanel.tsx` e
 - Branch: `symbolic-ref --short -q HEAD` (nome completo, `feat/x`), destacado
   `(abc1234…)`; leitura de `HEAD` só como fallback sem CLI, seguindo `.git`
   arquivo (`gitdir:`) de worktrees/submódulos.
+
+## Atualização: agendador único + watcher
+
+- **Frontend** (`src/git/gitRefresh.ts`): um único agendador por janela. Não
+  crie `setInterval` de status em componentes — use `useGitStatuses`
+  (App: status bar/decorações) ou `useGitRefresh` (painel SCM) e, depois de
+  qualquer operação que muda o repo (commit, checkout, pull, push, stash,
+  worktree…), chame `requestGitRefresh({ root, connId }, "op")`.
+  - Repos locais com watcher `full`: nenhum polling.
+  - SSH e watcher `git-only`/`failed`: polling 5 s com foco, 30 s sem foco,
+    pausado com a janela oculta/minimizada.
+  - Auto-fetch: relógio por repo (chave raiz+conexão) no agendador; trocar de
+    aba não reinicia.
+  - `fetchGitStatusShared` deduplica o status em voo entre App e SCM.
+- **Backend** (`src-tauri/src/git/watcher.rs`, `git_watch_set(roots)`): emite
+  `git://repo-changed {root, scopes}` (debounce 300 ms). Observa o git dir
+  (HEAD/index/estado de operação), `refs/` e a árvore de trabalho **sem
+  diretórios ignorados**. No Linux cada diretório custa 1 watch do inotify:
+  teto global `DEFAULT_DIR_CAP` (2048) somado entre repos; repo que não cabe
+  fica `git-only` e o frontend faz polling. Neste repo: 77 diretórios
+  observados de 28 211 (node_modules/target/worktrees ignorados).

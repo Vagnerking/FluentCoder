@@ -88,6 +88,9 @@ which = "6"
 # Windows — matching the project's openssl-free (rustls) stance.
 russh = { version = "0.61", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "2.3.0"
+# Watcher do Git (src/git/watcher.rs): `.git` (HEAD/index/refs) + árvore de
+# trabalho com filtro de .gitignore e teto global de diretórios no inotify.
+notify = "8"
 
 # Unix: checar pid vivo (locks órfãos da ponte IDE) e sinalizar o grupo de
 # processos do host de extensões. Já estava no lock (transitivo).

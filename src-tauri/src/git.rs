@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 pub(crate) mod history;
 pub(crate) mod status;
+pub(crate) mod watcher;
 pub(crate) mod runner;
 #[cfg(test)]
 pub(crate) mod test_support;
