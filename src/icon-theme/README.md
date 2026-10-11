@@ -13,6 +13,12 @@ nas telas.
 
 ---
 
+> **Temas de ícones de extensões:** o Material é hoje um *provedor* do motor
+> genérico [`engine.ts`](engine.ts) (formato `contributes.iconThemes` do VS
+> Code), escolhido pelo `themeRegistry` (`workbench.iconTheme`) em
+> [`iconThemeService.ts`](iconThemeService.ts). `<FileIcon>` segue o tema
+> ativo. Contrato em [docs/context/temas.md](../../docs/context/temas.md).
+
 ## 1. Material Icon Theme (arquivos e pastas)
 
 Usa o pacote npm [`material-icon-theme`](https://www.npmjs.com/package/material-icon-theme)

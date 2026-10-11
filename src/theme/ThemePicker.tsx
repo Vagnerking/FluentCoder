@@ -48,8 +48,9 @@ function groupLabel(e: ThemeEntry): string {
 function toItems(kind: ThemeKind, extensionId?: string): QuickPickItem[] {
   const list = themeRegistry.list(kind).filter((e) => !extensionId || (e.origin.type === "extension" && e.origin.extensionId === extensionId));
   // Como no VS Code: claros, escuros e alto contraste juntos; embutidos primeiro.
-  const order = (e: ThemeEntry) => (e.uiTheme === "vs" ? 0 : e.uiTheme === "hc-black" || e.uiTheme === "hc-light" ? 2 : 1);
-  const sorted = [...list].sort((a, b) => (kind === "color" ? order(a) - order(b) : 0) || (a.origin.type === "builtin" ? -1 : 1) - (b.origin.type === "builtin" ? -1 : 1) || a.label.localeCompare(b.label));
+  const order = (e: ThemeEntry) =>
+    kind === "color" ? (e.uiTheme === "vs" ? 0 : e.uiTheme === "hc-black" || e.uiTheme === "hc-light" ? 2 : 1) : e.id === "Nenhum" ? 1 : 0; // "Nenhum" por último
+  const sorted = [...list].sort((a, b) => order(a) - order(b) || (a.origin.type === "builtin" ? -1 : 1) - (b.origin.type === "builtin" ? -1 : 1) || a.label.localeCompare(b.label));
   return sorted.map((e) => ({ id: e.id, label: e.label, description: groupLabel(e), icon: kind === "color" ? "agentPaintcan" : "symbolFile", keywords: e.id }));
 }
 

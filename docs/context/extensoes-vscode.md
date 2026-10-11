@@ -227,6 +227,21 @@ no lado virtual de um diff)/`decorationTypeDisposed`,
     manifesto traduzido e o resultado da varredura, nunca o código. **Nunca
     grava portão**: depois de instalar, o portão é recalculado sobre os
     arquivos extraídos (hash conferido).
+24. **Contribuições declarativas sem executar código** (modo "somente
+    contribuições": temas, ícones, gramáticas, linguagens, snippets): só de
+    extensões HABILITADAS; com código bloqueado só se
+    `extensions.applyContributionsWhenCodeBlocked` (padrão ligado). Lidas como
+    TEXTO pelo Rust (`extensions_read_contribution`: realpath na pasta da
+    extensão, extensões de arquivo de contribuição, ≤ 4 MB); JSON/plist com
+    tetos; `include` ≤ 8 dentro da pasta. Contrato completo em
+    [Temas](temas.md).
+25. **Ativos de tema** só pelo protocolo `fcext://` (só extensões registradas,
+    realpath, svg ≤ 512 KB, imagens ≤ 1 MB, fontes ≤ 2 MB, SVG sanitizado com
+    CSP `default-src 'none'`) e sempre via `<img>`/`url()` — SVG de extensão
+    nunca inline no DOM. Cores só hex validado; glifos = um code point.
+26. **Regex de gramáticas e de `language-configuration.json`** passam pela
+    guarda de ReDoS (estática, compilação, orçamento de tempo por linha;
+    gramática desligada após estouros) — `src/editor/textmate/redos.ts`.
 
 ## Desempenho
 

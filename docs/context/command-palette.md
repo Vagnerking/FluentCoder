@@ -97,6 +97,13 @@ conversas do Claude Code/Codex). Comandos próprios, montados em
   Chat…"). Executar ativa a extensão se preciso (como o `onCommand` do VS
   Code). Gerados por `extensionPaletteCommands()` (`src/extensions/index.ts`).
 
+## Temas
+
+"Preferências: Tema de Cores", "Preferências: Tema de Ícones de Arquivo" e
+"Preferências: Tema de Ícones do Produto" (`themePaletteCommands()` em
+`src/theme/ThemePicker.tsx`) abrem o seletor do `themeRegistry` com prévia ao
+vivo nas setas (Enter salva, Esc restaura). Ver [Temas](temas.md).
+
 ## Como estender com novos comandos
 
 Adicione uma entrada ao array `commands` em `App.tsx`:

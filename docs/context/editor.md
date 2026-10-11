@@ -54,7 +54,9 @@ Implementação principal:
 - `src/lsp/client.ts`: bloqueio inicial do provider e descarte de respostas
   semânticas antigas;
 - `src/lsp/uri.ts`: serialização compatível das URIs Windows;
-- `src/components/EditorPane.tsx`: cores das categorias semânticas;
+- `src/theme/builtinThemes.ts` (Fluent Escuro/Claro/Alto Contraste) e
+  `src/theme/monacoTheme.ts` (temas de extensão): cores das categorias
+  semânticas — ver [Temas](temas.md);
 - `src/lsp/monacoSetup.ts`: registro e tokenizer léxico do C#.
 
 ### Regras que não podem ser removidas
@@ -136,7 +138,10 @@ Quando houver regressão:
    - se respostas antigas estão sendo descartadas;
    - se existem refreshes temporizados ou providers duplicados.
 5. Se a categoria estiver correta no log, mas a cor estiver errada, corrigir o
-   tema semântico em `EditorPane.tsx`.
+   tema semântico em `src/theme/builtinThemes.ts` (embutidos) ou a derivação em
+   `src/theme/monacoTheme.ts` (temas de extensão). Todo tema, inclusive de
+   extensão, TEM de ter regra para as categorias obrigatórias acima
+   (`REQUIRED_SEMANTIC`, testado em `src/theme/themes.test.ts`).
 
 Não corrigir problemas de classificação de tipos apenas alterando cores. A cor
 deve refletir a categoria correta fornecida pelo Roslyn.
@@ -185,6 +190,18 @@ O Roslyn usado pelo app aceita `textDocument/diagnostic`, mas pode omitir
 - ao associar diagnósticos de `dotnet build` a modelos Monaco no Windows,
   comparar URIs com drive canônico, pois `file:///C:/...` e `file:///c:/...`
   representam o mesmo arquivo.
+
+## Temas, gramáticas e snippets de extensões
+
+- O tema do editor segue o tema de cor ATIVO (`src/theme/registry.ts`); nunca
+  passe nome fixo (`"fluent-acrylic-dark"`) a `<Editor>`/`create*`: use
+  `useMonacoThemeId()`/`getActiveColorTheme().monacoId` (o standalone aplica o
+  tema globalmente a cada criação). Caminho standalone (`defineTheme`), sem o
+  theme/textmate service override (ADR 0003, `src/lsp/vscodeServices.ts`).
+- Gramáticas/linguagens/snippets de extensões nunca tocam C#, Razor/CSHTML
+  nem TS/JS/JSON/CSS/HTML (mapeamento, tokenização, configuração, injeção,
+  provider de snippet em `cshtml`/`aspnetcorerazor`/`razor`). Detalhes em
+  [Temas](temas.md).
 
 ## Ações do editor, origem da abertura e anotações Git
 

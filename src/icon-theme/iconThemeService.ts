@@ -52,7 +52,9 @@ function collect(): Map<string, ExtIconThemeRef> {
     for (const t of c.iconThemes) {
       if (!isObj(t) || typeof t.id !== "string" || typeof t.path !== "string") continue;
       const path = normalizeInside(t.path);
-      if (!path || t.id === MATERIAL_ID || t.id === NONE_ID || out.has(t.id)) continue;
+      // O mesmo id do embutido (PKief.material-icon-theme instalada) SUBSTITUI o
+      // embutido: vale a versão da extensão, que pode ser mais nova.
+      if (!path || t.id === NONE_ID || out.has(t.id)) continue;
       const label = typeof t.label === "string" && !/^%.*%$/.test(t.label) ? t.label : t.id;
       out.set(t.id, { ext, path, label });
     }
@@ -62,7 +64,7 @@ function collect(): Map<string, ExtIconThemeRef> {
 
 function entries(): ThemeEntry[] {
   const list: ThemeEntry[] = [
-    { kind: "fileIcon", id: MATERIAL_ID, label: "Material Icon Theme", origin: { type: "builtin" }, description: "embutido" },
+    ...(extThemes.has(MATERIAL_ID) ? [] : [{ kind: "fileIcon" as const, id: MATERIAL_ID, label: "Material Icon Theme", origin: { type: "builtin" as const }, description: "embutido" }]),
     { kind: "fileIcon", id: NONE_ID, label: "Nenhum", origin: { type: "builtin" }, description: "sem ícones de arquivo" },
   ];
   for (const [id, r] of extThemes) list.push({ kind: "fileIcon", id, label: r.label, origin: { type: "extension", extensionId: r.ext.id, extensionName: r.ext.displayName } });
@@ -190,7 +192,7 @@ onDidChangeActiveColorTheme((t) => {
 });
 
 async function applyEntry(entry: ThemeEntry): Promise<void> {
-  if (entry.id === MATERIAL_ID) {
+  if (entry.id === MATERIAL_ID && !extThemes.has(MATERIAL_ID)) {
     setFontFaces("");
     active = materialTheme();
     changed();
