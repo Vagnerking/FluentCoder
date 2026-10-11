@@ -292,7 +292,7 @@ export function TreeNode({
         <span className={`tree-chevron${hasExpandableChildren ? " folder" : ""}${expanded ? " expanded" : ""}`}>
           {hasExpandableChildren && <Codicon name="chevronRight" size={12} />}
         </span>
-        <FileIcon path={node.path} isDir={node.isDir} expanded={hasExpandableChildren && expanded} className="tree-icon" />
+        <FileIcon path={node.path} isDir={node.isDir} expanded={hasExpandableChildren && expanded} isRoot={isWorkspaceRoot} className="tree-icon" />
         <span className="tree-label-stack">
           <span className={`tree-label${deco ? ` deco-${deco.kind}` : ""}`}>{node.name}</span>
           {isWorkspaceRoot && workspaceRootSubtitle && (

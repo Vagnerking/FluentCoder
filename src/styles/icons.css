@@ -19,6 +19,17 @@
   pointer-events: none;
 }
 
+/* Tema de ícones por fonte (ex.: Seti): glifo da @font-face do tema. */
+.file-icon-font {
+  overflow: hidden;
+  font-style: normal;
+  font-weight: normal;
+  text-align: center;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 /* ---- Codicons: align the web-font glyphs with adjacent text ---- */
 .codicon {
   vertical-align: middle;

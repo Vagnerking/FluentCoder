@@ -1,19 +1,15 @@
 /**
- * Renders the Material icon for a file or folder.
+ * Ícone de arquivo/pasta do TEMA DE ÍCONES ATIVO (Material Icon Theme por
+ * padrão, ou o de uma extensão — `src/icon-theme/iconThemeService.ts`).
  *
- * Components pass a path/name (and, for folders, whether it's open); this
- * component owns the two-step resolution — name via {@link resolveFileIconName} /
- * {@link resolveFolderIconName}, then the SVG URL via {@link iconUrl}. The URL
- * table is resolved at build time (see icon-assets), so resolution is
- * synchronous; the browser fetches and caches the SVG bytes by content-hashed
- * URL, so repeated rows of the same type reuse one download.
+ * Componentes passam caminho/nome (e, para pastas, se está aberta / é raiz);
+ * a resolução segue a ordem do VS Code (`src/icon-theme/engine.ts`). Imagens
+ * SEMPRE via `<img>` (SVG de extensão nunca entra inline no DOM); ícones de
+ * fonte viram um glifo com a `@font-face` do tema.
  */
-import { iconUrl } from "./icon-assets";
-import {
-  resolveFileIconName,
-  resolveFolderIconName,
-  type IconColorTheme,
-} from "./icon-resolver";
+import { resolveIconRender, useFileIconTheme } from "../iconThemeService";
+import type { IconVariant } from "../engine";
+import type { IconColorTheme } from "./icon-resolver";
 
 interface FileIconProps {
   /** File/folder path or bare name (only the last segment is used). */
@@ -22,7 +18,9 @@ interface FileIconProps {
   isDir?: boolean;
   /** For folders, whether it's currently expanded (open-folder icon). */
   expanded?: boolean;
-  /** Active color theme; light has its own icon overrides for some types. */
+  /** Pasta raiz do workspace (`rootFolder*` do tema). */
+  isRoot?: boolean;
+  /** Força a variante clara/escura (padrão: segue o tema de cor ativo). */
   theme?: IconColorTheme;
   /** Pixel size of the square icon. Defaults to 16 (one explorer row). */
   size?: number;
@@ -30,26 +28,25 @@ interface FileIconProps {
   className?: string;
 }
 
-export function FileIcon({
-  path,
-  isDir = false,
-  expanded = false,
-  theme = "dark",
-  size = 16,
-  className,
-}: FileIconProps) {
-  const iconName = isDir
-    ? resolveFolderIconName(path, expanded, theme)
-    : resolveFileIconName(path, theme);
-  const url = iconUrl(iconName);
-
+export function FileIcon({ path, isDir = false, expanded = false, isRoot = false, theme, size = 16, className }: FileIconProps) {
+  useFileIconTheme();
+  const variant: IconVariant | undefined = theme === "light" ? "light" : theme === "dark" ? "dark" : undefined;
+  const icon = resolveIconRender({ path, isDir, expanded, isRoot, variant });
+  const cls = `file-icon${icon?.kind === "font" ? " file-icon-font" : ""}${className ? ` ${className}` : ""}`;
+  if (icon?.kind === "font") {
+    return (
+      <span
+        className={cls}
+        style={{ width: size, height: size, fontFamily: `"${icon.fontFamily}"`, color: icon.color, fontSize: icon.size ?? size, lineHeight: `${size}px` }}
+        aria-hidden="true"
+      >
+        {icon.character}
+      </span>
+    );
+  }
   return (
-    <span
-      className={`file-icon${className ? ` ${className}` : ""}`}
-      style={{ width: size, height: size }}
-      aria-hidden="true"
-    >
-      {url && <img src={url} width={size} height={size} alt="" draggable={false} />}
+    <span className={cls} style={{ width: size, height: size }} aria-hidden="true">
+      {icon && <img src={icon.src} width={size} height={size} alt="" draggable={false} />}
     </span>
   );
 }

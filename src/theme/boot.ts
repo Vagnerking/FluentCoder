@@ -10,6 +10,7 @@
 import { reloadExtensionContributions } from "../extensions/contributions/source";
 import { applyCachedColorTheme, startColorThemes } from "./colorThemeService";
 import { themeRegistry, type ThemeKind } from "./registry";
+import { startFileIconThemes } from "../icon-theme/iconThemeService";
 
 let booted = false;
 const kinds: ThemeKind[] = [];
@@ -29,6 +30,7 @@ export function bootThemes(): void {
   booted = true;
   applyCachedColorTheme();
   step(startColorThemes, "color");
+  step(startFileIconThemes, "fileIcon");
   void reloadExtensionContributions().finally(() => {
     for (const k of kinds) void themeRegistry.restore(k).catch(() => {});
   });
