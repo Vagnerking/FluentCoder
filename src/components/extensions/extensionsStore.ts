@@ -28,6 +28,7 @@ import { classifyPreview } from "../../extensions/preview";
 import { CAPABILITIES } from "../../extensions/capabilities";
 import { isExtensionActive, refreshHostedExtensions, restartExtensionHost } from "../../extensions";
 import { listen } from "@tauri-apps/api/event";
+import { reloadExtensionContributions } from "../../extensions/contributions/source";
 
 export interface ExtensionsState {
   loaded: boolean;
@@ -125,6 +126,7 @@ export function loadExtensions(force = false): Promise<void> {
     try {
       const [paths, installed, sources] = await Promise.all([extensionsApi.paths(), extensionsApi.list(), extensionsApi.sources()]);
       set((s) => ({ platform: paths.platform, installed, sources, loaded: true, updates: pruneUpdates(s.updates, installed) }));
+      void reloadExtensionContributions(installed);
       evaluateBackground();
     } catch (err) {
       loadPromise = null;
@@ -259,6 +261,8 @@ async function syncHost(): Promise<void> {
 async function reloadInstalled(): Promise<void> {
   const installed = await extensionsApi.list();
   set((s) => ({ installed, updates: pruneUpdates(s.updates, installed) }));
+  // Temas, ícones, gramáticas e snippets (sem executar código) seguem a lista nova.
+  void reloadExtensionContributions(installed);
   writeUpdateCache(state.lastUpdateCheck ?? Date.now(), state.updates);
   evaluateBackground();
   await syncHost();

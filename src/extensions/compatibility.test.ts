@@ -81,8 +81,20 @@ test("só stubs como função principal (servidor de linguagem): Incompatível",
   assert.ok(r.reasons.some((x) => x.code === "activation" && x.severity === "blocker"));
 });
 
-test("declarativa: tema só → Incompatível; sem manifesto → Não avaliada", () => {
-  assert.equal(classify({ manifest: { ...base, contributes: { themes: [{ label: "T", path: "t.json" }] } }, hostPlatform: host }, caps).verdict, "incompatible");
+test("declarativa: tema só → Compatível (sem código); sem manifesto → Não avaliada", () => {
+  const theme = classify({ manifest: { ...base, contributes: { themes: [{ label: "T", path: "t.json" }] } }, hostPlatform: host }, caps);
+  assert.equal(theme.verdict, "compatible");
+  assert.ok(theme.reasons.some((r) => r.code === "no-code" && /Sem código/.test(r.message)));
+  // Engine acima da API do shim não bloqueia quem não tem código.
+  const newer = classify({ manifest: { ...base, engines: { vscode: "^9.0.0" }, contributes: { iconThemes: [{ id: "i", label: "I", path: "i.json" }] } }, hostPlatform: host }, caps);
+  assert.equal(newer.verdict, "compatible");
+  assert.ok(newer.reasons.some((r) => r.code === "engine-no-code"));
+  // Mista com código bloqueado: avisa que as contribuições valem mesmo assim.
+  const mixed = classify({ manifest: { ...base, engines: { vscode: "^9.0.0" }, main: "a.js", contributes: { themes: [{ label: "T", path: "t.json" }] } }, hostPlatform: host, apiScan: null }, caps);
+  assert.equal(mixed.verdict, "incompatible");
+  assert.ok(mixed.reasons.some((r) => r.code === "contributions-only"));
+  // Keymap/sem nada útil continua Incompatível.
+  assert.equal(classify({ manifest: { ...base, contributes: { debuggers: [{}] } }, hostPlatform: host }, caps).verdict, "incompatible");
   assert.equal(classify({ manifest: null, hostPlatform: host }, caps).verdict, "unknown");
   assert.equal(classify({ manifest: { ...base, main: "a.js" }, hostPlatform: host, apiScan: { bindings: 0, paths: [] } }, caps).verdict, "unknown");
 });

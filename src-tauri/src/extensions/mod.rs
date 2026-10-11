@@ -10,6 +10,7 @@
 //!
 //! Contratos e regras de segurança: docs/context/extensoes-vscode.md.
 
+pub mod contrib;
 pub mod openvsx;
 pub mod preflight;
 pub mod scan;

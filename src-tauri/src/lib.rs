@@ -63,6 +63,8 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         // SO/capacidades em `window.__FLUENT_PLATFORM__` antes do primeiro paint.
         .plugin(platform::init_plugin())
+        // Ícones/fontes de temas de extensões (só da pasta delas; ver extensions/contrib.rs).
+        .register_asynchronous_uri_scheme_protocol(extensions::contrib::SCHEME, extensions::contrib::protocol)
         .setup(|app| {
             // Explicitly stamp every window with a crisp, high-resolution icon so
             // the Windows taskbar / Alt-Tab show the app logo (a frameless,
@@ -163,6 +165,8 @@ pub fn run() {
             extensions::extensions_set_trust,
             extensions::extensions_preflight,
             extensions::extensions_check_updates,
+            extensions::contrib::extensions_read_contribution,
+            extensions::contrib::snippets_user_list,
             ext_host::deep_link::deep_link_take_pending,
             ext_host::deep_link::deep_link_ack,
             fs_commands::write_file,

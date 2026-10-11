@@ -241,6 +241,7 @@ const CONTRIB_LABEL: Record<string, string> = {
   snippets: "Snippets",
   themes: "Temas de cor",
   iconThemes: "Temas de ícones",
+  productIconThemes: "Ícones de produto",
   debuggers: "Depuradores",
   notebooks: "Notebooks",
   taskDefinitions: "Tipos de tarefa",
@@ -305,7 +306,11 @@ export function classify(input: ClassifyInput, caps: Capabilities): Compatibilit
   if (!range) add("blocker", "no-engine", "Sem `engines.vscode` no manifesto: não é uma extensão VS Code válida.");
   else {
     const ok = satisfiesEngine(caps.hostVersion, range);
-    if (ok === false) add("blocker", "engine", `Requer VS Code ${range}; este host implementa a API ${caps.hostVersion}.`);
+    // Sem código, a versão da API não importa: as contribuições declarativas
+    // (temas, ícones, gramáticas, snippets) são aplicadas pelo app.
+    if (ok === false && !hasMain && !hasBrowser && declarativeOf(contributes).length)
+      add("info", "engine-no-code", `Declara VS Code ${range} (este host implementa a API ${caps.hostVersion}); como não tem código, as contribuições são aplicadas mesmo assim.`);
+    else if (ok === false) add("blocker", "engine", `Requer VS Code ${range}; este host implementa a API ${caps.hostVersion}.`);
     else if (ok === null) add("limit", "engine-unknown", `Faixa de versão \`${range}\` não reconhecida; o host implementa a API ${caps.hostVersion}.`);
   }
 
@@ -357,6 +362,9 @@ export function classify(input: ClassifyInput, caps: Capabilities): Compatibilit
     if (!hasMain && supportedContrib === 0) add("blocker", "unsupported-contrib", msg);
     else add("limit", "unsupported-contrib", msg);
   }
+  const declarative = declarativeOf(contributes);
+  if (!hasMain && !hasBrowser && declarative.length)
+    add("info", "no-code", `Sem código: só contribuições declarativas (${declarative.map((k) => CONTRIB_LABEL[k] ?? k).join(", ")}), aplicadas pelo app sem executar nada.`);
   if (!hasMain && !hasBrowser && supportedContrib === 0 && !unsupportedContrib.length) {
     add("blocker", "nothing", "Sem código e sem contribuições que o Fluent Coder use.");
   }
@@ -463,10 +471,22 @@ export function classify(input: ClassifyInput, caps: Capabilities): Compatibilit
   else if (!codeAnalyzed) verdict = "unknown";
   else if (limits) verdict = "partial";
   else verdict = "compatible";
+  if (hasMain && declarative.length && !RUNNABLE.has(verdict))
+    reasons.push({
+      severity: "info",
+      code: "contributions-only",
+      message: `Somente contribuições: ${declarative.map((k) => CONTRIB_LABEL[k] ?? k).join(", ")} são aplicados pelo app mesmo com o código bloqueado (configurável em \`extensions.applyContributionsWhenCodeBlocked\`).`,
+    });
   // Ordem: bloqueios, limitações, informações.
   const order: Record<Severity, number> = { blocker: 0, limit: 1, info: 2 };
   reasons.sort((a, b) => order[a.severity] - order[b.severity]);
   return { verdict, reasons, contributes: summarizeContributions(m, caps), analyzed: { manifest: true, code: codeAnalyzed }, hostVersion: caps.hostVersion };
+}
+
+/** Pontos de contribuição DECLARATIVOS presentes (aplicados sem executar código). */
+const DECLARATIVE_KEYS = ["themes", "iconThemes", "productIconThemes", "grammars", "languages", "snippets"];
+function declarativeOf(contributes: Record<string, unknown>): string[] {
+  return DECLARATIVE_KEYS.filter((k) => Array.isArray(contributes[k]) && (contributes[k] as unknown[]).length > 0);
 }
 
 function hasWebviewViews(contributes: Record<string, unknown>): boolean {

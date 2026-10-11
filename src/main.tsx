@@ -42,6 +42,7 @@ import { installSettingsJsonSupport } from "./settings/settingsJsonMonaco";
 import { installExtHostSettingsBridge } from "./settings/extHostBridge";
 import { getPlatform } from "./platform/os";
 import { installNativeDragGuard } from "./workbench/workbenchDrag";
+import { reloadExtensionContributions } from "./extensions/contributions/source";
 
 // macOS runs a native, opaque window (a transparent frameless window never
 // materializes there — the app would show only a Dock icon and menu bar). Tag the
@@ -108,6 +109,10 @@ void settingsReady.then(() => {
     });
   }
 });
+
+// Contribuições declarativas das extensões (temas, ícones, gramáticas,
+// snippets) — lidas como dados, sem executar código (modo somente contribuições).
+void reloadExtensionContributions();
 
 async function revealPaintedWindow() {
   // One frame lets React commit the shell while keeping warm-window startup

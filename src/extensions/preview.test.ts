@@ -13,7 +13,7 @@ const scan = { scannerVersion: 2, file: "out/ext.js", filesWithApi: 1, bindings:
 test("prévia fase 1 (manifesto): com código ainda é Não avaliada; tema puro já sai decidido", () => {
   assert.equal(classifyPreview(base, "linux-x64", new Set(), caps).verdict, "unknown");
   const theme = { ...base, manifest: { name: "t", publisher: "a", version: "1", engines: { vscode: "^1.80.0" }, contributes: { themes: [{ label: "T", path: "t.json" }] } }, code: "no-main" as const };
-  assert.equal(classifyPreview(theme, "linux-x64", new Set(), caps).verdict, "incompatible");
+  assert.equal(classifyPreview(theme, "linux-x64", new Set(), caps).verdict, "compatible");
 });
 
 test("prévia fase 2 (código): veredito com a varredura; incompleta/grande demais não afirmam nada", () => {

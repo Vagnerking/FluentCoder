@@ -370,28 +370,28 @@
       "note": "esquemas JSON contribuídos não validam arquivos no editor"
     },
     "languages": {
-      "state": "unsupported",
-      "note": "linguagens contribuídas não são registradas no Monaco"
+      "state": "supported",
+      "note": "registradas no Monaco sem executar código; C#, Razor/CSHTML e as linguagens com LSP próprio mantêm o mapeamento do app"
     },
     "grammars": {
-      "state": "unsupported",
-      "note": "gramáticas TextMate contribuídas não são carregadas"
+      "state": "supported",
+      "note": "gramáticas TextMate (Oniguruma) com limite de tempo por linha e validação contra ReDoS; C#/Razor/CSHTML mantêm o pipeline do app"
     },
     "snippets": {
-      "state": "unsupported",
-      "note": "snippets contribuídos não são carregados"
+      "state": "supported",
+      "note": "IntelliSense do Monaco (tabstops, placeholders, escolhas, variáveis)"
     },
     "themes": {
-      "state": "unsupported",
-      "note": "temas de cor de extensões não são aplicados"
+      "state": "supported",
+      "note": "temas de cor (editor, terminal e tokens da UI) sem executar código"
     },
     "iconThemes": {
-      "state": "unsupported",
-      "note": "temas de ícones de extensões não são aplicados"
+      "state": "supported",
+      "note": "temas de ícones de arquivos (SVG/PNG só via <img>, fontes ≤ 2 MB)"
     },
     "productIconThemes": {
-      "state": "unsupported",
-      "note": "temas de ícones de produto não são aplicados"
+      "state": "partial",
+      "note": "ícones de produto por fonte: troca os codicons da UI (melhor esforço)"
     },
     "debuggers": {
       "state": "unsupported",

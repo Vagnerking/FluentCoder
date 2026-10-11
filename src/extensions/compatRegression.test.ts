@@ -78,7 +78,8 @@ test("Material Icon Theme: `glsl` de outro objeto não vira API ausente", () => 
   const { report, scan } = run("material-icons");
   assert.ok(!scan!.paths.some(([p]) => p === "glsl"));
   assert.ok(!codes(report).includes("api-absent"));
-  assert.equal(report.verdict, "partial");
+  // Temas de ícones agora são aplicados pelo app (modo somente contribuições).
+  assert.equal(report.verdict, "compatible");
 });
 
 test("ErrorLens: `browser` igual ao `main` não tira o bundle da análise", () => {
