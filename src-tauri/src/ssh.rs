@@ -1738,17 +1738,100 @@ async fn exec_git(conn: &Connection, root: &str, args: &[&str]) -> Result<String
     }
 }
 
+/// Marcador entre as saídas de um lote (`\0\x01FLUENT-GIT-SEP:<exit>\x01\0`).
+const BATCH_SEP: &str = "\u{0}\u{1}FLUENT-GIT-SEP:";
+
+/// Roda vários `git -C <root> …` num **único** exec remoto (`sh -c`), para que
+/// histórico/blame/grafo custem 1 RTT em vez de N. Devolve um resultado por
+/// comando (stdout no sucesso; no erro, o stderr agregado do lote).
+async fn exec_git_batch(
+    conn: &Connection,
+    root: &str,
+    cmds: &[Vec<String>],
+) -> Result<Vec<Result<String, String>>, String> {
+    let output = exec_capture(conn, &batch_command(root, cmds)).await?;
+    Ok(split_batch_output(&output.stdout, &output.stderr, cmds.len()))
+}
+
+/// Monta o `sh -c '…'` do lote. Pura (testada).
+fn batch_command(root: &str, cmds: &[Vec<String>]) -> String {
+    let mut script = String::new();
+    for cmd in cmds {
+        script.push_str("GIT_TERMINAL_PROMPT=0 GIT_OPTIONAL_LOCKS=0 git -c core.quotepath=false -C ");
+        script.push_str(&shell_quote(root));
+        for a in cmd {
+            script.push(' ');
+            script.push_str(&shell_quote(a));
+        }
+        script.push_str("; printf '\\000\\001FLUENT-GIT-SEP:%s\\001\\000' \"$?\"\n");
+    }
+    format!("sh -c {}", shell_quote(&script))
+}
+
+/// Separa a saída de [`exec_git_batch`]. Pura (testada).
+fn split_batch_output(stdout: &str, stderr: &str, expected: usize) -> Vec<Result<String, String>> {
+    let mut results = Vec::with_capacity(expected);
+    let mut rest = stdout;
+    for _ in 0..expected {
+        let Some(pos) = rest.find(BATCH_SEP) else {
+            results.push(Err(if stderr.trim().is_empty() {
+                "Saída do lote git remoto incompleta.".to_string()
+            } else {
+                stderr.trim().to_string()
+            }));
+            continue;
+        };
+        let out = &rest[..pos];
+        let after = &rest[pos + BATCH_SEP.len()..];
+        let end = after.find("\u{1}\u{0}").unwrap_or(after.len());
+        let code: i32 = after[..end].trim().parse().unwrap_or(-1);
+        rest = after.get(end + 2..).unwrap_or("");
+        results.push(if code == 0 {
+            Ok(out.to_string())
+        } else {
+            let msg = stderr.trim();
+            Err(if msg.is_empty() {
+                format!("git remoto saiu com código {code}")
+            } else {
+                msg.to_string()
+            })
+        });
+    }
+    results
+}
+
+fn owned(args: &[&str]) -> Vec<String> {
+    args.iter().map(|s| s.to_string()).collect()
+}
+
+/// Log remoto em 1 exec: identidade/remoto + `git log -z --numstat`.
+async fn remote_log(
+    conn: &Connection,
+    root: &str,
+    log_args: Vec<String>,
+) -> Result<Vec<crate::git::GitCommit>, String> {
+    use crate::git::history;
+    let mut results = exec_git_batch(conn, root, &[owned(&history::META_ARGS), log_args])
+        .await?
+        .into_iter();
+    let meta = history::parse_repo_meta(&results.next().and_then(Result::ok).unwrap_or_default());
+    let raw = match results.next().unwrap_or_else(|| Ok(String::new())) {
+        Ok(raw) => raw,
+        Err(error) if history::is_empty_history_error(&error) => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let mut commits = history::into_commits(history::parse_log_z(&raw, None));
+    history::apply_meta_to_log(&mut commits, &meta);
+    Ok(commits)
+}
+
+
 // ---- Remote git: history, blame, stash, discard (SSH parity for GitPanel) ----
 //
 // Each mirrors its local `git.rs` twin's arguments over `exec_git` and reuses the
 // SAME parser (`git::parse_log_records` / `parse_blame` / `parse_stash_list`), so
 // the GitPanel renders remote history/blame/stash identically to local.
 
-/// Record format shared by the repo-wide and per-file remote logs (matches
-/// `git.rs`): unit-separated fields, record-separated rows.
-const REMOTE_LOG_FORMAT: &str = "--pretty=format:%H\x1f%h\x1f%an\x1f%ae\x1f%ar\x1f%s\x1e";
-const REMOTE_GRAPH_FORMAT: &str =
-    "--pretty=format:%H\x1f%h\x1f%P\x1f%D\x1f%an\x1f%ae\x1f%ar\x1f%s\x1e";
 
 #[tauri::command]
 pub async fn ssh_git_worktrees(
@@ -1844,17 +1927,7 @@ pub async fn ssh_git_log(
     state: State<'_, SshState>,
 ) -> Result<Vec<crate::git::GitCommit>, String> {
     let conn = get_conn(&state, &conn_id).await?;
-    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
-        .await
-        .is_err()
-    {
-        return Ok(Vec::new());
-    }
-    let n = format!("-{limit}");
-    let out = exec_git(&conn, &root, &["log", &n, "--no-color", REMOTE_LOG_FORMAT]).await?;
-    let mut commits = crate::git::parse_log_records(&out)?;
-    enrich_remote_log_commits(&conn, &root, &mut commits, None).await;
-    Ok(commits)
+    remote_log(&conn, &root, crate::git::history::log_args(limit, &[])).await
 }
 
 #[tauri::command]
@@ -1864,30 +1937,23 @@ pub async fn ssh_git_graph(
     limit: u32,
     state: State<'_, SshState>,
 ) -> Result<Vec<crate::git::GitGraphCommit>, String> {
+    use crate::git::history;
     let conn = get_conn(&state, &conn_id).await?;
-    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
-        .await
-        .is_err()
-    {
-        return Ok(Vec::new());
-    }
-    let n = format!("-{limit}");
-    let out = exec_git(
+    let mut results = exec_git_batch(
         &conn,
         &root,
-        &[
-            "log",
-            "--all",
-            "--topo-order",
-            "--decorate=short",
-            &n,
-            "--no-color",
-            REMOTE_GRAPH_FORMAT,
-        ],
+        &[owned(&history::META_ARGS), crate::git::graph_args(limit)],
     )
-    .await?;
+    .await?
+    .into_iter();
+    let meta = history::parse_repo_meta(&results.next().and_then(Result::ok).unwrap_or_default());
+    let out = match results.next().unwrap_or_else(|| Ok(String::new())) {
+        Ok(raw) => raw,
+        Err(error) if history::is_empty_history_error(&error) => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
     let mut commits = crate::git::parse_graph_records(&out)?;
-    enrich_remote_graph_commits(&conn, &root, &mut commits).await;
+    history::apply_meta_to_graph(&mut commits, &meta);
     Ok(commits)
 }
 
@@ -1898,52 +1964,38 @@ pub async fn ssh_git_compare_upstream(
     limit: u32,
     state: State<'_, SshState>,
 ) -> Result<crate::git::GitUpstreamComparison, String> {
+    use crate::git::history;
     let conn = get_conn(&state, &conn_id).await?;
-    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
-        .await
-        .is_err()
-    {
-        return Ok(crate::git::GitUpstreamComparison {
-            upstream: String::new(),
-            ahead: Vec::new(),
-            behind: Vec::new(),
-        });
-    }
-    let upstream = match exec_git(
-        &conn,
-        &root,
-        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
-    )
-    .await
-    {
-        Ok(value) => value.trim().to_string(),
-        Err(_) => {
-            return Ok(crate::git::GitUpstreamComparison {
-                upstream: String::new(),
-                ahead: Vec::new(),
-                behind: Vec::new(),
-            })
-        }
+    let empty = || crate::git::GitUpstreamComparison {
+        upstream: String::new(),
+        ahead: Vec::new(),
+        behind: Vec::new(),
     };
-    let n = format!("-{limit}");
-    let ahead_raw = exec_git(
+    // 1 exec: upstream + identidade/remoto + ahead + behind.
+    let mut results = exec_git_batch(
         &conn,
         &root,
-        &["log", &n, "--no-color", REMOTE_LOG_FORMAT, "@{upstream}..HEAD"],
+        &[
+            owned(&["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]),
+            owned(&history::META_ARGS),
+            history::log_args(limit, &["@{upstream}..HEAD"]),
+            history::log_args(limit, &["HEAD..@{upstream}"]),
+        ],
     )
-    .await?;
-    let behind_raw = exec_git(
-        &conn,
-        &root,
-        &["log", &n, "--no-color", REMOTE_LOG_FORMAT, "HEAD..@{upstream}"],
-    )
-    .await?;
-    let mut ahead = crate::git::parse_log_records(&ahead_raw)?;
-    let mut behind = crate::git::parse_log_records(&behind_raw)?;
-    enrich_remote_log_commits(&conn, &root, &mut ahead, None).await;
-    enrich_remote_log_commits(&conn, &root, &mut behind, None).await;
+    .await?
+    .into_iter();
+    let Some(Ok(upstream)) = results.next() else {
+        return Ok(empty());
+    };
+    let meta = history::parse_repo_meta(&results.next().and_then(Result::ok).unwrap_or_default());
+    let ahead_raw = results.next().unwrap_or_else(|| Ok(String::new()))?;
+    let behind_raw = results.next().unwrap_or_else(|| Ok(String::new()))?;
+    let mut ahead = history::into_commits(history::parse_log_z(&ahead_raw, None));
+    let mut behind = history::into_commits(history::parse_log_z(&behind_raw, None));
+    history::apply_meta_to_log(&mut ahead, &meta);
+    history::apply_meta_to_log(&mut behind, &meta);
     Ok(crate::git::GitUpstreamComparison {
-        upstream,
+        upstream: upstream.trim().to_string(),
         ahead,
         behind,
     })
@@ -1958,30 +2010,12 @@ pub async fn ssh_git_log_file(
     state: State<'_, SshState>,
 ) -> Result<Vec<crate::git::GitCommit>, String> {
     let conn = get_conn(&state, &conn_id).await?;
-    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
-        .await
-        .is_err()
-    {
-        return Ok(Vec::new());
-    }
-    let n = format!("-{limit}");
-    let out = exec_git(
+    remote_log(
         &conn,
         &root,
-        &[
-            "log",
-            &n,
-            "--no-color",
-            "--follow",
-            REMOTE_LOG_FORMAT,
-            "--",
-            &file,
-        ],
+        crate::git::history::log_args(limit, &["--follow", "--", &file]),
     )
-    .await?;
-    let mut commits = crate::git::parse_log_records(&out)?;
-    enrich_remote_log_commits(&conn, &root, &mut commits, Some(&file)).await;
-    Ok(commits)
+    .await
 }
 
 #[tauri::command]
@@ -2190,94 +2224,6 @@ fn remote_repo_relative_path(root: &str, file: &str) -> String {
     rel.replace('\\', "/")
 }
 
-async fn enrich_remote_log_commits(
-    conn: &Connection,
-    root: &str,
-    commits: &mut [crate::git::GitCommit],
-    file: Option<&str>,
-) {
-    let name = exec_git(conn, root, &["config", "--get", "user.name"])
-        .await
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    let email = exec_git(conn, root, &["config", "--get", "user.email"])
-        .await
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    let identity = if name.is_empty() && email.is_empty() {
-        None
-    } else {
-        Some((name, crate::git::normalize_git_email(&email)))
-    };
-    crate::git::apply_log_identity(commits, identity.as_ref());
-
-    let remote = match exec_git(conn, root, &["remote", "get-url", "origin"]).await {
-        Ok(value) => value,
-        Err(_) => exec_git(conn, root, &["remote", "get-url", "upstream"])
-            .await
-            .unwrap_or_default(),
-    };
-    let remote = remote.trim().to_string();
-    let mut details = std::collections::HashMap::new();
-
-    for commit in commits.iter() {
-        let raw = if let Some(file) = file {
-            exec_git(
-                conn,
-                root,
-                &["show", "--numstat", "--format=%P", &commit.hash, "--", file],
-            )
-            .await
-        } else {
-            exec_git(
-                conn,
-                root,
-                &["show", "--numstat", "--format=%P", &commit.hash],
-            )
-            .await
-        }
-        .unwrap_or_default();
-        let mut detail = crate::git::parse_commit_numstat(&raw);
-        detail.remote_url = crate::git::commit_url_from_remote(&remote, &commit.hash);
-        details.insert(commit.hash.clone(), detail);
-    }
-
-    crate::git::apply_log_commit_details(commits, &details);
-}
-
-async fn enrich_remote_graph_commits(
-    conn: &Connection,
-    root: &str,
-    commits: &mut [crate::git::GitGraphCommit],
-) {
-    let name = exec_git(conn, root, &["config", "--get", "user.name"])
-        .await
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    let email = exec_git(conn, root, &["config", "--get", "user.email"])
-        .await
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    let identity = if name.is_empty() && email.is_empty() {
-        None
-    } else {
-        Some((name, crate::git::normalize_git_email(&email)))
-    };
-    crate::git::apply_graph_identity(commits, identity.as_ref());
-
-    let remote = match exec_git(conn, root, &["remote", "get-url", "origin"]).await {
-        Ok(value) => value,
-        Err(_) => exec_git(conn, root, &["remote", "get-url", "upstream"])
-            .await
-            .unwrap_or_default(),
-    };
-    crate::git::apply_graph_remote_urls(commits, remote.trim());
-}
-
 #[tauri::command]
 pub async fn ssh_git_blame(
     conn_id: String,
@@ -2285,57 +2231,38 @@ pub async fn ssh_git_blame(
     file: String,
     state: State<'_, SshState>,
 ) -> Result<Vec<crate::git::BlameHunk>, String> {
+    use crate::git::history;
     let conn = get_conn(&state, &conn_id).await?;
-    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
-        .await
-        .is_err()
-    {
-        return Ok(Vec::new());
-    }
-    let out = exec_git(&conn, &root, &["blame", "--porcelain", "-M", "--", &file]).await?;
+    // 2 execs no total (antes: 5 + 1 por hash, sequenciais): blame + meta num
+    // lote, depois as estatísticas de todos os hashes de uma vez.
+    let mut results = exec_git_batch(
+        &conn,
+        &root,
+        &[
+            owned(&["blame", "--porcelain", "-M", "--", &file]),
+            owned(&history::META_ARGS),
+        ],
+    )
+    .await?
+    .into_iter();
+    let out = match results.next().unwrap_or_else(|| Ok(String::new())) {
+        Ok(out) => out,
+        Err(error) if crate::git::is_not_repo_error(&error) => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let meta = history::parse_repo_meta(&results.next().and_then(Result::ok).unwrap_or_default());
     let mut hunks = crate::git::parse_blame(&out);
-    let name = exec_git(&conn, &root, &["config", "--get", "user.name"])
-        .await
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    let email = exec_git(&conn, &root, &["config", "--get", "user.email"])
-        .await
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    let identity = if name.is_empty() && email.is_empty() {
-        None
+    let hashes = history::blame_hashes(&hunks);
+    let stats = if hashes.is_empty() {
+        Vec::new()
     } else {
-        Some((name, crate::git::normalize_git_email(&email)))
+        let mut args = history::stats_args(false);
+        args.extend(hashes);
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let raw = exec_git(&conn, &root, &args).await.unwrap_or_default();
+        history::parse_log_z(&raw, Some(&remote_repo_relative_path(&root, &file)))
     };
-    crate::git::apply_blame_identity(&mut hunks, identity.as_ref());
-    let remote = match exec_git(&conn, &root, &["remote", "get-url", "origin"]).await {
-        Ok(value) => value,
-        Err(_) => exec_git(&conn, &root, &["remote", "get-url", "upstream"])
-            .await
-            .unwrap_or_default(),
-    };
-    let remote = remote.trim().to_string();
-    let mut details = std::collections::HashMap::new();
-    let hashes: std::collections::HashSet<String> = hunks
-        .iter()
-        .filter(|h| !h.hash.is_empty())
-        .map(|h| h.hash.clone())
-        .collect();
-    for hash in hashes {
-        let raw = exec_git(
-            &conn,
-            &root,
-            &["show", "--numstat", "--format=%P", &hash, "--", &file],
-        )
-        .await
-        .unwrap_or_default();
-        let mut detail = crate::git::parse_commit_numstat(&raw);
-        detail.remote_url = crate::git::commit_url_from_remote(&remote, &hash);
-        details.insert(hash, detail);
-    }
-    crate::git::apply_blame_commit_details(&mut hunks, &details);
+    history::apply_to_blame(&mut hunks, &meta, &stats);
     Ok(hunks)
 }
 
@@ -3298,6 +3225,48 @@ mod tests {
         assert_eq!(split_name("file.txt"), ("file", ".txt"));
         assert_eq!(split_name("noext"), ("noext", ""));
         assert_eq!(split_name(".bashrc"), (".bashrc", ""));
+    }
+
+    #[test]
+    fn git_batch_output_is_split_per_command() {
+        let out = "A\u{0}\u{1}FLUENT-GIT-SEP:0\u{1}\u{0}\u{1e}rec\u{0}\u{0}\u{1}FLUENT-GIT-SEP:128\u{1}\u{0}";
+        let res = split_batch_output(out, "fatal: boom", 2);
+        assert_eq!(res[0].as_deref(), Ok("A"));
+        assert_eq!(res[1].clone().unwrap_err(), "fatal: boom");
+        let res = split_batch_output("", "", 1);
+        assert!(res[0].is_err());
+    }
+
+    #[test]
+    fn git_batch_command_quotes_everything_for_sh() {
+        let cmd = batch_command("/srv/my repo", &[vec!["log".into(), "it's".into()]]);
+        assert!(cmd.starts_with("sh -c '"));
+        assert!(cmd.contains("-C '\\''/srv/my repo'\\''"), "{cmd}");
+        assert!(cmd.contains("FLUENT-GIT-SEP"));
+    }
+
+    #[test]
+    fn git_batch_runs_in_a_real_shell() {
+        // Executa o script do lote num sh local contra um repo temporário:
+        // prova o printf com NUL e a separação dos códigos de saída.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap();
+        std::process::Command::new("git").args(["init", "-q", root]).status().unwrap();
+        let cmd = batch_command(
+            root,
+            &[
+                vec!["rev-parse".into(), "--is-inside-work-tree".into()],
+                vec!["rev-parse".into(), "--verify".into(), "nope".into()],
+            ],
+        );
+        let out = std::process::Command::new("sh").args(["-c", &cmd]).output().unwrap();
+        let res = split_batch_output(
+            &String::from_utf8_lossy(&out.stdout),
+            &String::from_utf8_lossy(&out.stderr),
+            2,
+        );
+        assert_eq!(res[0].as_deref().map(str::trim), Ok("true"));
+        assert!(res[1].is_err());
     }
 
     #[test]

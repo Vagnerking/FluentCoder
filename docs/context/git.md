@@ -23,3 +23,19 @@ espelhos `ssh_git_*` de `ssh.rs`, em `src/git/*`, `GitPanel.tsx` e
     processos (git + ssh/hooks).
 - Formatos parseáveis: use `-z`/`%x00`/`%x1e`/`%x1f`. Nada de parse de saída
   com aspas/escapes octais.
+
+## Histórico, blame e grafo sem N+1 (`src-tauri/src/git/history.rs`)
+
+- Histórico, file history e compare: **um** `git log -z --numstat` com
+  `history::LOG_FORMAT` traz metadados e estatísticas. Nunca volte a fazer
+  `git show` por commit.
+- Line history (`-L`) e blame: os hashes descobertos vão num único
+  `git log --no-walk=unsorted -z --numstat` (stdin no local, args no SSH),
+  sem pathspec (com pathspec o git descarta commits de renames antigos); o
+  numstat é filtrado por caminho no parser.
+- Identidade e remoto: um `git config --get-regexp` (`history::META_ARGS`).
+- SSH: `exec_git_batch` roda vários `git` num único exec (`sh -c` com
+  separador NUL), então histórico/grafo/compare custam 1 RTT e blame 2.
+- Datas relativas vêm de `%at` formatado em pt-BR (`format_relative_time`),
+  iguais às do blame/CodeLens.
+- Grafo usa `--branches --remotes --tags HEAD`, não `--all` (exclui `refs/stash`).

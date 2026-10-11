@@ -1,8 +1,11 @@
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+pub(crate) mod history;
 pub(crate) mod runner;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 /// Returns the current git branch name for the repository containing `path`,
 /// or `None` when the folder isn't a git repo (or HEAD is detached/unborn).
@@ -209,7 +212,7 @@ pub fn empty_status() -> GitStatus {
     }
 }
 
-fn is_not_repo_error(error: &str) -> bool {
+pub(crate) fn is_not_repo_error(error: &str) -> bool {
     error.to_ascii_lowercase().contains("not a git repository")
 }
 
@@ -1239,15 +1242,36 @@ pub async fn git_blame(root: String, file: String) -> Result<Vec<BlameHunk>, Str
 }
 
 fn git_blame_blocking(root: String, file: String) -> Result<Vec<BlameHunk>, String> {
-    if run_git(&root, &["rev-parse", "--is-inside-work-tree"]).is_err() {
-        return Ok(Vec::new());
-    }
     // --porcelain: machine-readable. -M: detect moved lines within the file.
-    let raw = run_git(&root, &["blame", "--porcelain", "-M", "--", &file])?;
+    let raw = match run_git(&root, &["blame", "--porcelain", "-M", "--", &file]) {
+        Ok(raw) => raw,
+        Err(error) if is_not_repo_error(&error) => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
     let mut hunks = parse_blame(&raw);
-    let identity = git_identity(&root);
-    apply_blame_identity(&mut hunks, identity.as_ref());
-    enrich_blame_commits(&mut hunks, &root, &file);
+    // Uma chamada de estatísticas para TODOS os hashes do blame (antes: um
+    // `git show` por hash) + uma de identidade/remoto.
+    let hashes = history::blame_hashes(&hunks);
+    let stats = if hashes.is_empty() {
+        Vec::new()
+    } else {
+        let args = history::stats_args(true);
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let stdin = hashes.join("\n") + "\n";
+        let raw = runner::run_with(
+            &root,
+            &args,
+            runner::RunOptions {
+                kind: runner::CallKind::Read,
+                timeout: None,
+                stdin: Some(stdin.as_bytes()),
+            },
+        )
+        .unwrap_or_default();
+        history::parse_log_z(&raw, Some(&repo_relative_path(&root, &file)))
+    };
+    let meta = history::repo_meta_local(&root);
+    history::apply_to_blame(&mut hunks, &meta, &stats);
     Ok(hunks)
 }
 
@@ -1338,86 +1362,6 @@ pub(crate) fn parse_blame(raw: &str) -> Vec<BlameHunk> {
     hunks
 }
 
-#[derive(Clone, Default)]
-pub(crate) struct BlameCommitDetails {
-    pub previous_hash: String,
-    pub additions: u32,
-    pub deletions: u32,
-    pub files_changed: u32,
-    pub remote_url: String,
-}
-
-pub(crate) fn apply_blame_commit_details(
-    hunks: &mut [BlameHunk],
-    details: &HashMap<String, BlameCommitDetails>,
-) {
-    for hunk in hunks {
-        if let Some(detail) = details.get(&hunk.hash) {
-            hunk.previous_hash = detail.previous_hash.clone();
-            hunk.additions = detail.additions;
-            hunk.deletions = detail.deletions;
-            hunk.files_changed = detail.files_changed;
-            hunk.remote_url = detail.remote_url.clone();
-        }
-    }
-}
-
-fn enrich_blame_commits(hunks: &mut [BlameHunk], root: &str, file: &str) {
-    let remote = run_git(root, &["remote", "get-url", "origin"])
-        .or_else(|_| run_git(root, &["remote", "get-url", "upstream"]))
-        .unwrap_or_default();
-    let remote = remote.trim();
-    let mut details = HashMap::new();
-    let mut hashes = HashSet::new();
-    for hunk in hunks.iter() {
-        if !hunk.hash.is_empty() {
-            hashes.insert(hunk.hash.clone());
-        }
-    }
-
-    for hash in hashes {
-        let raw = run_git(
-            root,
-            &["show", "--numstat", "--format=%P", &hash, "--", file],
-        )
-        .unwrap_or_default();
-        let mut detail = parse_commit_numstat(&raw);
-        detail.remote_url = commit_url_from_remote(remote, &hash);
-        details.insert(hash, detail);
-    }
-    apply_blame_commit_details(hunks, &details);
-}
-
-pub(crate) fn parse_commit_numstat(raw: &str) -> BlameCommitDetails {
-    let mut detail = BlameCommitDetails::default();
-    let mut saw_parent_line = false;
-
-    for line in raw.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if !saw_parent_line {
-            saw_parent_line = true;
-            detail.previous_hash = line.split_whitespace().next().unwrap_or("").to_string();
-            continue;
-        }
-        let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() < 3 {
-            continue;
-        }
-        detail.files_changed += 1;
-        if let Ok(additions) = fields[0].parse::<u32>() {
-            detail.additions += additions;
-        }
-        if let Ok(deletions) = fields[1].parse::<u32>() {
-            detail.deletions += deletions;
-        }
-    }
-
-    detail
-}
-
 pub(crate) fn commit_url_from_remote(remote: &str, hash: &str) -> String {
     if remote.is_empty() || hash.is_empty() {
         return String::new();
@@ -1436,47 +1380,6 @@ pub(crate) fn commit_url_from_remote(remote: &str, hash: &str) -> String {
         format!("{web}/commits/{hash}")
     } else {
         format!("{web}/commit/{hash}")
-    }
-}
-
-pub(crate) fn apply_blame_identity(hunks: &mut [BlameHunk], identity: Option<&(String, String)>) {
-    for hunk in hunks {
-        hunk.avatar_url = avatar_url_for_email(&hunk.author_email);
-        if let Some((name, email)) = identity {
-            hunk.is_current_user = (!email.is_empty()
-                && hunk.author_email.eq_ignore_ascii_case(email))
-                || (!name.is_empty() && hunk.author.eq_ignore_ascii_case(name));
-        }
-    }
-}
-
-pub(crate) fn apply_log_identity(commits: &mut [GitCommit], identity: Option<&(String, String)>) {
-    for commit in commits {
-        if commit.avatar_url.is_empty() {
-            commit.avatar_url = avatar_url_for_email(&commit.author_email);
-        }
-        if let Some((name, email)) = identity {
-            commit.is_current_user = (!email.is_empty()
-                && commit.author_email.eq_ignore_ascii_case(email))
-                || (!name.is_empty() && commit.author.eq_ignore_ascii_case(name));
-        }
-    }
-}
-
-fn git_identity(root: &str) -> Option<(String, String)> {
-    let name = run_git(root, &["config", "--get", "user.name"])
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    let email = run_git(root, &["config", "--get", "user.email"])
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    let email = normalize_git_email(&email);
-    if name.is_empty() && email.is_empty() {
-        None
-    } else {
-        Some((name, email))
     }
 }
 
@@ -1535,16 +1438,22 @@ pub async fn git_log(path: String, limit: u32) -> Result<Vec<GitCommit>, String>
 }
 
 fn git_log_blocking(path: String, limit: u32) -> Result<Vec<GitCommit>, String> {
-    if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
-        return Ok(Vec::new());
-    }
-    // Unit separator (\x1f) between fields, record separator (\x1e) between rows
-    // — safe against any character that could appear in a subject.
-    let fmt = "--pretty=format:%H\x1f%h\x1f%an\x1f%ae\x1f%ar\x1f%s\x1e";
-    let raw = run_git(&path, &["log", &format!("-{limit}"), "--no-color", fmt])?;
+    // Um único `git log -z --numstat` (antes: 1 log + 1 `git show` por commit).
+    local_log(&path, &history::log_args(limit, &[]), None)
+}
 
-    let mut commits = parse_log_records(&raw)?;
-    enrich_log_commits(&mut commits, &path, None);
+/// Roda um `git log` no formato de [`history::LOG_FORMAT`] e aplica
+/// identidade/remoto (1 chamada). Repo inexistente ou sem commits → vazio.
+fn local_log(path: &str, args: &[String], path_filter: Option<&str>) -> Result<Vec<GitCommit>, String> {
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let raw = match run_git(path, &args) {
+        Ok(raw) => raw,
+        Err(error) if history::is_empty_history_error(&error) => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let mut commits = history::into_commits(history::parse_log_z(&raw, path_filter));
+    let meta = history::repo_meta_local(path);
+    history::apply_meta_to_log(&mut commits, &meta);
     Ok(commits)
 }
 
@@ -1556,25 +1465,33 @@ pub async fn git_graph(path: String, limit: u32) -> Result<Vec<GitGraphCommit>, 
 }
 
 fn git_graph_blocking(path: String, limit: u32) -> Result<Vec<GitGraphCommit>, String> {
-    if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
-        return Ok(Vec::new());
-    }
-    let fmt = "--pretty=format:%H\x1f%h\x1f%P\x1f%D\x1f%an\x1f%ae\x1f%ar\x1f%s\x1e";
-    let raw = run_git(
-        &path,
-        &[
-            "log",
-            "--all",
-            "--topo-order",
-            "--decorate=short",
-            &format!("-{limit}"),
-            "--no-color",
-            fmt,
-        ],
-    )?;
+    let raw = match run_git(&path, &graph_args(limit).iter().map(String::as_str).collect::<Vec<_>>()) {
+        Ok(raw) => raw,
+        Err(error) if history::is_empty_history_error(&error) => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
     let mut commits = parse_graph_records(&raw)?;
-    enrich_graph_commits(&mut commits, &path);
+    let meta = history::repo_meta_local(&path);
+    history::apply_meta_to_graph(&mut commits, &meta);
     Ok(commits)
+}
+
+/// Args do grafo. `--branches --remotes --tags HEAD` em vez de `--all`: o
+/// `--all` incluía `refs/stash` (commits WIP/index do stash viravam branches
+/// fantasmas). `HEAD` mantém o commit atual mesmo destacado.
+pub(crate) fn graph_args(limit: u32) -> Vec<String> {
+    vec![
+        "log".into(),
+        "--branches".into(),
+        "--remotes".into(),
+        "--tags".into(),
+        "HEAD".into(),
+        "--topo-order".into(),
+        "--decorate=short".into(),
+        format!("-{limit}"),
+        "--no-color".into(),
+        "--pretty=format:%H\x1f%h\x1f%P\x1f%D\x1f%an\x1f%ae\x1f%at\x1f%s\x1e".into(),
+    ]
 }
 
 /// Lists commits that are only on HEAD (`ahead`) or only on @{upstream}
@@ -1585,13 +1502,6 @@ pub async fn git_compare_upstream(path: String, limit: u32) -> Result<GitUpstrea
 }
 
 fn git_compare_upstream_blocking(path: String, limit: u32) -> Result<GitUpstreamComparison, String> {
-    if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
-        return Ok(GitUpstreamComparison {
-            upstream: String::new(),
-            ahead: Vec::new(),
-            behind: Vec::new(),
-        });
-    }
     let upstream = match run_git(&path, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]) {
         Ok(value) => value.trim().to_string(),
         Err(_) => {
@@ -1602,14 +1512,8 @@ fn git_compare_upstream_blocking(path: String, limit: u32) -> Result<GitUpstream
             })
         }
     };
-    let fmt = "--pretty=format:%H\x1f%h\x1f%an\x1f%ae\x1f%ar\x1f%s\x1e";
-    let n = format!("-{limit}");
-    let ahead_raw = run_git(&path, &["log", &n, "--no-color", fmt, "@{upstream}..HEAD"])?;
-    let behind_raw = run_git(&path, &["log", &n, "--no-color", fmt, "HEAD..@{upstream}"])?;
-    let mut ahead = parse_log_records(&ahead_raw)?;
-    let mut behind = parse_log_records(&behind_raw)?;
-    enrich_log_commits(&mut ahead, &path, None);
-    enrich_log_commits(&mut behind, &path, None);
+    let ahead = local_log(&path, &history::log_args(limit, &["@{upstream}..HEAD"]), None)?;
+    let behind = local_log(&path, &history::log_args(limit, &["HEAD..@{upstream}"]), None)?;
     Ok(GitUpstreamComparison {
         upstream,
         ahead,
@@ -1627,25 +1531,8 @@ pub async fn git_log_file(path: String, file: String, limit: u32) -> Result<Vec<
 }
 
 fn git_log_file_blocking(path: String, file: String, limit: u32) -> Result<Vec<GitCommit>, String> {
-    if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
-        return Ok(Vec::new());
-    }
-    let fmt = "--pretty=format:%H\x1f%h\x1f%an\x1f%ae\x1f%ar\x1f%s\x1e";
-    let raw = run_git(
-        &path,
-        &[
-            "log",
-            &format!("-{limit}"),
-            "--no-color",
-            "--follow",
-            fmt,
-            "--",
-            &file,
-        ],
-    )?;
-    let mut commits = parse_log_records(&raw)?;
-    enrich_log_commits(&mut commits, &path, Some(&file));
-    Ok(commits)
+    // `--follow` + pathspec: o numstat já vem restrito ao arquivo (com renames).
+    local_log(&path, &history::log_args(limit, &["--follow", "--", &file]), None)
 }
 
 /// History for a single line in a file, GitLens-style. This is intentionally
@@ -1658,16 +1545,13 @@ pub async fn git_log_line(path: String, file: String, line: u32, limit: u32) -> 
 }
 
 fn git_log_line_blocking(path: String, file: String, line: u32, limit: u32) -> Result<Vec<GitCommit>, String> {
-    if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
-        return Ok(Vec::new());
-    }
     if line == 0 {
         return Err("Linha inválida para histórico Git.".into());
     }
     let rel = repo_relative_path(&path, &file);
     let line_spec = format!("-L{line},{line}:{rel}");
     let fmt = "--pretty=format:%x1e%H\x1f%h\x1f%an\x1f%ae\x1f%ar\x1f%s";
-    let raw = run_git(
+    let raw = match run_git(
         &path,
         &[
             "log",
@@ -1678,9 +1562,34 @@ fn git_log_line_blocking(path: String, file: String, line: u32, limit: u32) -> R
             fmt,
             &line_spec,
         ],
+    ) {
+        Ok(raw) => raw,
+        Err(error) if history::is_empty_history_error(&error) => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let hashes: Vec<String> = parse_log_records_from_line_history(&raw)?
+        .into_iter()
+        .map(|c| c.hash)
+        .collect();
+    if hashes.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Metadados + estatísticas do arquivo para todos os hashes em UMA chamada.
+    let args = history::stats_args(true);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let stdin = hashes.join("\n") + "\n";
+    let stats_raw = runner::run_with(
+        &path,
+        &args,
+        runner::RunOptions {
+            kind: runner::CallKind::Read,
+            timeout: None,
+            stdin: Some(stdin.as_bytes()),
+        },
     )?;
-    let mut commits = parse_log_records_from_line_history(&raw)?;
-    enrich_log_commits(&mut commits, &path, Some(&file));
+    let mut commits = history::into_commits(history::parse_log_z(&stats_raw, Some(&rel)));
+    let meta = history::repo_meta_local(&path);
+    history::apply_meta_to_log(&mut commits, &meta);
     Ok(commits)
 }
 
@@ -2001,7 +1910,12 @@ pub(crate) fn parse_graph_records(raw: &str) -> Result<Vec<GitGraphCommit>, Stri
             author_email: email.clone(),
             avatar_url: avatar_url_for_email(&email),
             is_current_user: false,
-            date: fields[6].to_string(),
+            // `%at` (local e SSH) → "há 2 h", como blame/CodeLens; aceita `%ar`.
+            date: fields[6]
+                .trim()
+                .parse::<i64>()
+                .map(format_relative_time)
+                .unwrap_or_else(|_| fields[6].to_string()),
             subject: fields[7].to_string(),
             remote_url: String::new(),
         });
@@ -2019,79 +1933,6 @@ fn parse_log_records_from_line_history(raw: &str) -> Result<Vec<GitCommit>, Stri
         }
     }
     parse_log_records(&compact)
-}
-
-pub(crate) fn apply_graph_identity(
-    commits: &mut [GitGraphCommit],
-    identity: Option<&(String, String)>,
-) {
-    for commit in commits {
-        if commit.avatar_url.is_empty() {
-            commit.avatar_url = avatar_url_for_email(&commit.author_email);
-        }
-        if let Some((name, email)) = identity {
-            commit.is_current_user = (!email.is_empty()
-                && commit.author_email.eq_ignore_ascii_case(email))
-                || (!name.is_empty() && commit.author.eq_ignore_ascii_case(name));
-        }
-    }
-}
-
-pub(crate) fn apply_graph_remote_urls(commits: &mut [GitGraphCommit], remote: &str) {
-    for commit in commits {
-        commit.remote_url = commit_url_from_remote(remote, &commit.hash);
-    }
-}
-
-pub(crate) fn apply_log_commit_details(
-    commits: &mut [GitCommit],
-    details: &HashMap<String, BlameCommitDetails>,
-) {
-    for commit in commits {
-        if let Some(detail) = details.get(&commit.hash) {
-            commit.additions = detail.additions;
-            commit.deletions = detail.deletions;
-            commit.files_changed = detail.files_changed;
-            commit.remote_url = detail.remote_url.clone();
-        }
-    }
-}
-
-fn enrich_graph_commits(commits: &mut [GitGraphCommit], root: &str) {
-    let identity = git_identity(root);
-    apply_graph_identity(commits, identity.as_ref());
-    let remote = run_git(root, &["remote", "get-url", "origin"])
-        .or_else(|_| run_git(root, &["remote", "get-url", "upstream"]))
-        .unwrap_or_default();
-    apply_graph_remote_urls(commits, remote.trim());
-}
-
-fn enrich_log_commits(commits: &mut [GitCommit], root: &str, file: Option<&str>) {
-    let identity = git_identity(root);
-    apply_log_identity(commits, identity.as_ref());
-
-    let remote = run_git(root, &["remote", "get-url", "origin"])
-        .or_else(|_| run_git(root, &["remote", "get-url", "upstream"]))
-        .unwrap_or_default();
-    let remote = remote.trim();
-    let mut details = HashMap::new();
-
-    for commit in commits.iter() {
-        let raw = if let Some(file) = file {
-            run_git(
-                root,
-                &["show", "--numstat", "--format=%P", &commit.hash, "--", file],
-            )
-        } else {
-            run_git(root, &["show", "--numstat", "--format=%P", &commit.hash])
-        }
-        .unwrap_or_default();
-        let mut detail = parse_commit_numstat(&raw);
-        detail.remote_url = commit_url_from_remote(remote, &commit.hash);
-        details.insert(commit.hash.clone(), detail);
-    }
-
-    apply_log_commit_details(commits, &details);
 }
 
 // ---------------------------------------------------------------------------
@@ -2187,6 +2028,99 @@ fn git_snapshot_restore_blocking(path: String, snapshot_id: String, head: String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use super::test_support::TempRepo;
+
+    /// Repo com: arquivo não-ASCII com espaço, rename e um segundo autor.
+    fn history_repo() -> TempRepo {
+        let repo = TempRepo::new();
+        repo.write("café é.txt", "a\n");
+        repo.write("old.txt", "x\n");
+        repo.commit_all("primeiro");
+        repo.write("café é.txt", "a\nb\nc\n");
+        repo.git(&["mv", "old.txt", "novo nome.txt"]);
+        repo.commit_all("segundo: rename");
+        repo.write("café é.txt", "a\nB\nc\n");
+        repo.git(&["add", "-A"]);
+        repo.git(&[
+            "-c", "user.name=Bia", "-c", "user.email=bia@example.com",
+            "commit", "-q", "-m", "terceiro",
+        ]);
+        repo
+    }
+
+    #[test]
+    fn log_has_stats_identity_from_a_single_log_call() {
+        let repo = history_repo();
+        let commits = git_log_blocking(repo.root(), 30).unwrap();
+        assert_eq!(commits.len(), 3);
+        assert_eq!(commits[0].subject, "terceiro");
+        assert_eq!(commits[0].author, "Bia");
+        assert!(!commits[0].is_current_user);
+        assert!(commits[1].is_current_user, "Ana é o user.name do repo");
+        assert_eq!((commits[0].additions, commits[0].deletions, commits[0].files_changed), (1, 1, 1));
+        // segundo: café (+2) e o rename (0/0) → 2 arquivos.
+        assert_eq!((commits[1].additions, commits[1].files_changed), (2, 2));
+        assert!(commits[2].date.starts_with("agora") || commits[2].date.starts_with("há"));
+    }
+
+    #[test]
+    fn file_and_line_history_and_blame_follow_non_ascii_paths() {
+        let repo = history_repo();
+        let file = repo.file("café é.txt").to_string_lossy().to_string();
+        let history = git_log_file_blocking(repo.root(), file.clone(), 50).unwrap();
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[1].additions, 2);
+        assert_eq!(history[1].files_changed, 1, "numstat restrito ao arquivo");
+
+        let line = git_log_line_blocking(repo.root(), file.clone(), 2, 50).unwrap();
+        assert_eq!(line.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(), ["terceiro", "segundo: rename"]);
+        assert_eq!(line[0].files_changed, 1);
+
+        let blame = git_blame_blocking(repo.root(), file).unwrap();
+        assert_eq!(blame.len(), 3);
+        assert_eq!(blame[1].author, "Bia");
+        assert_eq!(blame[1].subject, "terceiro");
+        assert!(!blame[1].previous_hash.is_empty(), "pai vem do lote de stats");
+        assert_eq!((blame[1].additions, blame[1].deletions), (1, 1));
+        assert_eq!(blame[0].subject, "primeiro");
+        assert!(blame[0].is_current_user);
+    }
+
+    #[test]
+    fn empty_and_non_repo_histories_are_empty_lists() {
+        let repo = TempRepo::new();
+        assert!(git_log_blocking(repo.root(), 30).unwrap().is_empty());
+        assert!(git_graph_blocking(repo.root(), 30).unwrap().is_empty());
+        let plain = tempfile::tempdir().unwrap();
+        let plain = plain.path().to_string_lossy().to_string();
+        assert!(git_log_blocking(plain.clone(), 30).unwrap().is_empty());
+        assert!(git_blame_blocking(plain, "x".into()).unwrap().is_empty());
+    }
+
+    /// Medição (não roda por padrão): `FLUENT_BENCH_REPO=/caminho cargo test
+    /// --lib git::tests::bench_history -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_history() {
+        let root = std::env::var("FLUENT_BENCH_REPO").expect("FLUENT_BENCH_REPO");
+        let t = std::time::Instant::now();
+        // Caminho antigo: log + 2 config + remote + 1 `git show --numstat` por commit.
+        let raw = run_git(&root, &["log", "-30", "--format=%H"]).unwrap();
+        let _ = run_git(&root, &["config", "--get", "user.name"]);
+        let _ = run_git(&root, &["config", "--get", "user.email"]);
+        let _ = run_git(&root, &["remote", "get-url", "origin"]);
+        let mut spawns = 4;
+        for hash in raw.lines() {
+            let _ = run_git(&root, &["show", "--numstat", "--format=%P", hash]);
+            spawns += 1;
+        }
+        let old = t.elapsed();
+        let t = std::time::Instant::now();
+        let commits = git_log_blocking(root.clone(), 30).unwrap();
+        let new = t.elapsed();
+        println!("historico 30 commits: antes {old:?} ({spawns} spawns) / depois {new:?} (2 spawns) — {} commits", commits.len());
+    }
 
     /// Compile-time guard: the git commands Tauri invokes are `async fn`s
     /// (futures), so Tauri runs them on its async runtime — never on the main
