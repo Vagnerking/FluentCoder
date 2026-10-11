@@ -15,6 +15,7 @@ import {
   gitCheckout,
   gitCheckoutRemoteBranch,
   gitCommit,
+  gitCommitFiles,
   gitCompareUpstream,
   gitDiscardAll,
   gitDiscardFile,
@@ -110,7 +111,7 @@ import {
 } from "../git/gitFluent";
 import { GitFluentBranchesView } from "./git/GitFluentBranchesView";
 import { GitFluentCompareView } from "./git/GitFluentCompareView";
-import { GitFluentGraphView } from "./git/GitFluentGraphView";
+import { GitFluentGraphView, type GitCommitFilesState } from "./git/GitFluentGraphView";
 import { GitFluentHistoryView } from "./git/GitFluentHistoryView";
 import { GitFluentContributorsView, GitFluentTagsView } from "./git/GitFluentRefsViews";
 import { GitFluentRemotesView } from "./git/GitFluentRemotesView";
@@ -1016,6 +1017,8 @@ function GitRepositoryPanel({
   // repo-wide `commits` so switching back doesn't refetch the whole log.
   const [fileCommits, setFileCommits] = useState<GitCommit[]>([]);
   const [selectedGraphHash, setSelectedGraphHash] = useState<string | null>(null);
+  // Arquivos por commit para "Mostrar arquivos do commit" / seleção no grafo.
+  const [commitFiles, setCommitFiles] = useState<Record<string, GitCommitFilesState>>({});
   // Right-click context menu over a changed file (issue #9), VS Code-style.
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -1106,7 +1109,17 @@ function GitRepositoryPanel({
     setExpandedStashes(new Set());
     setStashFiles({});
     setStashFilesLoading({});
+    setCommitFiles({});
   }, [connId, rootPath]);
+
+  // A seção "Grafo" carrega ao ser expandida (e no mount, se já estiver
+  // aberta) — antes só carregava por uma aba do Git Fluent que nem existia
+  // mais no painel e ficava em "Nenhum commit carregado no grafo.".
+  useEffect(() => {
+    if (!rootPath || !showGitGraphView || graphCommits.length > 0) return;
+    void loadCommitGraph();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connId, rootPath, showGitGraphView]);
 
   /** Wraps an action with busy state, error capture, and a status refresh. */
   async function act(fn: () => Promise<unknown>) {
@@ -1217,6 +1230,19 @@ function GitRepositoryPanel({
       setError(null);
     } catch (err) {
       setError(String(err));
+    }
+  }
+
+  async function loadCommitFiles(hash: string) {
+    if (!rootPath) return;
+    const current = commitFiles[hash];
+    if (current === "loading" || Array.isArray(current)) return;
+    setCommitFiles((prev) => ({ ...prev, [hash]: "loading" }));
+    try {
+      const files = await gitCommitFiles(rootPath, hash, connId);
+      setCommitFiles((prev) => ({ ...prev, [hash]: files }));
+    } catch (err) {
+      setCommitFiles((prev) => ({ ...prev, [hash]: { error: String(err) } }));
     }
   }
 
@@ -1495,17 +1521,19 @@ function GitRepositoryPanel({
   }
 
   function openGitFluentWorkspace() {
-    setShowGitFluentOverview(true);
-    setActiveGitFluentTab("graph");
+    setShowGitGraphView(true);
+    revealPanelView("graph");
     if (graphCommits.length === 0) void loadCommitGraph();
     if (commits.length === 0) void loadHistory();
   }
 
-  function showCommitInGraph(commit: GitCommit | GitGraphCommit) {
-    setShowGitFluentOverview(true);
-    setActiveGitFluentTab("graph");
+  /** Seleciona um commit na seção "Grafo" (expande e rola até ela). */
+  function showCommitInGraph(commit: Pick<GitCommit, "hash">, withFiles = false) {
+    setShowGitGraphView(true);
     setSelectedGraphHash(commit.hash);
     if (graphCommits.length === 0) void loadCommitGraph();
+    if (withFiles) void loadCommitFiles(commit.hash);
+    revealPanelView("graph");
   }
 
   function showBranchTipInGraph(branch: GitBranchInfo) {
@@ -2006,7 +2034,7 @@ function GitRepositoryPanel({
       id: "show-commit-files",
       label: "Mostrar arquivos do commit",
       icon: "openChanges",
-      run: () => showCommitInGraph(commit),
+      run: () => showCommitInGraph(commit, true),
     },
     menuSeparator("sep-commit-navigation"),
     {
@@ -2339,10 +2367,7 @@ function GitRepositoryPanel({
       id: "show-commit",
       label: "Mostrar no grafo",
       icon: "graph",
-      run: () => {
-        setSelectedGraphHash(tag.commit.hash);
-        selectGitFluentTab("graph");
-      },
+      run: () => showCommitInGraph(tag.commit),
     },
     {
       id: "open-remote",
@@ -2385,10 +2410,7 @@ function GitRepositoryPanel({
       id: "show-latest",
       label: "Mostrar último commit no grafo",
       icon: "graph",
-      run: () => {
-        setSelectedGraphHash(contributor.latestCommit.hash);
-        selectGitFluentTab("graph");
-      },
+      run: () => showCommitInGraph(contributor.latestCommit),
     },
   ];
 
@@ -3061,11 +3083,14 @@ function GitRepositoryPanel({
             <GitFluentGraphView
               rows={gitFluentGraphRows}
               selectedHash={selectedGraphHash}
+              commitFiles={commitFiles}
               rootPath={repoRootPath}
               connId={connId}
-              onToggleCommit={(hash) =>
-                setSelectedGraphHash((current) => (current === hash ? null : hash))
-              }
+              onToggleCommit={(hash) => {
+                const next = selectedGraphHash === hash ? null : hash;
+                setSelectedGraphHash(next);
+                if (next) void loadCommitFiles(next);
+              }}
               onOpenCommitMenu={(event, commit) => openFileMenu(event, commitContextMenu(commit))}
               onOpenFile={onOpenFile}
               onOpenRevisionDiff={onOpenRevisionDiff}
@@ -3112,12 +3137,12 @@ function GitRepositoryPanel({
               <GitFluentHistoryView
                 commits={activeHistoryCommits}
                 scope={historyScope}
-                onSelectCommit={(commit) => {
-                  setSelectedGraphHash(commit.hash);
-                  setActiveGitFluentTab("graph");
-                }}
+                onSelectCommit={(commit) => showCommitInGraph(commit, true)}
                 onOpenCommitMenu={(event, commit) => openFileMenu(event, commitContextMenu(commit))}
-                onOpenGraph={() => selectGitFluentTab("graph")}
+                onOpenGraph={() => {
+                  setShowGitGraphView(true);
+                  revealPanelView("graph");
+                }}
               />
             )}
             {gitFluentPaneActiveTab === "branches" && (
@@ -3151,20 +3176,14 @@ function GitRepositoryPanel({
             {gitFluentPaneActiveTab === "tags" && (
               <GitFluentTagsView
                 tags={gitFluentTags}
-                onSelectTag={(tag) => {
-                  setSelectedGraphHash(tag.commit.hash);
-                  selectGitFluentTab("graph");
-                }}
+                onSelectTag={(tag) => showCommitInGraph(tag.commit)}
                 onOpenTagMenu={(event, tag) => openFileMenu(event, tagContextMenu(tag))}
               />
             )}
             {gitFluentPaneActiveTab === "contributors" && (
               <GitFluentContributorsView
                 contributors={gitFluentContributors}
-                onSelectContributor={(contributor) => {
-                  setSelectedGraphHash(contributor.latestCommit.hash);
-                  selectGitFluentTab("graph");
-                }}
+                onSelectContributor={(contributor) => showCommitInGraph(contributor.latestCommit)}
                 onOpenContributorMenu={(event, contributor) => openFileMenu(event, contributorContextMenu(contributor))}
               />
             )}

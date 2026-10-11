@@ -289,6 +289,74 @@
 
 }
 
+/* Linha + (opcional) arquivos do commit selecionado. */
+.git-fluent-graph-entry {
+  display: grid;
+  min-width: 0;
+}
+
+/* "Mostrar arquivos do commit": lista sob o commit selecionado. */
+.git-graph-commit-files {
+  display: grid;
+  gap: 1px;
+  margin: 0 0 4px 28px;
+  padding: 2px 0;
+  list-style: none;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.git-graph-commit-files.is-empty {
+  padding: 4px 8px;
+  color: var(--text-muted);
+  font-size: var(--font-caption);
+}
+
+.git-graph-commit-files.is-error { color: var(--error, #ff9aa8); }
+
+.git-graph-commit-file {
+  display: grid;
+  grid-template-columns: 18px minmax(0, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--font-caption);
+  text-align: left;
+  cursor: pointer;
+}
+
+.git-graph-commit-file:hover { background: var(--hover, rgba(255, 255, 255, 0.05)); }
+.git-graph-commit-file:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+
+.git-graph-commit-file .git-commit-file-status {
+  width: 16px;
+  text-align: center;
+}
+
+.git-graph-commit-file-name,
+.git-graph-commit-file-dir {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-graph-commit-file-dir { color: var(--text-muted); }
+
+.git-graph-commit-file-stats {
+  display: inline-flex;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.git-graph-commit-file-stats .add { color: #8fe0ad; }
+.git-graph-commit-file-stats .del { color: #ff9aa8; }
+
 @container (max-width: 430px) {
   .git-fluent-toolbar-actions {
     margin-left: 1px;

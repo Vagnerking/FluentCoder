@@ -194,10 +194,35 @@ test("organiza abas do Git Fluent em grupos estáveis", () => {
   );
 });
 
-test("monta linhas do grafo com HEAD sintético e lanes por pais", () => {
+test("HEAD vem das refs do commit, não da posição; sem rótulo HEAD sintético", () => {
+  // Com --topo-order sobre todas as refs, a linha 0 é o commit mais novo de
+  // QUALQUER branch (aqui: feat/x), não o HEAD.
   const rows = buildGitFluentGraphRows(
     [
-      commit("m1", ["a1", "b1"]),
+      { ...commit("f2", ["f1"]), refs: ["feat/x"] },
+      { ...commit("f1", ["m1"]), refs: [] },
+      { ...commit("m1", ["m0"]), refs: ["HEAD -> main", "origin/main"] },
+      { ...commit("m0", []), refs: [] },
+    ],
+    "main"
+  );
+  assert.deepEqual(
+    rows.map((row) => [row.commit.hash, row.isHead, row.refs]),
+    [
+      ["f2", false, ["feat/x"]],
+      ["f1", false, []],
+      ["m1", true, ["HEAD -> main", "origin/main"]],
+      ["m0", false, []],
+    ]
+  );
+  const detached = buildGitFluentGraphRows([{ ...commit("d1", []), refs: ["HEAD", "tag: v1"] }]);
+  assert.equal(detached[0].isHead, true);
+});
+
+test("monta linhas do grafo com lanes por pais", () => {
+  const rows = buildGitFluentGraphRows(
+    [
+      { ...commit("m1", ["a1", "b1"]), refs: ["HEAD -> main"] },
       commit("a1", ["a0"]),
       commit("b1", ["b0"]),
       commit("a0", []),

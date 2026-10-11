@@ -12,7 +12,8 @@ import {
   type MouseEvent,
 } from "react";
 import type { GitRevisionDiffTarget } from "../../api";
-import type { GitGraphCommit } from "../../types";
+import type { GitCommitFile, GitGraphCommit } from "../../types";
+import { commitFileStatusClass, fileName, joinRepoPath } from "../../git/gitUi";
 import type { GitFluentGraphRow } from "../../git/gitFluent";
 import {
   filterGitFluentGraphRows,
@@ -24,9 +25,14 @@ import {
 import { Codicon } from "../../icons/codicons/Codicon";
 import { GitFluentFilterInput } from "./GitFluentFilterInput";
 
+/** Arquivos de um commit: carregando, lista ou erro. */
+export type GitCommitFilesState = "loading" | GitCommitFile[] | { error: string };
+
 interface GitFluentGraphViewProps {
   rows: GitFluentGraphRow[];
   selectedHash: string | null;
+  /** Arquivos por hash (`gitCommitFiles`), mostrados sob o commit selecionado. */
+  commitFiles?: Record<string, GitCommitFilesState>;
   rootPath: string;
   connId?: string;
   onToggleCommit: (hash: string) => void;
@@ -45,8 +51,13 @@ interface GitFluentGraphViewProps {
 export function GitFluentGraphView({
   rows,
   selectedHash,
+  commitFiles,
+  rootPath,
+  connId,
   onToggleCommit,
   onOpenCommitMenu,
+  onOpenFile,
+  onOpenRevisionDiff,
 }: GitFluentGraphViewProps) {
   const [query, setQuery] = useState("");
   const [visibleLimit, setVisibleLimit] = useState(40);
@@ -93,15 +104,30 @@ export function GitFluentGraphView({
           {renderedRows.length === 0 ? (
             <div className="git-fluent-empty">Nenhum commit encontrado para "{trimmedQuery}".</div>
           ) : null}
-          {renderedRows.map((row) => (
-            <GitFluentGraphRowItem
-              key={`fluent-graph-${row.commit.hash}`}
-              row={row}
-              selected={selectedHash === row.commit.hash}
-              onToggleCommit={handleToggleCommit}
-              onOpenCommitMenu={handleOpenCommitMenu}
-            />
-          ))}
+          {renderedRows.map((row) => {
+            const selected = selectedHash === row.commit.hash;
+            const files = selected ? commitFiles?.[row.commit.hash] : undefined;
+            return (
+              <div key={`fluent-graph-${row.commit.hash}`} className="git-fluent-graph-entry">
+                <GitFluentGraphRowItem
+                  row={row}
+                  selected={selected}
+                  onToggleCommit={handleToggleCommit}
+                  onOpenCommitMenu={handleOpenCommitMenu}
+                />
+                {files !== undefined && (
+                  <GitCommitFilesList
+                    commit={row.commit}
+                    files={files}
+                    rootPath={rootPath}
+                    connId={connId}
+                    onOpenFile={onOpenFile}
+                    onOpenRevisionDiff={onOpenRevisionDiff}
+                  />
+                )}
+              </div>
+            );
+          })}
           {visibleRows.length > renderedRows.length ? (
             <button
               type="button"
@@ -246,3 +272,65 @@ const GitFluentGraphRowItem = memo(function GitFluentGraphRowItem({
     </article>
   );
 });
+
+function GitCommitFilesList({
+  commit,
+  files,
+  rootPath,
+  connId,
+  onOpenFile,
+  onOpenRevisionDiff,
+}: {
+  commit: GitGraphCommit;
+  files: GitCommitFilesState;
+  rootPath: string;
+  connId?: string;
+  onOpenFile: (path: string, name: string) => void;
+  onOpenRevisionDiff?: GitFluentGraphViewProps["onOpenRevisionDiff"];
+}) {
+  if (files === "loading") {
+    return <div className="git-graph-commit-files is-empty">Carregando arquivos…</div>;
+  }
+  if (!Array.isArray(files)) {
+    return <div className="git-graph-commit-files is-empty is-error">{files.error}</div>;
+  }
+  if (files.length === 0) {
+    return <div className="git-graph-commit-files is-empty">Nenhum arquivo alterado neste commit.</div>;
+  }
+  return (
+    <ul className="git-graph-commit-files" aria-label={`Arquivos do commit ${commit.short}`}>
+      {files.map((file) => {
+        const absolutePath = joinRepoPath(rootPath, file.path);
+        const open = () => {
+          if (onOpenRevisionDiff) {
+            onOpenRevisionDiff(absolutePath, commit.hash, commit.short, "previous", rootPath, connId);
+          } else {
+            onOpenFile(absolutePath, fileName(file.path));
+          }
+        };
+        return (
+          <li key={`${commit.hash}:${file.path}`}>
+            <button
+              type="button"
+              className="git-graph-commit-file"
+              title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
+              onClick={open}
+            >
+              <span className={`git-commit-file-status ${commitFileStatusClass(file.status)}`}>
+                {file.status}
+              </span>
+              <span className="git-graph-commit-file-name">{fileName(file.path)}</span>
+              <span className="git-graph-commit-file-dir">
+                {file.path.includes("/") ? file.path.slice(0, file.path.lastIndexOf("/")) : ""}
+              </span>
+              <span className="git-graph-commit-file-stats">
+                {file.additions ? <span className="add">+{file.additions}</span> : null}
+                {file.deletions ? <span className="del">-{file.deletions}</span> : null}
+              </span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}

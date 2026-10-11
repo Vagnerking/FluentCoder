@@ -181,13 +181,25 @@ function graphLaneX(laneIndex: number): number {
   return GRAPH_LANE_BASE_X + Math.min(laneIndex, GRAPH_LANE_MAX_VISIBLE - 1) * GRAPH_LANE_STEP;
 }
 
+/** O commit é o HEAD? Vem das decorações reais (`HEAD -> x` ou `HEAD` destacado). */
+export function isGraphHeadCommit(commit: Pick<GitGraphCommit, "refs">): boolean {
+  return commit.refs.some((ref) => ref === "HEAD" || ref.startsWith("HEAD -> "));
+}
+
+/**
+ * Linhas do grafo. O HEAD é identificado pelas refs do próprio commit — com
+ * `--branches --remotes --tags HEAD --topo-order` a primeira linha é o commit
+ * mais novo de QUALQUER ref, não necessariamente o HEAD. Não se injeta mais um
+ * rótulo `HEAD -> <branch>` falso na linha 0. `_currentBranch` fica só por
+ * compatibilidade de assinatura.
+ */
 export function buildGitFluentGraphRows(
   commits: GitGraphCommit[],
-  currentBranch?: string | null
+  _currentBranch?: string | null
 ): GitFluentGraphRow[] {
   const activeLanes: Array<string | null> = [];
 
-  return commits.map((commit, index) => {
+  return commits.map((commit) => {
     let laneIndex = activeLanes.indexOf(commit.hash);
     if (laneIndex === -1) {
       laneIndex = activeLanes.findIndex((lane) => lane === null);
@@ -252,11 +264,7 @@ export function buildGitFluentGraphRows(
     }
     const lanesAfter = [...activeLanes];
 
-    const refs =
-      index === 0 && currentBranch && !commit.refs.some((ref) => ref.includes(currentBranch))
-        ? [`HEAD -> ${currentBranch}`, ...commit.refs]
-        : commit.refs;
-    const sortedRefs = sortGitFluentGraphRefs(refs);
+    const sortedRefs = sortGitFluentGraphRefs(commit.refs);
     const visualLane = Math.min(laneIndex, 5);
     const visibleIndexes = new Set<number>();
     lanesBefore.forEach((value, lane) => {
@@ -302,7 +310,7 @@ export function buildGitFluentGraphRows(
       lanes,
       connectors,
       color: graphLaneColor(laneIndex),
-      isHead: index === 0,
+      isHead: isGraphHeadCommit(commit),
       isMerge: parents.length > 1,
     };
   });
