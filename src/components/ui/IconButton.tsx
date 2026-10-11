@@ -19,6 +19,12 @@ export interface IconButtonProps
   pressed?: boolean;
   /** Spins the glyph (busy feedback, e.g. a refresh in flight). */
   spin?: boolean;
+  /**
+   * Imagem (data URI do ícone de uma extensão) no lugar do codicon, pintada
+   * como máscara na cor do texto (como os codicons). `icon` segue como
+   * fallback semântico.
+   */
+  image?: string;
   /** Tooltip side. Defaults to "top". */
   tooltipPlacement?: "top" | "bottom" | "left" | "right";
 }
@@ -37,6 +43,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
       pressed,
       tooltipPlacement = "top",
       spin,
+      image,
       className,
       type = "button",
       ...rest
@@ -53,7 +60,15 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
           aria-pressed={pressed}
           {...rest}
         >
-          <Codicon name={icon} spin={spin} className="ui-icon-button-icon" />
+          {image ? (
+            <span
+              aria-hidden="true"
+              className="ui-icon-button-icon ui-icon-button-img"
+              style={{ WebkitMaskImage: `url("${image.replace(/"/g, "%22")}")`, maskImage: `url("${image.replace(/"/g, "%22")}")` }}
+            />
+          ) : (
+            <Codicon name={icon} spin={spin} className="ui-icon-button-icon" />
+          )}
         </button>
       </Tooltip>
     );

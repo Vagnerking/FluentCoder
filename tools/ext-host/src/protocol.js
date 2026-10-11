@@ -45,6 +45,7 @@ const SCHEMAS = {
   respond: (p) => isObj(p) && isNum(p.requestId),
   executeCommand: (p) => isObj(p) && isStr(p.command, 512) && (p.args === undefined || Array.isArray(p.args)),
   listCommands: () => true,
+  evaluateWhen: (p) => isObj(p) && arr(p.exprs, (e) => e === null || isStr(e, 2048), 64),
   runKeybinding: (p) => isObj(p) && isStr(p.key, 64) && (p.context === undefined || isObj(p.context)),
   shutdown: () => true,
   // Espelho do editor (Monaco → host)

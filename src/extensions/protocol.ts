@@ -47,6 +47,16 @@ export interface InstalledExtension {
   keybindings?: ContributedKeybinding[];
   /** Ícone do contêiner da view (data URI SVG/PNG do pacote), se houver. */
   icon?: string;
+  /** Botões `editor/title` (grupo navigation) contribuídos, sem os de diff. */
+  editorTitle?: ContributedEditorTitleAction[];
+}
+
+export interface ContributedEditorTitleAction {
+  command: string;
+  title: string;
+  when?: string;
+  /** `src` = data URI do ícone do pacote; `codicon` = `$(nome)`. */
+  icon?: { src: string } | { codicon: string };
 }
 
 export interface LoadedExtension {

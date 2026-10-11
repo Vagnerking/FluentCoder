@@ -272,6 +272,7 @@ export function EditorGroupView(props: EditorGroupViewProps) {
           <EditorActions
             ctx={actionCtx}
             actions={editorActions}
+            maxPrimary={5}
             moreItems={[
               {
                 id: "split-down",

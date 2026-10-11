@@ -66,7 +66,7 @@ respostas); respostas `{id, result|error}`; eventos `{event, …}`.
 | ciclo de vida | `initialize` (workspaceFolders, dataDir, language, `secrets: "keyring"`, debugWebviews), `listInstalled`, `loadExtension`, `activate`, `shutdown` |
 | webviews | `resolveView`, `webviewMessage`, `webviewState`, `webviewVisible`, `webviewUrl`, `disposeWebview`, `setTheme`, `restoreWebviewPanels` (painéis da sessão anterior) |
 | editor | `documentOpened`, `documentChanged` (mudanças incrementais 0-based + versão + dirty + undo/redo), `documentClosed`, `documentSaved`, `editorsChanged` (ativo, visíveis, abas), `selectionChanged`, `visibleRangesChanged`, `diagnostics`, `windowState` |
-| ações | `executeCommand`, `listCommands`, `runKeybinding`, `diffAction` (accept/reject + texto final), `diffEdited` (texto do lado direito editado na revisão), `diffClosed`, `terminalOpened` (pid, `shellIntegration` pedida; cols/rows no pseudoterminal), `terminalShell` (OSC 633: ready/cwd/start/data/end), `terminalInput`/`terminalResize` (pseudoterminal), `terminalClosed` (exitCode), `handleUri`, `provideCodeLenses`, `executeCodeLens`, `cancelProgress`, `respond`, `setWorkspaceFolders` |
+| ações | `executeCommand`, `listCommands`, `evaluateWhen` (lista de `when` → booleanos, best effort), `runKeybinding`, `diffAction` (accept/reject + texto final), `diffEdited` (texto do lado direito editado na revisão), `diffClosed`, `terminalOpened` (pid, `shellIntegration` pedida; cols/rows no pseudoterminal), `terminalShell` (OSC 633: ready/cwd/start/data/end), `terminalInput`/`terminalResize` (pseudoterminal), `terminalClosed` (exitCode), `handleUri`, `provideCodeLenses`, `executeCodeLens`, `cancelProgress`, `respond`, `setWorkspaceFolders` |
 | comentários | `commentAction` (botão de um thread: só comandos que o thread oferece; com `text` num comentário em edição = corpo novo), `commentReaction`, `commentingRanges`, `commentCreateThread` ("+" numa faixa comentável), `commentDisposeTemplate` (cancelar o rascunho), `commentThreads` (snapshot) |
 | quick input | `quickInputEvent` (value/accept/hide/active/selection/button/itemButton) |
 | painéis | `webviewPanelState` (aba do painel na grade: active/visible/viewColumn) |
@@ -266,6 +266,19 @@ no lado virtual de um diff)/`decorationTypeDisposed`,
 - `revealView` (`<view>.focus`) e `revealWebview` de uma view chegam pelo
   `ExtensionHostRuntime` (`revealExtensionView`) e revelam a view na região
   onde ela estiver.
+- **Ações do título do editor** (como o VS Code): cada extensão liberada com
+  view ganha um botão na barra de ações do editor, com o ícone dela
+  ("Mostrar Claude Code", "Mostrar Codex") — revela a view onde ela estiver.
+  Os comandos `menus.editor/title` do grupo `navigation` (vindos no
+  descritor como `editorTitle`, sem os de aceitar/rejeitar diff) entram assim:
+  os de "abrir a sidebar" (ex.: `chatgpt.openSidebar`) rodam junto com o
+  botão; os demais (ex.: `claude-vscode.editor.openLast` "Claude Code: Open")
+  vão para "Mais ações". O `when` de cada um é avaliado no host
+  (`evaluateWhen`: `config.*`, `setContext`…) e reavaliado em
+  `context`/`extensionActivated`; sem host, só entram os sem `when`.
+  Planejamento puro em `editorTitleActions.ts`; registro em
+  `useExtensionEditorActions`. Ícones: SVG/PNG do pacote (≤ 64 KB, dentro da
+  pasta da extensão) como data URI, desenhados como máscara.
 - **Painéis** (`createWebviewPanel`, custom editors via `vscode.openWith`)
   são **abas reais da grade de editores** (`webviewTabs.ts`,
   `ExtensionWebviewTab`, `mode: "webview"` no `OpenFile`): `viewColumn` N =
@@ -538,7 +551,8 @@ no VS Code. Sem as sequências em 2,5 s (outro shell) → integração simulada
   ("Claude Code", "Codex"…), em lote a cada 250 ms (teto de 256 KB por janela).
 - `contributes`: comandos (Paleta), `configuration` (defaults + padrões do
   core como `files.autoSave`), `keybindings` (best effort: no editor só os de
-  `editorTextFocus`; no webview, todos), `menus.editor/title` (diff),
+  `editorTextFocus`; no webview, todos), `menus.editor/title` (diff + botões
+  do título do editor),
   `views`/`viewsContainers` (metadados). Itens de barra de status
   (`createStatusBarItem`, `setStatusBarMessage`, `withProgress`) aparecem na
   barra do app, com `$(ícone)`, comando e Tooltip. Os comandos contribuídos

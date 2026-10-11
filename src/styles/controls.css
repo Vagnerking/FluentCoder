@@ -148,6 +148,20 @@
   font-size: var(--icon-md);
 }
 
+/* Ícone de extensão (data URI) como máscara na cor do texto. */
+.ui-icon-button-img {
+  display: inline-block;
+  width: var(--icon-md);
+  height: var(--icon-md);
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
 .ui-icon-button:hover:not(:disabled) {
   background: var(--fill-subtle-hover);
   color: var(--text);

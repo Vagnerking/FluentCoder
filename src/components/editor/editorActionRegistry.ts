@@ -25,6 +25,8 @@ export interface EditorActionItem {
   menu?: (ctx: EditorActionContext) => readonly MenuItemSpec[];
   /** Visível só quando true (padrão: sempre). */
   when?: (ctx: EditorActionContext) => boolean;
+  /** Ícone de extensão (data URI) no lugar do codicon (máscara monocromática); `icon` vale nos menus. */
+  iconImage?: string;
   /** Toggle ligado (aria-pressed + preenchimento selecionado). */
   pressed?: (ctx: EditorActionContext) => boolean;
   /** `primary` = ícone na barra; `overflow` = só no menu "Mais ações". */

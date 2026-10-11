@@ -75,6 +75,7 @@ export function EditorActions({ ctx, actions, moreItems = [], maxPrimary = 4 }: 
         <IconButton
           key={item.id}
           icon={item.icon}
+          image={item.iconImage}
           label={item.label}
           size="sm"
           tooltipPlacement="bottom"

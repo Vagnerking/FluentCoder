@@ -52,6 +52,7 @@ import { TerminalsView, type PanelTab } from "./components/TerminalPanel";
 import { ProblemsPanel } from "./components/ProblemsPanel";
 import { OutputPanel } from "./components/OutputPanel";
 import { IconButton } from "./components/ui/IconButton";
+import { registerEditorAction } from "./components/editor/EditorActions";
 import { Menu } from "./components/ui/Menu";
 import { useViewLayoutController, WorkbenchViewsProvider } from "./workbench/WorkbenchViews";
 import { ViewContainer } from "./workbench/ViewContainer";
@@ -91,6 +92,7 @@ import {
   ExtensionHostRuntime,
   ExtensionStatusItems,
   extensionPaletteCommands,
+  useExtensionEditorActions,
   restartExtensionHost,
   useExtensionDiffs,
   bindExtDiffEditor,
@@ -6017,6 +6019,32 @@ export default function App() {
   // Views de extensão (Claude Code, Codex…): uma view independente por
   // extensão; o iframe vive na ExtensionWebviewLayer (mover não recarrega).
   const extensionViews = useExtensionViews(rootPath);
+  // Título do editor: botões Claude Code/Codex (ícones deles) que revelam a
+  // view onde ela estiver + comandos `editor/title` contribuídos (when no host).
+  useExtensionEditorActions(extensionViews.installed, {
+    reveal: revealView,
+    onError: (message) => alert(`Falha ao executar o comando da extensão:\n${message}`),
+  });
+  // "Adicionar ao contexto do chat": arquivo (ou seleção) do editor ativo →
+  // chip no composer do Fluent Chat, revelado onde a view estiver.
+  const revealFluentChatRef = useRef(revealFluentChat);
+  revealFluentChatRef.current = revealFluentChat;
+  useEffect(
+    () =>
+      registerEditorAction({
+        id: "chat-add-context",
+        icon: "attachContext",
+        label: "Adicionar ao contexto do chat",
+        group: "primary",
+        order: 30,
+        when: ({ file }) => !!file && !isVirtualTab(file.path) && (file.mode ?? "text") === "text",
+        run: () => {
+          const selection = editorActionsRef.current?.getSelection() ?? null;
+          revealFluentChatRef.current((v) => v.attach(selection?.text ? "selection" : "activeFile"));
+        },
+      }),
+    []
+  );
   /** Menu de contexto de um ícone da activity bar ("Mover para…"). */
   const [activityMenu, setActivityMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   // Views "convidadas" da primária (movidas para lá, sem ícone fixo): ganham

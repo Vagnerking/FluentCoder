@@ -145,6 +145,29 @@ function viewIcon(pkg, extPath) {
   return iconDataUri(extPath, pkg.icon);
 }
 
+/**
+ * Botões `editor/title` (grupo `navigation`) contribuídos, com título e ícone
+ * do comando. Os de aceitar/rejeitar diff ficam de fora: a revisão de diff do
+ * app já os chama (host.diffAction).
+ */
+function editorTitleActions(pkg, extPath, contributions) {
+  const raw = new Map(((pkg.contributes && pkg.contributes.commands) || []).filter((c) => c && typeof c.command === 'string').map((c) => [c.command, c]));
+  const titles = new Map(contributions.commands.map((c) => [c.command, c]));
+  return contributions.editorTitle
+    .filter((m) => String(m.group || '').startsWith('navigation') && !/(accept|reject)ProposedDiff$/i.test(m.command))
+    .map((m) => {
+      const c = titles.get(m.command);
+      if (!c) return null;
+      return {
+        command: m.command,
+        title: c.category ? `${c.category}: ${c.title}` : c.title,
+        when: m.when,
+        icon: iconSpec(extPath, (raw.get(m.command) || {}).icon),
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 8);
+}
 
 function wantsStartup(pkg) {
   const ev = Array.isArray(pkg.activationEvents) ? pkg.activationEvents : [];
@@ -181,6 +204,7 @@ function describe(pkg, extPath, source, index) {
     info.commands = c.commands.filter((x) => !x.hidden).map(({ command, title, category, paletteWhen }) => ({ command, title, category, paletteWhen }));
     info.keybindings = c.keybindings;
     info.icon = viewIcon(pkg, extPath);
+    info.editorTitle = editorTitleActions(pkg, extPath, c);
   }
   return info;
 }
@@ -258,4 +282,4 @@ function listInstalled(opts = {}) {
   return [...best.values()].sort((a, b) => Number(b.supported) - Number(a.supported) || a.id.localeCompare(b.id));
 }
 
-module.exports = { listInstalled, compareVersions, SUPPORTED, BUILTIN, extensionDirs, managedDir, platformTag, readIndex, gateAllows, iconDataUri, iconSpec };
+module.exports = { listInstalled, compareVersions, SUPPORTED, BUILTIN, extensionDirs, managedDir, platformTag, readIndex, gateAllows, iconDataUri, iconSpec, editorTitleActions };

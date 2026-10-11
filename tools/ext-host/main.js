@@ -198,6 +198,18 @@ const handlers = {
   listCommands() {
     return host.contributedCommands();
   },
+  // `when` de contribuições (ex.: botões editor/title) avaliado com o contexto
+  // do host (config.*, setContext, foco publicado pelo app). Best effort.
+  evaluateWhen(p) {
+    return p.exprs.map((e) => {
+      if (!e) return true;
+      try {
+        return !!host.evaluateWhen(e);
+      } catch {
+        return false;
+      }
+    });
+  },
   runKeybinding(p) {
     return host.runKeybinding(p.key, p.context);
   },

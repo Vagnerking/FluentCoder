@@ -34,6 +34,7 @@ import type { HostEvent, InstalledExtension, WebviewInfo } from "./protocol";
 
 export { ExtensionView, ExtensionWebviewLayer } from "./ExtensionView";
 export { useExtensionViews, type ExtensionViewsModel, type ExtensionViewState } from "./useExtensionViews";
+export { useExtensionEditorActions } from "./useExtensionEditorActions";
 export { ExtensionWebview } from "./ExtensionWebview";
 export { ExtensionHostRuntime, type ExtensionHostRuntimeProps } from "./ExtensionHostRuntime";
 export { ExtensionStatusItems } from "./ExtensionStatusItems";
@@ -51,7 +52,7 @@ export function disposeWebviewTab(handle: string): void {
   void extHost.notify("disposeWebview", { handle });
 }
 export { OUTPUT_CHANNEL as EXTENSIONS_OUTPUT_CHANNEL } from "./client";
-export type { HostEvent, InstalledExtension, WebviewInfo } from "./protocol";
+export type { ContributedEditorTitleAction, HostEvent, InstalledExtension, WebviewInfo } from "./protocol";
 
 export async function listHostedExtensions(rootPath: string | null): Promise<InstalledExtension[]> {
   const r = await extHost.ensureStarted(rootPath);
