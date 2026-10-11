@@ -30,8 +30,11 @@ import "./styles/workbench.css";
 import "./styles/extensions.css";
 import "./styles/views.css";
 import "./styles/view-pane.css";
+import "./styles/settings.css";
 import "./theme/acrylic.css";
 import { applyAcrylicFlyouts } from "./theme/acrylic";
+import { bootSettings } from "./settings/bootstrap";
+import { installWorkbenchSettings } from "./settings/applyWorkbench";
 import { getPlatform } from "./platform/os";
 import { installNativeDragGuard } from "./workbench/workbenchDrag";
 
@@ -64,11 +67,33 @@ installNativeDragGuard();
 // workbench (no session restore, no LSP manager, etc.).
 const detachToken = readDetachToken();
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    {detachToken ? <DetachedEditor token={detachToken} /> : <App />}
-  </React.StrictMode>
-);
+// Configurações (User settings.json + workspace): carregadas ANTES do 1º render
+// para o layout (lado da sidebar, zoom, fonte) já nascer certo — com teto, para
+// um disco lento nunca segurar a janela (até lá valem os defaults).
+const settingsReady = Promise.race([
+  bootSettings(),
+  new Promise<void>((resolve) => setTimeout(resolve, 1500)),
+]);
+installWorkbenchSettings();
+
+void settingsReady.then(() => {
+  // A preferência de acrílico vem das settings.
+  applyAcrylicFlyouts();
+  ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+    <React.StrictMode>
+      {detachToken ? <DetachedEditor token={detachToken} /> : <App />}
+    </React.StrictMode>
+  );
+  if (!detachToken) {
+    void revealPaintedWindow().catch((error) => {
+      console.error("Falha ao exibir a janela inicializada:", error);
+      const current = getCurrentWindow();
+      void current.show().then(() => current.setFocus()).catch((fallbackError) => {
+        console.error("Falha no fallback de exibição da janela:", fallbackError);
+      });
+    });
+  }
+});
 
 async function revealPaintedWindow() {
   // One frame lets React commit the shell while keeping warm-window startup
@@ -77,12 +102,3 @@ async function revealPaintedWindow() {
   await invoke("window_ready");
 }
 
-if (!detachToken) {
-  void revealPaintedWindow().catch((error) => {
-    console.error("Falha ao exibir a janela inicializada:", error);
-    const current = getCurrentWindow();
-    void current.show().then(() => current.setFocus()).catch((fallbackError) => {
-      console.error("Falha no fallback de exibição da janela:", fallbackError);
-    });
-  });
-}

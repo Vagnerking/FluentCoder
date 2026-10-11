@@ -1,6 +1,5 @@
 /**
- * Regras do índice do Quick Open (Ctrl+P), no mesmo idioma `localStorage` de
- * `filesExclude.ts` até existir o sistema de settings:
+ * Regras do índice do Quick Open (Ctrl+P), lidas do sistema de settings:
  *
  * - `search.exclude` (objeto `{ glob: boolean }`, como no VS Code), mesclado
  *   sobre os defaults do VS Code;
@@ -9,7 +8,8 @@
  *   bater no teto o Quick Open AVISA — nunca corta em silêncio.
  */
 
-import { getFilesExcludeGlobs } from "./filesExclude.ts";
+import { booleanGlobMap, getFilesExcludeGlobs } from "./filesExclude.ts";
+import { settings } from "./instance.ts";
 
 export const SEARCH_EXCLUDE_KEY = "search.exclude";
 export const QUICK_OPEN_MAX_FILES_KEY = "fluent.quickOpen.maxFiles";
@@ -23,44 +23,20 @@ export const DEFAULT_SEARCH_EXCLUDE: Record<string, boolean> = {
 
 export const DEFAULT_QUICK_OPEN_MAX_FILES = 50_000;
 
-function storage(): Storage | null {
-  try {
-    return typeof localStorage === "undefined" ? null : localStorage;
-  } catch {
-    return null;
-  }
-}
-
-export function getSearchExcludeMap(): Record<string, boolean> {
-  const merged = { ...DEFAULT_SEARCH_EXCLUDE };
-  try {
-    const raw = storage()?.getItem(SEARCH_EXCLUDE_KEY);
-    if (!raw) return merged;
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return merged;
-    for (const [glob, on] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof on === "boolean") merged[glob] = on;
-    }
-  } catch {
-    /* valor malformado: defaults */
-  }
-  return merged;
+export function getSearchExcludeMap(resource?: string | null): Record<string, boolean> {
+  return booleanGlobMap(settings.get(SEARCH_EXCLUDE_KEY, { resource }), DEFAULT_SEARCH_EXCLUDE);
 }
 
 /** `files.exclude` + `search.exclude` ativos, sem duplicatas. */
-export function getQuickOpenExcludeGlobs(): string[] {
-  const search = Object.entries(getSearchExcludeMap())
+export function getQuickOpenExcludeGlobs(resource?: string | null): string[] {
+  const search = Object.entries(getSearchExcludeMap(resource))
     .filter(([, on]) => on)
     .map(([g]) => g);
-  return [...new Set([...getFilesExcludeGlobs(), ...search])];
+  return [...new Set([...getFilesExcludeGlobs(resource), ...search])];
 }
 
 export function getQuickOpenMaxFiles(): number {
-  try {
-    const n = Number(storage()?.getItem(QUICK_OPEN_MAX_FILES_KEY));
-    if (Number.isFinite(n) && n > 0) return Math.floor(n);
-  } catch {
-    /* ignora */
-  }
+  const n = Number(settings.get(QUICK_OPEN_MAX_FILES_KEY));
+  if (Number.isFinite(n) && n > 0) return Math.floor(n);
   return DEFAULT_QUICK_OPEN_MAX_FILES;
 }

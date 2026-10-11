@@ -1,0 +1,133 @@
+/* ==========================================================================
+   Configurações — efeitos das settings no workbench (atributos `data-*` do
+   <html>, aplicados por src/settings/applyWorkbench.ts) e a tela de
+   Configurações / Atalhos de Teclado (src/components/settings/).
+   ========================================================================== */
+
+/* ---- Fonte da interface (fluent.ui.fontSize / fontFamily) ---- */
+html[data-ui-font] body {
+  font-size: var(--font-base);
+  line-height: var(--line-height-base);
+}
+
+/* ---- Acessibilidade ---- */
+html[data-reduce-motion] *,
+html[data-reduce-motion] *::before,
+html[data-reduce-motion] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+html[data-high-contrast] {
+  --text-secondary: #ffffff;
+  --text-muted: rgba(255, 255, 255, 0.86);
+  --border-subtle: rgba(255, 255, 255, 0.42);
+  --stroke: rgba(255, 255, 255, 0.36);
+  --acrylic-border: rgba(255, 255, 255, 0.5);
+  --acrylic-border-strong: rgba(255, 255, 255, 0.7);
+  --fill-selected: rgba(96, 205, 255, 0.32);
+  --fill-selected-hover: rgba(96, 205, 255, 0.4);
+  --stroke-focus: #ffff00;
+}
+
+html[data-focus-outline] {
+  --focus-ring-width: 3px;
+}
+
+html[data-reduce-transparency] {
+  --shell-bg: var(--shell-bg-solid);
+  --acrylic-tint: #1f2630;
+  --acrylic-tint-strong: #1c222b;
+  --titlebar-bg: #191f28;
+  --tabbar-bg: #232b36;
+}
+
+/* ---- Densidade (fluent.ui.density) ---- */
+html[data-density="compact"] .tree-row {
+  height: 22px;
+}
+
+html[data-density="compact"] .tab {
+  height: 24px;
+}
+
+html[data-density="compact"] .tab-bar {
+  height: 30px;
+  min-height: 30px;
+}
+
+html[data-density="spacious"] .tree-row {
+  height: 32px;
+}
+
+html[data-density="spacious"] .tab {
+  height: 32px;
+}
+
+html[data-density="spacious"] .tab-bar {
+  height: 40px;
+  min-height: 40px;
+}
+
+/* ---- Barra de status (workbench.statusBar.visible) ---- */
+html[data-statusbar="hidden"] .status-bar {
+  display: none;
+}
+
+/* ---- Abas (workbench.editor.*) ---- */
+html[data-show-tabs="none"] .tab-bar-wrap {
+  display: none;
+}
+
+html[data-show-tabs="single"] .tab:not(.active) {
+  display: none;
+}
+
+html[data-tab-close="left"] .tab {
+  padding: 0 10px 0 var(--space-xs);
+}
+
+html[data-tab-close="left"] .tab-close {
+  order: -1;
+}
+
+html[data-tab-sizing="shrink"] .tab {
+  flex: 0 1 auto;
+  min-width: 72px;
+}
+
+html[data-tab-sizing="shrink"] .tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+html[data-tab-sizing="fixed"] .tab {
+  flex: 0 0 160px;
+  width: 160px;
+}
+
+html[data-tab-sizing="fixed"] .tab-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+html[data-tabs-wrap] .tab-bar {
+  flex-wrap: wrap;
+  height: auto;
+  overflow: visible;
+  padding-block: var(--space-xxs);
+  row-gap: var(--space-xxs);
+}
+
+html[data-highlight-modified] .tab:has(.tab-close.dirty)::before {
+  content: "";
+  position: absolute;
+  inset: 0 var(--space-xs) auto;
+  height: 2px;
+  border-radius: var(--radius-xs);
+  background: var(--color-git-modified);
+}

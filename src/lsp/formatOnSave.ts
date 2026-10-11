@@ -7,7 +7,8 @@
  * `editor.action.formatDocument` action, with zero extra LSP plumbing here.
  *
  * Scope (documented behavior):
- *  - Applies to the languages in {@link FORMATTABLE_LANGUAGES} only.
+ *  - Applies to any language whose `editor.formatOnSave` (setting, per
+ *    language) is on and that has a formatting provider.
  *  - Requires an ATTACHED editor (the active/visible tab). Background "save all"
  *    flows (close window / switch folder) write as-is — formatting a model with
  *    no editor is not supported by Monaco's action surface, and blocking a bulk
@@ -15,42 +16,28 @@
  *  - NEVER blocks or fails a save: any error/timeout falls back to saving the
  *    unformatted content.
  *
- * Follows the codebase's `localStorage` boolean-flag idiom (see
- * `razorProjectionFlag.ts`); flipping the flag needs no reload — it is read at
- * every save.
+ * Read from the settings system at every save — flipping it needs no reload.
  */
 import * as monaco from "monaco-editor";
 import { toFileUri } from "./uri";
 import { lspLog } from "./debug";
+import { settings } from "../settings/instance";
 
+/** Setting `editor.formatOnSave` (por linguagem: `"[csharp]": {…}`). */
 export const FORMAT_ON_SAVE_KEY = "editor.formatOnSave";
-
-/** Languages whose LSP formatting is wired and trusted for on-save runs. */
-const FORMATTABLE_LANGUAGES = new Set(["csharp"]);
 
 /** A save must never hang on a slow/stuck formatter. */
 const FORMAT_TIMEOUT_MS = 2000;
 
-/** True when saves should format first. Defaults to false; safe without DOM. */
-export function isFormatOnSaveEnabled(): boolean {
-  try {
-    return (
-      typeof localStorage !== "undefined" &&
-      localStorage.getItem(FORMAT_ON_SAVE_KEY) === "1"
-    );
-  } catch {
-    return false;
-  }
+/** True when saves should format first (setting `editor.formatOnSave`). */
+export function isFormatOnSaveEnabled(languageId?: string | null, resource?: string | null): boolean {
+  return settings.get<boolean>(FORMAT_ON_SAVE_KEY, { languageId, resource }) === true;
 }
 
-/** Flip the flag; returns the new state. */
+/** Flip the user setting; returns the new state. */
 export function toggleFormatOnSave(): boolean {
   const next = !isFormatOnSaveEnabled();
-  try {
-    localStorage.setItem(FORMAT_ON_SAVE_KEY, next ? "1" : "0");
-  } catch {
-    /* storage unavailable — stays off */
-  }
+  void settings.update(FORMAT_ON_SAVE_KEY, next, "user").catch(() => {});
   return next;
 }
 
@@ -61,10 +48,9 @@ export function toggleFormatOnSave(): boolean {
  * The caller saves `null` ⇒ the original content — a save never breaks here.
  */
 export async function formatModelForSave(path: string): Promise<string | null> {
-  if (!isFormatOnSaveEnabled()) return null;
   const model = monaco.editor.getModel(monaco.Uri.parse(toFileUri(path)));
   if (!model || model.isDisposed()) return null;
-  if (!FORMATTABLE_LANGUAGES.has(model.getLanguageId())) return null;
+  if (!isFormatOnSaveEnabled(model.getLanguageId(), path)) return null;
   const editor = monaco.editor.getEditors().find((e) => e.getModel() === model);
   if (!editor) return null; // background tab — save as-is (see module docs)
   const action = editor.getAction("editor.action.formatDocument");

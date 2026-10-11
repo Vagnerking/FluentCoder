@@ -66,8 +66,8 @@ import { QuickOpen } from "./components/QuickOpen";
 import { SymbolSearch } from "./components/SymbolSearch";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import {
-  RAZOR_PROJECTION_FLAG_KEY,
   isRazorProjectionEnabled,
+  setRazorProjectionEnabled,
 } from "./lsp/razorProjectionFlag";
 import {
   formatModelForSave,
@@ -293,6 +293,9 @@ import { useWorkbenchDrag } from "./workbench/useWorkbenchDrag";
 import { diffSideLabel, diffTabName } from "./editor/openRouting";
 import { openTabInList, setTabPinned, tabsKeptAfterClose } from "./components/editor/tabLogic";
 import type { BreadcrumbRoot } from "./editor/breadcrumbs";
+import { settings } from "./settings/instance";
+import { useSetting, useSyncedSetting } from "./settings/react";
+import { useWorkspaceSettingsSync } from "./settings/useWorkspaceSettingsSync";
 
 /** Abas nativas do Fluent Chat na sidebar secundária. */
 // Views nativas no registro (Explorador, Pesquisar…, Fluent Chat, painel).
@@ -551,30 +554,9 @@ function readStoredNumber(key: string, fallback: number): number {
   }
 }
 
-/** Reads the persisted sidebar side ("left"/"right"), defaulting on error. */
-function readStoredSide(key: string, fallback: "left" | "right"): "left" | "right" {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw === "left" || raw === "right" ? raw : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
 /** Activity bar placement around the primary sidebar/explorer.
     The bar is always visible — it can't be fully hidden (it hosts the views). */
 type ActivityBarPos = "side" | "right" | "top" | "bottom";
-function readStoredActivityPos(key: string, fallback: ActivityBarPos): ActivityBarPos {
-  try {
-    const raw = localStorage.getItem(key);
-    // A previously-stored "hidden" now falls back to the lateral bar.
-    return raw === "side" || raw === "right" || raw === "top" || raw === "bottom"
-      ? raw
-      : fallback;
-  } catch {
-    return fallback;
-  }
-}
 
 /** A drop target for the activity-bar drag. `window-*` moves the whole dock. */
 type DropZone = "left" | "right" | "top" | "bottom" | "window-left" | "window-right";
@@ -608,14 +590,6 @@ function activityZoneAtPoint(x: number, y: number, dockRect?: DOMRect | null): D
 
 /** Where the bottom panel (terminal/problems) is docked relative to the editor. */
 type PanelPos = "bottom" | "right" | "left";
-function readStoredPanelPos(key: string, fallback: PanelPos): PanelPos {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw === "bottom" || raw === "right" || raw === "left" ? raw : fallback;
-  } catch {
-    return fallback;
-  }
-}
 /** Maps a pointer position to a panel drop zone (bottom / right / left, or null). */
 function panelZoneAtPoint(x: number, y: number): PanelPos | null {
   const w = window.innerWidth;
@@ -647,17 +621,22 @@ export default function App() {
   const [sidebarWidth, setSidebarWidth] = useState(() =>
     readStoredNumber("ui.sidebarWidth", 260)
   );
-  const [sidebarSide, setSidebarSide] = useState<"left" | "right">(() =>
-    readStoredSide("ui.sidebarSide", "left")
+  // Posições/zoom são SETTINGS (workbench.*, fluent.ui.scale): o estado local
+  // muda na hora (arrastes, Ctrl+=) e é gravado no User settings.json com
+  // debounce — ver src/settings/react.ts.
+  const [sidebarSide, setSidebarSide] = useSyncedSetting<"left" | "right">(
+    "workbench.sideBar.location",
+    (v) => (v === "right" ? "right" : "left")
   );
   // Whole-UI zoom (VSCode-style), persisted so the workbench reopens at the same
   // scale. Ctrl+= zooms in, Ctrl+- zooms out, Ctrl+0 resets to 100%.
-  const [uiScale, setUiScale] = useState(() =>
-    clampUiScale(readStoredNumber("ui.scale", UI_SCALE_DEFAULT))
+  const [uiScale, setUiScale] = useSyncedSetting<number>("fluent.ui.scale", (v) =>
+    clampUiScale(typeof v === "number" ? v : UI_SCALE_DEFAULT)
   );
   // Activity bar placement (independent of the sidebar) — lateral, top, or hidden.
-  const [activityBarPos, setActivityBarPos] = useState<ActivityBarPos>(() =>
-    readStoredActivityPos("ui.activityBarPos", "side")
+  const [activityBarPos, setActivityBarPos] = useSyncedSetting<ActivityBarPos>(
+    "workbench.activityBar.location",
+    (v) => (v === "right" || v === "top" || v === "bottom" ? v : "side")
   );
   // Secondary side bar hosting the AI agents chat: docks on the side OPPOSITE
   // the primary sidebar, toggled from the title bar, resizable and persisted.
@@ -866,8 +845,9 @@ export default function App() {
   );
   // Bottom panel placement (bottom / docked right / docked left) + its width when
   // docked to a side. Both persisted, like the rest of the layout.
-  const [panelPos, setPanelPos] = useState<PanelPos>(() =>
-    readStoredPanelPos("ui.panelPos", "bottom")
+  const [panelPos, setPanelPos] = useSyncedSetting<PanelPos>(
+    "workbench.panel.defaultLocation",
+    (v) => (v === "left" || v === "right" ? v : "bottom")
   );
   const [panelWidth, setPanelWidth] = useState(() =>
     readStoredNumber("ui.panelWidth", 360)
@@ -1005,6 +985,13 @@ export default function App() {
   // True while attached to a remote host (drives the status-bar indicator and
   // read-only guards). Mirrors the ambient `getActiveRemote()` for rendering.
   const [remoteSession, setRemoteSession] = useState<RemoteSession | null>(null);
+  // Camadas workspace/pasta das configurações seguem o que está aberto; o
+  // `settings` de um workspace não salvo vive no próprio estado do workspace.
+  useWorkspaceSettingsSync(rootPath, !!remoteSession, activeWorkspace, (next) =>
+    setActiveWorkspace((current) =>
+      current ? { ...current, settings: next, dirty: current.filePath ? current.dirty : true } : current
+    )
+  );
   // "Open With…" selector (ISSUE-70): the file + anchor point while it's shown.
   const [openWith, setOpenWith] = useState<
     { path: string; x: number; y: number } | null
@@ -1105,9 +1092,8 @@ export default function App() {
   const [recents, setRecents] = useState<string[]>(() => getRecentFolders());
   const [gitBusy, setGitBusy] = useState(false);
   const [lastFetch, setLastFetch] = useState<number | null>(null);
-  const [autoFetch, setAutoFetch] = useState(
-    () => localStorage.getItem("git.autofetch") !== "off"
-  );
+  const [autoFetch, setAutoFetch] = useSyncedSetting<boolean>("git.autofetch", (v) => v !== false, 0);
+  const autoFetchPeriodS = useSetting<number>("git.autofetchPeriod");
 
   // ---- Repositórios Git ----------------------------------------------------
   // "Repositório" ≠ "pasta do workspace": o backend descobre os repos das
@@ -1305,17 +1291,16 @@ export default function App() {
   // Auto-fetch (git.autofetch): relógio por repo no agendador, com chave
   // estável — trocar de aba/arquivo não o reinicia mais.
   useEffect(() => {
-    getGitRefreshScheduler().setAutoFetch(autoFetch, 180_000);
-  }, [autoFetch]);
+    getGitRefreshScheduler().setAutoFetch(
+      autoFetch,
+      Math.max(30, Number(autoFetchPeriodS) || 180) * 1000
+    );
+  }, [autoFetch, autoFetchPeriodS]);
   useEffect(() => onGitAutoFetched((at) => setLastFetch(at)), []);
 
   const toggleAutoFetch = useCallback(() => {
-    setAutoFetch((v) => {
-      const next = !v;
-      localStorage.setItem("git.autofetch", next ? "on" : "off");
-      return next;
-    });
-  }, []);
+    setAutoFetch((v) => !v);
+  }, [setAutoFetch]);
 
   // Runs a git op with a spinner, surfaces errors, then refreshes status.
   const runGitOp = useCallback(
@@ -1662,31 +1647,12 @@ export default function App() {
       /* storage unavailable — ignore */
     }
   }, [sidebarWidth]);
-  useEffect(() => {
-    try {
-      localStorage.setItem("ui.sidebarSide", sidebarSide);
-    } catch {
-      /* storage unavailable — ignore */
-    }
-  }, [sidebarSide]);
-  // Apply the UI zoom to the whole document and persist it. The non-standard
-  // `zoom` property (supported by the Chromium-based WebView) reflows the
-  // px-based chrome, unlike `transform: scale`. Value 1 clears the override.
+  // Apply the UI zoom to the whole document (persisted as `fluent.ui.scale`).
+  // The non-standard `zoom` property (supported by the Chromium-based WebView)
+  // reflows the px-based chrome, unlike `transform: scale`. 1 clears it.
   useEffect(() => {
     document.documentElement.style.zoom = uiScale === 1 ? "" : String(uiScale);
-    try {
-      localStorage.setItem("ui.scale", String(uiScale));
-    } catch {
-      /* storage unavailable — ignore */
-    }
   }, [uiScale]);
-  useEffect(() => {
-    try {
-      localStorage.setItem("ui.activityBarPos", activityBarPos);
-    } catch {
-      /* storage unavailable — ignore */
-    }
-  }, [activityBarPos]);
   useEffect(() => {
     try {
       localStorage.setItem("ui.agentsSidebarWidth", String(agentsSidebarWidth));
@@ -1703,12 +1669,11 @@ export default function App() {
   }, [panelHeight]);
   useEffect(() => {
     try {
-      localStorage.setItem("ui.panelPos", panelPos);
       localStorage.setItem("ui.panelWidth", String(panelWidth));
     } catch {
       /* storage unavailable — ignore */
     }
-  }, [panelPos, panelWidth]);
+  }, [panelWidth]);
 
   const activeFile = openFiles.find((f) => f.path === activePath) ?? null;
 
@@ -1933,12 +1898,9 @@ export default function App() {
         run: () => {
           // Flip the ADR-0002 projection flag and reload so `.cshtml` re-opens
           // under the chosen engine. No DevTools needed (release has none).
-          if (isRazorProjectionEnabled()) {
-            localStorage.removeItem(RAZOR_PROJECTION_FLAG_KEY);
-          } else {
-            localStorage.setItem(RAZOR_PROJECTION_FLAG_KEY, "1");
-          }
-          location.reload();
+          void setRazorProjectionEnabled(!isRazorProjectionEnabled())
+            .catch(() => {})
+            .finally(() => location.reload());
         },
       },
       {
@@ -5263,13 +5225,7 @@ export default function App() {
    */
   const handleSelectTsVersion = useCallback(async () => {
     const current: "project" | "editor" =
-      (() => {
-        try {
-          return localStorage.getItem(TS_PREFER_EDITOR_KEY) === "1" ? "editor" : "project";
-        } catch {
-          return "project";
-        }
-      })();
+      settings.get<boolean>(TS_PREFER_EDITOR_KEY) === true ? "editor" : "project";
     // Fetch the real version numbers (like VS Code shows them in the picker).
     let versions = { project: null as string | null, editor: null as string | null };
     if (rootPath) {
@@ -5281,12 +5237,10 @@ export default function App() {
     }
     const apply = (id: string) => {
       if (id !== "project" && id !== "editor") return;
-      try {
-        localStorage.setItem(TS_PREFER_EDITOR_KEY, id === "editor" ? "1" : "0");
-      } catch {
-        /* storage unavailable — ignore */
-      }
-      restartLsp("typescript");
+      void settings
+        .update(TS_PREFER_EDITOR_KEY, id === "editor", "user")
+        .catch(() => {})
+        .finally(() => restartLsp("typescript"));
     };
     setQuickPick({
       title: "Selecionar versão do TypeScript",

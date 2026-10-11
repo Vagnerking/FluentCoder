@@ -1,4 +1,5 @@
 import { appendOutput } from "../output/outputStore";
+import { settings } from "../settings/instance";
 
 /**
  * Debug log for the LSP lifecycle, mirrored to the webview console and to the
@@ -26,7 +27,7 @@ export function lspLog(...args: unknown[]): void {
 //
 // Two tiers: lines about the Razor/C# (Roslyn) pipeline are ALWAYS mirrored
 // (that's the whole point — the projection chain is the hard thing to debug);
-// everything else only mirrors when `localStorage["lsp.diagToFile"] === "1"`, to
+// everything else only mirrors when the setting `fluent.lsp.logToFile` is on, to
 // keep the file focused in normal use.
 const PIPELINE_RE =
   /razor|projection|roslyn|csharp|cshtml|\.g\.cs|semantic|diagnostic|solution\/open|projectInitial/i;
@@ -34,7 +35,7 @@ let diagToFileAll: boolean | undefined;
 function mirrorToDiagFile(line: string): void {
   if (diagToFileAll === undefined) {
     try {
-      diagToFileAll = localStorage.getItem("lsp.diagToFile") === "1";
+      diagToFileAll = settings.get<boolean>("fluent.lsp.logToFile") === true;
     } catch {
       diagToFileAll = false;
     }

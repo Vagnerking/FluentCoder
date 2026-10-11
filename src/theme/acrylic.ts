@@ -4,13 +4,15 @@
  * efetivamente desenhá-lo. No Linux (WebKitGTK) o filtro é aceito pelo CSS mas
  * some sem composição por GPU, e o código do editor vazaria através do menu —
  * lá a superfície continua opaca. Também respeita `prefers-reduced-transparency`
- * e a preferência `ui.acrylicFlyouts` ("on"/"off") no localStorage.
+ * e as settings `fluent.window.acrylicFlyouts` (auto/on/off) e
+ * `fluent.ui.reduceTransparency`.
  *
  * Sem a classe `acrylic-flyouts` no <html>, nada muda (fundo opaco do token
  * `--color-surface-flyout`). Ver src/theme/acrylic.css.
  */
 
 import { getPlatform } from "../platform/os.ts";
+import { settings } from "../settings/instance.ts";
 
 export interface AcrylicEnv {
   supportsBackdrop: boolean;
@@ -40,13 +42,9 @@ function detect(): AcrylicEnv {
   } catch {
     /* sem suporte à media query */
   }
-  let preference: AcrylicEnv["preference"] = null;
-  try {
-    const v = localStorage.getItem("ui.acrylicFlyouts");
-    preference = v === "on" || v === "off" ? v : null;
-  } catch {
-    /* armazenamento indisponível */
-  }
+  const v = settings.get<string>("fluent.window.acrylicFlyouts");
+  const preference: AcrylicEnv["preference"] = v === "on" || v === "off" ? v : null;
+  if (settings.get<boolean>("fluent.ui.reduceTransparency") === true) reducedTransparency = true;
   return { supportsBackdrop, platform, reducedTransparency, preference };
 }
 

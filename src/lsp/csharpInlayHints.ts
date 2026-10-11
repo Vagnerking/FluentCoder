@@ -12,11 +12,13 @@
  * inlay-hint provider starts/stops emitting — no reload needed. The Monaco editor
  * option `inlayHints.enabled` defaults to "on", so nothing else gates rendering.
  *
- * Follows the `localStorage` boolean-flag idiom (see `formatOnSave.ts`,
- * `razorProjectionFlag.ts`).
+ * Lido do sistema de settings (`csharp.inlayHints.enabled`).
  */
 
-export const CSHARP_INLAY_HINTS_KEY = "csharp.inlayHints";
+import { settings } from "../settings/instance.ts";
+
+/** Setting (schema em `src/settings/coreSettings.ts`). */
+export const CSHARP_INLAY_HINTS_KEY = "csharp.inlayHints.enabled";
 
 /** The `csharp|inlay_hints.*` sections whose value tracks the toggle. Mirrors
  * the C# Dev Kit "enable everything" set: types + all parameter kinds. The
@@ -43,24 +45,13 @@ export const CSHARP_INLAY_HINT_SUPPRESS_SECTIONS: readonly string[] = [
 
 /** True when C# inlay hints should be shown. Defaults to false; safe without DOM. */
 export function isCsharpInlayHintsEnabled(): boolean {
-  try {
-    return (
-      typeof localStorage !== "undefined" &&
-      localStorage.getItem(CSHARP_INLAY_HINTS_KEY) === "1"
-    );
-  } catch {
-    return false;
-  }
+  return settings.get<boolean>(CSHARP_INLAY_HINTS_KEY) === true;
 }
 
-/** Flip the flag; returns the new state. */
+/** Flip the user setting; returns the new state. */
 export function toggleCsharpInlayHints(): boolean {
   const next = !isCsharpInlayHintsEnabled();
-  try {
-    localStorage.setItem(CSHARP_INLAY_HINTS_KEY, next ? "1" : "0");
-  } catch {
-    /* storage unavailable — stays off */
-  }
+  void settings.update(CSHARP_INLAY_HINTS_KEY, next, "user").catch(() => {});
   return next;
 }
 

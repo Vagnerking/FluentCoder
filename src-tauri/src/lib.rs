@@ -16,6 +16,7 @@ mod razor;
 mod runner;
 mod search;
 mod session;
+mod settings;
 mod shell_integration;
 mod snap;
 mod ssh;
@@ -107,6 +108,7 @@ pub fn run() {
         .manage(razor::commands::RazorState::new())
         .manage(ssh::SshState::new())
         .manage(git::watcher::GitWatchState::new())
+        .manage(settings::SettingsWatchState::new())
         .manage(window::WindowPlacementState::new())
         .manage(window::WindowHandoffState::new())
         .manage(window::ActiveEditorState::new())
@@ -262,6 +264,12 @@ pub fn run() {
             session::session_set_last_folder,
             session::session_set_open_files,
             session::session_set_workspace,
+            settings::settings_paths,
+            settings::settings_read_files,
+            settings::settings_write_file,
+            settings::settings_retire_legacy,
+            settings::settings_watch,
+            settings::editorconfig_chain,
             window::open_new_window,
             window::is_fresh_window,
             window::window_ready,
