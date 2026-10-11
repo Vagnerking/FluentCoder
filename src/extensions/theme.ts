@@ -8,6 +8,8 @@
  * Mantido puro para teste; `readFluentThemeVars()` liga ao DOM.
  */
 
+import { getActiveColorTheme, webviewThemeKind } from "../theme/activeTheme.ts";
+
 type Resolve = (token: string) => string;
 
 /** `rgba(r, g, b, a)` → `rgb(r, g, b)`; outras cores passam inalteradas. */
@@ -195,8 +197,17 @@ export function buildVscodeThemeVars(resolve: Resolve): Record<string, string> {
   };
 }
 
-/** Lê os tokens computados do documento do app. */
+/**
+ * Lê os tokens computados do documento do app. Com um tema de extensão ativo,
+ * as cores dele (`colors` → `--vscode-*`) vencem as derivadas dos tokens: o
+ * webview fica com o tema escolhido, não só com o Fluent.
+ */
 export function readFluentThemeVars(): Record<string, string> {
   const style = getComputedStyle(document.documentElement);
-  return buildVscodeThemeVars((name) => style.getPropertyValue(name));
+  return { ...buildVscodeThemeVars((name) => style.getPropertyValue(name)), ...getActiveColorTheme().vscodeVars };
+}
+
+/** `kind` do tema ativo no formato dos webviews/host (`dark`/`light`/`high-contrast`). */
+export function activeWebviewThemeKind(): "dark" | "light" | "high-contrast" {
+  return webviewThemeKind();
 }

@@ -42,6 +42,8 @@ import type {
 import { EDITOR_OPTIONS } from "./editorOptions.ts";
 import { attachEditorSettings, useEditorSettingsOptions } from "../settings/editorRuntime";
 import { palette } from "../theme/palette";
+import { defineActiveMonacoTheme, useMonacoThemeId } from "../theme/useMonacoTheme";
+import { getActiveColorTheme } from "../theme/activeTheme";
 import { openExternal } from "../platform/commands";
 import { fontStacks, formatShortcutsInText } from "../platform";
 import { LARGE_FILE_EDITOR_OPTIONS, largeFileLanguage } from "../editor/fileOpenPolicy";
@@ -960,6 +962,8 @@ export function EditorPane({
   onEditorReady,
 }: EditorPaneProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+  // Tema de cor ativo (troca ao vivo; src/theme/registry.ts).
+  const monacoThemeId = useMonacoThemeId();
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
   // Opções vindas das settings (fonte, quebra, minimapa, cursor…), resolvidas
   // para a linguagem e o arquivo (overrides "[lang]", pasta, .editorconfig).
@@ -1894,123 +1898,14 @@ export function EditorPane({
       }
     }
 
-    monaco.editor.defineTheme("fluent-acrylic-dark", {
-      base: "vs-dark",
-      inherit: true,
-      // Token color rules. With `'semanticHighlighting.enabled': false` (see the
-      // editor options below) these now drive the LEXICAL (Monarch) tokens — the
-      // standalone theme matches each token scope (`keyword`, `keyword.if`,
-      // `type`, `string`…) against these `rules`. They are also the rules that
-      // WOULD color LSP semantic tokens if semantic highlighting were re-enabled
-      // via the full VS Code theme path (the deferred follow-up noted below), so
-      // the bare LSP type names (class, enum, method…) are kept here too.
-      rules: [
-        // C# Monarch emits specific scopes such as `keyword.if` and
-        // `keyword.return`. Keep declarations/modifiers blue and make
-        // control-flow keywords visually distinct, matching the Dark+ family.
-        { token: "keyword", foreground: "569CD6" },
-        { token: "keyword.if", foreground: "C586C0" },
-        { token: "keyword.else", foreground: "C586C0" },
-        { token: "keyword.switch", foreground: "C586C0" },
-        { token: "keyword.case", foreground: "C586C0" },
-        { token: "keyword.default", foreground: "C586C0" },
-        { token: "keyword.for", foreground: "C586C0" },
-        { token: "keyword.foreach", foreground: "C586C0" },
-        { token: "keyword.while", foreground: "C586C0" },
-        { token: "keyword.do", foreground: "C586C0" },
-        { token: "keyword.break", foreground: "C586C0" },
-        { token: "keyword.continue", foreground: "C586C0" },
-        { token: "keyword.return", foreground: "C586C0" },
-        { token: "keyword.throw", foreground: "C586C0" },
-        { token: "keyword.try", foreground: "C586C0" },
-        { token: "keyword.catch", foreground: "C586C0" },
-        { token: "keyword.finally", foreground: "C586C0" },
-        { token: "keyword.goto", foreground: "C586C0" },
-        { token: "keyword.yield", foreground: "C586C0" },
-        // Roslyn classifies flow keywords with this semantic token. It arrives
-        // after Monarch's `keyword.if` / `keyword.return` token and therefore
-        // must have its own rule or it falls back to the editor foreground.
-        { token: "controlKeyword", foreground: "C586C0" },
-        { token: "modifier", foreground: "569CD6" },
-        { token: "namespace", foreground: "4EC9B0" },
-        { token: "type", foreground: "4EC9B0" },
-        { token: "class", foreground: "4EC9B0" },
-        { token: "recordClass", foreground: "4EC9B0" },
-        { token: "struct", foreground: "86C691" },
-        { token: "recordStruct", foreground: "86C691" },
-        { token: "interface", foreground: "B8D7A3" },
-        { token: "enum", foreground: "B8D7A3" },
-        { token: "delegate", foreground: "B8D7A3" },
-        { token: "enumMember", foreground: "4FC1FF" },
-        { token: "constant", foreground: "4FC1FF" },
-        { token: "typeParameter", foreground: "4EC9B0" },
-        { token: "parameter", foreground: "9CDCFE" },
-        { token: "variable", foreground: "9CDCFE" },
-        { token: "property", foreground: "9CDCFE" },
-        { token: "field", foreground: "9CDCFE" },
-        { token: "enumMember", foreground: "4FC1FF" },
-        { token: "method", foreground: "DCDCAA" },
-        { token: "member", foreground: "DCDCAA" },
-        { token: "function", foreground: "DCDCAA" },
-        { token: "extensionMethod", foreground: "DCDCAA" },
-        { token: "event", foreground: "DCDCAA" },
-        { token: "stringEscapeCharacter", foreground: "D7BA7D" },
-        { token: "stringVerbatim", foreground: "CE9178" },
-        // Roslyn uses these names when Visual Studio protocol extensions are
-        // enabled. Standard LSP maps them to class/enum/etc.; keeping both makes
-        // the theme resilient to either server schema.
-        { token: "class name", foreground: "4EC9B0" },
-        { token: "struct name", foreground: "86C691" },
-        { token: "interface name", foreground: "B8D7A3" },
-        { token: "enum name", foreground: "B8D7A3" },
-        { token: "type parameter name", foreground: "4EC9B0" },
-      ],
-      // Chrome colors derive from the shared palette so the editor surfaces
-      // track the CSS token layer (F2-AUD-001). Monaco needs literals at
-      // registration time, so we read them from `palette` (hex without `#`
-      // where Monaco expects a bare token is not required — it accepts `#rgb`).
-      // Syntax-token foregrounds in `rules` above are a separate highlighting
-      // concern and intentionally stay inline.
-      colors: {
-        "editor.background": palette.editorBg,
-        "editorGutter.background": palette.editorBg,
-        "editorLineNumber.foreground": palette.textMuted,
-        "editorLineNumber.activeForeground": palette.textActive,
-        "editor.lineHighlightBackground": "#FFFFFF0A",
-        "editor.selectionBackground": "#60CDFF35",
-        "editor.inactiveSelectionBackground": "#60CDFF20",
-        "editorCursor.foreground": palette.accent,
-        "editorIndentGuide.background1": "#FFFFFF12",
-        "editorIndentGuide.activeBackground1": "#8BB7D94D",
-        "minimap.background": palette.editorBg,
-        "scrollbarSlider.background": "#B8C7D526",
-        "scrollbarSlider.hoverBackground": "#B8C7D540",
-        "scrollbarSlider.activeBackground": "#B8C7D55A",
-        // Completion (IntelliSense) widget. Without these the suggest list
-        // falls back to vs-dark defaults, which read as near-invisible text
-        // against this theme's customized surfaces — the dropdown of
-        // references becomes unreadable. Opaque surface (no acrylic alpha)
-        // so the editor text never bleeds through the list.
-        "editorSuggestWidget.background": palette.surfaceOverlay,
-        "editorSuggestWidget.border": palette.surfaceOverlayBorder,
-        "editorSuggestWidget.foreground": palette.textActive,
-        "editorSuggestWidget.selectedBackground": "#2C5E80",
-        "editorSuggestWidget.selectedForeground": palette.textBright,
-        "editorSuggestWidget.highlightForeground": palette.accent,
-        "editorSuggestWidget.focusHighlightForeground": "#9DDCFF",
-        // Hover, signature-help and parameter-hint popups share the same
-        // surface so all editor flyouts stay legible and consistent.
-        "editorHoverWidget.background": palette.surfaceOverlay,
-        "editorHoverWidget.border": palette.surfaceOverlayBorder,
-        "editorHoverWidget.foreground": palette.textActive,
-        "editorWidget.background": palette.surfaceOverlay,
-        "editorWidget.border": palette.surfaceOverlayBorder,
-        "editorWidget.foreground": palette.textActive,
-        "editorCodeLens.foreground": "#93A1B5",
-        // Inline (ghost text) completion preview — the dimmed italic text.
-        "editorGhostText.foreground": palette.textMuted,
-      },
-    });
+    // Tema de cor ATIVO (Fluent Escuro por padrão; Fluent Claro, Alto
+    // Contraste ou o tema de uma extensão). As regras das categorias Roslyn
+    // obrigatórias (editor.md → "Cores": class, struct, enum, interface,
+    // controlKeyword, keyword, modifier, method…) vivem em
+    // src/theme/builtinThemes.ts e, para temas de extensão, são derivadas em
+    // src/theme/monacoTheme.ts. Com `'semanticHighlighting.enabled': false`
+    // elas colorem os tokens LÉXICOS (Monarch).
+    defineActiveMonacoTheme(monaco);
   };
 
   const handleMount: OnMount = (editorInstance, monaco) => {
@@ -2070,8 +1965,9 @@ export function EditorPane({
     // `theme` do @monaco-editor/react nem sempre aplica o tema definido em
     // beforeMount (o serviço de tema do VS Code intercepta), deixando o editor
     // no tema default claro → C# em azul/preto sobre fundo escuro = "apagado".
-    // Reaplicar aqui, após o define + mount, garante o fluent-acrylic-dark.
-    monaco.editor.setTheme("fluent-acrylic-dark");
+    // Reaplicar aqui, após o define + mount, garante o tema ativo
+    // (fluent-acrylic-dark por padrão; ver src/theme/registry.ts).
+    monaco.editor.setTheme(getActiveColorTheme().monacoId);
 
     editorInstance.onDidChangeCursorPosition((e) => {
       const line = e.position.lineNumber;
@@ -2253,7 +2149,7 @@ export function EditorPane({
         </div>
         <DiffEditor
           height="100%"
-          theme="fluent-acrylic-dark"
+          theme={monacoThemeId}
           language={diffLanguage}
           originalLanguage={diffLanguage}
           modifiedLanguage={diffLanguage}
@@ -2321,7 +2217,7 @@ export function EditorPane({
   const editor = (
     <Editor
       height="100%"
-      theme="fluent-acrylic-dark"
+      theme={monacoThemeId}
       // The model URI must use the `file://` scheme so LSP clients whose
       // documentSelector is `{ scheme: "file" }` attach to it. Passing the raw
       // Windows path would make Monaco treat the drive letter as the URI scheme.

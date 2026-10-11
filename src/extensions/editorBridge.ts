@@ -35,6 +35,7 @@ import {
   vscodeSeverityToMarker,
 } from "./editorModel";
 import { readFluentThemeVars } from "./theme";
+import { onDidChangeActiveColorTheme } from "../theme/activeTheme";
 import { attachCommentWidgets } from "./commentWidgets";
 import { attachCommentingRanges } from "./commentingRanges";
 
@@ -52,9 +53,12 @@ export function extDecorationType(key: string): ReturnType<typeof renderDecorati
 const instanceCss = new Map<string, Map<string, string>>();
 let instanceCssChanged: () => void = () => {};
 
-/** Tema escuro do app: ThemeColor → valor das variáveis `--vscode-*` (cache por sessão). */
+/** Tema ativo do app: ThemeColor → valor das variáveis `--vscode-*` (cache até trocar de tema). */
 const resolveExtThemeColor = (() => {
   let vars: Record<string, string> | null = null;
+  onDidChangeActiveColorTheme(() => {
+    vars = null;
+  });
   return (id: string) => {
     vars = vars ?? readFluentThemeVars();
     return vars[themeColorVar(id)];

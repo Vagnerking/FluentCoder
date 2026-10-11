@@ -5,7 +5,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { termCreate, termWrite, termResize, termClose, type TermSpawnOptions } from "../api";
-import { terminalTheme } from "../theme/palette";
+import { getActiveColorTheme, onDidChangeActiveColorTheme } from "../theme/activeTheme";
 import "@xterm/xterm/css/xterm.css";
 import { pseudoAttach, pseudoInput, pseudoResize } from "../extensions/pseudoTerminal";
 import { settings } from "../settings/instance";
@@ -62,10 +62,10 @@ export function TerminalView({ id, cwd, connId, command, spawn, attach, pseudo, 
     // (mono do SO quando a fonte não é definida) e mudam ao vivo.
     const readOpts = () => terminalOptionsFromSettings((k) => settings.get(k), fontStacks().mono);
     const term = new Terminal({
-      // Shared palette so the terminal stays in sync with the token layer
-      // (F2-AUD-001); also fills in the previously-missing ANSI red/green/
-      // yellow/magenta so colored CLI output renders correctly.
-      theme: { ...terminalTheme },
+      // Tema de cor ativo (Fluent por padrão — mesma paleta dos tokens,
+      // F2-AUD-001 — ou o `terminal.*` de um tema de extensão); troca ao vivo.
+      // Fonte, cursor e scrollback vêm das configurações (terminal.integrated.*).
+      theme: { ...getActiveColorTheme().terminal },
       ...readOpts(),
     });
     const offSettings = settings.onDidChange((e) => {
@@ -78,6 +78,10 @@ export function TerminalView({ id, cwd, connId, command, spawn, attach, pseudo, 
       term.options.cursorBlink = o.cursorBlink;
       term.options.scrollback = o.scrollback;
       if (created) safeFit();
+    });
+
+    const offTheme = onDidChangeActiveColorTheme((t) => {
+      term.options.theme = { ...t.terminal };
     });
 
     const fitAddon = new FitAddon();
@@ -204,6 +208,7 @@ export function TerminalView({ id, cwd, connId, command, spawn, attach, pseudo, 
     return () => {
       disposed = true;
       offSettings();
+      offTheme();
       onData.dispose();
       unlistenFn?.();
       unlistenExit?.();

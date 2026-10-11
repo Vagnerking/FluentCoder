@@ -143,6 +143,7 @@ class ExtensionHost {
     this._outputTimer = null;
     this.events = {
       never: new EventEmitter(),
+      activeColorTheme: new EventEmitter(),
       activeTextEditor: new EventEmitter(),
       visibleTextEditors: new EventEmitter(),
       textEditorSelection: new EventEmitter(),
@@ -904,8 +905,21 @@ class ExtensionHost {
   }
 
   setTheme(vars, kind) {
+    const prevKind = this.themeKind;
+    const prevVars = this.themeVars;
     this.themeVars = vars || {};
     this.themeKind = kind || 'dark';
+    // Tema trocado no app (src/theme/registry.ts): extensões que escutam
+    // `window.onDidChangeActiveColorTheme` (ex.: Catppuccin) são avisadas.
+    if (prevKind !== this.themeKind || JSON.stringify(prevVars) !== JSON.stringify(this.themeVars)) {
+      this.events.activeColorTheme.fire(this.activeColorTheme());
+    }
+  }
+
+  /** `vscode.ColorTheme` atual (`kind` numérico do `ColorThemeKind`). */
+  activeColorTheme() {
+    const k = this.themeKind;
+    return { kind: k === 'light' ? 1 : k === 'high-contrast' ? 3 : k === 'high-contrast-light' ? 4 : 2 };
   }
 
   // --------------------------------------------------------- documentos

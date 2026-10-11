@@ -5,6 +5,7 @@
  * ações Aceitar (Ctrl+Enter) / Rejeitar (Esc). O CLI fica bloqueado até a
  * decisão; com várias propostas, revisa-se uma por vez (fila).
  */
+import { getActiveColorTheme } from "../theme/activeTheme";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import * as monaco from "monaco-editor";
 import { whenMonacoReady } from "../monaco-loader";
@@ -78,7 +79,7 @@ export function ClaudeDiffReview({ diff, queued, rootPath, onAccept, onReject, s
       const original = monaco.editor.createModel(diff.original, language, uri("original"));
       const modified = monaco.editor.createModel(diff.proposed, language, uri("proposed"));
       const editor = monaco.editor.createDiffEditor(hostRef.current, {
-        theme: "fluent-acrylic-dark",
+        theme: getActiveColorTheme().monacoId,
         automaticLayout: true,
         renderSideBySide: true,
         originalEditable: false,

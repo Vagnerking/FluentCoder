@@ -25,7 +25,8 @@ import type {
   WebviewInfo,
 } from "./protocol";
 import { PendingQueue } from "./relay";
-import { readFluentThemeVars } from "./theme";
+import { activeWebviewThemeKind, readFluentThemeVars } from "./theme";
+import { onDidChangeActiveColorTheme } from "../theme/activeTheme";
 import { appendOutput } from "../output/outputStore";
 
 interface StartInfo {
@@ -142,7 +143,7 @@ class ExtHostClient {
       debugWebviews: EXT_DEBUG,
     })) as InitializeResult;
     // Tema já no 1º HTML servido (evita "piscar" com as cores do VS Code).
-    void this.notify("setTheme", { vars: readFluentThemeVars(), kind: "dark" });
+    void this.notify("setTheme", { vars: readFluentThemeVars(), kind: activeWebviewThemeKind() });
     this.timings.hostStartMs = Math.round(performance.now() - t0);
     this.lastInit = result;
     // Ganchos que precisam chegar ao host ANTES de qualquer extensão ativar
@@ -275,6 +276,11 @@ class ExtHostClient {
     });
   }
 
+  /** O host já foi iniciado nesta janela (sem iniciar). */
+  isStarted(): boolean {
+    return this.initPromise !== null;
+  }
+
   notify(method: string, params?: unknown): Promise<void> {
     return invoke<void>("ext_host_send", { line: JSON.stringify({ method, params }) }).catch((err) => {
       extLog(`falha ao enviar ${method}`, err);
@@ -380,3 +386,10 @@ function describe(message: unknown): string {
 }
 
 export const extHost = new ExtHostClient();
+
+// Tema de cor trocado: o host atualiza `window.activeColorTheme` (e dispara
+// `onDidChangeActiveColorTheme`) e o HTML dos próximos webviews já nasce certo.
+onDidChangeActiveColorTheme(() => {
+  if (!extHost.isStarted()) return;
+  requestAnimationFrame(() => void extHost.notify("setTheme", { vars: readFluentThemeVars(), kind: activeWebviewThemeKind() }));
+});

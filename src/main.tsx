@@ -42,7 +42,7 @@ import { installSettingsJsonSupport } from "./settings/settingsJsonMonaco";
 import { installExtHostSettingsBridge } from "./settings/extHostBridge";
 import { getPlatform } from "./platform/os";
 import { installNativeDragGuard } from "./workbench/workbenchDrag";
-import { reloadExtensionContributions } from "./extensions/contributions/source";
+import { bootThemes } from "./theme/boot";
 
 // macOS runs a native, opaque window (a transparent frameless window never
 // materializes there — the app would show only a Dock icon and menu bar). Tag the
@@ -57,6 +57,11 @@ document.documentElement.classList.add(`platform-${getPlatform().os}`);
 
 // Flyouts acrílicos só onde o WebView desenha o backdrop-filter (senão opacos).
 applyAcrylicFlyouts();
+
+// Temas (cor, ícones) + contribuições declarativas de extensões (temas,
+// gramáticas, snippets — lidas como dados, sem executar código). O tema do
+// cache entra antes do 1º paint.
+bootThemes();
 
 // Kill the WebView's native right-click menu (Inspecionar / Recarregar / Salvar
 // como…). The app provides its own context menus everywhere; this suppresses the
@@ -109,10 +114,6 @@ void settingsReady.then(() => {
     });
   }
 });
-
-// Contribuições declarativas das extensões (temas, ícones, gramáticas,
-// snippets) — lidas como dados, sem executar código (modo somente contribuições).
-void reloadExtensionContributions();
 
 async function revealPaintedWindow() {
   // One frame lets React commit the shell while keeping warm-window startup

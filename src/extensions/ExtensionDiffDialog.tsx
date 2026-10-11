@@ -1,4 +1,5 @@
 import { useId, useRef } from "react";
+import { getActiveColorTheme } from "../theme/activeTheme";
 import { createPortal } from "react-dom";
 import Editor, { DiffEditor } from "@monaco-editor/react";
 import { useModalFocus } from "../components/useModalFocus";
@@ -53,14 +54,14 @@ export function ExtensionDiffDialog({ view, onClose }: { view: ExtDocumentView; 
               original={view.left.content}
               modified={view.right.content}
               language={language}
-              theme="fluent-acrylic-dark"
+              theme={getActiveColorTheme().monacoId}
               options={{ readOnly: true, renderSideBySide: true, minimap: { enabled: false }, automaticLayout: true }}
             />
           ) : (
             <Editor
               value={view.content}
               language={language}
-              theme="fluent-acrylic-dark"
+              theme={getActiveColorTheme().monacoId}
               options={{ readOnly: true, minimap: { enabled: false }, automaticLayout: true }}
             />
           )}

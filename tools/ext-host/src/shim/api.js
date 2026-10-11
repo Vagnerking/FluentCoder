@@ -389,9 +389,9 @@ function createVscodeApi(host, ext) {
     },
     onDidChangeWindowState: host.events.windowState.event,
     get activeColorTheme() {
-      return { kind: host.themeKind === 'light' ? types.ColorThemeKind.Light : host.themeKind === 'high-contrast' ? types.ColorThemeKind.HighContrast : types.ColorThemeKind.Dark };
+      return host.activeColorTheme();
     },
-    onDidChangeActiveColorTheme: host.events.never.event,
+    onDidChangeActiveColorTheme: host.events.activeColorTheme.event,
     get terminals() {
       return host.terminals;
     },

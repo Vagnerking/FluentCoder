@@ -3,7 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { EXT_DEBUG, extHost, extLog, hostOutput } from "./client";
 import type { WebviewInfo } from "./protocol";
 import { controlMessage, isExternalLink, originOf, parseIframeMessage } from "./relay";
-import { readFluentThemeVars } from "./theme";
+import { activeWebviewThemeKind, readFluentThemeVars } from "./theme";
+import { onDidChangeActiveColorTheme } from "../theme/activeTheme";
 import { handleForwardedKey } from "./keys";
 
 interface Props {
@@ -70,7 +71,7 @@ export function ExtensionWebview({ info, visible }: Props) {
         case "ready":
           extLog(`iframe pronto ${handle}`);
           hostOutput(`UI carregada: ${infoRef.current.viewType} (${handle})`);
-          win?.postMessage(controlMessage("theme", { vars: readFluentThemeVars(), kind: "dark" }), origin);
+          win?.postMessage(controlMessage("theme", { vars: readFluentThemeVars(), kind: activeWebviewThemeKind() }), origin);
           detach?.();
           detach = extHost.attachSink(handle, (m) => iframeRef.current?.contentWindow?.postMessage(m, origin));
           break;
@@ -107,8 +108,17 @@ export function ExtensionWebview({ info, visible }: Props) {
       }
     };
     window.addEventListener("message", onMessage);
+    // Troca de tema ao vivo: o preâmbulo do webview reaplica as `--vscode-*`
+    // e a classe `vscode-dark`/`vscode-light` sem recarregar a UI.
+    const offTheme = onDidChangeActiveColorTheme(() => {
+      // Um frame: os tokens CSS do app já foram aplicados quando o evento chega.
+      requestAnimationFrame(() =>
+        iframeRef.current?.contentWindow?.postMessage(controlMessage("theme", { vars: readFluentThemeVars(), kind: activeWebviewThemeKind() }), origin),
+      );
+    });
     return () => {
       window.removeEventListener("message", onMessage);
+      offTheme();
       detach?.();
     };
   }, [url, handle]);
