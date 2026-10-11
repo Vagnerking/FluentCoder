@@ -26,10 +26,24 @@ export type OpenDecision =
   /** Precisa de confirmação para abrir binário como texto. */
   | { kind: "confirm-binary"; large: boolean };
 
-export function decideOpen(probe: FileProbe): OpenDecision {
-  if (probe.binary) return { kind: "confirm-binary", large: probe.size > LARGE_FILE_BYTES };
-  if (probe.size > HUGE_FILE_BYTES) return { kind: "confirm-huge" };
-  if (probe.size > LARGE_FILE_BYTES) return { kind: "large" };
+/** Limites efetivos (settings `fluent.editor.largeFileThresholdMB` e
+ *  `files.maxMemoryForLargeFilesMB`; o "enorme" nunca passa dos 50 MB que o
+ *  `read_file` do Rust aceita sem confirmação). */
+export interface OpenLimits {
+  large: number;
+  huge: number;
+}
+
+export function openLimitsFromSettings(largeMB: unknown, hugeMB: unknown): OpenLimits {
+  const mb = (v: unknown, d: number) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : d) * 1024 * 1024;
+  const huge = Math.min(mb(hugeMB, 50), HUGE_FILE_BYTES);
+  return { large: Math.min(mb(largeMB, 5), huge), huge };
+}
+
+export function decideOpen(probe: FileProbe, limits: OpenLimits = { large: LARGE_FILE_BYTES, huge: HUGE_FILE_BYTES }): OpenDecision {
+  if (probe.binary) return { kind: "confirm-binary", large: probe.size > limits.large };
+  if (probe.size > limits.huge) return { kind: "confirm-huge" };
+  if (probe.size > limits.large) return { kind: "large" };
   return { kind: "normal" };
 }
 

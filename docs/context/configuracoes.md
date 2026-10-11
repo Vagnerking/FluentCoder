@@ -119,3 +119,43 @@ extensões) é mesclado no User settings e renomeado para `.bak`.
   na camada pedida (`ConfigurationTarget.Global` → User, `Workspace` →
   workspace, `WorkspaceFolder` → `.fluent/settings.json` da pasta);
 - os defaults de fallback do host batem com os do app (`editor.tabSize` 2).
+
+## Onde cada setting é aplicada
+
+| Área | Settings | Onde |
+|---|---|---|
+| Editor (Monaco) | `editor.font*`, `lineHeight`, `wordWrap*`, `rulers`, `lineNumbers`, `minimap.enabled`, `stickyScroll.enabled`, `renderWhitespace`, `renderLineHighlight`, `cursor*`, `smoothScrolling`, `mouseWheelZoom`, `formatOnPaste/OnType`, `autoClosingBrackets`, `bracketPairColorization.enabled`, `guides.*`, `folding`, `codeLens`, `inlayHints.enabled`, `linkedEditing`, `acceptSuggestionOnEnter`, `accessibilitySupport` | `editorSettings.ts` → `useEditorSettingsOptions` → `options` do `<Editor>` (EditorPane) |
+| Indentação do modelo | `editor.tabSize`, `insertSpaces`, `detectIndentation` (+ `.editorconfig`) | `attachEditorSettings` (EditorPane `onMount`) → `model.updateOptions`/`detectIndentation`; barra de status via `useActiveIndentation` |
+| Salvamento | `editor.formatOnSave` (por linguagem), `files.trimTrailingWhitespace`, `insertFinalNewline`, `trimFinalNewlines`, `files.eol`/`files.encoding` (arquivo novo) | `formatOnSave.ts` + `prepareSave` no `saveFile` do App |
+| Auto save | `files.autoSave`, `autoSaveDelay` | `useAutoSave` (App) |
+| Arquivos grandes | `fluent.editor.largeFileThresholdMB`, `files.maxMemoryForLargeFilesMB` (teto 50 MB do `read_file`) | `openFileGate.ts` |
+| Exclusões | `files.exclude`, `search.exclude`, `fluent.quickOpen.maxFiles` | Explorer (`api.ts`), Quick Open, Busca (somadas às exclusões digitadas); mudar `files.exclude` relê o Explorer |
+| Busca | `search.smartCase` | SearchPanel |
+| Explorer | `explorer.confirmDelete` | FileExplorer |
+| Abas | `workbench.editor.enablePreview` (App), `showTabs`, `wrapTabs`, `tabActionLocation`, `tabSizing`, `highlightModifiedTabs` | `applyWorkbench.ts` (`data-*`) + `styles/settings.css` |
+| Layout | `workbench.sideBar.location`, `activityBar.location`, `panel.defaultLocation`, `fluent.ui.scale` | `useSyncedSetting` no App (arrastes/atalhos gravam com debounce) |
+| Aparência / acessibilidade | `fluent.ui.density`, `fluent.ui.fontSize/fontFamily`, `workbench.statusBar.visible`, `workbench.reduceMotion`, `fluent.accessibility.highContrast/focusOutline`, `fluent.ui.reduceTransparency`, `fluent.window.acrylicFlyouts` | `applyWorkbench.ts` + `styles/settings.css`; acrílico em `theme/acrylic.ts` |
+| Temas | `workbench.colorTheme`, `workbench.iconTheme` | `applyTheme.ts` → `src/theme/registry.ts` (interface; temas de extensões entram por `registerColorThemeProvider`) |
+| Terminal | `terminal.integrated.font*`, `lineHeight`, `cursorStyle`, `cursorBlinking`, `scrollback`, `defaultProfile.<so>` + `profiles.<so>`, `fluent.terminal.shellPath/shellArgs` | `terminalSettings.ts` → TerminalView (ao vivo; shell só para terminais locais sem spawn de extensão) |
+| Git | `git.autofetch`, `autofetchPeriod`, `confirmSync`, `avatars`, `repositoryScanMaxDepth` | App (autofetch/sync) e `git/gitSettings.ts` |
+| Extensões | `extensions.autoCheckUpdates`, `autoUpdate`, `ignoreRecommendations` | `extensionsStore.ts`, view Extensões |
+| Agentes de IA | `fluent.agents.defaultProvider`, `defaultMode` (bypass nunca é padrão) | `useFluentChat.ts` (vencem o "último usado") |
+| Linguagens | `csharp.inlayHints.enabled`, `fluent.typescript.preferEditorVersion`, `fluent.razor.projection`, `fluent.lsp.logToFile` | módulos de `src/lsp/` |
+| Monaco/LSP | `editor.tabSize`/`insertSpaces`/`detectIndentation`, `files.eol`, `files.associations` e as seções `python.*`, `yaml.*`, `json.*`, `css.*`, `html.*`, `typescript.*`… | `monacoBridge.ts` → `updateUserConfiguration` do serviço de configuração JÁ carregado (respostas de `workspace/configuration` dos servidores). `editor.semanticHighlighting.enabled` e `editor.wordBasedSuggestions` são sempre forçados aos valores do contrato do editor |
+
+### EditorConfig
+
+`.editorconfig` vence as settings (inclusive as de linguagem), como a extensão
+EditorConfig do VS Code. O Rust (`editorconfig_chain`) devolve a cadeia até
+`root = true`; `editorconfig.ts` faz o parse e o glob da spec.
+
+| Propriedade | Efeito |
+|---|---|
+| `indent_style`, `indent_size`, `tab_width` | `insertSpaces`/`tabSize`/`indentSize` do modelo; desliga a detecção |
+| `end_of_line` | EOL de arquivo novo (existentes mantêm o detectado) |
+| `charset` | encoding de arquivo novo |
+| `trim_trailing_whitespace`, `insert_final_newline` | pipeline de salvamento (depois do format-on-save) |
+| `max_line_length` | régua extra |
+
+O cache é invalidado quando um `.editorconfig` é salvo pelo app e quando a
+janela volta ao foco (editado fora).

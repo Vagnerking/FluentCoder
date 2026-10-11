@@ -40,6 +40,7 @@ import type {
   PackageOutdatedDependency,
 } from "../types";
 import { EDITOR_OPTIONS } from "./editorOptions.ts";
+import { attachEditorSettings, useEditorSettingsOptions } from "../settings/editorRuntime";
 import { palette } from "../theme/palette";
 import { openExternal } from "../platform/commands";
 import { fontStacks, formatShortcutsInText } from "../platform";
@@ -960,6 +961,10 @@ export function EditorPane({
 }: EditorPaneProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
+  // Opções vindas das settings (fonte, quebra, minimapa, cursor…), resolvidas
+  // para a linguagem e o arquivo (overrides "[lang]", pasta, .editorconfig).
+  const settingsLanguage = file ? languageForFile(file.sourcePath ? baseName(file.sourcePath) : file.name, file.sourcePath ?? file.path) : null;
+  const settingsOptions = useEditorSettingsOptions(settingsLanguage, file ? (file.sourcePath ?? file.path) : null);
   // The v10 `@codingame` services must finish `initialize()` before the first
   // editor mounts (documented constraint) — `whenMonacoReady` also points
   // `@monaco-editor/react` at the shared Monaco instance. Gate the <Editor> on
@@ -2012,6 +2017,9 @@ export function EditorPane({
     editorRef.current = editorInstance;
     monacoRef.current = monaco;
     onEditorReadyRef.current?.(editorInstance);
+    // tabSize/insertSpaces/detecção no MODELO (settings + .editorconfig);
+    // acompanha trocas de modelo e de setting, e se desfaz com o editor.
+    attachEditorSettings(editorInstance);
 
     // Breakpoint toggling: click on the glyph margin (left of the line numbers).
     // The path comes from the CURRENT model uri (not the `file` prop) so the
@@ -2265,7 +2273,11 @@ export function EditorPane({
             minimap: { enabled: false },
             scrollBeyondLastLine: false,
             automaticLayout: true,
-            fontSize: 14,
+            fontSize: settingsOptions.fontSize as number,
+            fontFamily: settingsOptions.fontFamily as string,
+            fontLigatures: settingsOptions.fontLigatures as boolean | string,
+            renderWhitespace: settingsOptions.renderWhitespace as "none",
+            smoothScrolling: settingsOptions.smoothScrolling as boolean,
             padding: { top: 12 },
             diffWordWrap: "off",
             ignoreTrimWhitespace: false,
@@ -2333,10 +2345,14 @@ export function EditorPane({
       onMount={handleMount}
       options={{
         ...EDITOR_OPTIONS,
+        // Settings do usuário/workspace/pasta/linguagem (src/settings/). As
+        // opções travadas do EDITOR_OPTIONS (hover, suggest, semantic) não
+        // vêm daqui.
+        ...settingsOptions,
         // Revisões Git (HEAD/índice/commit) abrem como somente leitura.
         readOnly: Boolean(file.readOnly),
         readOnlyMessage: { value: file.sourceLabel ?? "Esta revisão é somente leitura." },
-        codeLens: true,
+        codeLens: settingsOptions.codeLens as boolean,
         codeLensFontSize: 12,
         codeLensFontFamily: fontStacks().ui,
         lineDecorationsWidth: 13,

@@ -8,6 +8,9 @@ import { termCreate, termWrite, termResize, termClose, type TermSpawnOptions } f
 import { terminalTheme } from "../theme/palette";
 import "@xterm/xterm/css/xterm.css";
 import { pseudoAttach, pseudoInput, pseudoResize } from "../extensions/pseudoTerminal";
+import { settings } from "../settings/instance";
+import { defaultShellFromSettings, terminalOptionsFromSettings } from "../settings/terminalSettings";
+import { getPlatform } from "../platform/os";
 
 interface TerminalViewProps {
   id: string;
@@ -55,16 +58,26 @@ export function TerminalView({ id, cwd, connId, command, spawn, attach, pseudo, 
   useEffect(() => {
     if (!containerRef.current) return;
 
+    // Fonte, cursor e histórico vêm das settings `terminal.integrated.*`
+    // (mono do SO quando a fonte não é definida) e mudam ao vivo.
+    const readOpts = () => terminalOptionsFromSettings((k) => settings.get(k), fontStacks().mono);
     const term = new Terminal({
       // Shared palette so the terminal stays in sync with the token layer
       // (F2-AUD-001); also fills in the previously-missing ANSI red/green/
       // yellow/magenta so colored CLI output renders correctly.
       theme: { ...terminalTheme },
-      // Mono do SO (Cascadia / SF Mono / JetBrains Mono → DejaVu Sans Mono).
-      fontFamily: fontStacks().mono,
-      fontSize: 13,
-      lineHeight: 1.2,
-      cursorBlink: true,
+      ...readOpts(),
+    });
+    const offSettings = settings.onDidChange((e) => {
+      if (!e.affectsConfiguration("terminal.integrated") && !e.affectsConfiguration("editor.fontFamily")) return;
+      const o = readOpts();
+      term.options.fontFamily = o.fontFamily;
+      term.options.fontSize = o.fontSize;
+      term.options.lineHeight = o.lineHeight;
+      term.options.cursorStyle = o.cursorStyle;
+      term.options.cursorBlink = o.cursorBlink;
+      term.options.scrollback = o.scrollback;
+      if (created) safeFit();
     });
 
     const fitAddon = new FitAddon();
@@ -137,7 +150,10 @@ export function TerminalView({ id, cwd, connId, command, spawn, attach, pseudo, 
       }
       created = true;
       const { cols, rows } = term;
-      termCreate(id, cwd, cols, rows, command, spawnRef.current, connId)
+      // Shell do usuário (perfil/`fluent.terminal.shellPath`) só para terminais
+      // locais comuns — os criados por extensões trazem o próprio spawn.
+      const userShell = !spawnRef.current && !connId ? defaultShellFromSettings((k) => settings.get(k), getPlatform().os) : null;
+      termCreate(id, cwd, cols, rows, command, spawnRef.current ?? userShell, connId)
         .then((pid) => {
           if (!disposed) cbRef.current.onReady?.(pid ?? null);
         })
@@ -187,6 +203,7 @@ export function TerminalView({ id, cwd, connId, command, spawn, attach, pseudo, 
 
     return () => {
       disposed = true;
+      offSettings();
       onData.dispose();
       unlistenFn?.();
       unlistenExit?.();

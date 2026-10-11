@@ -1,6 +1,6 @@
 // MUST be first: unifies the Monaco instance (npm, not CDN) + wires workers so
 // the editor models and the LSP client share one Monaco. See monaco-loader.ts.
-import "./monaco-loader";
+import { whenMonacoReady } from "./monaco-loader";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
@@ -35,6 +35,8 @@ import "./theme/acrylic.css";
 import { applyAcrylicFlyouts } from "./theme/acrylic";
 import { bootSettings } from "./settings/bootstrap";
 import { installWorkbenchSettings } from "./settings/applyWorkbench";
+import { installThemeSettings } from "./settings/applyTheme";
+import { installMonacoSettingsBridge } from "./settings/monacoBridge";
 import { getPlatform } from "./platform/os";
 import { installNativeDragGuard } from "./workbench/workbenchDrag";
 
@@ -75,10 +77,14 @@ const settingsReady = Promise.race([
   new Promise<void>((resolve) => setTimeout(resolve, 1500)),
 ]);
 installWorkbenchSettings();
+// Subconjunto das settings → serviço de configuração do VS Code no Monaco
+// (servidores de linguagem e modelos); as opções travadas do editor ficam fora.
+installMonacoSettingsBridge(whenMonacoReady);
 
 void settingsReady.then(() => {
   // A preferência de acrílico vem das settings.
   applyAcrylicFlyouts();
+  installThemeSettings();
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       {detachToken ? <DetachedEditor token={detachToken} /> : <App />}

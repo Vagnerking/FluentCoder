@@ -295,6 +295,8 @@ import { openTabInList, setTabPinned, tabsKeptAfterClose } from "./components/ed
 import type { BreadcrumbRoot } from "./editor/breadcrumbs";
 import { settings } from "./settings/instance";
 import { useSetting, useSyncedSetting } from "./settings/react";
+import { prepareSave, useActiveIndentation } from "./settings/editorRuntime";
+import { useAutoSave } from "./settings/useAutoSave";
 import { useWorkspaceSettingsSync } from "./settings/useWorkspaceSettingsSync";
 
 /** Abas nativas do Fluent Chat na sidebar secundária. */
@@ -471,8 +473,6 @@ function isUntitled(path: string): boolean {
   return path.startsWith(UNTITLED_PREFIX);
 }
 
-/** Editor tab size — kept in one place so the StatusBar and Monaco agree. */
-const TAB_SIZE = 2;
 
 /** Encodings offered in the encoding pickers (reopen / save-with).
  *
@@ -1320,14 +1320,26 @@ export default function App() {
     [activeGitTarget, gitBusy]
   );
 
-  const handleGitSync = useCallback(
-    () =>
-      runGitOp(async (root, connId) => {
-        await gitPull(root, connId);
-        await gitPush(root, connId);
-      }),
-    [runGitOp]
-  );
+  const handleGitSync = useCallback(async () => {
+    // `git.confirmSync` (VS Code): pergunta antes do pull + push.
+    if (settings.get<boolean>("git.confirmSync") !== false) {
+      const choice = await askConfirm(
+        "Sincronizar alterações?",
+        "Isto vai baixar (pull) e enviar (push) os commits do branch atual.",
+        [
+          { label: "Sincronizar", variant: "primary", value: "ok", default: true },
+          { label: "Sempre, não perguntar de novo", variant: "secondary", value: "always" },
+          { label: "Cancelar", variant: "secondary", value: "cancel" },
+        ]
+      );
+      if (choice === "always") void settings.update("git.confirmSync", false, "user").catch(() => {});
+      else if (choice !== "ok") return;
+    }
+    return runGitOp(async (root, connId) => {
+      await gitPull(root, connId);
+      await gitPush(root, connId);
+    });
+  }, [askConfirm, runGitOp]);
   const handleGitFetch = useCallback(
     () =>
       runGitOp(async (root, connId) => {
@@ -2513,6 +2525,16 @@ export default function App() {
     // git routes over SSH when remote, so decorations refresh either way.
     void refreshWorkspaceGitStatuses();
   }, [refreshWorkspaceGitStatuses, rootPath]);
+  // `files.exclude` mudou (UI, settings.json ou .vscode): o Explorer relê a raiz.
+  const refreshExplorerRef = useRef(refreshExplorerRoot);
+  refreshExplorerRef.current = refreshExplorerRoot;
+  useEffect(
+    () =>
+      settings.onDidChange((e) => {
+        if (e.affectsConfiguration("files.exclude")) void refreshExplorerRef.current().catch(() => {});
+      }),
+    []
+  );
 
   /**
    * Re-syncs everything that a branch switch changes (issue #16): the status-bar
@@ -3255,7 +3277,7 @@ export default function App() {
             bom: decoded?.bom,
             eol: decoded?.eol,
             openedFrom: opts?.origin,
-            preview: opts?.preview && !opts?.pinned ? true : undefined,
+            preview: opts?.preview && !opts?.pinned && settings.get<boolean>("workbench.editor.enablePreview") !== false ? true : undefined,
             pinned: opts?.pinned || undefined,
             ...gateFields,
           });
@@ -3690,6 +3712,15 @@ export default function App() {
           const formatted = await formatModelForSave(targetPath);
           if (formatted != null) contentToWrite = formatted;
         }
+        // Settings/.editorconfig do salvamento: trim de espaços, nova linha
+        // final e, para arquivo novo, EOL/encoding padrão.
+        const prepared = await prepareSave(
+          targetPath,
+          contentToWrite,
+          languageForFile(baseName(targetPath), targetPath),
+          isUntitled(file.path) || !file.encoding
+        );
+        contentToWrite = prepared.content;
         if (file.workspaceRemote && !isUntitled(file.path)) {
           await writeSshTextFile(file.workspaceRemote.connId, targetPath, contentToWrite);
         } else {
@@ -3697,9 +3728,9 @@ export default function App() {
           // default). Untitled buffers have no detected encoding yet, so they fall
           // back to UTF-8 + LF inside writeFile.
           await writeFile(targetPath, contentToWrite, {
-            encoding: file.encoding,
-            eol: file.eol,
-            bom: file.bom,
+            encoding: file.encoding ?? prepared.encoding,
+            eol: file.eol ?? prepared.eol,
+            bom: file.bom ?? prepared.bom,
           });
         }
         // Notify disk-based language tooling that this file's on-disk content is
@@ -3734,6 +3765,11 @@ export default function App() {
     },
     []
   );
+
+  // files.autoSave (afterDelay / onFocusChange / onWindowChange).
+  const autoSaveFiles = useMemo(() => Object.values(layout.groups).flatMap((g) => g.files), [layout.groups]);
+  useAutoSave(autoSaveFiles, activePath, isVirtualTab, saveFile);
+  const activeIndentation = useActiveIndentation();
 
   /** Remove a tab from `openFiles`, moving focus off it if it was active. */
   /** Removes a tab from a group, moving focus off it and collapsing an emptied
@@ -6850,7 +6886,7 @@ export default function App() {
             : undefined
         }
         onOpenRemote={() => void openSshFlow()}
-        tabSize={TAB_SIZE}
+        tabSize={activeIndentation.tabSize}
         errorCount={errorCount}
         warningCount={warningCount}
         lspServers={activeLspServers}

@@ -8,6 +8,8 @@ import {
   type ReactNode,
 } from "react";
 import { cancelSearch, searchInDir } from "../api";
+import { getQuickOpenExcludeGlobs } from "../settings/quickOpenSettings";
+import { useSetting, useSettingsVersion } from "../settings/react";
 import type { FileMatches, FileNode, LineMatch, OpenFile, SearchOptions } from "../types";
 import { Codicon } from "../icons/codicons/Codicon";
 import { FileIcon } from "../icon-theme/material/FileIcon";
@@ -285,10 +287,19 @@ export function SearchPanel({
   const isScoped = !!scopePath && !!searchRoot;
 
   const includeGlobs = useMemo(() => parseGlobs(includeText), [includeText]);
-  const excludeGlobs = useMemo(() => parseGlobs(excludeText), [excludeText]);
+  // Como no VS Code: `files.exclude` + `search.exclude` (settings) somam às
+  // exclusões digitadas; `search.smartCase` liga maiúsculas só quando o termo tem.
+  const settingsVersion = useSettingsVersion();
+  const excludeGlobs = useMemo(
+    () => [...new Set([...parseGlobs(excludeText), ...getQuickOpenExcludeGlobs(searchRoot)])],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [excludeText, searchRoot, settingsVersion]
+  );
+  const smartCase = useSetting<boolean>("search.smartCase") === true;
+  const effectiveCase = caseSensitive || (smartCase && /\p{Lu}/u.test(query));
   const options: SearchOptions = useMemo(
-    () => ({ regex, caseSensitive, wholeWord, includeGlobs, excludeGlobs }),
-    [regex, caseSensitive, wholeWord, includeGlobs, excludeGlobs]
+    () => ({ regex, caseSensitive: effectiveCase, wholeWord, includeGlobs, excludeGlobs }),
+    [regex, effectiveCase, wholeWord, includeGlobs, excludeGlobs]
   );
 
   // Discards any queued batch + pending frame. Called before each new search.

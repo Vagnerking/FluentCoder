@@ -72,6 +72,7 @@ import {
   type ChatTarget,
 } from "./targets";
 import { mergeUsage, settleToolCalls, upsertToolCall } from "./transcript";
+import { getSetting } from "../settings/instance";
 
 const PREFS_KEY = "fluentChat.prefs";
 
@@ -156,12 +157,16 @@ export function useFluentChat(deps: FluentChatDeps) {
   );
   const [providersLoaded, setProvidersLoaded] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [composerTarget, setComposerTarget] = useState<string>(
-    () => readPrefs().lastTarget ?? providerTargetId("claude"),
-  );
-  const [mode, setModeState] = useState<AgentMode>(
-    () => normalizeAgentMode(readPrefs().mode) ?? "ask",
-  );
+  // Settings `fluent.agents.defaultProvider/defaultMode` vencem o "último
+  // usado" (estado em localStorage); vazio = último usado. Bypass nunca é padrão.
+  const [composerTarget, setComposerTarget] = useState<string>(() => {
+    const preferred = getSetting<string>("fluent.agents.defaultProvider");
+    return preferred ? providerTargetId(preferred) : readPrefs().lastTarget ?? providerTargetId("claude");
+  });
+  const [mode, setModeState] = useState<AgentMode>(() => {
+    const preferred = normalizeAgentMode(getSetting<string>("fluent.agents.defaultMode"));
+    return (preferred && preferred !== "bypass" ? preferred : null) ?? normalizeAgentMode(readPrefs().mode) ?? "ask";
+  });
   const [prefModels, setPrefModels] = useState<Record<string, string>>(
     () => readPrefs().models ?? {},
   );

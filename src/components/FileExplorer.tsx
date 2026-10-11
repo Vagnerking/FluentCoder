@@ -28,6 +28,7 @@ import {
 import { TreeNode } from "./TreeNode";
 import { TreeContextMenu } from "./TreeContextMenu";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { getSetting } from "../settings/instance";
 import { buildAdvancedFileMenuItems } from "../explorer/advancedFileMenu";
 
 /** Internal cut/copy clipboard for explorer file operations (not the OS one). */
@@ -530,14 +531,21 @@ export function FileExplorer({
     }
   }
 
+  // `explorer.confirmDelete: false` (setting) pula a confirmação.
   const requestDelete = useCallback((node: FileNode) => {
-    setDeleteTarget(node);
+    if (getSetting<boolean>("explorer.confirmDelete") === false) void deleteNode(node);
+    else setDeleteTarget(node);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function confirmDelete() {
     const node = deleteTarget;
     setDeleteTarget(null);
     if (!node) return;
+    await deleteNode(node);
+  }
+
+  async function deleteNode(node: FileNode) {
     const owner = workspaceRootForPath(node.path);
     const operationRoot = localRootForPath(node.path);
     if (!operationRoot && !owner?.connId) return;

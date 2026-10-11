@@ -6,7 +6,8 @@
 
 import { ask } from "@tauri-apps/plugin-dialog";
 import { probeFile } from "../api";
-import { decideOpen, formatSize } from "./fileOpenPolicy";
+import { decideOpen, formatSize, openLimitsFromSettings } from "./fileOpenPolicy";
+import { settings } from "../settings/instance";
 
 export interface OpenGate {
   /** Pode ler acima do limite de 50 MB (o usuário aceitou). */
@@ -29,7 +30,10 @@ export async function gateLocalTextOpen(path: string, name: string): Promise<Ope
     // ainda recusa o que passar do limite.
     return { allowLarge: false, largeFile: false, readOnly: false };
   }
-  const decision = decideOpen(probe);
+  const decision = decideOpen(
+    probe,
+    openLimitsFromSettings(settings.get("fluent.editor.largeFileThresholdMB"), settings.get("files.maxMemoryForLargeFilesMB")),
+  );
   const size = formatSize(probe.size);
   switch (decision.kind) {
     case "normal":

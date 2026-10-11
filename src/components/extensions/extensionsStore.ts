@@ -10,6 +10,7 @@
  * só troca com "Reiniciar Host de Extensões": `needsRestart` sinaliza na UI.
  */
 import { useSyncExternalStore } from "react";
+import { getSetting } from "../../settings/instance";
 import {
   extensionsApi,
   pruneUpdates,
@@ -462,6 +463,8 @@ let startupScheduled = false;
 /** Checa atualizações (sob demanda: `force`; startup: respeita o throttle). */
 export async function checkForUpdates(force = false): Promise<void> {
   if (state.checkingUpdates) return;
+  // `extensions.autoCheckUpdates: false` desliga só a checagem automática.
+  if (!force && getSetting<boolean>("extensions.autoCheckUpdates") === false) return;
   if (!force && !shouldCheckUpdates(state.lastUpdateCheck, Date.now())) return;
   set({ checkingUpdates: true });
   try {
@@ -469,6 +472,10 @@ export async function checkForUpdates(force = false): Promise<void> {
     const at = Date.now();
     writeUpdateCache(at, updates);
     set({ updates, lastUpdateCheck: at });
+    // `extensions.autoUpdate`: instala as atualizações encontradas na checagem automática.
+    if (!force && updates.length && getSetting<boolean>("extensions.autoUpdate") === true) {
+      queueMicrotask(() => void updateAll());
+    }
   } catch (err) {
     if (force) set({ error: `Não foi possível checar atualizações: ${msg(err)}` });
   } finally {
