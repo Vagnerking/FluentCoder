@@ -356,15 +356,16 @@ export function CommitGraphView({
     [connId, header, headHash, rootPath]
   );
 
+  // Estado atual sem efeitos colaterais dentro de updaters do setState.
+  const lineageRef = useRef(lineage);
+  lineageRef.current = lineage;
+
   const onPillEnter = useCallback(
     (pill: RefPill) => {
       if (lineageTimer.current) window.clearTimeout(lineageTimer.current);
       lineageTimer.current = window.setTimeout(() => {
-        setLineage((cur) => {
-          if (cur?.pinned) return cur;
-          loadLineage(pill.ref, false);
-          return cur;
-        });
+        if (lineageRef.current?.pinned) return;
+        loadLineage(pill.ref, false);
       }, LINEAGE_HOVER_MS);
     },
     [loadLineage]
@@ -376,11 +377,9 @@ export function CommitGraphView({
   const onPillClick = useCallback(
     (pill: RefPill) => {
       if (lineageTimer.current) window.clearTimeout(lineageTimer.current);
-      setLineage((cur) => {
-        if (cur?.pinned && cur.ref === pill.ref) return null;
-        loadLineage(pill.ref, true);
-        return cur;
-      });
+      const cur = lineageRef.current;
+      if (cur?.pinned && cur.ref === pill.ref) setLineage(null);
+      else loadLineage(pill.ref, true);
     },
     [loadLineage]
   );
