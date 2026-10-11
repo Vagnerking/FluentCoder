@@ -12,6 +12,7 @@ import { applyCachedColorTheme, startColorThemes } from "./colorThemeService";
 import { themeRegistry, type ThemeKind } from "./registry";
 import { startFileIconThemes } from "../icon-theme/iconThemeService";
 import { startProductIconThemes } from "../icons/productIconTheme";
+import { startContributedGrammars } from "../editor/textmate/grammarService";
 
 let booted = false;
 const kinds: ThemeKind[] = [];
@@ -33,6 +34,7 @@ export function bootThemes(): void {
   step(startColorThemes, "color");
   step(startFileIconThemes, "fileIcon");
   step(startProductIconThemes, "productIcon");
+  step(startContributedGrammars);
   void reloadExtensionContributions().finally(() => {
     for (const k of kinds) void themeRegistry.restore(k).catch(() => {});
   });
