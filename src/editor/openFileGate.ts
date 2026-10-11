@@ -30,6 +30,8 @@ export async function gateLocalTextOpen(path: string, name: string): Promise<Ope
     // ainda recusa o que passar do limite.
     return { allowLarge: false, largeFile: false, readOnly: false };
   }
+  // Sonda vazia (backend sem resposta): caminho normal.
+  if (!probe) return { allowLarge: false, largeFile: false, readOnly: false };
   const decision = decideOpen(
     probe,
     openLimitsFromSettings(settings.get("fluent.editor.largeFileThresholdMB"), settings.get("files.maxMemoryForLargeFilesMB")),

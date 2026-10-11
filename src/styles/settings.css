@@ -156,6 +156,7 @@ html[data-highlight-modified] .tab:has(.tab-close.dirty)::before {
 
 .settings-header-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-sm);
@@ -371,10 +372,10 @@ html[data-highlight-modified] .tab:has(.tab-close.dirty)::before {
 
 .setting-control {
   margin-top: var(--space-sm);
-  max-width: 420px;
+  max-width: min(420px, 100%);
 }
 
-.setting-control .ui-select { min-width: 220px; }
+.setting-control .ui-select { min-width: min(220px, 100%); max-width: 100%; }
 
 .setting-text { display: flex; flex-direction: column; gap: var(--space-xxs); }
 

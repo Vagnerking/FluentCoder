@@ -119,7 +119,12 @@ export function KeybindingsEditor({ onOpenFile }: KeybindingsEditorProps) {
       out.push({ command: rule.command, title: c?.title ?? rule.command, detail: c?.detail, rule });
       bound.add(rule.command);
     }
-    for (const c of cmds) if (!bound.has(c.id)) out.push({ command: c.id, title: c.title, detail: c.detail, rule: null });
+    for (const c of cmds) {
+      if (bound.has(c.id)) continue;
+      // Atalho que o próprio comando anuncia (menus/Monaco): exibido como padrão.
+      const key = c.keybinding ? normalizeKey(c.keybinding) : "";
+      out.push({ command: c.id, title: c.title, detail: c.detail, rule: key ? { key, command: c.id, source: "default" } : null });
+    }
     return out.sort((a, b) => a.title.localeCompare(b.title, "pt-BR"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effective, version]);
