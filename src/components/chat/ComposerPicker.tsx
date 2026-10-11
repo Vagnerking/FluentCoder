@@ -139,6 +139,8 @@ export function ComposerPicker({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
+        // Nome explícito: num compositor estreito o rótulo vira só ícone (CSS).
+        aria-label={triggerTitle ?? triggerLabel}
         title={triggerTitle}
       >
         {triggerIcon && <Codicon name={triggerIcon as IconAction} size={13} />}

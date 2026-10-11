@@ -121,23 +121,24 @@
   gap: 6px;
 }
 
-/* Região estreita: as abas inativas viram só ícone (o nome segue no
-   aria-label e no tooltip); a ativa mantém o texto. */
+/* Região estreita: TODAS as abas viram só ícone (o nome segue no aria-label
+   e no tooltip; a ativa é marcada pelo indicador). Antes só as inativas
+   perdiam o texto e a faixa inteira mudava de largura ao trocar de aba. */
 .view-container-header {
   container-type: inline-size;
   container-name: viewhdr;
 }
 
 @container viewhdr (max-width: 420px) {
-  .view-tab:not(.is-selected) .view-tab-text {
+  .view-tab .view-tab-text {
     display: none;
   }
 
-  .view-tab:not(.is-selected) .ui-tab-label {
+  .view-tab .ui-tab-label {
     gap: 0;
   }
 
-  .view-tab:not(.is-selected) {
+  .view-tab {
     padding: 0 8px;
   }
 }

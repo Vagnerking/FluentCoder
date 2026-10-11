@@ -604,6 +604,25 @@
   gap: var(--space-xs);
   min-width: 0;
 }
+
+/* Compositor estreito: os pickers viram só ícone (nome no aria-label e no
+   tooltip) por prioridade — agente e modo primeiro, o modelo por último —
+   em vez de ellipsis de 2 letras ("Cl…", "P…"). */
+.fc-composer-toolbar {
+  container: fccomposer / inline-size;
+}
+
+@container fccomposer (max-width: 380px) {
+  .fc-toolbar-start .fc-picker-trigger-label {
+    display: none;
+  }
+}
+
+@container fccomposer (max-width: 260px) {
+  .fc-toolbar-end .fc-picker-trigger-label {
+    display: none;
+  }
+}
 .fc-toolbar-start,
 .fc-toolbar-end {
   display: flex;
