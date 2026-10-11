@@ -117,7 +117,21 @@ let explorerWorkspaceRoot: string | null = null;
 
 /** Records the opened folder so `readDir` can anchor `files.exclude` globs. */
 export function setExplorerWorkspaceRoot(root: string | null): void {
+  const changed = explorerWorkspaceRoot !== root;
   explorerWorkspaceRoot = root;
+  if (changed) for (const l of [...workspaceRootListeners]) l(root);
+}
+
+const workspaceRootListeners = new Set<(root: string | null) => void>();
+
+/** Pasta LOCAL aberta (null em SSH/sem pasta) — snippets do workspace, etc. */
+export function getExplorerWorkspaceRoot(): string | null {
+  return explorerWorkspaceRoot;
+}
+
+export function onDidChangeExplorerWorkspaceRoot(listener: (root: string | null) => void): () => void {
+  workspaceRootListeners.add(listener);
+  return () => workspaceRootListeners.delete(listener);
 }
 
 /**
