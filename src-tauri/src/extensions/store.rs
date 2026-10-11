@@ -396,6 +396,132 @@ struct Found {
     target_platform: Option<String>,
 }
 
+// ------------------------------------------------------------------ NLS
+
+/// Locale do app (o host recebe o mesmo em `initialize.language`).
+pub const DEFAULT_LOCALE: &str = "pt-br";
+const NLS_MAX_BYTES: u64 = 4 << 20;
+const NLS_MAX_DEPTH: usize = 32;
+const NLS_MAX_NODES: usize = 50_000;
+
+/// Arquivos de mensagens, do mais genérico ao mais específico:
+/// `package.nls.json` → `package.nls.pt.json` → `package.nls.pt-br.json`.
+/// Espelho de `nlsChain` em tools/ext-host/src/contributions.js.
+pub fn nls_chain(locale: &str) -> Vec<String> {
+    let loc = locale.to_ascii_lowercase().replace('_', "-");
+    let mut out = vec!["package.nls.json".to_string()];
+    let lang = loc.split('-').next().unwrap_or("");
+    let is_lang = |s: &str| (2..=3).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_lowercase());
+    if is_lang(lang) {
+        out.push(format!("package.nls.{lang}.json"));
+    }
+    let parts: Vec<&str> = loc.split('-').collect();
+    let region_ok = parts.len() > 1 && parts[1..].iter().all(|p| (2..=8).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()));
+    if loc != lang && is_lang(lang) && region_ok {
+        out.push(format!("package.nls.{loc}.json"));
+    }
+    out
+}
+
+/// Mensagens mescladas pela cadeia (o mais específico vence). `fetch` lê um
+/// arquivo pelo nome (disco ou rede) e devolve o JSON já com o teto aplicado.
+pub fn merge_nls(locale: &str, mut fetch: impl FnMut(&str) -> Option<Value>) -> serde_json::Map<String, Value> {
+    let mut nls = serde_json::Map::new();
+    for f in nls_chain(locale) {
+        if let Some(Value::Object(m)) = fetch(&f) {
+            nls.extend(m);
+        }
+    }
+    nls
+}
+
+pub fn load_nls(ext_dir: &Path, locale: &str) -> serde_json::Map<String, Value> {
+    merge_nls(locale, |f| {
+        let p = ext_dir.join(f);
+        let m = std::fs::metadata(&p).ok()?;
+        if !m.is_file() || m.len() > NLS_MAX_BYTES {
+            return None;
+        }
+        serde_json::from_slice(&std::fs::read(&p).ok()?).ok()
+    })
+}
+
+fn placeholder_key(s: &str) -> Option<&str> {
+    let k = s.strip_prefix('%')?.strip_suffix('%')?;
+    (!k.is_empty() && !k.contains('%')).then_some(k)
+}
+
+pub fn is_placeholder(s: &str) -> bool {
+    placeholder_key(s).is_some()
+}
+
+/// Texto de uma mensagem: `"texto"` ou `{ message, comment }`.
+fn nls_message(v: &Value) -> Option<&str> {
+    match v {
+        Value::String(s) => Some(s),
+        Value::Object(o) => o.get("message").and_then(Value::as_str),
+        _ => None,
+    }
+}
+
+/// Manifesto traduzido com as mensagens dadas: toda string que seja
+/// exatamente `%chave%` vira a mensagem (travessia limitada: profundidade ≤ 32,
+/// ≤ 50 000 nós). Chave ausente: fica `%chave%`. Espelho de `localizeManifest`.
+pub fn localize_with(pkg: &Value, nls: &serde_json::Map<String, Value>) -> Value {
+    fn walk(v: &Value, depth: usize, nodes: &mut usize, nls: &serde_json::Map<String, Value>) -> Value {
+        *nodes += 1;
+        if *nodes > NLS_MAX_NODES || depth > NLS_MAX_DEPTH {
+            return v.clone();
+        }
+        match v {
+            Value::String(s) => match placeholder_key(s).and_then(|k| nls.get(k)).and_then(nls_message) {
+                Some(m) => Value::String(m.to_string()),
+                None => v.clone(),
+            },
+            Value::Array(a) => Value::Array(a.iter().map(|x| walk(x, depth + 1, nodes, nls)).collect()),
+            Value::Object(o) => Value::Object(o.iter().map(|(k, x)| (k.clone(), walk(x, depth + 1, nodes, nls))).collect()),
+            _ => v.clone(),
+        }
+    }
+    let mut nodes = 0;
+    walk(pkg, 0, &mut nodes, nls)
+}
+
+/// O manifesto lido do disco, traduzido pela cadeia de `package.nls*.json` da pasta.
+pub fn localize_manifest(pkg: &Value, ext_dir: &Path, locale: &str) -> Value {
+    let nls = load_nls(ext_dir, locale);
+    if nls.is_empty() {
+        return pkg.clone();
+    }
+    localize_with(pkg, &nls)
+}
+
+/// O manifesto ainda tem algum `%chave%` (vale buscar o NLS)?
+pub fn has_placeholders(v: &Value) -> bool {
+    match v {
+        Value::String(s) => is_placeholder(s),
+        Value::Array(a) => a.iter().any(has_placeholders),
+        Value::Object(o) => o.values().any(has_placeholders),
+        _ => false,
+    }
+}
+
+/// Nome para exibição: `displayName` traduzido; placeholder sem tradução → `name`.
+pub fn display_name_of(pkg: &Value) -> String {
+    match pkg.get("displayName").and_then(Value::as_str) {
+        Some(d) if !d.is_empty() && !is_placeholder(d) => d.to_string(),
+        _ => str_of(pkg, "name"),
+    }
+}
+
+/// Descrição para exibição (placeholder sem tradução → vazio).
+pub fn description_of(pkg: &Value) -> String {
+    match pkg.get("description").and_then(Value::as_str) {
+        Some(d) if !is_placeholder(d) => d.to_string(),
+        _ => String::new(),
+    }
+}
+
 fn read_pkg(path: &Path) -> Option<Value> {
     let meta = std::fs::metadata(path.join("package.json")).ok()?;
     if meta.len() > 4 << 20 {
@@ -466,6 +592,7 @@ pub fn discover(dir: &Path, vscode_dir: Option<&Path>) -> Vec<InstalledInfo> {
         if pkg_id(&pkg).as_deref() != Some(id.as_str()) {
             continue;
         }
+        let pkg = localize_manifest(&pkg, &path, DEFAULT_LOCALE);
         if !platform_matches(Some(entry.target_platform.as_str()), host) {
             continue;
         }
@@ -475,8 +602,8 @@ pub fn discover(dir: &Path, vscode_dir: Option<&Path>) -> Vec<InstalledInfo> {
                 id: id.clone(),
                 publisher: str_of(&pkg, "publisher"),
                 name: str_of(&pkg, "name"),
-                display_name: pkg.get("displayName").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| str_of(&pkg, "name")),
-                description: str_of(&pkg, "description"),
+                display_name: display_name_of(&pkg),
+                description: description_of(&pkg),
                 version: str_of(&pkg, "version"),
                 location: "app",
                 path: path.to_string_lossy().into_owned(),
@@ -502,14 +629,15 @@ pub fn discover(dir: &Path, vscode_dir: Option<&Path>) -> Vec<InstalledInfo> {
                 continue;
             }
             let ov = index.vscode.get(&f.id).cloned().unwrap_or_default();
+            let pkg = localize_manifest(&f.pkg, &f.path, DEFAULT_LOCALE);
             out.insert(
                 f.id.clone(),
                 InstalledInfo {
                     id: f.id.clone(),
-                    publisher: str_of(&f.pkg, "publisher"),
-                    name: str_of(&f.pkg, "name"),
-                    display_name: f.pkg.get("displayName").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| str_of(&f.pkg, "name")),
-                    description: str_of(&f.pkg, "description"),
+                    publisher: str_of(&pkg, "publisher"),
+                    name: str_of(&pkg, "name"),
+                    display_name: display_name_of(&pkg),
+                    description: description_of(&pkg),
                     version: ver,
                     location: "vscode",
                     path: f.path.to_string_lossy().into_owned(),
@@ -523,7 +651,7 @@ pub fn discover(dir: &Path, vscode_dir: Option<&Path>) -> Vec<InstalledInfo> {
                     pre_release: false,
                     installed_at: None,
                     shadowed_version: None,
-                    manifest: f.pkg,
+                    manifest: pkg,
                 },
             );
         }
@@ -675,6 +803,46 @@ mod tests {
         // uninstall de extensão do VS Code: recusado (somente leitura)
         assert!(uninstall(&dir, "acme.other").is_err());
         assert!(vdir.join("acme.other-1.0.0/package.json").is_file());
+        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(vdir).unwrap();
+    }
+
+    /// Paridade com `localizeManifest` (JS): a mesma saída dourada.
+    #[test]
+    fn nls_matches_js_golden_and_chain() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tools/ext-host/test/fixtures/nls");
+        let expected: Value = serde_json::from_slice(&std::fs::read(root.join("expected.json")).unwrap()).unwrap();
+        let pkg: Value = serde_json::from_slice(&std::fs::read(root.join("demo/package.json")).unwrap()).unwrap();
+        for loc in ["pt-br", "en", "pt"] {
+            assert_eq!(localize_manifest(&pkg, &root.join("demo"), loc), expected[loc], "locale {loc}");
+        }
+        assert_eq!(nls_chain("pt-BR"), vec!["package.nls.json", "package.nls.pt.json", "package.nls.pt-br.json"]);
+        assert_eq!(nls_chain("en"), vec!["package.nls.json", "package.nls.en.json"]);
+        assert_eq!(nls_chain("../x"), vec!["package.nls.json"]);
+        let loc = localize_manifest(&pkg, &root.join("demo"), "pt-br");
+        assert_eq!(display_name_of(&loc), "Demo NLS");
+        // chave ausente: o nome de exibição cai para `name`
+        let raw = serde_json::json!({"name": "x", "displayName": "%nao.existe%", "description": "%d%"});
+        assert_eq!(display_name_of(&raw), "x");
+        assert_eq!(description_of(&raw), "");
+        assert!(has_placeholders(&raw));
+    }
+
+    #[test]
+    fn discover_localizes_both_origins() {
+        let dir = tmpdir("nlsdisc");
+        let vdir = tmpdir("nlsv");
+        let ext = vdir.join("acme.demo-nls-1.0.0");
+        std::fs::create_dir_all(&ext).unwrap();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tools/ext-host/test/fixtures/nls/demo");
+        for f in ["package.json", "package.nls.json", "package.nls.pt.json", "package.nls.pt-br.json"] {
+            std::fs::copy(root.join(f), ext.join(f)).unwrap();
+        }
+        let found = discover(&dir, Some(&vdir));
+        let d = found.iter().find(|f| f.id == "acme.demo-nls").unwrap();
+        assert_eq!(d.display_name, "Demo NLS");
+        assert_eq!(d.description, "Descrição em português genérico");
+        assert_eq!(d.manifest["contributes"]["commands"][0]["title"], "Executar Demo");
         std::fs::remove_dir_all(dir).unwrap();
         std::fs::remove_dir_all(vdir).unwrap();
     }

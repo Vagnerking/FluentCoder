@@ -648,6 +648,35 @@ avaliada" (regra 20). O host ignora entrada com `dir` inseguro ou cujo
   desabilitada ou removida só troca com **"Reiniciar Host de Extensões"**
   (a view mostra o aviso com o botão).
 
+### NLS do manifesto (nomes reais em vez de `%displayName%`)
+
+Toda string do `package.json` que seja exatamente `%chave%` vira a mensagem
+de `package.nls*.json` (`"texto"` ou `{ message, comment }`) — **na leitura**,
+uma vez; todo consumidor recebe o manifesto já traduzido (como o scanner do
+VS Code). Cadeia (o mais específico vence): `package.nls.json` →
+`package.nls.<idioma>.json` → `package.nls.<locale>.json` (`pt-br` → `pt` →
+base; nomes em minúsculas). Locale = o do app (`pt-br`, o mesmo
+`initialize.language` do host). Travessia profunda limitada (profundidade ≤
+32, ≤ 50 000 nós; cada NLS ≤ 4 MB): `displayName`, `description`, títulos/
+categorias de comandos, `configuration` (títulos, `description`,
+`markdownDescription`, `enumDescriptions`, `deprecationMessage`), views,
+contêineres, walkthroughs, aliases… Chave ausente: o `%chave%` fica no
+manifesto e os campos de exibição caem para o `name` (título de comando → id).
+
+- **Uma implementação por lado, mesma saída** (teste de paridade com saída
+  dourada em `tools/ext-host/test/fixtures/nls/`): Rust
+  `store::localize_manifest` (usado no `discover` das duas origens — a lista
+  da view — e por isso também em `extensions_local_details`); Node
+  `contributions.localizeManifest` (usado em `installed.js` → descritor do
+  host/aba/Paleta, `host.js loadExtension` → `packageJSON` traduzido em
+  `vscode.extensions.*`, e `readContributions`).
+- **Remoto**: o Open VSX serve o `package.json` CRU; `extensions_metadata`
+  busca a cadeia de `package.nls*.json` da versão pelos arquivos do pacote
+  (`{site}/vscode/unpkg/{ns}/{nome}/{versão}/extension/…`, mesma allowlist,
+  teto de 4 MB) e traduz; sem NLS, `displayName`/`description` caem nos da API
+  do catálogo (já traduzidos). Rede real: `cargo test --lib real_openvsx_nls
+  -- --ignored --nocapture`.
+
 ### Catálogo (`src-tauri/src/extensions/openvsx.rs`)
 
 Fonte padrão **Open VSX** (`https://open-vsx.org/api`, hosts

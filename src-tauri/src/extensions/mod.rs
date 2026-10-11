@@ -393,7 +393,51 @@ pub async fn extensions_metadata(app: AppHandle, source_id: String, namespace: S
         Some(u) => reg.text(u).await.ok().and_then(|t| serde_json::from_str(&t).ok()),
         None => None,
     };
+    let manifest = match manifest {
+        Some(m) => Some(localize_remote_manifest(&reg, &meta, m).await),
+        None => None,
+    };
     Ok(RegistryDetails { metadata: openvsx::trim_metadata(&meta), manifest })
+}
+
+/// O Open VSX serve o `package.json` CRU (`%displayName%`…): busca a cadeia
+/// de `package.nls*.json` da versão pelos arquivos do pacote (teto de 4 MB
+/// cada, mesma allowlist) e traduz como no disco. Sem NLS acessível, os campos
+/// de exibição caem nos que a API do catálogo já devolve traduzidos.
+pub async fn localize_remote_manifest(reg: &Registry, meta: &Value, manifest: Value) -> Value {
+    let mut out = manifest;
+    if store::has_placeholders(&out) {
+        let ns = meta.get("namespace").and_then(Value::as_str).unwrap_or_default();
+        let name = meta.get("name").and_then(Value::as_str).unwrap_or_default();
+        let ver = meta.get("version").and_then(Value::as_str).unwrap_or_default();
+        let mut nls = serde_json::Map::new();
+        if vsix::validate_id_part(ns).is_ok() && vsix::validate_id_part(name).is_ok() && !ver.is_empty() {
+            for f in store::nls_chain(store::DEFAULT_LOCALE) {
+                if let Ok(bytes) = reg.package_file(ns, name, ver, &f, 4 << 20).await {
+                    if let Ok(Value::Object(m)) = serde_json::from_slice::<Value>(&bytes) {
+                        nls.extend(m);
+                    }
+                }
+            }
+        }
+        if !nls.is_empty() {
+            out = store::localize_with(&out, &nls);
+        }
+    }
+    if let Some(obj) = out.as_object_mut() {
+        for k in ["displayName", "description"] {
+            let raw = obj.get(k).and_then(Value::as_str).map(store::is_placeholder).unwrap_or(false);
+            if raw {
+                match meta.get(k).and_then(Value::as_str) {
+                    Some(v) if !store::is_placeholder(v) => {
+                        obj.insert(k.to_string(), Value::String(v.to_string()));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    out
 }
 
 #[tauri::command]
@@ -600,6 +644,23 @@ mod tests {
         assert_eq!(normalize_id("Anthropic.Claude-Code").unwrap(), "anthropic.claude-code");
         assert!(normalize_id("nodot").is_err());
         assert!(normalize_id("../x.y").is_err());
+    }
+
+    /// NLS do manifesto REMOTO (rede, só leitura): o `package.json` do Open VSX
+    /// vem cru (`%displayName%`); traduzido pelos `package.nls*.json` da versão.
+    /// `cargo test --lib real_openvsx_nls -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn real_openvsx_nls() {
+        let reg = Registry::new(openvsx::default_sources().remove(0)).unwrap();
+        let meta = reg.latest_stable("eamodio", "gitlens", store::host_platform(), false).await.unwrap();
+        let raw: Value = serde_json::from_str(&reg.text(meta["files"]["manifest"].as_str().unwrap()).await.unwrap()).unwrap();
+        assert!(store::is_placeholder(raw["displayName"].as_str().unwrap()), "o catálogo serve o manifesto cru");
+        let loc = localize_remote_manifest(&reg, &meta, raw).await;
+        println!("displayName: {} · description: {}", loc["displayName"], loc["description"]);
+        assert!(!store::is_placeholder(loc["displayName"].as_str().unwrap()));
+        let views = loc["contributes"]["views"].as_object().unwrap().values().flat_map(|v| v.as_array().cloned().unwrap_or_default()).collect::<Vec<_>>();
+        assert!(views.iter().all(|v| !store::is_placeholder(v["name"].as_str().unwrap_or(""))), "nomes de views traduzidos");
     }
 
     /// Instalação REAL de uma extensão pequena do Open VSX numa pasta

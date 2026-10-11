@@ -344,6 +344,29 @@ impl Registry {
         Ok(best.unwrap_or(latest))
     }
 
+    /// Base dos arquivos do pacote de uma versão: `{site}/vscode/unpkg/{ns}/{nome}/{versão}/extension/`
+    /// (endpoint do Open VSX, confirmado em 10/10/2026 para package.json,
+    /// package.nls*.json e bundles `dist/*.js`). Só para fontes cuja API termina
+    /// em `/api` (o layout do Open VSX); outras → None.
+    pub fn package_file_base(&self, ns: &str, name: &str, version: &str) -> Option<String> {
+        let site = self.source.url.strip_suffix("/api")?;
+        Some(format!("{site}/vscode/unpkg/{}/{}/{}/extension/", enc(ns), enc(name), enc(version)))
+    }
+
+    /// Um arquivo do pacote (caminho relativo validado como no VSIX: sem `..`,
+    /// absoluto ou NUL), com teto. Mesma allowlist de hosts de todo o resto.
+    pub async fn package_file(&self, ns: &str, name: &str, version: &str, rel: &str, cap: usize) -> Result<Vec<u8>, FetchError> {
+        let base = self.package_file_base(ns, name, version).ok_or_else(|| FetchError::Other("a fonte não publica os arquivos do pacote".into()))?;
+        let safe = super::vsix::safe_relative(rel.trim_start_matches("./")).map_err(FetchError::Other)?;
+        let path = safe.components().map(|c| enc(&c.as_os_str().to_string_lossy())).collect::<Vec<_>>().join("/");
+        let (b, ctype) = self.get_bytes(&format!("{base}{path}"), cap).await?;
+        // O unpkg do Open VSX responde páginas HTML para pastas/erros.
+        if ctype.as_deref().map(|t| t.starts_with("text/html")).unwrap_or(false) {
+            return Err(FetchError::NotFound);
+        }
+        Ok(b)
+    }
+
     pub async fn text(&self, url: &str) -> Result<String, String> {
         let (b, _) = self.get_bytes(url, TEXT_CAP).await?;
         Ok(String::from_utf8_lossy(&b).into_owned())

@@ -26,7 +26,7 @@ const { NotebookService } = require('./shim/notebooks');
 const { createVscodeApi, toUri } = require('./shim/api');
 const { ResourceServer } = require('./server');
 const { buildPreamble, injectPreamble } = require('./preamble');
-const { readContributions } = require('./contributions');
+const { readContributions, localizeManifest, displayNameOf } = require('./contributions');
 const { evaluateWhen } = require('./when');
 
 const { Disposable, EventEmitter, Uri, Position, Range, Selection } = types;
@@ -245,7 +245,9 @@ class ExtensionHost {
   /** Carrega (sem ativar) uma extensão a partir da pasta instalada. */
   loadExtension(extensionPath) {
     extensionPath = path.resolve(extensionPath);
-    const packageJSON = JSON.parse(fs.readFileSync(path.join(extensionPath, 'package.json'), 'utf8'));
+    // Traduzido UMA vez aqui: `extensions.getExtension(id).packageJSON` sai
+    // localizado, como no VS Code (o scanner de lá entrega o manifesto traduzido).
+    const packageJSON = localizeManifest(JSON.parse(fs.readFileSync(path.join(extensionPath, 'package.json'), 'utf8')), extensionPath, this.language);
     const id = `${packageJSON.publisher}.${packageJSON.name}`.toLowerCase();
     if (this.extensions.has(id)) return this.extensions.get(id);
     const mainPath = packageJSON.main ? require.resolve(path.resolve(extensionPath, packageJSON.main)) : null;
@@ -277,7 +279,7 @@ class ExtensionHost {
     return {
       id: ext.id,
       name: ext.packageJSON.name,
-      displayName: ext.packageJSON.displayName || ext.packageJSON.name,
+      displayName: displayNameOf(ext.packageJSON),
       version: ext.packageJSON.version,
       publisher: ext.packageJSON.publisher,
       path: ext.extensionPath,
@@ -1379,7 +1381,7 @@ class ExtensionHost {
       diffId: diff.id,
       title: diff.title,
       extensionId: ext ? ext.id : undefined,
-      extensionName: ext ? ext.packageJSON.displayName || ext.packageJSON.name : undefined,
+      extensionName: ext ? displayNameOf(ext.packageJSON) : undefined,
       filePath,
       isNewFile,
       reviewable,

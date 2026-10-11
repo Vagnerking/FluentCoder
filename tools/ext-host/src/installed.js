@@ -12,7 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { readContributions } = require('./contributions');
+const { readContributions, localizeManifest, displayNameOf } = require('./contributions');
 const { VSCODE_VERSION } = require('./shim/api');
 
 /** Extensões embutidas: rótulo curto e views de webview preferidas (Fluent Chat). */
@@ -196,7 +196,7 @@ function describe(pkg, extPath, source, index) {
     id,
     path: extPath,
     version: pkg.version,
-    displayName: pkg.displayName || pkg.name,
+    displayName: displayNameOf(pkg),
     publisher: pkg.publisher,
     source,
     builtin: !!builtin,
@@ -205,7 +205,7 @@ function describe(pkg, extPath, source, index) {
     /** Roda por liberação explícita do usuário (código "Não avaliado"). */
     trusted: !builtin && supported && !!gate && gate.verdict === 'unknown',
     blockedReason: supported ? undefined : !enabled ? 'disabled' : gate && gate.verdict && !RUNNABLE_VERDICTS.has(gate.verdict) ? gate.verdict : 'not-evaluated',
-    label: builtin ? builtin.label : pkg.displayName || pkg.name,
+    label: builtin ? builtin.label : displayNameOf(pkg),
     viewIds: builtin ? builtin.viewIds : webviewViewIds(pkg),
     activateOnStartup: !builtin && wantsStartup(pkg),
   };
@@ -221,7 +221,7 @@ function describe(pkg, extPath, source, index) {
 }
 
 /** Extensões da pasta gerenciada, conforme o índice (pastas fora do índice são ignoradas). */
-function scanManaged(dir, index, tag) {
+function scanManaged(dir, index, tag, language) {
   const out = [];
   for (const [id, rec] of Object.entries(index.extensions)) {
     if (typeof rec.dir !== 'string' || !DIR_RE.test(rec.dir) || rec.dir.includes('..')) continue;
@@ -231,7 +231,7 @@ function scanManaged(dir, index, tag) {
     if (`${pkg.publisher}.${pkg.name}`.toLowerCase() !== id) continue;
     const tp = rec.targetPlatform;
     if (tp && tp !== 'universal' && tp !== 'web' && tp !== tag) continue;
-    out.push({ pkg, extPath });
+    out.push({ pkg: localizeManifest(pkg, extPath, language), extPath });
   }
   return out;
 }
@@ -267,18 +267,20 @@ function scanVscode(dirs, tag) {
 }
 
 /**
- * Lista a versão carregável de cada extensão (gerenciada > VS Code).
- * @param {{ managed?: string|null, vscodeDirs?: string[] }|string[]} [opts]
+ * Lista a versão carregável de cada extensão (gerenciada > VS Code), com o
+ * manifesto traduzido (`language`, padrão `pt-br`).
+ * @param {{ managed?: string|null, vscodeDirs?: string[], language?: string }|string[]} [opts]
  */
 function listInstalled(opts = {}) {
   // Assinatura antiga: listInstalled(dirs).
   if (Array.isArray(opts)) opts = { vscodeDirs: opts, managed: null };
   const tag = platformTag();
+  const language = opts.language || 'pt-br';
   const mdir = managedDir(opts.managed);
   const index = readIndex(mdir);
   const best = new Map();
   if (mdir) {
-    for (const { pkg, extPath } of scanManaged(mdir, index, tag)) best.set(`${pkg.publisher}.${pkg.name}`.toLowerCase(), describe(pkg, extPath, 'app', index));
+    for (const { pkg, extPath } of scanManaged(mdir, index, tag, language)) best.set(`${pkg.publisher}.${pkg.name}`.toLowerCase(), describe(pkg, extPath, 'app', index));
   }
   const fromVscode = new Map();
   for (const { pkg, extPath } of scanVscode(opts.vscodeDirs || extensionDirs(), tag)) {
@@ -288,7 +290,7 @@ function listInstalled(opts = {}) {
   }
   for (const [id, { pkg, extPath }] of fromVscode) {
     if (best.has(id)) continue; // a gerenciada vence
-    best.set(id, describe(pkg, extPath, 'vscode', index));
+    best.set(id, describe(localizeManifest(pkg, extPath, language), extPath, 'vscode', index));
   }
   return [...best.values()].sort((a, b) => Number(b.supported) - Number(a.supported) || a.id.localeCompare(b.id));
 }

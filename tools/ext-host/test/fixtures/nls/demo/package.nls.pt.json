@@ -1,0 +1,6 @@
+{
+  "description": "Descrição em português genérico",
+  "command.run": "Executar Demo (pt)",
+  "view.name": "View Demo (pt)",
+  "config.mode.a": { "message": "Modo A (pt)" }
+}

@@ -61,7 +61,7 @@ let managedExtensionsDir = null;
 let headless = false;
 
 function scanInstalled() {
-  return listInstalled({ managed: managedExtensionsDir });
+  return listInstalled({ managed: managedExtensionsDir, language: host ? host.language : 'pt-br' });
 }
 
 /** Cache de compilação do V8 (Node 22.1+): `require` dos bundles grandes fica mais rápido da 2ª vez. */

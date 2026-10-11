@@ -1,0 +1,33 @@
+{
+  "name": "demo-nls",
+  "publisher": "acme",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "1.0.0",
+  "engines": { "vscode": "^1.80.0" },
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "demo.run", "title": "%command.run%", "category": "%category%" },
+      { "command": "demo.missing", "title": "%command.missing%" }
+    ],
+    "configuration": [
+      {
+        "title": "%config.title%",
+        "properties": {
+          "demo.mode": {
+            "type": "string",
+            "enum": ["a", "b"],
+            "enumDescriptions": ["%config.mode.a%", "%config.mode.b%"],
+            "markdownDescription": "%config.mode%",
+            "deprecationMessage": "%config.deprecated%"
+          }
+        }
+      }
+    ],
+    "views": { "explorer": [{ "id": "demo.view", "name": "%view.name%" }] },
+    "viewsContainers": { "activitybar": [{ "id": "demo", "title": "%container.title%", "icon": "media/icon.svg" }] },
+    "walkthroughs": [{ "id": "w", "title": "%walk.title%", "steps": [{ "id": "s", "title": "%walk.step%", "description": "Literal sem placeholder: 100% pronto" }] }],
+    "languages": [{ "id": "demo", "aliases": ["%lang.alias%", "Demo"] }]
+  }
+}
