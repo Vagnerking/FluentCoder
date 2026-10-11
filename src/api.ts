@@ -43,6 +43,8 @@ import type {
 } from "./agents/types";
 import type { ProviderStatus } from "./acp/providers";
 import { getFilesExcludeGlobs } from "./settings/filesExclude";
+import type { FileProbe } from "./editor/fileOpenPolicy";
+import { getQuickOpenExcludeGlobs, getQuickOpenMaxFiles } from "./settings/quickOpenSettings";
 
 /** Raw shape returned by the Rust `git_status` (snake_case from serde). */
 interface RawGitStatus {
@@ -165,7 +167,7 @@ export interface DecodedFile {
  * UTF-16, Windows-1252/Latin-1 heuristic); remote SFTP reads are assumed UTF-8
  * + LF since the SFTP path returns a decoded string.
  */
-export async function readFile(path: string): Promise<DecodedFile> {
+export async function readFile(path: string, opts?: { allowLarge?: boolean }): Promise<DecodedFile> {
   const remote = getActiveRemote();
   if (remote) {
     const content = await invoke<string>("ssh_read_file", {
@@ -174,7 +176,15 @@ export async function readFile(path: string): Promise<DecodedFile> {
     });
     return { content, encoding: "UTF-8", bom: false, eol: "Lf" };
   }
-  return invoke<DecodedFile>("read_file", { path });
+  return invoke<DecodedFile>("read_file", { path, allowLarge: opts?.allowLarge ?? false });
+}
+
+/**
+ * Size + binary sniff of a LOCAL file (reads at most 8 KB), so the editor can
+ * decide how to open it before reading it all (see `editor/fileOpenPolicy.ts`).
+ */
+export function probeFile(path: string): Promise<FileProbe> {
+  return invoke<FileProbe>("probe_file", { path });
 }
 
 /** Reads a text file from a specific SSH connection, independent of window state. */
@@ -867,22 +877,37 @@ export function buildSearchIndex(root: string): Promise<void> {
   return invoke<void>("build_search_index", { root });
 }
 
-/** Lists every file under `root` (skipping heavy dirs) for Quick Open (Ctrl+P).
- *  Over SSH the host's `find` produces the list (no contents read). */
-export function listProjectFiles(root: string, connId?: string): Promise<ProjectFile[]> {
-  if (connId) {
-    return invoke<ProjectFile[]>("ssh_list_project_files", {
-      connId,
-      root,
-    });
+/** Quick Open index of one root, plus whether the size cap cut it. */
+export interface ProjectIndex {
+  files: ProjectFile[];
+  /** More files exist than `cap` (the list was cut — the UI says so). */
+  truncated: boolean;
+  cap: number;
+}
+
+/**
+ * Indexes the files under `root` for Quick Open (Ctrl+P). Local roots honour
+ * `.gitignore`, `files.exclude` + `search.exclude` and skip heavy dirs
+ * (`node_modules`, `target`, `.claude/worktrees`…); the cap
+ * (`fluent.quickOpen.maxFiles`) is reported via `truncated`, never silent.
+ * Over SSH the host's `find` produces the list (no contents read).
+ */
+export async function listProjectIndex(root: string, connId?: string): Promise<ProjectIndex> {
+  const sshConn = connId ?? getActiveRemote()?.connId;
+  if (sshConn) {
+    const files = await invoke<ProjectFile[]>("ssh_list_project_files", { connId: sshConn, root });
+    return { files, truncated: false, cap: files.length };
   }
-  const remote = getActiveRemote();
-  if (remote)
-    return invoke<ProjectFile[]>("ssh_list_project_files", {
-      connId: remote.connId,
-      root,
-    });
-  return invoke<ProjectFile[]>("list_project_files", { root });
+  return invoke<ProjectIndex>("list_project_files", {
+    root,
+    exclude: getQuickOpenExcludeGlobs(),
+    maxFiles: getQuickOpenMaxFiles(),
+  });
+}
+
+/** Lists the project files under `root` (see {@link listProjectIndex}). */
+export async function listProjectFiles(root: string, connId?: string): Promise<ProjectFile[]> {
+  return (await listProjectIndex(root, connId)).files;
 }
 
 /**

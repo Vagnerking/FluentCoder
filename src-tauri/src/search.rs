@@ -1,4 +1,4 @@
-use crate::walk::is_skipped_dir;
+use crate::walk::{is_skipped_dir, is_skipped_dir_path};
 use grep_matcher::Matcher;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{sinks, BinaryDetection, SearcherBuilder};
@@ -420,7 +420,7 @@ fn should_visit(entry: &DirEntry) -> bool {
     if entry.depth() == 0 || !entry.file_type().is_some_and(|kind| kind.is_dir()) {
         return true;
     }
-    !is_skipped_dir(&entry.file_name().to_string_lossy())
+    !is_skipped_dir(&entry.file_name().to_string_lossy()) && !is_skipped_dir_path(entry.path())
 }
 
 fn is_searchable_file(entry: &DirEntry) -> bool {

@@ -140,8 +140,13 @@ export interface OpenFile {
   };
   /** True when the buffer differs from what's on disk. */
   dirty: boolean;
-  /** Read-only tabs are virtual views such as Git revisions. */
+  /** Read-only tabs are virtual views such as Git revisions (or huge files). */
   readOnly?: boolean;
+  /**
+   * Large-file mode (> 5 MB): opened as plaintext with the heavy Monaco
+   * features off and no LSP `didOpen`. See `editor/fileOpenPolicy.ts`.
+   */
+  largeFile?: boolean;
   /** Original file represented by a virtual/read-only tab. */
   sourcePath?: string;
   /** Small UI hint shown by editor surfaces for virtual tabs. */

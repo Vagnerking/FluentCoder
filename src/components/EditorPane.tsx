@@ -43,6 +43,7 @@ import { EDITOR_OPTIONS } from "./editorOptions.ts";
 import { palette } from "../theme/palette";
 import { openExternal } from "../platform/commands";
 import { fontStacks, formatShortcutsInText } from "../platform";
+import { LARGE_FILE_EDITOR_OPTIONS, largeFileLanguage } from "../editor/fileOpenPolicy";
 
 // Console-only debug logging. (It used to mirror to a hardcoded path on another
 // machine and fire an IPC file write — with an ever-growing buffer — on EVERY
@@ -2300,9 +2301,9 @@ export function EditorPane({
       : "";
   const editorLanguage = isDiffViewFile(file)
     ? "diff"
-    : languageForFile(
-        file.sourcePath ? baseName(file.sourcePath) : file.name,
-        file.sourcePath ?? file.path
+    : largeFileLanguage(
+        languageForFile(file.sourcePath ? baseName(file.sourcePath) : file.name, file.sourcePath ?? file.path),
+        file.largeFile
       );
   const editor = (
     <Editor
@@ -2338,11 +2339,21 @@ export function EditorPane({
         codeLensFontSize: 12,
         codeLensFontFamily: fontStacks().ui,
         lineDecorationsWidth: 13,
+        // Large-file mode: plaintext + heavy features off (fileOpenPolicy.ts).
+        ...(file.largeFile ? LARGE_FILE_EDITOR_OPTIONS : {}),
       }}
     />
   );
   const editorFrame = (
     <div className="editor-pane-shell">
+      {file.largeFile && !file.readOnly && (
+        <div className="editor-readonly-banner" role="status">
+          <div className="editor-readonly-main">
+            <span className="codicon codicon-dashboard" aria-hidden="true" />
+            <span>Modo de arquivo grande: realce, IntelliSense e recursos pesados desligados.</span>
+          </div>
+        </div>
+      )}
       {file.readOnly && (
         <div className="editor-readonly-banner" role="status">
           <div className="editor-readonly-main">

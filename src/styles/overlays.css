@@ -69,6 +69,8 @@
 }
 
 .quick-open-empty { padding: 10px var(--space-md); color: var(--text-muted); font-size: var(--font-caption); }
+/* Quick Open index hit its cap: say so (never truncate silently). */
+.quick-open-notice { padding: 4px var(--space-md); color: var(--color-status-warning); font-size: var(--font-caption-sm); }
 
 /* Result rows: 32px, selection = soft accent fill + the leading accent pill. */
 .quick-open-item,

@@ -1,3 +1,4 @@
+import { gateLocalTextOpen } from "./editor/openFileGate";
 import {
   useCallback,
   useEffect,
@@ -3181,6 +3182,20 @@ export default function App() {
         return true;
       }
 
+      // Local text files: probe size/binary BEFORE reading everything (8 KB
+      // sniff). Binary or > 50 MB asks first; > 5 MB opens in large-file mode
+      // (no LSP/heavy editor features). See editor/fileOpenPolicy.ts.
+      const gate =
+        resolvedMode === "text" && !workspaceRemote && !getActiveRemote()
+          ? await gateLocalTextOpen(node.path, node.name)
+          : { allowLarge: false, largeFile: false, readOnly: false };
+      if (!gate) return false;
+      const gateFields = {
+        largeFile: gate.largeFile || undefined,
+        readOnly: gate.readOnly || undefined,
+        sourceLabel: gate.sourceLabel,
+      };
+
       // Active-group routing (VS Code style): when a detached editor window is
       // the active group, a NEW file opens there as a tab instead of here. Files
       // already open in this window were focused-in-place above.
@@ -3191,7 +3206,7 @@ export default function App() {
             resolvedMode === "text"
               ? workspaceRemote
                 ? await readSshTextFile(workspaceRemote.connId, node.path)
-                : await readFile(node.path)
+                : await readFile(node.path, { allowLarge: gate.allowLarge })
               : null;
           await openInDetached(active.label, {
             path: node.path,
@@ -3203,6 +3218,7 @@ export default function App() {
             encoding: decoded?.encoding,
             bom: decoded?.bom,
             eol: decoded?.eol,
+            ...gateFields,
           });
           return true;
         }
@@ -3218,7 +3234,7 @@ export default function App() {
           resolvedMode === "text"
             ? workspaceRemote
               ? await readSshTextFile(workspaceRemote.connId, node.path)
-              : await readFile(node.path)
+              : await readFile(node.path, { allowLarge: gate.allowLarge })
             : null;
         // Dedupe INSIDE the functional update: the `already` check above reads a
         // snapshot, so two quick opens of the same file both pass it and would
@@ -3244,6 +3260,7 @@ export default function App() {
             openedFrom: opts?.origin,
             preview: opts?.preview && !opts?.pinned ? true : undefined,
             pinned: opts?.pinned || undefined,
+            ...gateFields,
           });
         });
         setActivePath(node.path);

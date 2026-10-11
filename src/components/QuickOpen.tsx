@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SearchBox } from "./ui/Input";
-import { listProjectFiles } from "../api";
+import { listProjectIndex } from "../api";
 import { useModalDismiss } from "./useModalDismiss";
 import { rankFiles } from "../quickOpen/fuzzy";
 import type { FileNode, OpenFile, ProjectFile } from "../types";
@@ -102,6 +102,8 @@ export function QuickOpen({
   const [query, setQuery] = useState("");
   const [files, setFiles] = useState<QuickOpenFile[]>([]);
   const [loading, setLoading] = useState(false);
+  /** Roots whose index hit the cap (`fluent.quickOpen.maxFiles`) — shown, never silent. */
+  const [truncatedRoots, setTruncatedRoots] = useState<{ label: string; cap: number }[]>([]);
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -132,12 +134,16 @@ export function QuickOpen({
     }
     let cancelled = false;
     setLoading(true);
+    setTruncatedRoots([]);
     void (async () => {
       const all: QuickOpenFile[] = [];
+      const cut: { label: string; cap: number }[] = [];
       for (const target of targets) {
         try {
-          const list = await listProjectFiles(target.path, target.connId);
+          const index = await listProjectIndex(target.path, target.connId);
           if (cancelled) return;
+          if (index.truncated) cut.push({ label: target.label, cap: index.cap });
+          const list = index.files;
           const workspaceRemote =
             target.provider === "ssh" && target.connId && target.remote
               ? {
@@ -159,7 +165,10 @@ export function QuickOpen({
           console.error(err);
         }
       }
-      if (!cancelled) setFiles(all);
+      if (!cancelled) {
+        setFiles(all);
+        setTruncatedRoots(cut);
+      }
     })().finally(() => {
       if (!cancelled) setLoading(false);
     });
@@ -234,6 +243,17 @@ export function QuickOpen({
           onKeyDown={onKeyDown}
         />
 
+        {truncatedRoots.length > 0 && (
+          <div className="quick-open-notice" role="status">
+            {truncatedRoots
+              .map(
+                (r) =>
+                  `${targets.length > 1 ? `${r.label}: ` : ""}índice limitado aos primeiros ${r.cap.toLocaleString("pt-BR")} arquivos`
+              )
+              .join(" · ")}
+            {" — refine a busca ou ajuste fluent.quickOpen.maxFiles / search.exclude."}
+          </div>
+        )}
         <div className="quick-open-list" role="listbox" ref={listRef}>
           {visible.length === 0 ? (
             <div className="quick-open-empty">

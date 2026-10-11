@@ -134,6 +134,7 @@ pub fn run() {
             agents::ide_bridge::ide_bridge_set_advertised,
             fs_commands::read_dir,
             fs_commands::read_file,
+            fs_commands::probe_file,
             fs_commands::read_file_with_encoding,
             fs_commands::read_file_base64,
             ext_host::ext_host_start,

@@ -2,6 +2,16 @@ use serde::Serialize;
 use std::fs::{self, OpenOptions};
 use std::path::{Component, Path, PathBuf};
 
+/// Runs blocking filesystem work on Tauri's blocking pool. In Tauri 2 a sync
+/// `#[tauri::command] fn` runs on the MAIN thread, so every `read_dir`/`read_file`
+/// used to freeze the UI (and the GTK event loop) for the whole I/O. All the
+/// commands below are `async` wrappers over a `*_blocking` implementation.
+async fn off_main<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| format!("tarefa de arquivo falhou: {e}"))?
+}
+
 /// A single entry (file or directory) inside a folder, as shown in the explorer.
 #[derive(Serialize)]
 pub struct DirEntry {
@@ -243,7 +253,12 @@ fn workspace_relative(entry: &Path, workspace_root: Option<&str>) -> Option<Stri
 /// patterns); the heavy walks (search, Quick Open) use the separate
 /// `walk::SKIP_DIRS` list and are unaffected.
 #[tauri::command]
-pub fn read_dir(
+pub async fn read_dir(path: String, exclude: Option<Vec<String>>, workspace_root: Option<String>) -> Result<Vec<DirEntry>, String> {
+    off_main(move || read_dir_blocking(path, exclude, workspace_root)).await
+}
+
+/// Blocking body of [`read_dir`].
+pub(crate) fn read_dir_blocking(
     path: String,
     exclude: Option<Vec<String>>,
     workspace_root: Option<String>,
@@ -300,16 +315,90 @@ pub fn read_dir(
 /// editor can show them in the status bar and round-trip them on save. This is
 /// why a UTF-16 or BOM-prefixed file (e.g. Roslyn's decompiled metadata) opens
 /// as clean text instead of showing a stray `◇`/`?` at the start.
+///
+/// Files above `HUGE_FILE_BYTES` are refused unless `allow_large` (the front
+/// end asks first and then opens them read-only in large-file mode); nothing
+/// above `MAX_TEXT_BYTES` is ever decoded (the IPC string would exhaust the
+/// WebView). Runs off the main thread.
 #[tauri::command]
-pub fn read_file(path: String) -> Result<crate::text_io::DecodedFile, String> {
-    let bytes = fs::read(&path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+pub async fn read_file(path: String, allow_large: Option<bool>) -> Result<crate::text_io::DecodedFile, String> {
+    off_main(move || read_file_blocking(&path, allow_large.unwrap_or(false))).await
+}
+
+/// Above this the editor asks before opening (VS Code's
+/// `files.maxMemoryForLargeFilesMB` prompt) and opens read-only.
+pub(crate) const HUGE_FILE_BYTES: u64 = 50 * 1024 * 1024;
+/// Hard ceiling for decoding a file as text at all.
+pub(crate) const MAX_TEXT_BYTES: u64 = 512 * 1024 * 1024;
+/// How many leading bytes the binary sniff inspects.
+const SNIFF_BYTES: usize = 8 * 1024;
+
+pub(crate) fn read_file_blocking(path: &str, allow_large: bool) -> Result<crate::text_io::DecodedFile, String> {
+    let meta = fs::metadata(path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+    let size = meta.len();
+    if size > MAX_TEXT_BYTES {
+        return Err(format!("Arquivo grande demais para abrir como texto ({} MB).", size / 1_048_576));
+    }
+    if size > HUGE_FILE_BYTES && !allow_large {
+        return Err(format!("FILE_TOO_LARGE:{size}"));
+    }
+    let bytes = fs::read(path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
     Ok(crate::text_io::decode(&bytes))
+}
+
+/// What the editor needs to decide HOW to open a file before reading it.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FileProbe {
+    pub size: u64,
+    /// NUL byte in the first 8 KB (and no UTF-16 BOM): almost surely binary.
+    pub binary: bool,
+}
+
+/// Binary sniff like git/VS Code: a NUL byte in the first block, unless the
+/// file starts with a UTF-16 BOM (UTF-16 text is full of NULs).
+pub(crate) fn looks_binary(head: &[u8]) -> bool {
+    if head.starts_with(&[0xFF, 0xFE]) || head.starts_with(&[0xFE, 0xFF]) {
+        return false;
+    }
+    head.contains(&0)
+}
+
+pub(crate) fn probe_file_blocking(path: &str) -> Result<FileProbe, String> {
+    use std::io::Read;
+    let meta = fs::metadata(path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+    if meta.is_dir() {
+        return Err(format!("'{path}' é uma pasta."));
+    }
+    let mut head = vec![0u8; SNIFF_BYTES];
+    let mut file = fs::File::open(path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+    let mut filled = 0;
+    while filled < head.len() {
+        match file.read(&mut head[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(format!("Falha ao ler '{path}': {e}")),
+        }
+    }
+    Ok(FileProbe { size: meta.len(), binary: looks_binary(&head[..filled]) })
+}
+
+/// Size + binary sniff (reads at most 8 KB), off the main thread.
+#[tauri::command]
+pub async fn probe_file(path: String) -> Result<FileProbe, String> {
+    off_main(move || probe_file_blocking(&path)).await
 }
 
 /// Re-reads a file forcing a specific encoding ("Reopen with Encoding"). The EOL
 /// is still auto-detected from the freshly decoded text.
 #[tauri::command]
-pub fn read_file_with_encoding(
+pub async fn read_file_with_encoding(path: String, encoding: String) -> Result<crate::text_io::DecodedFile, String> {
+    off_main(move || read_file_with_encoding_blocking(path, encoding)).await
+}
+
+/// Blocking body of [`read_file_with_encoding`].
+pub(crate) fn read_file_with_encoding_blocking(
     path: String,
     encoding: String,
 ) -> Result<crate::text_io::DecodedFile, String> {
@@ -325,10 +414,14 @@ pub fn read_file_with_encoding(
 /// back to `application/octet-stream` (the browser still renders common images).
 /// Upper bound for inlining a file as a base64 `data:` URL. Beyond this, the
 /// memory + string overhead would freeze the WebView, so we refuse instead.
-pub(crate) const MAX_PREVIEW_BYTES: u64 = 256 * 1024 * 1024;
+pub(crate) const MAX_PREVIEW_BYTES: u64 = 64 * 1024 * 1024;
 
 #[tauri::command]
-pub fn read_file_base64(path: String) -> Result<String, String> {
+pub async fn read_file_base64(path: String) -> Result<String, String> {
+    off_main(move || read_file_base64_blocking(path)).await
+}
+
+pub(crate) fn read_file_base64_blocking(path: String) -> Result<String, String> {
     let meta = fs::metadata(&path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
     if meta.len() > MAX_PREVIEW_BYTES {
         return Err(format!(
@@ -418,7 +511,12 @@ fn base64_encode(input: &[u8]) -> String {
 /// BOM and line ending so an edit never silently rewrites those — matching
 /// VS Code's "preserve" default. Omitting them falls back to UTF-8 + LF.
 #[tauri::command]
-pub fn write_file(
+pub async fn write_file(path: String, contents: String, encoding: Option<String>, eol: Option<crate::text_io::Eol>, bom: Option<bool>) -> Result<(), String> {
+    off_main(move || write_file_blocking(path, contents, encoding, eol, bom)).await
+}
+
+/// Blocking body of [`write_file`].
+pub(crate) fn write_file_blocking(
     path: String,
     contents: String,
     encoding: Option<String>,
@@ -441,7 +539,12 @@ pub fn write_file(
 
 /// Creates an empty file without ever overwriting an existing path.
 #[tauri::command]
-pub fn create_file(
+pub async fn create_file(workspace_root: String, parent: String, name: String) -> Result<DirEntry, String> {
+    off_main(move || create_file_blocking(workspace_root, parent, name)).await
+}
+
+/// Blocking body of [`create_file`].
+pub(crate) fn create_file_blocking(
     workspace_root: String,
     parent: String,
     name: String,
@@ -457,7 +560,12 @@ pub fn create_file(
 
 /// Creates exactly one folder level and rejects collisions.
 #[tauri::command]
-pub fn create_folder(
+pub async fn create_folder(workspace_root: String, parent: String, name: String) -> Result<DirEntry, String> {
+    off_main(move || create_folder_blocking(workspace_root, parent, name)).await
+}
+
+/// Blocking body of [`create_folder`].
+pub(crate) fn create_folder_blocking(
     workspace_root: String,
     parent: String,
     name: String,
@@ -470,7 +578,12 @@ pub fn create_folder(
 /// Renames `path` to `new_name` within the same parent folder. Rejects a
 /// collision (never overwrites) and revalidates both ends against the workspace.
 #[tauri::command]
-pub fn rename_path(
+pub async fn rename_path(workspace_root: String, path: String, new_name: String) -> Result<DirEntry, String> {
+    off_main(move || rename_path_blocking(workspace_root, path, new_name)).await
+}
+
+/// Blocking body of [`rename_path`].
+pub(crate) fn rename_path_blocking(
     workspace_root: String,
     path: String,
     new_name: String,
@@ -495,7 +608,12 @@ pub fn rename_path(
 
 /// Sends `path` to the OS recycle bin (recoverable). Never deletes permanently.
 #[tauri::command]
-pub fn delete_to_trash(workspace_root: String, path: String) -> Result<(), String> {
+pub async fn delete_to_trash(workspace_root: String, path: String) -> Result<(), String> {
+    off_main(move || delete_to_trash_blocking(workspace_root, path)).await
+}
+
+/// Blocking body of [`delete_to_trash`].
+pub(crate) fn delete_to_trash_blocking(workspace_root: String, path: String) -> Result<(), String> {
     let target = validate_existing_path(&workspace_root, &path)?;
     crate::platform::move_to_trash(&target)
 }
@@ -503,7 +621,12 @@ pub fn delete_to_trash(workspace_root: String, path: String) -> Result<(), Strin
 /// Copies `src` (file or directory, recursive) into `dest_parent`, resolving any
 /// name collision without overwriting. Revalidates both ends in the workspace.
 #[tauri::command]
-pub fn copy_path(
+pub async fn copy_path(workspace_root: String, src: String, dest_parent: String) -> Result<DirEntry, String> {
+    off_main(move || copy_path_blocking(workspace_root, src, dest_parent)).await
+}
+
+/// Blocking body of [`copy_path`].
+pub(crate) fn copy_path_blocking(
     workspace_root: String,
     src: String,
     dest_parent: String,
@@ -526,7 +649,12 @@ pub fn copy_path(
 /// Moves `src` (file or directory, recursive) into `dest_parent`, resolving any
 /// name collision without overwriting. Falls back to copy+remove across volumes.
 #[tauri::command]
-pub fn move_path(
+pub async fn move_path(workspace_root: String, src: String, dest_parent: String) -> Result<DirEntry, String> {
+    off_main(move || move_path_blocking(workspace_root, src, dest_parent)).await
+}
+
+/// Blocking body of [`move_path`].
+pub(crate) fn move_path_blocking(
     workspace_root: String,
     src: String,
     dest_parent: String,
@@ -576,8 +704,10 @@ pub async fn reveal_in_explorer(workspace_root: String, path: String) -> Result<
 #[cfg(test)]
 mod tests {
     use super::{
-        build_exclude_matcher, copy_path, create_file, create_folder, move_path, rename_path,
-        workspace_relative,
+        build_exclude_matcher, copy_path_blocking as copy_path, create_file_blocking as create_file,
+        create_folder_blocking as create_folder, looks_binary, move_path_blocking as move_path,
+        probe_file_blocking, read_file_blocking, rename_path_blocking as rename_path, workspace_relative,
+        HUGE_FILE_BYTES,
     };
     use std::fs;
     use std::path::Path;
@@ -737,6 +867,39 @@ mod tests {
         let root = workspace();
         let root_text = root.to_string_lossy().to_string();
         assert!(create_file(root_text.clone(), root_text, "con.txt".into()).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn binary_sniff_and_probe() {
+        assert!(looks_binary(b"MZ\x90\x00\x03"));
+        assert!(!looks_binary(b"fn main() {}\n"));
+        assert!(!looks_binary(&[0xFF, 0xFE, b'a', 0, b'b', 0]), "UTF-16 LE com BOM é texto");
+        let root = workspace();
+        let bin = root.join("a.bin");
+        fs::write(&bin, [1u8, 2, 0, 4]).unwrap();
+        let txt = root.join("a.txt");
+        fs::write(&txt, "olá").unwrap();
+        let p = probe_file_blocking(&bin.to_string_lossy()).unwrap();
+        assert!(p.binary && p.size == 4);
+        let p = probe_file_blocking(&txt.to_string_lossy()).unwrap();
+        assert!(!p.binary);
+        assert!(probe_file_blocking(&root.to_string_lossy()).is_err(), "pasta não é arquivo");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn huge_files_need_explicit_consent() {
+        let root = workspace();
+        let big = root.join("big.log");
+        let f = fs::File::create(&big).unwrap();
+        // Sparse file: no real disk use.
+        f.set_len(HUGE_FILE_BYTES + 1).unwrap();
+        let err = read_file_blocking(&big.to_string_lossy(), false).unwrap_err();
+        assert!(err.starts_with("FILE_TOO_LARGE:"), "{err}");
+        let small = root.join("s.txt");
+        fs::write(&small, "x\r\ny").unwrap();
+        assert_eq!(read_file_blocking(&small.to_string_lossy(), false).unwrap().content, "x\ny");
         fs::remove_dir_all(root).unwrap();
     }
 
