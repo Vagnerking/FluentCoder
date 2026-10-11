@@ -50,8 +50,14 @@ src/extensions/client.ts ──invoke(ext_host_send)──▶ Rust src-tauri/src
   (`fluent-coder://`). Comandos: `ext_host_start`, `ext_host_send`,
   `ext_host_stop`, `ext_host_open_external` (só `http(s)`/`mailto`),
   `deep_link_take_pending`, `deep_link_ack`.
-- **Dados do host** em `<app_data_dir>/ext-host/`: `settings.json` (overrides —
-  **nunca** o settings do VS Code), `extensions/<id>/` (globalState,
+- **Configuração**: as MESMAS camadas do app (`src/settings/`, ver
+  [Configurações](configuracoes.md)) — o app manda `configuration` logo após o
+  `initialize` (antes de qualquer extensão ativar) e a cada mudança; o
+  `update()` das extensões volta como `configurationUpdate` e é gravado na
+  camada pedida (User settings.json, workspace ou `.fluent/settings.json`).
+  O antigo `ext-host/settings.json` só vale sem app (scripts headless) e é
+  migrado para o User settings na primeira execução (vira `.bak`).
+- **Dados do host** em `<app_data_dir>/ext-host/`: `extensions/<id>/` (globalState,
   workspaceState, `secret-keys.json` = só os NOMES dos segredos, globalStorage),
   `logs/`, `machine-id`, `server-port` (porta preferida), `compile-cache/`.
 
@@ -67,6 +73,7 @@ respostas); respostas `{id, result|error}`; eventos `{event, …}`.
 | webviews | `resolveView`, `webviewMessage`, `webviewState`, `webviewVisible`, `webviewUrl`, `disposeWebview`, `setTheme`, `restoreWebviewPanels` (painéis da sessão anterior) |
 | editor | `documentOpened`, `documentChanged` (mudanças incrementais 0-based + versão + dirty + undo/redo), `documentClosed`, `documentSaved`, `editorsChanged` (ativo, visíveis, abas), `selectionChanged`, `visibleRangesChanged`, `diagnostics`, `windowState` |
 | linguagens | `setLanguages` (registro do Monaco: `[{id, aliases, extensions}]`, ids `[\w.+#-]`, ≤ 2000) → `languages.getLanguages`/`match` |
+| configuração | `configuration` (`{defaults, user, workspace, folders: [{root, layer}]}`, camada = `{settings, overrides: {lang: {}}}`) → `getConfiguration`/`inspect`/`onDidChangeConfiguration` |
 | ações | `executeCommand`, `listCommands`, `evaluateWhen` (lista de `when` → booleanos, best effort), `runKeybinding`, `diffAction` (accept/reject + texto final), `diffEdited` (texto do lado direito editado na revisão), `diffClosed`, `terminalOpened` (pid, `shellIntegration` pedida; cols/rows no pseudoterminal), `terminalShell` (OSC 633: ready/cwd/start/data/end), `terminalInput`/`terminalResize` (pseudoterminal), `terminalClosed` (exitCode), `handleUri`, `provideCodeLenses`, `executeCodeLens`, `cancelProgress`, `respond`, `setWorkspaceFolders` |
 | comentários | `commentAction` (botão de um thread: só comandos que o thread oferece; com `text` num comentário em edição = corpo novo), `commentReaction`, `commentingRanges`, `commentCreateThread` ("+" numa faixa comentável), `commentDisposeTemplate` (cancelar o rascunho), `commentThreads` (snapshot) |
 | quick input | `quickInputEvent` (value/accept/hide/active/selection/button/itemButton) |
@@ -81,6 +88,8 @@ Eventos host → app: `postMessage`, `webviewHtml`, `webviewPanelCreated`
 `request` (showMessage, openDialog, saveDialog, **applyEdit**,
 **saveDocument**, **clipboardRead** → o app responde com `respond`),
 `quickInput`/`quickInputHide`, `commentThread`/`commentThreadDisposed`,
+`configurationUpdate` (`update()` de uma extensão: `key`, `value`, `target`
+`user`/`workspace`/`folder`, `resource`, `languageId`),
 `openFile` (com seleção), `openVirtualDocument`, `diff`/`closeDiff`,
 `diffContent` (a extensão editou o lado direito), `setSelection`,
 `revealRange`, `decorationType`/`decorations` (com `path`, ou `uri`+`diffId`

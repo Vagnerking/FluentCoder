@@ -123,6 +123,9 @@ class ExtensionHost {
     this.pending = new Map();
     this.nextRequest = 1;
     this.appConnected = !!opts.appConnected;
+    // Com o app: `update()` das extensões vira `configurationUpdate` (o app grava
+    // na camada certa e devolve o snapshot novo em `configuration`).
+    if (this.appConnected) this.config.writer = (req) => this.emit({ event: 'configurationUpdate', ...req });
     // `files.watcherExclude` lido a cada walk/evento (muda sem reiniciar o host).
     this.watchers = new WatchService((m) => this.log(m), { excludes: () => this.config.lookup('files.watcherExclude') });
     this.comments = new CommentService(this);

@@ -192,6 +192,10 @@ const handlers = {
   setLanguages(p) {
     host.setLanguages(p.languages);
   },
+  // Camadas de configuração do app (src/settings/): default/user/workspace/pastas.
+  configuration(p) {
+    host.config.setSnapshot(p);
+  },
   respond(p) {
     host.respond(p.requestId, p.result);
   },

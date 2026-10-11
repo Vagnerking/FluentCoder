@@ -38,6 +38,7 @@ import { installWorkbenchSettings } from "./settings/applyWorkbench";
 import { installThemeSettings } from "./settings/applyTheme";
 import { installMonacoSettingsBridge } from "./settings/monacoBridge";
 import { installKeybindings } from "./settings/keybindingRuntime";
+import { installExtHostSettingsBridge } from "./settings/extHostBridge";
 import { getPlatform } from "./platform/os";
 import { installNativeDragGuard } from "./workbench/workbenchDrag";
 
@@ -83,6 +84,7 @@ installWorkbenchSettings();
 installMonacoSettingsBridge(whenMonacoReady);
 // keybindings.json do usuário (formato VS Code, com `when`).
 installKeybindings();
+installExtHostSettingsBridge();
 
 void settingsReady.then(() => {
   // A preferência de acrílico vem das settings.

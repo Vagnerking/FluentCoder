@@ -49,6 +49,8 @@ export interface InstalledExtension {
   icon?: string;
   /** Botões `editor/title` (grupo navigation) contribuídos, sem os de diff. */
   editorTitle?: ContributedEditorTitleAction[];
+  /** `contributes.configuration(+Defaults)` localizado (tela de Configurações). */
+  contributes?: { configuration?: unknown; configurationDefaults?: unknown };
 }
 
 export interface ContributedEditorTitleAction {
@@ -188,6 +190,15 @@ export type HostEvent =
   /** Painéis persistíveis (serializer/custom editor) — o app guarda por workspace. */
   | { event: "webviewPanels"; panels: unknown[] }
   | { event: "context"; key: string; value: unknown }
+  /** `workspace.getConfiguration().update()` de uma extensão: o app grava na camada pedida. */
+  | {
+      event: "configurationUpdate";
+      key: string;
+      value: unknown;
+      target: "user" | "workspace" | "folder";
+      resource?: string | null;
+      languageId?: string | null;
+    }
   | {
       event: "request";
       requestId: number;

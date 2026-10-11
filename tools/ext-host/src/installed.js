@@ -216,6 +216,17 @@ function describe(pkg, extPath, source, index) {
     info.keybindings = c.keybindings;
     info.icon = viewIcon(pkg, extPath);
     info.editorTitle = editorTitleActions(pkg, extPath, c);
+    // `contributes.configuration(+Defaults)` (já localizado): a tela de
+    // Configurações do app mostra e edita as settings da extensão.
+    const contributes = pkg.contributes || {};
+    if (contributes.configuration || contributes.configurationDefaults) {
+      const conf = { configuration: contributes.configuration, configurationDefaults: contributes.configurationDefaults };
+      try {
+        if (JSON.stringify(conf).length <= 512 * 1024) info.contributes = conf;
+      } catch {
+        /* manifesto estranho: sem settings na UI */
+      }
+    }
   }
   return info;
 }

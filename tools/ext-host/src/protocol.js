@@ -25,6 +25,9 @@ const isPersistedPanel = (r) =>
   (r.customUri === undefined || r.customUri === null || (isStr(r.customUri, 8192) && !r.customUri.includes('\0') && /^[a-z][\w+.-]*:/i.test(r.customUri))) &&
   (r.options === undefined || isObj(r.options));
 
+/** Camada de configuração (`{ settings: {}, overrides: { lang: {} } }`). */
+const isLayer = (l) => isObj(l) && isObj(l.settings) && isObj(l.overrides) && Object.values(l.overrides).every(isObj);
+
 /** method → (params) => true se válido. */
 const SCHEMAS = {
   initialize: (p) => isObj(p) && optArr(p.workspaceFolders, (f) => f === null || isPath(f), 64) && isOptStr(p.dataDir, 4096) && (p.extensionsDir === undefined || p.extensionsDir === null || isPath(p.extensionsDir)) && isOptStr(p.secrets, 16),
@@ -46,6 +49,12 @@ const SCHEMAS = {
     isObj(p) &&
     arr(p.languages, (l) => isObj(l) && isStr(l.id, 128) && /^[\w.+#-]+$/.test(l.id) && optArr(l.aliases, (s) => isStr(s, 256), 64) && optArr(l.extensions, (s) => isStr(s, 256), 512), 2000),
   respond: (p) => isObj(p) && isNum(p.requestId),
+  configuration: (p) =>
+    isObj(p) &&
+    (p.defaults === undefined || isLayer(p.defaults)) &&
+    isLayer(p.user) &&
+    isLayer(p.workspace) &&
+    optArr(p.folders, (f) => isObj(f) && isPath(f.root) && isLayer(f.layer), 64),
   executeCommand: (p) => isObj(p) && isStr(p.command, 512) && (p.args === undefined || Array.isArray(p.args)),
   listCommands: () => true,
   evaluateWhen: (p) => isObj(p) && arr(p.exprs, (e) => e === null || isStr(e, 2048), 64),

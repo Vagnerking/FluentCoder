@@ -104,6 +104,14 @@ class ExtHostClient {
     return this.initPromise;
   }
 
+  private initHooks = new Set<(info: InitializeResult) => Promise<void> | void>();
+
+  /** Roda após cada `initialize` (startup/reinício), antes do `hostReady`. */
+  onInitialized(hook: (info: InitializeResult) => Promise<void> | void): () => void {
+    this.initHooks.add(hook);
+    return () => this.initHooks.delete(hook);
+  }
+
   /** Resultado do último `initialize` (null se o host não subiu). */
   get info(): InitializeResult | null {
     return this.lastInit;
@@ -137,6 +145,15 @@ class ExtHostClient {
     void this.notify("setTheme", { vars: readFluentThemeVars(), kind: "dark" });
     this.timings.hostStartMs = Math.round(performance.now() - t0);
     this.lastInit = result;
+    // Ganchos que precisam chegar ao host ANTES de qualquer extensão ativar
+    // (ex.: o snapshot das configurações — src/settings/extHostBridge.ts).
+    for (const hook of [...this.initHooks]) {
+      try {
+        await hook(result);
+      } catch (err) {
+        extLog("gancho de inicialização falhou", err);
+      }
+    }
     queueMicrotask(() => this.emit({ event: "hostReady" }));
     if (info.started) {
       const supported = result.extensions.filter((e) => e.supported).map((e) => `${e.label} ${e.version}`);

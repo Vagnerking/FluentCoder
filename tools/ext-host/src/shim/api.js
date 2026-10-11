@@ -629,8 +629,8 @@ function createVscodeApi(host, ext) {
       return [...host.documents.values()];
     },
     fs: fsApi,
-    getConfiguration(section, _scope) {
-      return host.config.getConfiguration(section);
+    getConfiguration(section, scope) {
+      return host.config.getConfiguration(section, scope);
     },
     onDidChangeConfiguration: host.config.onDidChangeConfiguration,
     getWorkspaceFolder(uri) {
