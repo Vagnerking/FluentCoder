@@ -94,6 +94,58 @@ function webviewViewIds(pkg) {
   return ids;
 }
 
+const ICON_MAX_BYTES = 64 * 1024;
+const ICON_MIME = { '.svg': 'image/svg+xml', '.png': 'image/png' };
+
+/**
+ * Ícone do pacote como data URI (SVG/PNG ≤ 64 KB, dentro da pasta da
+ * extensão). A UI do app o usa como máscara monocromática (aba da view,
+ * activity bar, ações do título do editor) — nunca como documento.
+ */
+function iconDataUri(extPath, rel) {
+  if (typeof rel !== 'string' || !rel || rel.startsWith('$(')) return undefined;
+  const abs = path.resolve(extPath, rel);
+  const root = path.resolve(extPath) + path.sep;
+  if (!abs.startsWith(root)) return undefined;
+  const mime = ICON_MIME[path.extname(abs).toLowerCase()];
+  if (!mime) return undefined;
+  try {
+    const st = fs.statSync(abs);
+    if (!st.isFile() || st.size > ICON_MAX_BYTES) return undefined;
+    return `data:${mime};base64,${fs.readFileSync(abs).toString('base64')}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Ícone de um comando/contêiner: string, `{light,dark}` (prefere o escuro) ou `$(codicon)`. */
+function iconSpec(extPath, icon) {
+  if (typeof icon === 'string') {
+    const m = /^\$\(([a-z0-9-]+)\)$/.exec(icon);
+    if (m) return { codicon: m[1] };
+    const src = iconDataUri(extPath, icon);
+    return src ? { src } : undefined;
+  }
+  if (icon && typeof icon === 'object') {
+    const src = iconDataUri(extPath, icon.dark) || iconDataUri(extPath, icon.light);
+    return src ? { src } : undefined;
+  }
+  return undefined;
+}
+
+/** Ícone do contêiner da view (secundária > activity bar > ícone do pacote). */
+function viewIcon(pkg, extPath) {
+  const vc = (pkg.contributes && pkg.contributes.viewsContainers) || {};
+  for (const loc of ['secondarySidebar', 'activitybar', 'panel']) {
+    for (const c of Array.isArray(vc[loc]) ? vc[loc] : []) {
+      const spec = c && iconSpec(extPath, c.icon);
+      if (spec && spec.src) return spec.src;
+    }
+  }
+  return iconDataUri(extPath, pkg.icon);
+}
+
+
 function wantsStartup(pkg) {
   const ev = Array.isArray(pkg.activationEvents) ? pkg.activationEvents : [];
   return ev.includes('*') || ev.includes('onStartupFinished');
@@ -128,6 +180,7 @@ function describe(pkg, extPath, source, index) {
     const c = readContributions(pkg, extPath);
     info.commands = c.commands.filter((x) => !x.hidden).map(({ command, title, category, paletteWhen }) => ({ command, title, category, paletteWhen }));
     info.keybindings = c.keybindings;
+    info.icon = viewIcon(pkg, extPath);
   }
   return info;
 }
@@ -205,4 +258,4 @@ function listInstalled(opts = {}) {
   return [...best.values()].sort((a, b) => Number(b.supported) - Number(a.supported) || a.id.localeCompare(b.id));
 }
 
-module.exports = { listInstalled, compareVersions, SUPPORTED, BUILTIN, extensionDirs, managedDir, platformTag, readIndex, gateAllows };
+module.exports = { listInstalled, compareVersions, SUPPORTED, BUILTIN, extensionDirs, managedDir, platformTag, readIndex, gateAllows, iconDataUri, iconSpec };

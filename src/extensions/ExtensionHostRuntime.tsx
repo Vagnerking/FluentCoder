@@ -65,8 +65,12 @@ export interface ExtensionHostRuntimeProps {
   showOutput?(channel: string): void;
   revealInExplorer?(path: string): void;
   filesChanged?(paths: string[]): void;
-  /** A extensão pediu para mostrar a view dela (`<view>.focus`): abrir a sidebar de agentes. */
-  revealAgentsSidebar?(): void;
+  /**
+   * A extensão pediu para mostrar a view de sidebar dela (`<view>.focus`,
+   * `webviewView.show`): revelar a view `ext:<id>` na região onde ela estiver.
+   * `extensionId` null = dono desconhecido (revela a sidebar secundária).
+   */
+  revealExtensionView?(target: { extensionId: string | null; handle?: string }): void;
   /** Comandos do workbench pedidos pela extensão (`workbench.action.*`, terminal, formatar…). */
   appCommand?(command: string, args: unknown[]): void;
   /**
@@ -266,17 +270,10 @@ export function ExtensionHostRuntime(props: ExtensionHostRuntimeProps) {
           p.revealInExplorer?.((ev as unknown as { path: string }).path);
           break;
         case "revealView": {
-          // Sidebar fechada: o dock monta já na aba da extensão (lê ui.agentsDockTab).
+          // A view vive no registro (`ext:<id>`), em qualquer região: o App a revela lá.
           const viewId = (ev as { viewId?: string }).viewId;
           const owner = viewId ? extHost.info?.extensions.find((e) => e.viewIds.includes(viewId)) : undefined;
-          if (owner) {
-            try {
-              localStorage.setItem("ui.agentsDockTab", owner.id);
-            } catch {
-              /* ignora */
-            }
-          }
-          p.revealAgentsSidebar?.();
+          p.revealExtensionView?.({ extensionId: owner?.id ?? null });
           break;
         }
         case "webviewPanelCreated": {
@@ -322,7 +319,7 @@ export function ExtensionHostRuntime(props: ExtensionHostRuntimeProps) {
           const e = ev as { handle: string; preserveFocus: boolean; viewColumn?: number };
           // Painel = aba do editor; view de sidebar = abre o Fluent Chat.
           if (hasWebviewPanel(e.handle)) p.revealWebviewTab?.(webviewTabPath(e.handle), { viewColumn: e.viewColumn, preserveFocus: e.preserveFocus });
-          else p.revealAgentsSidebar?.();
+          else p.revealExtensionView?.({ extensionId: null, handle: e.handle });
           break;
         }
         case "appCommand": {

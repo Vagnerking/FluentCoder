@@ -18,6 +18,8 @@ export interface FluentChatViewHandle {
   focusComposer: () => void;
   newConversation: () => void;
   showHistory: () => void;
+  /** Anexa contexto ao composer (ação "Adicionar ao contexto do chat"). */
+  attach: (kind: MentionKind) => void;
 }
 
 const SUGGESTIONS: { label: string; text: string; attach?: MentionKind; icon: IconAction }[] = [
@@ -28,9 +30,10 @@ const SUGGESTIONS: { label: string; text: string; attach?: MentionKind; icon: Ic
 ];
 
 /**
- * Aba "Chat" do Fluent Chat: cabeçalho com nova conversa/histórico, o
- * transcript (ou o welcome com sugestões, pronto para digitar — sem precisar
- * criar agente) e o composer.
+ * View "Fluent Chat": cabeçalho com nova conversa/histórico/configurar agentes,
+ * o transcript (ou o welcome com sugestões, pronto para digitar — sem precisar
+ * criar agente) e o composer. A configuração de agentes é um diálogo
+ * (`AgentsSettingsDialog`), não outra aba.
  */
 export const FluentChatView = forwardRef<
   FluentChatViewHandle,
@@ -39,6 +42,7 @@ export const FluentChatView = forwardRef<
     readEditorContext: () => AgentEditorContext | null;
     listFiles: () => Promise<ProjectFile[]>;
     onOpenFile: (path: string, line?: number) => void;
+    /** Abre "Configurar agentes" (engrenagem do cabeçalho e "Gerenciar agentes…" do composer). */
     onManageAgents: () => void;
   }
 >(function FluentChatView({ chat, readEditorContext, listFiles, onOpenFile, onManageAgents }, ref) {
@@ -59,6 +63,13 @@ export const FluentChatView = forwardRef<
       requestAnimationFrame(() => composerRef.current?.focus());
     },
     showHistory: () => setShowHistory(true),
+    attach: (kind) => {
+      setShowHistory(false);
+      requestAnimationFrame(() => {
+        composerRef.current?.attach(kind);
+        composerRef.current?.focus();
+      });
+    },
   }));
 
   const openDiff = useCallback((diff: ChatFileDiff) => {
@@ -132,6 +143,13 @@ export const FluentChatView = forwardRef<
             tooltipPlacement="bottom"
             pressed={showHistory}
             onClick={() => setShowHistory((value) => !value)}
+          />
+          <IconButton
+            size="sm"
+            icon="settings"
+            label="Configurar agentes"
+            tooltipPlacement="bottom"
+            onClick={onManageAgents}
           />
         </div>
       </header>

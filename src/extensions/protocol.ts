@@ -45,6 +45,8 @@ export interface InstalledExtension {
   /** Só para as suportadas: comandos/atalhos do `contributes`. */
   commands?: ContributedCommand[];
   keybindings?: ContributedKeybinding[];
+  /** Ícone do contêiner da view (data URI SVG/PNG do pacote), se houver. */
+  icon?: string;
 }
 
 export interface LoadedExtension {

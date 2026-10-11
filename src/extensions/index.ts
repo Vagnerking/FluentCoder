@@ -4,8 +4,13 @@
  * Contratos em docs/context/extensoes-vscode.md.
  *
  * Componentes:
- * - `ExtensionDock` — abas "Agentes" + UI real das extensões (props estáveis:
- *   `rootPath`, `agentsNode`; `onOpenFile`/`readEditorState` estão obsoletas).
+ * - `useExtensionViews(rootPath)` — registra uma view independente
+ *   `ext:<id>` por extensão liberada (registro de views do workbench) e guarda
+ *   o estado/handle de cada webview de view.
+ * - `ExtensionView` — conteúdo da view `ext:<id>` (status ou o slot do webview).
+ * - `ExtensionWebviewLayer` — montada UMA vez no App: os iframes das views,
+ *   posicionados sobre o slot da view onde quer que ela esteja (mover a view
+ *   não recarrega o iframe nem re-resolve a view).
  * - `ExtensionWebview` — um webview de extensão já resolvido (`WebviewInfo`)
  *   num <iframe> com o relay seguro; use para montar a UI em outro layout.
  * - `ExtensionHostRuntime` — montado UMA vez no App (já está): editor, diffs,
@@ -27,7 +32,8 @@ import { removeWebviewPanel } from "./webviewTabs";
 import { keybindingFor } from "../keybindingLabel";
 import type { HostEvent, InstalledExtension, WebviewInfo } from "./protocol";
 
-export { ExtensionDock } from "./ExtensionDock";
+export { ExtensionView, ExtensionWebviewLayer } from "./ExtensionView";
+export { useExtensionViews, type ExtensionViewsModel, type ExtensionViewState } from "./useExtensionViews";
 export { ExtensionWebview } from "./ExtensionWebview";
 export { ExtensionHostRuntime, type ExtensionHostRuntimeProps } from "./ExtensionHostRuntime";
 export { ExtensionStatusItems } from "./ExtensionStatusItems";

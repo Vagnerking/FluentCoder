@@ -21,7 +21,8 @@ App (React)
  │    ├─ editorBridge.ts  (eventos do Monaco ⇄ TextDocument/TextEditor)
  │    ├─ terminalBridge.ts (createTerminal ⇄ TerminalPanel/PTY)
  │    └─ diffs.ts + useExtensionDiffs (vscode.diff ⇄ ClaudeDiffReview)
- └─ ExtensionDock → ExtensionWebview <iframe>             ← só abas/webviews
+ ├─ useExtensionViews → views `ext:<id>` no registro      ← ExtensionView = slot na região
+ └─ ExtensionWebviewLayer → ExtensionWebview <iframe>     ← camada fixa, posicionada sobre o slot
         │ window.postMessage (relay validado: origem + contentWindow + handle + tipo)
         ▼
 src/extensions/client.ts ──invoke(ext_host_send)──▶ Rust src-tauri/src/ext_host/ ──stdin──▶ node tools/ext-host/main.js
@@ -246,12 +247,25 @@ no lado virtual de um diff)/`decorationTypeDisposed`,
 
 ## Integração com o editor
 
-- Abas no topo da sidebar secundária (o Fluent Chat): as abas nativas
-  **Chat** e **Agentes** (prop `nativeTabs` do `ExtensionDock`; ver
-  [Fluent Chat](agentes-ia.md)) | uma aba por extensão liberada no portão que contribua view de webview
-  (as views de sidebar dela). Aba lembrada em `ui.agentsDockTab`;
-  `requestedTab` foca uma aba de fora (Paleta). Sem extensões/Node, só as
-  abas nativas aparecem.
+- **Views independentes**: cada extensão liberada no portão que contribua
+  view de webview vira a view `ext:<id>` do registro
+  ([Views & Layout](views-layout.md)) — padrão: aba da sidebar secundária
+  depois do Fluent Chat, ícone = o do contêiner da view no `package.json`
+  (máscara monocromática). Cada uma é movível sozinha para a primária, a
+  secundária ou o painel. Sem extensões/Node, só o Fluent Chat aparece.
+- **Mover nunca recarrega nem re-resolve**: a view é resolvida UMA vez
+  (`useExtensionViews.ensureResolved`, na 1ª vez que fica visível) e o
+  iframe vive na `ExtensionWebviewLayer` (camada fixa), posicionado sobre o
+  slot da view onde ela estiver. Reanexar um `<iframe>` no DOM recarrega o
+  documento — por isso o iframe nunca é filho da região. O handle, o estado
+  e o relay continuam os mesmos; prova: o rodapé de debug (`↑/↓`) não zera
+  e a Saída "Extensões" não registra um novo "iframe montado"/"UI
+  carregada". Oculta = `visibility: hidden` + `webviewVisible:false` (o
+  iframe segue vivo: retainContextWhenHidden). O host só é reiniciado pelo
+  usuário ("Reiniciar Host de Extensões"), nunca para mover uma view.
+- `revealView` (`<view>.focus`) e `revealWebview` de uma view chegam pelo
+  `ExtensionHostRuntime` (`revealExtensionView`) e revelam a view na região
+  onde ela estiver.
 - **Painéis** (`createWebviewPanel`, custom editors via `vscode.openWith`)
   são **abas reais da grade de editores** (`webviewTabs.ts`,
   `ExtensionWebviewTab`, `mode: "webview"` no `OpenFile`): `viewColumn` N =
@@ -553,9 +567,11 @@ VSIX de terceiros no bundle.
 
 ## API para outras partes do app
 
-`src/extensions/index.ts`: `ExtensionDock` (props estáveis `rootPath`,
-`agentsNode`), `ExtensionWebview` (renderizar um webview resolvido em outro
-layout), `ExtensionHostRuntime`, `ExtensionStatusItems`, `useExtensionDiffs`,
+`src/extensions/index.ts`: `useExtensionViews(rootPath)` (registra as
+views `ext:<id>` e guarda o estado de cada webview de view),
+`ExtensionView` (conteúdo da view: status ou slot), `ExtensionWebviewLayer`
+(montada uma vez no App: os iframes das views), `ExtensionWebview` (renderizar
+um webview resolvido em outro layout), `ExtensionHostRuntime`, `ExtensionStatusItems`, `useExtensionDiffs`,
 `useHostedExtensions`, `listHostedExtensions`, `openExtensionView(id)`,
 `prewarmExtension(id)`, `restartExtensionHost()`, `refreshHostedExtensions()`
 (o host relê as instaladas sem reiniciar → evento `installedChanged`),
@@ -601,8 +617,9 @@ hostVersion, evaluatedAt }`. O host ignora entrada com `dir` inseguro ou cujo
   rótulos/views preferidas de sempre; o usuário pode desabilitá-las. As
   demais do VS Code começam **desabilitadas**. `blockedReason` explica
   (`disabled`, `not-evaluated`, `incompatible`, `unknown`).
-- `viewIds` de uma não embutida = suas views `type: "webview"`; o Fluent
-  Chat ganha uma aba por extensão liberada que tenha alguma.
+- `viewIds` de uma não embutida = suas views `type: "webview"`; cada
+  extensão liberada que tenha alguma ganha uma view `ext:<id>` (aba na
+  sidebar secundária por padrão).
   `activationEvents` `*`/`onStartupFinished` ativam ao subir o host.
 - **Sem reiniciar o app**: depois de instalar/habilitar, o app chama
   `refreshHostedExtensions()` (o host relê o índice → `installedChanged`):

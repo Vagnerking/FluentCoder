@@ -57,7 +57,7 @@ import { useViewLayoutController, WorkbenchViewsProvider } from "./workbench/Wor
 import { ViewContainer } from "./workbench/ViewContainer";
 import { viewMoveMenuItems } from "./workbench/DockableView";
 import { FLUENT_CHAT_VIEW, registerNativeViews } from "./workbench/nativeViews";
-import { extensionIdOfView, type ViewRegion } from "./workbench/viewRegistry";
+import { extensionIdOfView, extensionViewId, type ViewRegion } from "./workbench/viewRegistry";
 import { QuickOpen } from "./components/QuickOpen";
 import { SymbolSearch } from "./components/SymbolSearch";
 import { CommandPalette, type Command } from "./components/CommandPalette";
@@ -80,11 +80,13 @@ import { findNearestEditorConfig } from "./lsp/editorConfig";
 import { AboutDialog } from "./components/AboutDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { FluentChatView, type FluentChatViewHandle } from "./components/chat/FluentChatView";
-import { AgentsManager } from "./components/chat/AgentsManager";
+import { AgentsSettingsDialog } from "./components/chat/AgentsSettingsDialog";
 import { useFluentChat } from "./chat/useFluentChat";
 import { startTerminalTap } from "./chat/terminalTap";
 import {
-  ExtensionDock,
+  ExtensionView,
+  ExtensionWebviewLayer,
+  useExtensionViews,
   prewarmExtension,
   ExtensionHostRuntime,
   ExtensionStatusItems,
@@ -272,8 +274,6 @@ import { openTabInList, setTabPinned, tabsKeptAfterClose } from "./components/ed
 import type { BreadcrumbRoot } from "./editor/breadcrumbs";
 
 /** Abas nativas do Fluent Chat na sidebar secundária. */
-const FLUENT_CHAT_TAB = "fluent-chat";
-const FLUENT_AGENTS_TAB = "fluent-agents";
 // Views nativas no registro (Explorador, Pesquisar…, Fluent Chat, painel).
 registerNativeViews();
 
@@ -1735,22 +1735,15 @@ export default function App() {
   // (servers flip to "starting" → "ready"), so resetting gives visible feedback.
   // ---- Fluent Chat (sidebar secundária de IA) ----
   const fluentChatViewRef = useRef<FluentChatViewHandle>(null);
-  const [chatTabRequest, setChatTabRequest] = useState<{ key: string; nonce: number } | null>(null);
-  /** Abre o Fluent Chat (view do registro) numa aba nativa ("Chat"/"Agentes"). */
-  const requestChatTab = useCallback(
-    (key: string) => {
-      revealView(FLUENT_CHAT_VIEW);
-      setChatTabRequest({ key, nonce: Date.now() });
-    },
-    [revealView]
-  );
+  /** "Configurar agentes" (diálogo; antes era a aba "Agentes"). */
+  const [agentsDialogOpen, setAgentsDialogOpen] = useState(false);
   /** Revela a view Fluent Chat (na região onde ela estiver) e roda `then` no próximo frame. */
   const revealFluentChat = useCallback(
     (then?: (view: FluentChatViewHandle) => void) => {
-      requestChatTab(FLUENT_CHAT_TAB);
+      revealView(FLUENT_CHAT_VIEW);
       if (then) requestAnimationFrame(() => fluentChatViewRef.current && then(fluentChatViewRef.current));
     },
-    [requestChatTab]
+    [revealView]
   );
 
   const commands = useMemo<Command[]>(
@@ -1804,7 +1797,7 @@ export default function App() {
         id: "fluentChat.manageAgents",
         title: "Fluent Chat: Gerenciar Agentes",
         detail: "Fluent Chat",
-        run: () => requestChatTab(FLUENT_AGENTS_TAB),
+        run: () => setAgentsDialogOpen(true),
       },
       {
         // Os processos dos agentes (Claude/Codex/ACP) não são servidores de
@@ -6021,6 +6014,9 @@ export default function App() {
       }
     : undefined;
 
+  // Views de extensão (Claude Code, Codex…): uma view independente por
+  // extensão; o iframe vive na ExtensionWebviewLayer (mover não recarrega).
+  const extensionViews = useExtensionViews(rootPath);
   /** Menu de contexto de um ícone da activity bar ("Mover para…"). */
   const [activityMenu, setActivityMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   // Views "convidadas" da primária (movidas para lá, sem ícone fixo): ganham
@@ -6041,42 +6037,21 @@ export default function App() {
 
   /** Conteúdo de cada view do registro (onde quer que ela esteja). */
   function renderView(id: string, visible: boolean): ReactNode {
+    const extId = extensionIdOfView(id);
+    if (extId) {
+      const ext = extensionViews.installed.find((e) => e.id === extId);
+      return ext ? <ExtensionView extensionId={ext.id} label={ext.label} visible={visible} model={extensionViews} /> : null;
+    }
     switch (id) {
       case FLUENT_CHAT_VIEW:
-        // Ainda o dock antigo (Chat/Agentes + extensões) como UMA view.
         return (
-          <ExtensionDock
-            rootPath={rootPath}
-            requestedTab={chatTabRequest}
-            nativeTabs={[
-              {
-                key: FLUENT_CHAT_TAB,
-                label: "Chat",
-                node: (
-                  <FluentChatView
-                    ref={fluentChatViewRef}
-                    chat={fluentChat}
-                    readEditorContext={readEditorContext}
-                    listFiles={listChatFiles}
-                    onOpenFile={openAgentFile}
-                    onManageAgents={() => requestChatTab(FLUENT_AGENTS_TAB)}
-                  />
-                ),
-              },
-              {
-                key: FLUENT_AGENTS_TAB,
-                label: "Agentes",
-                node: (
-                  <AgentsManager
-                    chat={fluentChat}
-                    onStartChat={(targetId) => {
-                      fluentChat.startNewConversation(targetId);
-                      revealFluentChat((v) => v.focusComposer());
-                    }}
-                  />
-                ),
-              },
-            ]}
+          <FluentChatView
+            ref={fluentChatViewRef}
+            chat={fluentChat}
+            readEditorContext={readEditorContext}
+            listFiles={listChatFiles}
+            onOpenFile={openAgentFile}
+            onManageAgents={() => setAgentsDialogOpen(true)}
           />
         );
       case "terminal":
@@ -6636,6 +6611,9 @@ export default function App() {
       </div>
       </WorkbenchViewsProvider>
 
+      {/* Iframes das views de extensão (Claude Code, Codex…), posicionados
+          sobre a view onde ela estiver: mover não recarrega o webview. */}
+      <ExtensionWebviewLayer model={extensionViews} />
 
       {activityMenu && (
         <Menu
@@ -6656,6 +6634,17 @@ export default function App() {
         />
       )}
 
+      {agentsDialogOpen && (
+        <AgentsSettingsDialog
+          chat={fluentChat}
+          onClose={() => setAgentsDialogOpen(false)}
+          onStartChat={(targetId) => {
+            setAgentsDialogOpen(false);
+            fluentChat.startNewConversation(targetId);
+            revealFluentChat((v) => v.focusComposer());
+          }}
+        />
+      )}
 
       {/* A tab from another window is hovering over this one. Over a tab strip →
           an insertion bar at the exact spot; elsewhere → a whole-window hint. */}
@@ -6715,7 +6704,11 @@ export default function App() {
           invalidateGraph();
           invalidateIndex();
         }}
-        revealAgentsSidebar={() => revealView(FLUENT_CHAT_VIEW)}
+        revealExtensionView={({ extensionId, handle }) => {
+          const ext = extensionId ?? (handle ? extensionViews.extensionOfHandle(handle) : null);
+          if (ext) revealView(extensionViewId(ext));
+          else setAgentsSidebarOpen(true);
+        }}
         openWebviewTab={openWebviewTab}
         revealWebviewTab={revealWebviewTab}
         retitleWebviewTab={(path, title) =>

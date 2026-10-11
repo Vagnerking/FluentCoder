@@ -307,7 +307,7 @@ function AgentEditor({
 }
 
 /**
- * Aba "Agentes" do Fluent Chat: agentes personalizados (do workspace e
+ * "Configurar agentes" do Fluent Chat (diálogo `AgentsSettingsDialog`): agentes personalizados (do workspace e
  * globais) e os provedores detectados com dica de instalação.
  */
 export function AgentsManager({
@@ -399,7 +399,7 @@ export function AgentsManager({
       {chat.agents.length === 0 ? (
         <div className="fc-empty">
           Nenhum agente ainda. Crie um para fixar instruções, modelo e contexto — ou converse direto com um provedor
-          na aba Chat.
+          no Fluent Chat.
         </div>
       ) : (
         <>

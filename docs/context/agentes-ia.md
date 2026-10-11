@@ -1,7 +1,8 @@
 # Fluent Chat (agentes de IA: Claude Code, Codex, ACP) — contratos de integração
 
 Este documento registra as decisões obrigatórias da integração com os CLIs de
-IA. O chat chama-se **Fluent Chat** e vive na sidebar secundária. O código
+IA. O chat chama-se **Fluent Chat** e é uma view do workbench (padrão: sidebar
+secundária; movível — ver [Views & Layout](views-layout.md)). O código
 vive em `src-tauri/src/agents/` (backend: `mod.rs`, `registry.rs`,
 `events.rs`, `claude.rs`, `codex.rs`, `acp.rs`) e em `src/chat/` (lógica:
 hook `useFluentChat`, menções, contexto, transcript) +
@@ -13,7 +14,8 @@ Registro multi-CLI: [ADR 0007](../adr/0007-fluent-chat-provider-registry.md).
 - **Um processo por provedor+workspace**, de longa duração, gerenciado por um
   worker (`AcpState`). Nunca criar processo por mensagem — o custo de startup é
   o que deixava o chat lento.
-- O chat abre **somente na sidebar secundária**. O centro do editor nunca é
+- O chat é a view `fluentChat` (padrão: sidebar secundária; o usuário pode
+  movê-la para a primária ou o painel). O centro do editor nunca é
   substituído pelo chat.
 - Cada conversa guarda o **id nativo de sessão/thread** do provedor em
   `.project/agents.json` (`conversation.nativeSessionId`). É ele que permite
@@ -394,13 +396,19 @@ não criam snapshot de reversão no envio (`READ_ONLY_MODES`).
   instalação, agentes personalizados e "Gerenciar agentes…"), **modo** e
   **modelo**. Trocar de agente numa conversa com mensagens abre uma conversa
   nova (a sessão nativa pertence ao alvo anterior).
-- A sidebar secundária tem abas: **Chat** (padrão), **Agentes** (gerenciador
-  de agentes personalizados + provedores detectados) e, quando instaladas no
-  VS Code do usuário, a UI **real** das extensões Claude Code/Codex hospedada
-  pelo mini extension host (PoC) — contratos em
-  [Extensões VS Code hospedadas](extensoes-vscode.md). As abas nativas entram
-  pelo `nativeTabs` do `ExtensionDock` (chaves `fluent-chat`/`fluent-agents`);
-  as abas de extensão não mudam nada deste chat.
+- Fluent Chat, Claude Code (`ext:anthropic.claude-code`) e Codex
+  (`ext:openai.chatgpt`) são **views independentes** do registro — por
+  padrão abas da sidebar secundária, cada uma movível sozinha ("Mover
+  para…"/arrastar; [Views & Layout](views-layout.md)). As de extensão são a
+  UI **real** hospedada pelo mini extension host — contratos em
+  [Extensões VS Code hospedadas](extensoes-vscode.md); elas não mudam nada
+  deste chat.
+- **Não existe mais a aba "Agentes"**: o gerenciador (agentes personalizados
+  + provedores detectados) abre no diálogo **"Configurar agentes"**
+  (`AgentsSettingsDialog`) — engrenagem no cabeçalho do chat, item
+  "Gerenciar agentes…" do seletor do composer e Paleta "Fluent Chat:
+  Gerenciar Agentes". A aba antiga lembrada (`ui.agentsDockTab`) migra para a
+  view `fluentChat`.
 - Paleta: "Fluent Chat: Abrir", "Nova Conversa", "Histórico de Conversas",
   "Gerenciar Agentes" e "Reiniciar Agentes de IA" (`acp_stop_all`; os
   processos de agentes não são servidores de linguagem e ficam fora do
@@ -408,15 +416,15 @@ não criam snapshot de reversão no envio (`READ_ONLY_MODES`).
   [Paleta de Comandos](command-palette.md)).
 - Histórico: busca (título + mensagens, sem acento), grupos por data,
   renomear inline e excluir com confirmação.
-- O chat é uma **sidebar secundária**, ancorada na borda **oposta** à barra
-  lateral principal (nunca na principal). Largura redimensionável, padrão
-  500px, persistida em `ui.agentsSidebarWidth`. O lado é derivado:
-  `agentsSide = oposto de sidebarSide`, então as duas nunca colidem.
-- O toggle mostra/oculta essa sidebar e fica na **title bar**, à esquerda dos
-  botões de layout (barra lateral / painel).
-- Criar/editar agente, histórico e chat acontecem todos dentro dessa sidebar
-  (título do toggle: "Mostrar/Ocultar Fluent Chat"),
-  seguindo o [guia Fluent 2](../design/fluent-design.md).
+- A sidebar secundária fica ancorada na borda **oposta** à barra lateral
+  principal. Largura redimensionável, padrão 500px, persistida em
+  `ui.agentsSidebarWidth`. O lado é derivado: `agentsSide = oposto de
+  sidebarSide`, então as duas nunca colidem.
+- O toggle "Mostrar/Ocultar barra lateral secundária" fica na **title bar**,
+  à esquerda dos botões de layout (barra lateral / painel). A Paleta
+  "Fluent Chat: Abrir" revela a view onde ela estiver.
+- Histórico e chat acontecem na view; criar/editar agente no diálogo
+  "Configurar agentes", seguindo o [guia Fluent 2](../design/fluent-design.md).
 - Texto da conversa em contraste alto (`--text`), não secundário/muted.
 - **Status e erro pertencem à conversa que os produziu**: no `App`, os estados
   guardam `{conversationId, message}` (`conversationId: null` = aviso global,
