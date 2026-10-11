@@ -114,6 +114,10 @@ export interface LineageMerge {
   time: number;
   pr: number | null;
   fastForward: boolean;
+  /** 1º pai do merge (a base antes da integração). */
+  firstParent: string | null;
+  /** Commits que a branch levou no merge. */
+  commits: number;
 }
 
 export interface BranchLineage {

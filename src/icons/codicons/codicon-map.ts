@@ -230,7 +230,16 @@ export type IconAction =
   | "problems"
   | "moveView"
   | "hideView"
-  | "layout";
+  | "layout"
+  // Grafo de commits
+  | "cloud"
+  | "arrowDown"
+  | "gitPullRequest"
+  | "gitCompare"
+  | "gitFetch"
+  | "cherryPick"
+  | "history"
+  | "target";
 
 /** action → codicon name (without the `codicon-` prefix). */
 export const CODICON_MAP: Record<IconAction, string> = {
@@ -468,6 +477,14 @@ export const CODICON_MAP: Record<IconAction, string> = {
   moveView: "arrow-swap",
   hideView: "eye-closed",
   layout: "layout",
+  cloud: "cloud",
+  arrowDown: "arrow-down",
+  gitPullRequest: "git-pull-request",
+  gitCompare: "git-compare",
+  gitFetch: "git-fetch",
+  cherryPick: "git-stash-apply",
+  history: "history",
+  target: "target",
 };
 
 /** Codicon names that should spin (loading/sync feedback). */

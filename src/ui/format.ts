@@ -84,3 +84,49 @@ export function authorInitials(name: string): string {
   const letters = parts.length > 1 ? parts[0][0] + parts[parts.length - 1][0] : parts[0].slice(0, 2);
   return letters.toUpperCase();
 }
+
+const MONTHS = [
+  "janeiro",
+  "fevereiro",
+  "março",
+  "abril",
+  "maio",
+  "junho",
+  "julho",
+  "agosto",
+  "setembro",
+  "outubro",
+  "novembro",
+  "dezembro",
+];
+
+/**
+ * Data por extenso (hover card do grafo, como o VS Code pt-BR):
+ * "9 de julho de 2026 às 17:05" (fuso local).
+ */
+export function formatLongDate(value: string | number | Date): string {
+  const d = parse(value);
+  if (!d) return typeof value === "string" ? value : "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getDate()} de ${MONTHS[d.getMonth()]} de ${d.getFullYear()} às ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/**
+ * Data relativa por extenso: "agora", "há 5 minutos", "há 1 hora", "ontem",
+ * "há 3 dias", "há 2 semanas", "há 3 meses", "há 1 ano".
+ */
+export function formatRelativeDateLong(value: string | number | Date, now: number | Date = Date.now()): string {
+  const d = parse(value);
+  if (!d) return typeof value === "string" ? value : "";
+  const ref = now instanceof Date ? now.getTime() : now;
+  const diff = ref - d.getTime();
+  const plural = (n: number, one: string, many: string) => `há ${n} ${n === 1 ? one : many}`;
+  if (diff < MINUTE) return "agora";
+  if (diff < HOUR) return plural(Math.floor(diff / MINUTE), "minuto", "minutos");
+  if (diff < DAY) return plural(Math.floor(diff / HOUR), "hora", "horas");
+  if (diff < 2 * DAY) return "ontem";
+  if (diff < WEEK) return plural(Math.floor(diff / DAY), "dia", "dias");
+  if (diff < MONTH) return plural(Math.floor(diff / WEEK), "semana", "semanas");
+  if (diff < YEAR) return plural(Math.floor(diff / MONTH), "mês", "meses");
+  return plural(Math.floor(diff / YEAR), "ano", "anos");
+}

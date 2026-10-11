@@ -15,7 +15,6 @@ import {
   gitCheckout,
   gitCheckoutRemoteBranch,
   gitCommit,
-  gitCommitFiles,
   gitCompareUpstream,
   gitDiscardAll,
   gitDiscardFile,
@@ -100,7 +99,6 @@ import {
   GIT_FLUENT_PRIMARY_TABS,
   GIT_FLUENT_TABS,
   buildGitFluentBranchGroups,
-  buildGitFluentGraphRows,
   buildGitFluentRemoteTree,
   graphRefKind,
   graphRefLabel,
@@ -112,7 +110,7 @@ import {
 } from "../git/gitFluent";
 import { GitFluentBranchesView } from "./git/GitFluentBranchesView";
 import { GitFluentCompareView } from "./git/GitFluentCompareView";
-import { GitFluentGraphView, type GitCommitFilesState } from "./git/GitFluentGraphView";
+import { CommitGraphView } from "./git/graph/CommitGraphView";
 import { GitFluentHistoryView } from "./git/GitFluentHistoryView";
 import { GitFluentContributorsView, GitFluentTagsView } from "./git/GitFluentRefsViews";
 import { GitFluentRemotesView } from "./git/GitFluentRemotesView";
@@ -1065,9 +1063,10 @@ function GitRepositoryPanel({
   // Commits for the file under "File History" (ISSUE-71). Separate from the
   // repo-wide `commits` so switching back doesn't refetch the whole log.
   const [fileCommits, setFileCommits] = useState<GitCommit[]>([]);
-  const [selectedGraphHash, setSelectedGraphHash] = useState<string | null>(null);
-  // Arquivos por commit para "Mostrar arquivos do commit" / seleção no grafo.
-  const [commitFiles, setCommitFiles] = useState<Record<string, GitCommitFilesState>>({});
+  // Grafo paginado: recarrega quando HEAD/refs mudam; "Mostrar no grafo"
+  // de outras views foca um commit (nonce força o efeito).
+  const [graphReloadKey, setGraphReloadKey] = useState(0);
+  const [graphFocus, setGraphFocus] = useState<{ hash: string; nonce: number } | null>(null);
   // Right-click context menu over a changed file (issue #9), VS Code-style.
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -1148,6 +1147,7 @@ function GitRepositoryPanel({
     const refs = gitEventTouchesRefs(event);
     void refresh({ refs });
     if (!refs) return;
+    setGraphReloadKey((k) => k + 1);
     if (graphCommits.length > 0) void loadCommitGraph();
     if (commits.length > 0) void loadHistory();
     if (branches.length > 0 || remoteBranches.length > 0) void loadBranches();
@@ -1158,17 +1158,8 @@ function GitRepositoryPanel({
     setExpandedStashes(new Set());
     setStashFiles({});
     setStashFilesLoading({});
-    setCommitFiles({});
   }, [connId, rootPath]);
 
-  // A seção "Grafo" carrega ao ser expandida (e no mount, se já estiver
-  // aberta) — antes só carregava por uma aba do Git Fluent que nem existia
-  // mais no painel e ficava em "Nenhum commit carregado no grafo.".
-  useEffect(() => {
-    if (!rootPath || !showGitGraphView || graphCommits.length > 0) return;
-    void loadCommitGraph();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connId, rootPath, showGitGraphView]);
 
   /** Wraps an action with busy state, error capture, and a status refresh. */
   async function act(fn: () => Promise<unknown>) {
@@ -1279,19 +1270,6 @@ function GitRepositoryPanel({
       setError(null);
     } catch (err) {
       setError(String(err));
-    }
-  }
-
-  async function loadCommitFiles(hash: string) {
-    if (!rootPath) return;
-    const current = commitFiles[hash];
-    if (current === "loading" || Array.isArray(current)) return;
-    setCommitFiles((prev) => ({ ...prev, [hash]: "loading" }));
-    try {
-      const files = await gitCommitFiles(rootPath, hash, connId);
-      setCommitFiles((prev) => ({ ...prev, [hash]: files }));
-    } catch (err) {
-      setCommitFiles((prev) => ({ ...prev, [hash]: { error: String(err) } }));
     }
   }
 
@@ -1422,10 +1400,6 @@ function GitRepositoryPanel({
       ),
     };
   }, [graphCommits]);
-  const gitFluentGraphRows = useMemo(
-    () => buildGitFluentGraphRows(graphCommits, status?.branch),
-    [graphCommits, status?.branch]
-  );
   const localBranchGroups = useMemo(() => buildGitFluentBranchGroups(branches, "local"), [branches]);
   const remoteBranchGroups = useMemo(
     () => buildGitFluentBranchGroups(remoteBranches, "remote"),
@@ -1572,16 +1546,14 @@ function GitRepositoryPanel({
   function openGitFluentWorkspace() {
     setShowGitGraphView(true);
     revealPanelView("graph");
-    if (graphCommits.length === 0) void loadCommitGraph();
     if (commits.length === 0) void loadHistory();
   }
 
   /** Seleciona um commit na seção "Grafo" (expande e rola até ela). */
-  function showCommitInGraph(commit: Pick<GitCommit, "hash">, withFiles = false) {
+  function showCommitInGraph(commit: Pick<GitCommit, "hash">, _withFiles = false) {
     setShowGitGraphView(true);
-    setSelectedGraphHash(commit.hash);
-    if (graphCommits.length === 0) void loadCommitGraph();
-    if (withFiles) void loadCommitFiles(commit.hash);
+    // O grafo abre os detalhes (arquivos inclusos) do commit focado.
+    setGraphFocus({ hash: commit.hash, nonce: Date.now() });
     revealPanelView("graph");
   }
 
@@ -2694,24 +2666,6 @@ function GitRepositoryPanel({
       } as const;
   const gitFluentPaneActiveTab: GitFluentTab =
     activeGitFluentTab === "graph" ? "contributors" : activeGitFluentTab;
-  const gitGraphHeaderActions = (
-    <GitFluentViewActions
-      activeTab="graph"
-      busy={busy}
-      hasUpstream={Boolean(status?.hasUpstream)}
-      onCreateSuggestedBranch={() => void createSuggestedBranch()}
-      onRefreshBranches={() => void loadBranches()}
-      onAddRemote={addRemote}
-      onRefreshRemotes={() => void loadRemotes()}
-      onRefreshGraph={() => void loadCommitGraph()}
-      onRefreshStashes={() => void loadStashes()}
-      onCreateWorktree={() => void createWorktree()}
-      onPruneWorktrees={() => act(() => gitWorktreePrune(repoRootPath, connId))}
-      onRefreshCompare={() => void loadUpstreamComparison()}
-      onRefreshHistory={() => void loadHistory()}
-      onRefreshRepository={loadGitFluentRepositorySnapshot}
-    />
-  );
   const gitFluentPaneViewActions = (
     <GitFluentViewActions
       activeTab={gitFluentPaneActiveTab}
@@ -3121,25 +3075,23 @@ function GitRepositoryPanel({
           icon="gitGraph"
           expanded={showGitGraphView}
           onToggle={() => togglePanelView("graph", showGitGraphView, setShowGitGraphView)}
-          actions={gitGraphHeaderActions}
           {...panelViewDragProps("graph")}
         />
         {showGitGraphView && (
           <div className="git-view-pane-body git-graph-pane-body" style={panelBodyStyle("graph")}>
-            <GitFluentGraphView
-              rows={gitFluentGraphRows}
-              selectedHash={selectedGraphHash}
-              commitFiles={commitFiles}
+            <CommitGraphView
               rootPath={repoRootPath}
               connId={connId}
-              onToggleCommit={(hash) => {
-                const next = selectedGraphHash === hash ? null : hash;
-                setSelectedGraphHash(next);
-                if (next) void loadCommitFiles(next);
-              }}
-              onOpenCommitMenu={(event, commit) => openFileMenu(event, commitContextMenu(commit))}
-              onOpenFile={onOpenFile}
+              active={showGitGraphView}
+              reloadKey={graphReloadKey}
+              busy={busy}
+              onRun={(fn) => void act(fn)}
+              onPull={() => void act(() => gitPull(repoRootPath, connId))}
+              onPush={() => void act(() => gitPush(repoRootPath, connId))}
+              onFetch={() => void act(() => gitFetch(repoRootPath, connId))}
+              focusHash={graphFocus}
               onOpenRevisionDiff={onOpenRevisionDiff}
+              onOpenRevision={onOpenRevision}
             />
           </div>
         )}

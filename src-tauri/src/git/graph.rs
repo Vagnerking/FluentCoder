@@ -207,6 +207,10 @@ pub struct LineageMerge {
     pub pr: Option<u32>,
     /// Integrada sem commit de merge (fast-forward/rebase).
     pub fast_forward: bool,
+    /// 1º pai do merge (a base antes da integração).
+    pub first_parent: Option<String>,
+    /// Commits que a branch levou no merge (`M^1..ponta`).
+    pub commits: u32,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -884,6 +888,44 @@ pub(crate) fn lineage_args(reference: &str, base: &str) -> Vec<Vec<String>> {
     ]
 }
 
+/// Branch já mesclada: o merge-base com a base fica na própria ponta, então a
+/// divergência real é com o 1º pai do merge (`M^1`), e o caminho são os
+/// commits que o merge trouxe (`M^1..ponta`, first-parent).
+pub(crate) fn merged_lineage_args(tip: &str, merge_first_parent: &str) -> Vec<Vec<String>> {
+    vec![
+        vec!["merge-base".into(), tip.into(), merge_first_parent.into()],
+        vec![
+            "rev-list".into(),
+            "--first-parent".into(),
+            format!("--max-count={LINEAGE_PATH_CAP}"),
+            format!("{merge_first_parent}..{tip}"),
+            "--".into(),
+        ],
+        vec!["rev-list".into(), "--count".into(), format!("{merge_first_parent}..{tip}"), "--".into()],
+    ]
+}
+
+pub(crate) fn apply_merged_lineage(lineage: &mut BranchLineage, outs: &[Result<String, String>]) {
+    let get = |i: usize| outs.get(i).and_then(|r| r.as_ref().ok()).map(String::as_str).unwrap_or("");
+    let mb = get(0).trim();
+    if !mb.is_empty() {
+        lineage.merge_base = Some(mb.to_string());
+    }
+    lineage.path = parse_matches(get(1));
+    if let Some(m) = lineage.merged_into.as_mut() {
+        m.commits = get(2).trim().parse().unwrap_or(0);
+    }
+}
+
+/// Precisa da 2ª rodada (branch mesclada via commit de merge)?
+pub(crate) fn merged_first_parent(lineage: &BranchLineage) -> Option<String> {
+    lineage
+        .merged_into
+        .as_ref()
+        .filter(|m| !m.fast_forward)
+        .and_then(|m| m.first_parent.clone())
+}
+
 pub(crate) fn merge_base_summary_args(hash: &str) -> Vec<String> {
     vec![
         "log".into(),
@@ -920,6 +962,8 @@ pub(crate) fn build_lineage(reference: &str, base: &str, outs: &[Result<String, 
                     time: f[2].trim().parse().unwrap_or(0),
                     pr: pull_request_number(f[3]),
                     fast_forward: !is_merge,
+                    first_parent: parents.first().map(|p| p.to_string()),
+                    commits: 0,
                 });
             }
         }
@@ -1106,6 +1150,13 @@ pub(crate) fn git_branch_lineage_blocking(path: String, reference: String, base:
             .collect()
     });
     let mut lineage = build_lineage(&reference, &base, &outs)?;
+    if let Some(mfp) = merged_first_parent(&lineage) {
+        let outs: Vec<Result<String, String>> = merged_lineage_args(&lineage.tip, &mfp)
+            .iter()
+            .map(|args| run_owned(&path, args))
+            .collect();
+        apply_merged_lineage(&mut lineage, &outs);
+    }
     if let Some(mb) = lineage.merge_base.clone() {
         if let Ok(raw) = run_owned(&path, &merge_base_summary_args(&mb)) {
             apply_merge_base_summary(&mut lineage, &raw);
@@ -1406,7 +1457,10 @@ mod tests {
         let merged = feat.merged_into.expect("integrada");
         assert_eq!(merged.pr, Some(7));
         assert!(!merged.fast_forward);
-        assert_eq!(feat.merge_base_subject.as_deref(), Some("f2"));
+        assert_eq!(merged.commits, 2, "f1 + f2");
+        // Divergência real: com o 1º pai do merge (c1), não com a ponta.
+        assert_eq!(feat.merge_base_subject.as_deref(), Some("c1"));
+        assert_eq!(feat.path.len(), 2);
 
         let topic = git_branch_lineage_blocking(repo.root(), "topic".into(), Some("main".into())).unwrap();
         assert_eq!((topic.ahead, topic.behind), (1, 0));

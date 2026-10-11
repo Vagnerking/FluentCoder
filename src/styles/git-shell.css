@@ -197,8 +197,12 @@
   animation: git-panel-section-in 90ms ease-out;
 }
 
+/* O grafo virtualizado rola por dentro (lista + detalhes). */
 .git-graph-pane-body {
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
   contain: content;
 }
 

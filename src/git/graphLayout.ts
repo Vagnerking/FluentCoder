@@ -275,8 +275,8 @@ export const LANE_GEOMETRY = {
   nodeRadius: 4,
 } as const;
 
-export function laneX(lane: number): number {
-  return LANE_GEOMETRY.padding + lane * LANE_GEOMETRY.laneWidth + LANE_GEOMETRY.laneWidth / 2;
+export function laneX(lane: number, laneWidth: number = LANE_GEOMETRY.laneWidth, padding: number = LANE_GEOMETRY.padding): number {
+  return padding + lane * laneWidth + laneWidth / 2;
 }
 
 /**

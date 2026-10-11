@@ -68,6 +68,35 @@ espelhos `ssh_git_*` de `ssh.rs`, em `src/git/*`, `GitPanel.tsx` e
   (Comparar com…). Medido: 1ª página em 15 ms neste repo (465 commits) e
   160 ms num sintético de 50k sem commit-graph.
 
+## Grafo na UI (`src/components/git/graph/`, `src/git/graph*.ts`)
+
+- `graphLayout.ts` (puro, testado): `GraphLaneLayout.append(página)` —
+  lanes estáveis (buraco reaproveitado, nada desloca), estado contínuo entre
+  páginas. Cor = `branchColor(nome)` (paleta `--graph-lane-0…9`); remota
+  divide a cor da local; 2º pai de merge herda o nome do assunto. Nunca
+  volte a colorir por índice de lane.
+- `virtualWindow` + linha fixa de 22 px: só a janela visível (+ overscan)
+  vira DOM; a próxima página carrega a 100 linhas do fim. A coluna de
+  trilhos usa a largura das linhas **da janela**, não do histórico todo.
+- `graphModel.ts` (puro, testado): pílulas (local + remota de mesmo nome
+  numa pílula só), provedor (GitHub/GitLab/Bitbucket/Azure a partir do
+  remoto do upstream → origin → 1º), mensagem sem trailers + markdown leve
+  (sem HTML), "N arquivos alterados, X inserções(+), Y exclusões(-)",
+  resumo da linhagem, árvore de arquivos com pastas comprimidas.
+- `CommitHoverCard`: portal, 450 ms para abrir (120 ms trocando de linha),
+  180 ms para fechar, interativo, fecha ao rolar; teclado: Espaço/Ctrl+I na
+  lista abre e foca o cartão, Esc devolve o foco. Conteúdo = hover do VS Code
+  (autor, "há 3 meses (9 de julho de 2026 às 17:05)", co-autores, mensagem,
+  estatísticas, hash com copiar, "Abrir no GitHub") + ações.
+- Lista = `listbox` com `aria-activedescendant`: ↑/↓/PgUp/PgDn/Home/End,
+  Enter = detalhes, Shift+F10 = ações. Filtros esmaecem, não removem.
+- Linhagem: hover/clique numa pílula chama `git_branch_lineage` com a base
+  do cabeçalho; o caminho acende (o resto esmaece) e a faixa diz
+  "divergiu de X em <commit>", distância e "mesclada em X via PR #n".
+- Operações (checkout, branch aqui, cherry-pick, reverter) passam pelo
+  `act` do painel (busy, toast, `requestGitRefresh`); o grafo recarrega
+  pelo `reloadKey` quando o evento toca refs.
+
 ## Status (`src-tauri/src/git/status.rs`)
 
 - `git status --porcelain=v2 -z --branch`: caminhos crus (acentos, espaços,

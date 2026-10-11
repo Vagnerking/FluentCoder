@@ -2098,6 +2098,10 @@ pub async fn ssh_git_branch_lineage(
     };
     let outs = exec_git_batch(&conn, &root, &g::lineage_args(&reference, &base)).await?;
     let mut lineage = g::build_lineage(&reference, &base, &outs)?;
+    if let Some(mfp) = g::merged_first_parent(&lineage) {
+        let outs = exec_git_batch(&conn, &root, &g::merged_lineage_args(&lineage.tip, &mfp)).await?;
+        g::apply_merged_lineage(&mut lineage, &outs);
+    }
     if let Some(mb) = lineage.merge_base.clone() {
         if let Some(Ok(raw)) = exec_git_batch(&conn, &root, &[g::merge_base_summary_args(&mb)])
             .await?

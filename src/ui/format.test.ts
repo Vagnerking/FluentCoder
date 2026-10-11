@@ -50,3 +50,17 @@ test("iniciais para avatar", () => {
   assert.equal(authorInitials("You"), "EU");
   assert.equal(authorInitials(""), "?");
 });
+
+test("datas por extenso (hover card do grafo)", async () => {
+  const { formatLongDate, formatRelativeDateLong } = await import("./format.ts");
+  assert.equal(formatLongDate(new Date(2026, 6, 9, 17, 5)), "9 de julho de 2026 às 17:05");
+  assert.equal(formatLongDate("x"), "x");
+  assert.equal(formatRelativeDateLong(ago(10_000), NOW), "agora");
+  assert.equal(formatRelativeDateLong(ago(1 * MIN), NOW), "há 1 minuto");
+  assert.equal(formatRelativeDateLong(ago(2 * H), NOW), "há 2 horas");
+  assert.equal(formatRelativeDateLong(ago(30 * H), NOW), "ontem");
+  assert.equal(formatRelativeDateLong(ago(15 * D), NOW), "há 2 semanas");
+  assert.equal(formatRelativeDateLong(ago(31 * D), NOW), "há 1 mês");
+  assert.equal(formatRelativeDateLong(ago(93 * D), NOW), "há 3 meses");
+  assert.equal(formatRelativeDateLong(ago(800 * D), NOW), "há 2 anos");
+});

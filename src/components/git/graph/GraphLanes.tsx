@@ -19,6 +19,8 @@ interface GraphLanesProps {
   marker: GraphNodeMarker;
   /** Linhagem ativa: caminho destacado (o resto esmaece). */
   path: ReadonlySet<string> | null;
+  /** Largura de cada lane (px); menor na sidebar estreita. */
+  laneWidth?: number;
 }
 
 const H = LANE_GEOMETRY.rowHeight;
@@ -33,9 +35,17 @@ function color(index: number): string {
  * Trilhos de UMA linha (o grafo é virtualizado: só as linhas visíveis
  * desenham). Lanes além de `maxLanes` dobram numa coluna tracejada "+N".
  */
-export const GraphLanes = memo(function GraphLanes({ row, lanes, maxLanes, marker, path }: GraphLanesProps) {
-  const width = LANE_GEOMETRY.padding * 2 + lanes * LANE_GEOMETRY.laneWidth;
-  const x = (lane: number) => laneX(projectLane(lane, maxLanes));
+export const GraphLanes = memo(function GraphLanes({
+  row,
+  lanes,
+  maxLanes,
+  marker,
+  path,
+  laneWidth = LANE_GEOMETRY.laneWidth,
+}: GraphLanesProps) {
+  const pad = laneWidth < LANE_GEOMETRY.laneWidth ? 4 : LANE_GEOMETRY.padding;
+  const width = pad * 2 + lanes * laneWidth;
+  const x = (lane: number) => laneX(projectLane(lane, maxLanes), laneWidth, pad);
   const overflow = (lane: number) => lane >= maxLanes;
   const onPath = path?.has(row.hash) ?? false;
   const dim = (lit: boolean) => (path ? (lit ? " is-lit" : " is-dim") : "");
@@ -74,13 +84,13 @@ export const GraphLanes = memo(function GraphLanes({ row, lanes, maxLanes, marke
           d={edgePath(nodeX, MID, x(b.lane), H)}
           stroke={color(b.color)}
           className={`graph-edge${b.merge ? " is-merge" : ""}${overflow(b.lane) ? " is-overflow" : ""}${dim(
-            !b.merge && onPath && isPathEdge(b.target, row.hash, path ?? EMPTY)
+            onPath && isPathEdge(b.target, row.hash, path ?? EMPTY)
           )}`}
         />
       ))}
       <GraphNode x={nodeX} color={row.color} merge={row.isMerge} marker={marker} className={dim(onPath)} />
       {hidden > 0 && (
-        <text className="graph-overflow-label" x={laneX(maxLanes)} y={H - 2} textAnchor="middle">
+        <text className="graph-overflow-label" x={laneX(maxLanes, laneWidth, pad)} y={H - 2} textAnchor="middle">
           +{hidden}
         </text>
       )}
