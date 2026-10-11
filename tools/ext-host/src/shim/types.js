@@ -409,6 +409,21 @@ class Diagnostic {
   }
 }
 
+/** `new Location(uri, range | position)` (posição vira faixa vazia), como no VS Code. */
+class Location {
+  constructor(uri, rangeOrPosition) {
+    this.uri = uri;
+    this.range = rangeOrPosition instanceof Position ? new Range(rangeOrPosition, rangeOrPosition) : rangeOrPosition;
+  }
+}
+
+class DiagnosticRelatedInformation {
+  constructor(location, message) {
+    this.location = location;
+    this.message = message;
+  }
+}
+
 // Inputs de abas (window.tabGroups) — usados com `instanceof`.
 class TabInputText {
   constructor(uri) {
@@ -610,6 +625,8 @@ module.exports = {
   CancellationTokenSource,
   CancellationError,
   Diagnostic,
+  Location,
+  DiagnosticRelatedInformation,
   TabInputText,
   TabInputTextDiff,
   TabInputWebview,

@@ -41,6 +41,11 @@ test('languages.getLanguages = registro do app; match exposto na API', async () 
   assert.deepEqual(await api.languages.getLanguages(), ['python', 'rust', 'yaml']);
   assert.equal(api.languages.match({ language: 'rust' }, doc('/a.rs', 'rust')), 10);
   assert.equal(api.version, VSCODE_VERSION);
+  // `Location` (ErrorLens e o vscode-languageclient constroem): posição vira faixa vazia
+  const loc = new api.Location(Uri.file('/a.rs'), new api.Position(3, 4));
+  assert.ok(loc.range instanceof api.Range);
+  assert.deepEqual([loc.range.start.line, loc.range.end.character], [3, 4]);
+  assert.equal(new api.DiagnosticRelatedInformation(loc, 'veja').location, loc);
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
