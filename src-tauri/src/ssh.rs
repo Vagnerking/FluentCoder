@@ -1957,6 +1957,215 @@ pub async fn ssh_git_graph(
     Ok(commits)
 }
 
+/// Página do grafo via SSH: 1ª página = 2 execs (cabeçalho em lote + log),
+/// demais = 1 exec. Mesmo parser/argumentos do local (`git/graph.rs`).
+#[tauri::command]
+pub async fn ssh_git_graph_page(
+    conn_id: String,
+    root: String,
+    query: Option<crate::git::graph::GraphQuery>,
+    cursor: Option<crate::git::graph::GraphCursor>,
+    page_size: Option<u32>,
+    state: State<'_, SshState>,
+) -> Result<crate::git::graph::GraphPage, String> {
+    use crate::git::graph as g;
+    use crate::git::history;
+    let started = std::time::Instant::now();
+    let conn = get_conn(&state, &conn_id).await?;
+    let query = query.unwrap_or_default();
+    let page = g::clamp_page(page_size);
+    let elapsed = |s: std::time::Instant| s.elapsed().as_millis().min(u32::MAX as u128) as u32;
+    if let Some(cursor) = cursor {
+        let out = exec_git_batch(&conn, &root, &[g::page_log_args(&query, &cursor, page)])
+            .await?
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| Ok(String::new()));
+        let raw = match out {
+            Ok(raw) => raw,
+            Err(e) if history::is_empty_history_error(&e) => String::new(),
+            Err(e) => return Err(e),
+        };
+        let (commits, next) = g::finish_page(g::parse_graph_rows(&raw), &cursor, page);
+        return Ok(g::GraphPage { commits, cursor: next, header: None, elapsed_ms: elapsed(started) });
+    }
+    let mut first = exec_git_batch(
+        &conn,
+        &root,
+        &[
+            owned(&g::GRAPH_META_ARGS),
+            vec!["for-each-ref".into(), g::REFS_FORMAT.into()],
+            g::head_args(),
+            g::track_args(),
+        ],
+    )
+    .await?
+    .into_iter()
+    .map(|r| r.unwrap_or_default());
+    let meta = first.next().unwrap_or_default();
+    let refs = first.next().unwrap_or_default();
+    let head = first.next().unwrap_or_default();
+    let track = first.next().unwrap_or_default();
+    let parts = g::header_parts(&meta, &refs, &head, &track);
+    let (revs, selected) = g::resolve_revs(&query, &parts.parsed, &parts.head);
+    if revs.is_empty() {
+        return Ok(g::GraphPage {
+            commits: Vec::new(),
+            cursor: None,
+            header: Some(g::build_header(parts, selected, None)),
+            elapsed_ms: elapsed(started),
+        });
+    }
+    let cursor = g::GraphCursor { skip: 0, revs };
+    let mut cmds = vec![g::page_log_args(&query, &cursor, page)];
+    let match_cmd = g::match_args(&query, &cursor.revs);
+    if let Some(m) = match_cmd.clone() {
+        cmds.push(m);
+    }
+    let mut outs = exec_git_batch(&conn, &root, &cmds).await?.into_iter();
+    let raw = match outs.next().unwrap_or_else(|| Ok(String::new())) {
+        Ok(raw) => raw,
+        Err(e) if history::is_empty_history_error(&e) => String::new(),
+        Err(e) => return Err(e),
+    };
+    let matches = match_cmd.map(|_| g::parse_matches(&outs.next().and_then(Result::ok).unwrap_or_default()));
+    let (commits, next) = g::finish_page(g::parse_graph_rows(&raw), &cursor, page);
+    Ok(g::GraphPage {
+        commits,
+        cursor: next,
+        header: Some(g::build_header(parts, selected, matches)),
+        elapsed_ms: elapsed(started),
+    })
+}
+
+/// Detalhes de commit via SSH (1 exec; cache compartilhado por conexão+raiz).
+#[tauri::command]
+pub async fn ssh_git_commit_details(
+    conn_id: String,
+    root: String,
+    commit: String,
+    state: State<'_, SshState>,
+) -> Result<crate::git::graph::CommitDetails, String> {
+    use crate::git::graph as g;
+    let commit = commit.trim().to_string();
+    if commit.is_empty() || commit.starts_with('-') {
+        return Err("Commit inválido.".into());
+    }
+    let key = format!("ssh:{conn_id}:{root}");
+    if let Some(hit) = g::cached_details(&key, &commit) {
+        return Ok(hit);
+    }
+    let conn = get_conn(&state, &conn_id).await?;
+    let raw = exec_git_batch(&conn, &root, &[g::details_args(&commit)])
+        .await?
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| Err("Saída vazia.".into()))?;
+    let details = g::parse_details(&raw).ok_or_else(|| "Não foi possível ler o commit.".to_string())?;
+    g::store_details(&key, &details);
+    Ok(details)
+}
+
+/// Linhagem via SSH: comandos independentes num lote + resumo do merge-base.
+#[tauri::command]
+pub async fn ssh_git_branch_lineage(
+    conn_id: String,
+    root: String,
+    reference: String,
+    base: Option<String>,
+    state: State<'_, SshState>,
+) -> Result<crate::git::graph::BranchLineage, String> {
+    use crate::git::graph as g;
+    let reference = reference.trim().to_string();
+    if reference.is_empty() || reference.starts_with('-') {
+        return Err("Ref inválida.".into());
+    }
+    let conn = get_conn(&state, &conn_id).await?;
+    let base = match base.map(|b| b.trim().to_string()).filter(|b| !b.is_empty()) {
+        Some(b) if !b.starts_with('-') => b,
+        Some(_) => return Err("Base inválida.".into()),
+        None => {
+            let raw = exec_git_batch(&conn, &root, &[vec!["for-each-ref".into(), g::REFS_FORMAT.into()]])
+                .await?
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| Ok(String::new()))?;
+            let parsed = g::parse_refs(&raw);
+            g::detect_default_branch(&parsed)
+                .map(|r| r.short.clone())
+                .ok_or_else(|| "Nenhuma branch base (main/master) encontrada.".to_string())?
+        }
+    };
+    let outs = exec_git_batch(&conn, &root, &g::lineage_args(&reference, &base)).await?;
+    let mut lineage = g::build_lineage(&reference, &base, &outs)?;
+    if let Some(mb) = lineage.merge_base.clone() {
+        if let Some(Ok(raw)) = exec_git_batch(&conn, &root, &[g::merge_base_summary_args(&mb)])
+            .await?
+            .into_iter()
+            .next()
+        {
+            g::apply_merge_base_summary(&mut lineage, &raw);
+        }
+    }
+    Ok(lineage)
+}
+
+/// Arquivos entre duas revisões via SSH (`to` vazio = árvore de trabalho).
+#[tauri::command]
+pub async fn ssh_git_diff_files(
+    conn_id: String,
+    root: String,
+    from: String,
+    to: Option<String>,
+    state: State<'_, SshState>,
+) -> Result<Vec<crate::git::GitCommitFile>, String> {
+    use crate::git::graph as g;
+    let from = from.trim().to_string();
+    let to = to.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    if from.is_empty() || from.starts_with('-') || to.as_deref().is_some_and(|t| t.starts_with('-')) {
+        return Err("Revisão inválida.".into());
+    }
+    let conn = get_conn(&state, &conn_id).await?;
+    let mut outs = exec_git_batch(
+        &conn,
+        &root,
+        &[g::diff_files_args(&from, to.as_deref(), false), g::diff_files_args(&from, to.as_deref(), true)],
+    )
+    .await?
+    .into_iter();
+    let status = outs.next().unwrap_or_else(|| Ok(String::new()))?;
+    let numstat = outs.next().and_then(Result::ok).unwrap_or_default();
+    Ok(crate::git::parse_commit_file_records(&status, &numstat))
+}
+
+#[tauri::command]
+pub async fn ssh_git_cherry_pick(
+    conn_id: String,
+    root: String,
+    commit: String,
+    state: State<'_, SshState>,
+) -> Result<String, String> {
+    let args = crate::git::graph::cherry_pick_args(&commit)?;
+    let conn = get_conn(&state, &conn_id).await?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    exec_git(&conn, &root, &refs).await
+}
+
+#[tauri::command]
+pub async fn ssh_git_create_branch_at(
+    conn_id: String,
+    root: String,
+    name: String,
+    start: String,
+    checkout: bool,
+    state: State<'_, SshState>,
+) -> Result<(), String> {
+    let args = crate::git::graph::create_branch_at_args(&name, &start, checkout)?;
+    let conn = get_conn(&state, &conn_id).await?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    exec_git(&conn, &root, &refs).await.map(|_| ())
+}
+
 #[tauri::command]
 pub async fn ssh_git_compare_upstream(
     conn_id: String,
@@ -2088,7 +2297,17 @@ pub async fn ssh_git_diff_file_revision(
             )
             .await
         }
-        _ => Err("Comparação Git desconhecida.".into()),
+        other => match crate::git::revision_compare_base(other) {
+            Some(base) => {
+                exec_git(
+                    &conn,
+                    &root,
+                    &["diff", "--no-ext-diff", "--find-renames", base, &commit, "--", &rel],
+                )
+                .await
+            }
+            None => Err("Comparação Git desconhecida.".into()),
+        },
     }
 }
 

@@ -1668,7 +1668,11 @@ export function gitShowFileAtCommit(
   return invoke<string>("git_show_file_at_commit", { path, file, commit });
 }
 
-export type GitRevisionDiffTarget = "previous" | "working";
+/**
+ * `previous` = commit vs. pai; `working` = commit vs. arquivo atual;
+ * `rev:<hash>` = `<hash>` (original) vs. commit (Comparar com… do grafo).
+ */
+export type GitRevisionDiffTarget = "previous" | "working" | `rev:${string}`;
 export type GitChangeView = "working" | "staged";
 
 /** Returns a unified patch for a Git Fluent file revision. */

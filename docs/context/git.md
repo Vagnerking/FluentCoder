@@ -40,6 +40,34 @@ espelhos `ssh_git_*` de `ssh.rs`, em `src/git/*`, `GitPanel.tsx` e
   iguais às do blame/CodeLens.
 - Grafo usa `--branches --remotes --tags HEAD`, não `--all` (exclui `refs/stash`).
 
+## Grafo paginado, detalhes e linhagem (`src-tauri/src/git/graph.rs`)
+
+- `git_graph_page(path, query, cursor, pageSize=200)` (+ `ssh_git_graph_page`).
+  Sem cursor = 1ª página **com cabeçalho**: refs (`for-each-ref`, upstream e
+  ahead/behind de todas as branches, tags descascadas), HEAD, branch base
+  (`origin/HEAD` → main/master/develop/trunk), remotos (links do provedor),
+  identidade, `incoming`/`outgoing` (`rev-list --left-right HEAD...@{u}`).
+  Meta/refs/HEAD/track rodam em paralelo; no SSH, 1 lote + o log.
+- O cursor guarda `skip` + os **hashes** das revs resolvidas na 1ª página:
+  rolar não muda se uma ref andar. Nunca recalcule revs por página.
+- Refs: `auto` (HEAD + upstream + base e a remota da base, como o
+  "Automático" do VS Code), `current` (HEAD + upstream), `all` (refs +
+  HEAD, nunca `refs/stash`), `selected`.
+- Filtros: `author`/`search` **não removem linhas** — a 1ª página traz
+  `matches` (hashes) e a UI esmaece o resto; `path` limita o grafo com
+  `--parents` (pais reescritos, grafo conexo); `firstParent`.
+- `git_commit_details`: **um** `git show -z --raw --numstat
+  --diff-merges=first-parent` (mensagem `%B`, committer, co-autores,
+  arquivos com +/−); cache por hash no backend e no front (`graphApi.ts`).
+- `git_branch_lineage(ref, base?)`: merge-base, ahead/behind, caminho
+  first-parent `base..ref` e, se integrada, o merge mais antigo do
+  first-parent da base que descende da ponta (`--ancestry-path`), com o PR
+  (`Merge pull request #N`, `(#N)`, `See merge request …!N`).
+- Também: `git_diff_files(from, to|null)`, `git_cherry_pick`,
+  `git_create_branch_at`; `git_diff_file_revision` aceita `rev:<hash>`
+  (Comparar com…). Medido: 1ª página em 15 ms neste repo (465 commits) e
+  160 ms num sintético de 50k sem commit-graph.
+
 ## Status (`src-tauri/src/git/status.rs`)
 
 - `git status --porcelain=v2 -z --branch`: caminhos crus (acentos, espaços,

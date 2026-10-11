@@ -334,7 +334,7 @@ function gitRevisionDiffUri(
   shortHash: string,
   compareTo: GitRevisionDiffTarget
 ): string {
-  return `${GIT_DIFF_URI_PREFIX}${encodeURIComponent(shortHash)}/${compareTo}/${encodeURIComponent(filePath)}`;
+  return `${GIT_DIFF_URI_PREFIX}${encodeURIComponent(shortHash)}/${encodeURIComponent(compareTo)}/${encodeURIComponent(filePath)}`;
 }
 function gitWorkingDiffUri(filePath: string): string {
   return `${GIT_DIFF_URI_PREFIX}working/${encodeURIComponent(filePath)}`;
@@ -3392,26 +3392,35 @@ export default function App() {
         ? { rootPath: repoRootPath, connId }
         : gitTargetForPath(filePath);
       if (!target) return;
+      // "rev:<hash>": a outra revisão é o original (Comparar com… do grafo).
+      const otherRevision = compareTo.startsWith("rev:") ? compareTo.slice(4) : null;
+      const otherShort = otherRevision ? otherRevision.slice(0, 7) : "";
       try {
         const [diff, commits, originalContent, modifiedContent] = await Promise.all([
           gitDiffFileRevision(target.rootPath, filePath, commitHash, compareTo, target.connId),
           gitLogFile(target.rootPath, filePath, 80, target.connId).catch(() => []),
-          compareTo === "previous"
-            ? readGitFileAtCommitOrEmpty(target.rootPath, filePath, `${commitHash}^`, target.connId)
+          otherRevision
+            ? readGitFileAtCommitOrEmpty(target.rootPath, filePath, otherRevision, target.connId)
+            : compareTo === "previous"
+              ? readGitFileAtCommitOrEmpty(target.rootPath, filePath, `${commitHash}^`, target.connId)
+              : readGitFileAtCommitOrEmpty(target.rootPath, filePath, commitHash, target.connId),
+          compareTo === "working"
+            ? readWorkingFileOrEmpty(filePath, target.connId)
             : readGitFileAtCommitOrEmpty(target.rootPath, filePath, commitHash, target.connId),
-          compareTo === "previous"
-            ? readGitFileAtCommitOrEmpty(target.rootPath, filePath, commitHash, target.connId)
-            : readWorkingFileOrEmpty(filePath, target.connId),
         ]);
         const commitMeta = commits.find((commit) => commit.hash === commitHash);
-        const comparisonLabel =
-          compareTo === "previous" ? "alterações anteriores" : "comparado ao working file";
+        const comparisonLabel = otherRevision
+          ? `comparado a ${otherShort}`
+          : compareTo === "previous"
+            ? "alterações anteriores"
+            : "comparado ao working file";
         const content =
           diff.trim().length > 0
             ? diff
             : `# Sem diferenças para ${baseName(filePath)} em ${shortHash} (${comparisonLabel}).\n`;
-        const name =
-          compareTo === "previous"
+        const name = otherRevision
+          ? `${baseName(filePath)} ${otherShort} ↔ ${shortHash}`
+          : compareTo === "previous"
             ? `${baseName(filePath)} ${shortHash} ↔ anterior`
             : `${baseName(filePath)} ${shortHash} ↔ atual`;
         const path = gitRevisionDiffUri(filePath, shortHash, compareTo);
@@ -3422,15 +3431,18 @@ export default function App() {
             content,
             originalContent,
             modifiedContent,
-            originalLabel:
-              compareTo === "previous" ? `Anterior a ${shortHash}` : `Revisão ${shortHash}`,
-            modifiedLabel:
-              compareTo === "previous" ? `Revisão ${shortHash}` : "Arquivo atual",
+            originalLabel: otherRevision
+              ? `Revisão ${otherShort}`
+              : compareTo === "previous"
+                ? `Anterior a ${shortHash}`
+                : `Revisão ${shortHash}`,
+            modifiedLabel: compareTo === "working" ? "Arquivo atual" : `Revisão ${shortHash}`,
             dirty: false,
             readOnly: true,
             sourcePath: filePath,
-            sourceLabel:
-              compareTo === "previous"
+            sourceLabel: otherRevision
+              ? `Diff Git ${otherShort} ↔ ${shortHash}`
+              : compareTo === "previous"
                 ? `Diff Git ${shortHash} com revisão anterior`
                 : `Diff Git ${shortHash} com arquivo atual`,
             revisionHash: commitHash,

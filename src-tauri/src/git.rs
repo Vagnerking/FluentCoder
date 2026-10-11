@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 pub(crate) mod avatar;
 pub(crate) mod discovery;
+pub(crate) mod graph;
 pub(crate) mod history;
 pub(crate) mod status;
 pub(crate) mod watcher;
@@ -152,7 +153,7 @@ pub struct GitGraphCommit {
 }
 
 /// One file changed by a commit, used by the GitLens-like Commit Details view.
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Debug)]
 pub struct GitCommitFile {
     /// Path relative to the repo root, using `/`.
     path: String,
@@ -1536,8 +1537,23 @@ fn git_diff_file_revision_blocking(path: String, file: String, commit: String, c
                 &rel,
             ],
         ),
-        _ => Err("Comparação Git desconhecida.".into()),
+        other => match revision_compare_base(other) {
+            // "rev:<base>": a revisão comparada com outra (Comparar com…).
+            Some(base) => run_git(
+                &path,
+                &["diff", "--no-ext-diff", "--find-renames", base, &commit, "--", &rel],
+            ),
+            None => Err("Comparação Git desconhecida.".into()),
+        },
     }
+}
+
+/// `rev:<hash>` → `<hash>` (rejeita vazio e opções).
+pub(crate) fn revision_compare_base(compare_to: &str) -> Option<&str> {
+    compare_to
+        .strip_prefix("rev:")
+        .map(str::trim)
+        .filter(|b| !b.is_empty() && !b.starts_with('-'))
 }
 
 /// Returns the working-tree patch for a tracked file versus HEAD. This backs the
