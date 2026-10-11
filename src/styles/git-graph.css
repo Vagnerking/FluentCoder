@@ -1,0 +1,42 @@
+/* ---- Grafo de commits (src/components/git/graph) ----
+   Trilhos em SVG por linha (lista virtualizada, linha de 22 px — espelha
+   LANE_GEOMETRY.rowHeight em src/git/graphLayout.ts). */
+
+.graph-lanes {
+  display: block;
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+.graph-edge {
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+.graph-edge.is-overflow {
+  stroke-dasharray: 2 2;
+  opacity: 0.6;
+}
+
+.graph-overflow-label {
+  fill: var(--text-muted);
+  font-size: var(--font-caption-xs);
+}
+
+/* Linhagem ativa: o caminho acende, o resto esmaece. */
+.graph-edge.is-dim,
+.graph-node.is-dim {
+  opacity: 0.22;
+}
+
+.graph-edge.is-lit {
+  stroke-width: 2.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .graph-edge {
+    transition: none;
+  }
+}

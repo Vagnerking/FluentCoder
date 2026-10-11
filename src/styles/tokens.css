@@ -158,6 +158,21 @@
   --color-graph-markdown: var(--accent);
   --color-graph-code: #3ec9a7;
 
+  /* Lanes do grafo de commits (src/git/graphLayout.ts, GRAPH_PALETTE_SIZE =
+     10): cor por hash do nome da branch; contraste ≥ 3:1 sobre o card. */
+  --graph-lane-0: #60cdff;
+  --graph-lane-1: #ffb547;
+  --graph-lane-2: #f17cb8;
+  --graph-lane-3: #4fd1b5;
+  --graph-lane-4: #b794ff;
+  --graph-lane-5: #ff8a5c;
+  --graph-lane-6: #93d46f;
+  --graph-lane-7: #f2d16b;
+  --graph-lane-8: #6fa8ff;
+  --graph-lane-9: #ff7b8a;
+  /* Miolo dos nós vazados (merge, HEAD, recebidos). */
+  --graph-node-bg: #1f2630;
+
   /* ---- Focus (F2-AUD-003) ----
      One focus contract for every interactive element. Apply via the
      `:focus-visible` rule near the end of this file; never `outline: none`
