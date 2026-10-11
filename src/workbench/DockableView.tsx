@@ -57,10 +57,10 @@ export function DockableViewTabs({ region, ariaLabel, extraMenuItems }: TabsProp
       "src" in d.icon ? (
         <span className="view-tab-label">
           <ViewIconGlyph icon={d.icon} size={14} className="view-tab-img" />
-          {d.title}
+          <span className="view-tab-text">{d.title}</span>
         </span>
       ) : (
-        d.title
+        <span className="view-tab-text">{d.title}</span>
       ),
     badge: api.badges[d.id] || undefined,
   }));
@@ -80,6 +80,10 @@ export function DockableViewTabs({ region, ariaLabel, extraMenuItems }: TabsProp
         }}
         tabProps={(item) => ({
           "data-view-tab": item.value,
+          // Em regiões estreitas a aba inativa fica só com o ícone: o nome
+          // continua no aria-label e no title.
+          "aria-label": views.find((d) => d.id === item.value)?.title,
+          title: views.find((d) => d.id === item.value)?.title,
           className: `view-tab${drag?.viewId === item.value ? " is-dragging" : ""}`,
           onPointerDown: (e) => api.beginViewDrag(e, item.value),
           onPointerEnter: () => api.hoverView(item.value),

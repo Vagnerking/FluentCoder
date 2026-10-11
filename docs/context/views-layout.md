@@ -73,3 +73,35 @@ VS Code) e o layout responsivo das regiões. Código em `src/workbench/`.
   bar, Paleta, `Ctrl+Shift+F`, status bar → Problemas, `Ctrl+`` (Terminal),
   `revealView` de extensão etc. Nunca presumir que uma view está na região
   padrão.
+
+## Layout responsivo
+
+- `layoutConstraints.ts` (puro, testado nas larguras 800/1024/1366/1920 e
+  alturas 600/900) + `useWorkbenchLayout.ts`: reserva um **mínimo para o
+  editor somando todas as regiões abertas** (400 × 160 px CSS; em janelas
+  pequenas, no máximo metade da área útil), com a janela medida em px CSS
+  (`innerWidth ÷ zoom da UI`).
+- Falta espaço → 1) as regiões encolhem até o mínimo de cada uma
+  (proporcional à folga); 2) ainda falta → a região **usada há mais tempo**
+  (LRU: ponteiro/foco dentro dela) é **recolhida temporariamente**. As
+  preferências salvas (aberta, largura/altura: `ui.sidebarWidth`,
+  `ui.agentsSidebarWidth`, `ui.panelHeight`, `ui.panelWidth`) **nunca** são
+  sobrescritas pelo solver; a região volta sozinha quando houver espaço.
+- Região recolhida: o toggle da title bar, a activity bar ou um `reveal`
+  reabrem-na como **sobreposição** (`.region-overlay`,
+  `data-region-overlay`) por cima do editor; Escape ou clique fora fecham.
+  Usar a sobreposição não altera a ordem LRU (não tira outra região do
+  lugar). O iframe de uma view de extensão sobe junto (camada z 31).
+- Abrir uma região fechada a torna a mais recente: se faltar espaço, sai a
+  menos usada das outras.
+- Painel embaixo respeita a altura mínima do editor (o `max` da alça vem do
+  solver); muito baixo, recolhe como as laterais.
+- `WorkbenchResizeHandle`: alça única (barras e painel) com
+  `role="separator"`, `aria-orientation`, `aria-valuenow/min/max`; teclado:
+  setas ±16 px, Shift ±64, Home/End = mínimo/máximo (`resizeKeyValue`).
+  Arrastar usa a sessão `resize` (Escape/blur restauram).
+- Title bar: a central de comandos encolhe (≤ 760 px vira só o ícone de
+  busca + paleta; ≤ 560 px sai); menus e controles de janela ficam.
+- Status bar: os itens que as container queries escondem vão para o botão
+  **"Mais"** (`statusOverflow.ts`; limites espelhados do CSS e travados por
+  teste).

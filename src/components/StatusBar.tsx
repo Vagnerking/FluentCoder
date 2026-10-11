@@ -1,4 +1,6 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { hiddenStatusItems } from "./status/statusOverflow";
+import type { MenuItemSpec } from "./ui/Menu";
 import { createPortal } from "react-dom";
 import { Menu } from "./ui/Menu";
 import { Codicon } from "../icons/codicons/Codicon";
@@ -199,6 +201,49 @@ export function StatusBar({
   } | null>(null);
   const [blameMenu, setBlameMenu] = useState<{ x: number; y: number } | null>(null);
 
+  // Itens que a barra estreita esconde (container queries) vão para "Mais".
+  const barRef = useRef<HTMLDivElement>(null);
+  const [barWidth, setBarWidth] = useState(0);
+  const [moreMenu, setMoreMenu] = useState<DOMRect | null>(null);
+  useEffect(() => {
+    const el = barRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setBarWidth(el.clientWidth));
+    ro.observe(el);
+    setBarWidth(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
+  const hidden = hiddenStatusItems(barWidth);
+  const overflowItems: MenuItemSpec[] = [];
+  for (const key of hidden) {
+    if (key === "cursor" && fileName) {
+      overflowItems.push({ id: "st-cursor", label: `Ln ${line}, Col ${column}`, icon: "goToDefinition", disabled: true });
+    } else if (key === "language" && langDisplay) {
+      overflowItems.push({ id: "st-lang", label: `Linguagem: ${langDisplay}`, icon: "symbolFile", disabled: !onSelectLanguage, onSelect: onSelectLanguage });
+    } else if (key === "encoding" && fileName && encoding) {
+      overflowItems.push({ id: "st-enc", label: `Codificação: ${encoding}`, icon: "textEditor", disabled: !onSelectEncoding, onSelect: onSelectEncoding });
+    } else if (key === "eol" && fileName && eol) {
+      overflowItems.push({ id: "st-eol", label: `Fim de linha: ${eol}`, icon: "list", disabled: !onSelectEol, onSelect: onSelectEol });
+    } else if (key === "tabSize" && fileName) {
+      overflowItems.push({ id: "st-tab", label: `Tab Size: ${tabSize}`, icon: "formatDocument", disabled: true });
+    } else if (key === "blame" && currentLineBlame) {
+      overflowItems.push({
+        id: "st-blame",
+        label: `Autoria: ${blameAuthor(currentLineBlame.hunk)}, ${currentLineBlame.hunk.date}`,
+        icon: "annotationBlame",
+        disabled: !onOpenCurrentLineHistory,
+        onSelect: () => onOpenCurrentLineHistory?.(currentLineBlame.filePath),
+      });
+    } else if (key === "workspace") {
+      for (const s of lspServers ?? []) {
+        if (!s.workspace) continue;
+        const projects = s.workspace.projectCount === 1 ? "1 projeto" : `${s.workspace.projectCount} projetos`;
+        const solution = s.workspace.solutionPath ? baseName(s.workspace.solutionPath) : "projetos C#";
+        overflowItems.push({ id: `st-ws-${s.id}`, label: `${solution} · ${projects}`, icon: "solution", disabled: true });
+      }
+    }
+  }
+
   const closeBlameMenu = () => setBlameMenu(null);
   const runBlameAction = (action: () => void) => {
     action();
@@ -206,7 +251,7 @@ export function StatusBar({
   };
 
   return (
-    <div className="status-bar">
+    <div className="status-bar" ref={barRef}>
       <div className="status-left">
         {remoteHost ? (
           <span
@@ -526,6 +571,33 @@ export function StatusBar({
           <span className="status-item status-tabsize">Tab Size: {tabSize}</span>
         )}
       </div>
+      {overflowItems.length > 0 && (
+        <button
+          type="button"
+          className="status-item status-clickable status-more"
+          aria-label={`Mais itens da barra de status (${overflowItems.length})`}
+          aria-haspopup="menu"
+          aria-expanded={!!moreMenu}
+          title="Mais"
+          onClick={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            setMoreMenu((cur) => (cur ? null : rect));
+          }}
+        >
+          <Codicon name="more" />
+        </button>
+      )}
+
+      {moreMenu && overflowItems.length > 0 && (
+        <Menu
+          ariaLabel="Mais itens da barra de status"
+          anchor={{ rect: moreMenu, placement: "top-start" }}
+          items={overflowItems}
+          minWidth={220}
+          isInside={(t) => !!barRef.current?.querySelector(".status-more")?.contains(t)}
+          onClose={() => setMoreMenu(null)}
+        />
+      )}
 
       {lspMenu && (
         <Menu

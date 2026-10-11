@@ -26,47 +26,61 @@
   height: 100%;
 }
 
+/* Grupo esquerdo estreito: corta no fim em vez de sobrepor os itens. */
+.status-left {
+  overflow: hidden;
+}
+
 /* The left group (remote/git/diagnostics) keeps priority; the right group's
-   lower-value items drop out first as the bar narrows. */
+   lower-value items drop out first as the bar narrows — and reappear in the
+   "Mais" menu (button.status-more; thresholds mirrored in
+   src/components/status/statusOverflow.ts, kept in sync by a unit test). */
 .status-right { flex-shrink: 0; margin-left: auto; }
 
+button.status-more {
+  flex-shrink: 0;
+  font: inherit;
+  border: 0;
+  background: transparent;
+}
+
 @container (max-width: 720px) {
-  .status-tabsize { display: none; }
+  .status-bar .status-tabsize { display: none; }
 
 }
 
 @container (max-width: 680px) {
-  .status-eol { display: none; }
+  .status-bar .status-eol { display: none; }
 
 }
 
 @container (max-width: 620px) {
-  .status-encoding { display: none; }
+  .status-bar .status-encoding { display: none; }
 
 }
 
 @container (max-width: 520px) {
-  .status-language { display: none; }
+  .status-bar .status-language { display: none; }
 
 }
 
 @container (max-width: 430px) {
-  .status-cursor { display: none; }
+  .status-bar .status-cursor { display: none; }
 
 }
 
 @container (max-width: 360px) {
-  .status-workspace { display: none; }
+  .status-bar .status-workspace { display: none; }
 
 }
 
 @container (max-width: 860px) {
-  .status-blame-subject { display: none; }
+  .status-bar .status-blame-subject { display: none; }
 
 }
 
 @container (max-width: 680px) {
-  .status-blame { display: none; }
+  .status-bar .status-blame { display: none; }
 
 }
 

@@ -153,8 +153,9 @@ html.platform-linux:not(.window-maximized) .caption-close {
   align-items: center;
   gap: var(--space-xxs);
   min-width: 0;
-  /* Width follows the window: roomy on wide screens, never crowding the menu. */
-  width: clamp(200px, 34vw, 520px);
+  /* Width follows the window: roomy on wide screens, never crowding the menu;
+     shrinks to the icon (and then hides) on narrow windows — see below. */
+  width: clamp(140px, 34vw, 520px);
 }
 
 .command-center-search {
@@ -222,6 +223,25 @@ html.platform-linux:not(.window-maximized) .caption-close {
 
 @media (max-width: 900px) {
   .command-center-kbd { display: none; }
+
+}
+
+/* Janelas estreitas: a central de comandos vira só o ícone de busca + paleta
+   (o título continua no aria-label) e, no limite, sai — Ctrl+P/Ctrl+Shift+P
+   e os menus continuam valendo. Os controles de janela nunca somem. */
+@media (max-width: 760px) {
+  .command-center { width: auto; }
+
+  .command-center-search { flex: 0 0 auto; padding: 0 var(--space-xs); }
+
+  .command-center-label { display: none; }
+
+}
+
+@media (max-width: 560px) {
+  .titlebar-center { display: none; }
+
+  .titlebar { grid-template-columns: minmax(0, 1fr) minmax(min-content, auto); }
 
 }
 

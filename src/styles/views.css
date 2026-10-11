@@ -121,6 +121,27 @@
   gap: 6px;
 }
 
+/* Região estreita: as abas inativas viram só ícone (o nome segue no
+   aria-label e no tooltip); a ativa mantém o texto. */
+.view-container-header {
+  container-type: inline-size;
+  container-name: viewhdr;
+}
+
+@container viewhdr (max-width: 420px) {
+  .view-tab:not(.is-selected) .view-tab-text {
+    display: none;
+  }
+
+  .view-tab:not(.is-selected) .ui-tab-label {
+    gap: 0;
+  }
+
+  .view-tab:not(.is-selected) {
+    padding: 0 8px;
+  }
+}
+
 /* Ícone de extensão (SVG/PNG do pacote) como máscara monocromática: segue a
    cor do texto como os codicons (o logotipo cru seria preto no tema escuro). */
 .view-icon-img {
@@ -308,8 +329,103 @@ html.workbench-dragging-view * {
   overflow: auto;
 }
 
+/* ---- Layout responsivo (useWorkbenchLayout) ---- */
+
+/* Alças de redimensionamento: focáveis (role=separator); o foco acende a
+   mesma linha de destaque do hover. */
+.workbench-resize-handle {
+  outline: none;
+}
+
+.workbench-resize-handle:focus-visible::after {
+  opacity: 1;
+  transition-delay: 0ms;
+}
+
+/* Região recolhida por falta de espaço e reaberta como sobreposição: flutua
+   sobre o editor (sem empurrar o layout), com sombra de superfície
+   transitória. Escape/clique fora fecham; a preferência salva não muda. */
+.app > .body {
+  position: relative;
+}
+
+.editor-area {
+  position: relative;
+}
+
+.region-overlay {
+  position: absolute !important;
+  z-index: 30 !important;
+  top: var(--space-xxs);
+  bottom: var(--space-xs);
+  max-width: calc(100% - 2 * var(--space-sm));
+  box-shadow: var(--shadow-dialog) !important;
+  border-color: var(--acrylic-border-strong) !important;
+  /* Opaca: flutua sobre o editor (o acrílico translúcido deixaria o código
+     aparecer por baixo). */
+  background: var(--color-surface-overlay) !important;
+  animation: region-overlay-in var(--duration-medium, 167ms) var(--ease-standard);
+}
+
+/* Primária: ao lado da activity bar lateral (48 + vãos). */
+.sidebar.region-overlay-left {
+  left: calc(var(--space-sm) * 2 + 48px);
+}
+
+.sidebar.region-overlay-right {
+  right: calc(var(--space-sm) * 2 + 48px);
+}
+
+.primary-dock.activity-top .sidebar.region-overlay,
+.primary-dock.activity-bottom .sidebar.region-overlay {
+  left: var(--space-sm);
+  right: auto;
+}
+
+.agents-dock.region-overlay-left {
+  left: var(--space-sm);
+}
+
+.agents-dock.region-overlay-right {
+  right: var(--space-sm);
+}
+
+/* Painel embaixo: sobe por cima do editor. */
+.terminal-panel.region-overlay {
+  top: auto;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-width: none;
+}
+
+.terminal-panel.panel-right.region-overlay {
+  top: 0;
+  left: auto;
+}
+
+.terminal-panel.panel-left.region-overlay {
+  top: 0;
+  right: auto;
+}
+
+@keyframes region-overlay-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .view-drop-zone {
     transition: none;
+  }
+
+  .region-overlay {
+    animation: none;
   }
 }

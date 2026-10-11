@@ -56,6 +56,8 @@ import { registerEditorAction } from "./components/editor/EditorActions";
 import { Menu } from "./components/ui/Menu";
 import { useViewLayoutController, WorkbenchViewsProvider } from "./workbench/WorkbenchViews";
 import { ViewContainer } from "./workbench/ViewContainer";
+import { WorkbenchResizeHandle } from "./workbench/WorkbenchResizeHandle";
+import { useWorkbenchLayout } from "./workbench/useWorkbenchLayout";
 import { viewMoveMenuItems } from "./workbench/DockableView";
 import { FLUENT_CHAT_VIEW, registerNativeViews } from "./workbench/nativeViews";
 import { extensionIdOfView, extensionViewId, type ViewRegion } from "./workbench/viewRegistry";
@@ -440,6 +442,9 @@ const SIDEBAR_MIN = 180;
 const SIDEBAR_MIN_HORIZONTAL_ACTIVITY = 396;
 // Sidebar secundária (Fluent Chat), no lado oposto à principal.
 const AGENTS_SIDEBAR_MIN = 320;
+// Painel: altura mínima (embaixo) e largura mínima (numa lateral).
+const PANEL_MIN_HEIGHT = 80;
+const PANEL_MIN_WIDTH = 180;
 const AGENTS_SIDEBAR_DEFAULT = 500;
 
 function isUntitled(path: string): boolean {
@@ -855,16 +860,65 @@ export default function App() {
   // Terminal…) vive numa região — barra lateral primária, secundária ou
   // painel — persistida em `ui.viewLayout`. As três regiões abrem/fecham como
   // antes (sidebarOpen / agentsSidebarOpen / panelOpen).
-  const openRegion = useCallback((region: ViewRegion) => {
-    if (region === "primarySidebar") setSidebarOpen(true);
-    else if (region === "secondarySidebar") setAgentsSidebarOpen(true);
-    else setPanelOpen(true);
-  }, []);
   const regionOpen = useMemo(
     () => ({ primarySidebar: sidebarOpen, secondarySidebar: agentsSidebarOpen, panel: panelOpen }),
     [sidebarOpen, agentsSidebarOpen, panelOpen]
   );
-  const views = useViewLayoutController({ regionVisible: regionOpen, openRegion });
+  // Layout responsivo (docs/context/views-layout.md): reserva o mínimo do
+  // editor somando todas as regiões abertas; sem espaço, recolhe
+  // temporariamente a região menos usada (reabre como sobreposição) sem
+  // mexer nas preferências salvas (aberta/largura/altura).
+  const activityBarHorizontalPos = activityBarPos === "top" || activityBarPos === "bottom";
+  const workbenchLayout = useWorkbenchLayout({
+    uiScale,
+    open: regionOpen,
+    sizes: { primary: sidebarWidth, secondary: agentsSidebarWidth, panelHeight, panelWidth },
+    mins: {
+      primary: activityBarHorizontalPos ? SIDEBAR_MIN_HORIZONTAL_ACTIVITY : SIDEBAR_MIN,
+      secondary: AGENTS_SIDEBAR_MIN,
+      panelHeight: PANEL_MIN_HEIGHT,
+      panelWidth: PANEL_MIN_WIDTH,
+    },
+    panelPos,
+    activitySide: !activityBarHorizontalPos,
+  });
+  const workbenchLayoutRef = useRef(workbenchLayout);
+  workbenchLayoutRef.current = workbenchLayout;
+  const setRegionOpen = useCallback((region: ViewRegion, value: boolean | ((v: boolean) => boolean)) => {
+    if (region === "primarySidebar") setSidebarOpen(value);
+    else if (region === "secondarySidebar") setAgentsSidebarOpen(value);
+    else setPanelOpen(value);
+  }, []);
+  /** Abre a região; se ela está recolhida por falta de espaço, reabre como sobreposição. */
+  const openRegion = useCallback(
+    (region: ViewRegion) => {
+      const wl = workbenchLayoutRef.current;
+      if (wl.result[region].collapsed) {
+        wl.showOverlay(region);
+        return;
+      }
+      wl.markOpened(region);
+      setRegionOpen(region, true);
+    },
+    [setRegionOpen]
+  );
+  /** Botões da title bar / Ctrl+B: alterna a região (ou a sobreposição, se recolhida). */
+  const toggleRegion = useCallback(
+    (region: ViewRegion) => {
+      const wl = workbenchLayoutRef.current;
+      if (wl.result[region].collapsed) {
+        if (wl.overlay === region) wl.dismissOverlay();
+        else wl.showOverlay(region);
+        return;
+      }
+      setRegionOpen(region, (v) => {
+        if (!v) wl.markOpened(region);
+        return !v;
+      });
+    },
+    [setRegionOpen]
+  );
+  const views = useViewLayoutController({ regionVisible: workbenchLayout.regionVisible, openRegion });
   // View ativa da barra lateral primária (a activity bar destaca esta).
   const activeView = views.active("primarySidebar") ?? "";
   /** Só torna a view a ativa da região dela (sem abrir a região). */
@@ -5016,7 +5070,7 @@ export default function App() {
       // Ctrl+B → toggle the sidebar.
       if (key === "b") {
         e.preventDefault();
-        setSidebarOpen((v) => !v);
+        toggleRegion("primarySidebar");
         return;
       }
       // Ctrl+Shift+P → Command Palette (must come before the plain Ctrl+P).
@@ -5759,7 +5813,7 @@ export default function App() {
           id: "view.toggleSidebar",
           label: "Alternar Barra Lateral",
           accelerator: "Ctrl+B",
-          run: () => setSidebarOpen((v) => !v),
+          run: () => toggleRegion("primarySidebar"),
         },
         {
           id: "view.moveSidebar",
@@ -5789,7 +5843,7 @@ export default function App() {
           id: "view.toggleTerminal",
           label: "Alternar Terminal",
           accelerator: "Ctrl+`",
-          run: () => setPanelOpen((v) => !v),
+          run: () => toggleRegion("panel"),
         },
         { id: "view.sep2", label: "", separator: true },
         {
@@ -6005,14 +6059,24 @@ export default function App() {
   const activityBarHorizontal = activityBarPos === "top" || activityBarPos === "bottom";
   const activityIndicatorSide =
     activityBarPos === "right" ? "right" : sidebarSide;
-  const effectiveSidebarWidth = activityBarHorizontal
-    ? Math.max(sidebarWidth, SIDEBAR_MIN_HORIZONTAL_ACTIVITY)
-    : sidebarWidth;
+  // Tamanhos efetivos (solver): a preferência salva só muda pelas alças.
+  const wl = workbenchLayout;
+  const primaryOverlay = wl.overlay === "primarySidebar";
+  const secondaryOverlay = wl.overlay === "secondarySidebar";
+  const panelOverlay = wl.overlay === "panel";
+  const effectiveSidebarWidth = primaryOverlay
+    ? wl.overlaySize("primarySidebar")
+    : wl.result.primarySidebar.size;
+  const effectiveAgentsWidth = secondaryOverlay
+    ? wl.overlaySize("secondarySidebar")
+    : wl.result.secondarySidebar.size;
+  const effectivePanelSize = panelOverlay ? wl.overlaySize("panel") : wl.result.panel.size;
+  const primaryVisible = wl.regionVisible.primarySidebar;
   const primaryDockStyle: CSSProperties | undefined = activityBarHorizontal
     ? {
-        width: effectiveSidebarWidth,
-        height: sidebarOpen ? "100%" : undefined,
-        alignSelf: sidebarOpen ? "stretch" : undefined,
+        width: Math.max(effectiveSidebarWidth, SIDEBAR_MIN_HORIZONTAL_ACTIVITY),
+        height: primaryVisible ? "100%" : undefined,
+        alignSelf: primaryVisible ? "stretch" : undefined,
       }
     : undefined;
 
@@ -6354,12 +6418,12 @@ export default function App() {
     <div className="app">
       <TitleBar
         title={titleText}
-        sidebarOpen={sidebarOpen}
-        onToggleSidebar={() => setSidebarOpen((v) => !v)}
-        panelOpen={panelOpen}
-        onTogglePanel={() => setPanelOpen((v) => !v)}
-        agentsOpen={agentsSidebarOpen}
-        onToggleAgents={() => setAgentsSidebarOpen((v) => !v)}
+        sidebarOpen={workbenchLayout.regionVisible.primarySidebar}
+        onToggleSidebar={() => toggleRegion("primarySidebar")}
+        panelOpen={workbenchLayout.regionVisible.panel}
+        onTogglePanel={() => toggleRegion("panel")}
+        agentsOpen={workbenchLayout.regionVisible.secondarySidebar}
+        onToggleAgents={() => toggleRegion("secondarySidebar")}
         menus={menus}
         onOpenQuickOpen={() => setQuickOpenOpen(true)}
         onOpenCommandPalette={() => setCommandPaletteOpen(true)}
@@ -6408,9 +6472,10 @@ export default function App() {
             onItemContextMenu={(id, x, y) => setActivityMenu({ id, x, y })}
           />
 
-          {sidebarOpen && (
+          {primaryVisible && (
             <aside
-              className="sidebar"
+              className={`sidebar${primaryOverlay ? ` region-overlay region-overlay-${sidebarSide}` : ""}`}
+              data-region-overlay={primaryOverlay ? "" : undefined}
               style={{
                 width: effectiveSidebarWidth,
               }}
@@ -6426,36 +6491,18 @@ export default function App() {
           )}
         </div>
 
-        {sidebarOpen && (
-          <div
+        {wl.result.primarySidebar.visible && (
+          // Top/bottom activity bars need a wider floor (the solver's min) so
+          // the explorer can't shrink past the icon strip around it.
+          <WorkbenchResizeHandle
             className="sidebar-resize-handle"
-            title="Arraste para redimensionar a barra lateral"
-            onPointerDown={(e) => {
-              const startX = e.clientX;
-              // Top/bottom activity bars need a wider floor so the explorer
-              // can't shrink past the icon strip around it.
-              const minW =
-                activityBarHorizontal ? SIDEBAR_MIN_HORIZONTAL_ACTIVITY : SIDEBAR_MIN;
-              const startW = Math.max(sidebarWidth, minW);
-              const original = sidebarWidth;
-              workbenchDrag.pointer({
-                kind: "resize",
-                cursor: "col-resize",
-                captureTarget: e.currentTarget,
-                pointerId: e.pointerId,
-                onMove: (me) => {
-                  const delta = me.clientX - startX;
-                  // Docked right, dragging left widens the sidebar.
-                  const signed = sidebarSide === "right" ? -delta : delta;
-                  setSidebarWidth(
-                    Math.max(minW, Math.min(startW + signed, window.innerWidth * 0.6))
-                  );
-                },
-                onEnd: (committed) => {
-                  if (!committed) setSidebarWidth(original);
-                },
-              });
-            }}
+            orientation="vertical"
+            label="Redimensionar a barra lateral primária"
+            value={effectiveSidebarWidth}
+            min={activityBarHorizontal ? SIDEBAR_MIN_HORIZONTAL_ACTIVITY : SIDEBAR_MIN}
+            max={wl.result.primarySidebar.max}
+            direction={sidebarSide === "right" ? -1 : 1}
+            onChange={setSidebarWidth}
           />
         )}
 
@@ -6508,53 +6555,31 @@ export default function App() {
                 )
               )}
             </div>
-            {panelOpen && (
-              <div
+            {wl.result.panel.visible && (
+              // Embaixo: a altura respeita o mínimo do editor (max do solver).
+              // Right: drag left widens; left: drag right widens.
+              <WorkbenchResizeHandle
                 className="panel-resize-handle"
-                onPointerDown={(e) => {
-                  const startX = e.clientX;
-                  const startY = e.clientY;
-                  const startH = panelHeight;
-                  const startW = panelWidth;
-                  workbenchDrag.pointer({
-                    kind: "resize",
-                    cursor: panelPos === "bottom" ? "row-resize" : "col-resize",
-                    captureTarget: e.currentTarget,
-                    pointerId: e.pointerId,
-                    onMove: (me) => {
-                      if (panelPos === "bottom") {
-                        const delta = startY - me.clientY;
-                        setPanelHeight(
-                          Math.max(80, Math.min(startH + delta, window.innerHeight * 0.7))
-                        );
-                      } else {
-                        // Right: drag left widens; left: drag right widens.
-                        const delta =
-                          panelPos === "right" ? startX - me.clientX : me.clientX - startX;
-                        setPanelWidth(
-                          Math.max(180, Math.min(startW + delta, window.innerWidth * 0.7))
-                        );
-                      }
-                    },
-                    onEnd: (committed) => {
-                      if (committed) return;
-                      setPanelHeight(startH);
-                      setPanelWidth(startW);
-                    },
-                  });
-                }}
+                orientation={panelPos === "bottom" ? "horizontal" : "vertical"}
+                label="Redimensionar o painel"
+                value={effectivePanelSize}
+                min={panelPos === "bottom" ? PANEL_MIN_HEIGHT : PANEL_MIN_WIDTH}
+                max={wl.result.panel.max}
+                direction={panelPos === "left" ? 1 : -1}
+                onChange={panelPos === "bottom" ? setPanelHeight : setPanelWidth}
               />
             )}
             {/* Região "Painel": sempre montada (oculta quando fechada). As views
                 (Terminal, Problemas, Saída… ou outras movidas para cá) vêm do
                 registro; os terminais seguem vivos com o painel fechado. */}
             <div
-              className={`terminal-panel panel-${panelPos}`}
+              className={`terminal-panel panel-${panelPos}${panelOverlay ? " region-overlay" : ""}`}
+              data-region-overlay={panelOverlay ? "" : undefined}
               style={
-                panelOpen
+                wl.regionVisible.panel
                   ? panelPos === "right" || panelPos === "left"
-                    ? { width: panelWidth }
-                    : { height: panelHeight }
+                    ? { width: effectivePanelSize }
+                    : { height: effectivePanelSize }
                   : { display: "none" }
               }
             >
@@ -6582,42 +6607,26 @@ export default function App() {
         {/* Secondary side bar (AI agents chat), docked on the edge OPPOSITE the
             primary sidebar. Flex `order` (see .agents-dock rules) puts it and
             its resize handle on the correct side. */}
-        {agentsSidebarOpen && (
-          <div
+        {wl.result.secondarySidebar.visible && (
+          // Docked left, dragging right widens; docked right, dragging left widens.
+          <WorkbenchResizeHandle
             className={`agents-resize-handle agents-resize-${agentsSide}`}
-            title="Arraste para redimensionar a barra lateral secundária"
-            onPointerDown={(e) => {
-              const startX = e.clientX;
-              const startW = Math.max(agentsSidebarWidth, AGENTS_SIDEBAR_MIN);
-              const original = agentsSidebarWidth;
-              workbenchDrag.pointer({
-                kind: "resize",
-                cursor: "col-resize",
-                captureTarget: e.currentTarget,
-                pointerId: e.pointerId,
-                onMove: (me) => {
-                  const delta = me.clientX - startX;
-                  // Docked left, dragging right widens; docked right, dragging
-                  // left widens.
-                  const signed = agentsSide === "left" ? delta : -delta;
-                  setAgentsSidebarWidth(
-                    Math.max(
-                      AGENTS_SIDEBAR_MIN,
-                      Math.min(startW + signed, window.innerWidth * 0.7),
-                    ),
-                  );
-                },
-                onEnd: (committed) => {
-                  if (!committed) setAgentsSidebarWidth(original);
-                },
-              });
-            }}
+            orientation="vertical"
+            label="Redimensionar a barra lateral secundária"
+            value={effectiveAgentsWidth}
+            min={AGENTS_SIDEBAR_MIN}
+            max={wl.result.secondarySidebar.max}
+            direction={agentsSide === "left" ? 1 : -1}
+            onChange={setAgentsSidebarWidth}
           />
         )}
-        {agentsSidebarOpen && (
+        {wl.regionVisible.secondarySidebar && (
           <aside
-            className={`agents-dock agents-dock-${agentsSide}`}
-            style={{ width: Math.max(agentsSidebarWidth, AGENTS_SIDEBAR_MIN) }}
+            className={`agents-dock agents-dock-${agentsSide}${
+              secondaryOverlay ? ` region-overlay region-overlay-${agentsSide}` : ""
+            }`}
+            data-region-overlay={secondaryOverlay ? "" : undefined}
+            style={{ width: effectiveAgentsWidth }}
           >
             <ViewContainer
               region="secondarySidebar"
