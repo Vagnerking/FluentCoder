@@ -55,6 +55,13 @@ export interface ViewPaneContainerProps {
   panes: readonly ViewPaneDescriptor[];
   ariaLabel?: string;
   className?: string;
+  /**
+   * Pedido para expandir e rolar até um pane (ex.: "Mostrar no grafo"). O
+   * `nonce` distingue pedidos repetidos ao mesmo pane.
+   */
+  reveal?: { id: string; nonce: number } | null;
+  /** Avisa quando o conjunto de panes expandidos muda (inclui o estado inicial). */
+  onExpandedChange?: (expanded: Record<string, boolean>) => void;
 }
 
 const storageKey = (id: string) => `ui.viewPanes.${id}`;
@@ -84,7 +91,7 @@ function saveState(id: string, state: ViewPaneState) {
  * alternam, ↑/↓/Home/End andam entre cabeçalhos; na sash, ↑/↓ (Shift = 64 px)
  * e Enter/duplo clique restauram o padrão. Regras puras em `viewPaneLayout.ts`.
  */
-export function ViewPaneContainer({ id, panes, ariaLabel, className }: ViewPaneContainerProps) {
+export function ViewPaneContainer({ id, panes, ariaLabel, className, reveal, onExpandedChange }: ViewPaneContainerProps) {
   const uid = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const { height } = useElementSize(rootRef);
@@ -118,6 +125,26 @@ export function ViewPaneContainer({ id, panes, ariaLabel, className }: ViewPaneC
       weight: state.weights[p.id] ?? base * (p.defaultWeight ?? 1),
     }));
   }, [panes, state]);
+
+  // Expandidos → quem hospeda o container (carregar dados só do que está aberto).
+  const expandedKey = items.map((it) => `${it.id}:${it.expanded ? 1 : 0}`).join("|");
+  const expandedCb = useRef(onExpandedChange);
+  expandedCb.current = onExpandedChange;
+  useEffect(() => {
+    expandedCb.current?.(Object.fromEntries(items.map((it) => [it.id, it.expanded])));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedKey]);
+
+  useEffect(() => {
+    if (!reveal) return;
+    update((s) => (s.expanded[reveal.id] === true ? s : { ...s, expanded: { ...s.expanded, [reveal.id]: true } }));
+    requestAnimationFrame(() =>
+      rootRef.current
+        ?.querySelector<HTMLElement>(`[data-pane-id="${CSS.escape(reveal.id)}"]`)
+        ?.scrollIntoView({ block: "nearest" })
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reveal?.id, reveal?.nonce]);
 
   const solved = useMemo(
     () => (height > 0 ? solveViewPaneLayout(items, height, VIEW_PANE_HEADER_SIZE) : null),

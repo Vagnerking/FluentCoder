@@ -135,9 +135,9 @@ VS Code) e o layout responsivo das regiões. Código em `src/workbench/`.
 - Teclado nos cabeçalhos: Enter/Espaço alternam; ↑/↓/Home/End movem entre
   os cabeçalhos do container.
 - Migrados: Executar e Depurar (`run`), Pacotes (`packages`), Backlinks
-  (`backlinks`). O título da view (`explorer-header`) continua acima da pilha.
+  (`backlinks`), Controle do Código-Fonte (`scm`). O título da view (`explorer-header`) continua acima da pilha.
 
-### Migrar o Controle do Código-Fonte (frente Git)
+### Controle do Código-Fonte (migrado — contrato em docs/context/git.md)
 
 1. Trocar a pilha ad hoc (`git-view-section` + `--git-view-height` +
    `fillAvailablePanelView` + `renderPanelResizeHandle`) por

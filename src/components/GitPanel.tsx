@@ -3,12 +3,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
-  type CSSProperties,
-  type DragEvent,
-  type PointerEvent,
-  type ReactNode,
 } from "react";
 import {
   gitBranches,
@@ -111,6 +106,8 @@ import {
 import { GitFluentBranchesView } from "./git/GitFluentBranchesView";
 import { GitFluentCompareView } from "./git/GitFluentCompareView";
 import { CommitGraphView } from "./git/graph/CommitGraphView";
+import { RepositoriesView, useRepositoryBulk, useRepositoryStatuses, type RepositoryEntry } from "./git/RepositoriesView";
+import { SectionHeader, ViewPaneContainer, type PaneAction, type ViewPaneDescriptor } from "./ui/ViewPane";
 import { GitFluentHistoryView } from "./git/GitFluentHistoryView";
 import { GitFluentContributorsView, GitFluentTagsView } from "./git/GitFluentRefsViews";
 import { GitFluentRemotesView } from "./git/GitFluentRemotesView";
@@ -121,7 +118,6 @@ import { GitFluentViewActions } from "./git/GitFluentViewActions";
 import { GitFluentWorktreesView } from "./git/GitFluentWorktreesView";
 import { TreeContextMenu } from "./TreeContextMenu";
 import { Tooltip } from "./Tooltip";
-import { startPointerDrag } from "../workbench/workbenchDrag";
 import { scmOpenTarget, type ScmGroup } from "../editor/openRouting";
 
 interface GitPanelProps {
@@ -172,6 +168,8 @@ interface GitPanelProps {
   gitAssistant?: GitAssistAdapter;
   /** Future settings hook for commit/branch generation rules. */
   gitAssistPreferences?: GitAssistPreferences;
+  /** Abre um terminal novo no repositório (view Repositórios). */
+  onOpenTerminal?: (path: string, connId?: string) => void;
 }
 
 export interface GitWorkspaceRoot {
@@ -192,20 +190,17 @@ const REPO_KIND_LABEL: Record<string, string> = {
   nested: "aninhado",
 };
 
-interface GitRepositoryPanelProps extends Omit<GitPanelProps, "workspaceRoots"> {
+interface GitRepositoryPanelProps extends Omit<GitPanelProps, "workspaceRoots" | "onOpenTerminal"> {
   rootName?: string;
   /** Tipo do repo descoberto (`worktree`, `submodule`, `nested`). */
   rootKind?: string;
-  embedded?: boolean;
   connId?: string;
   provider?: "local" | "ssh";
-  collapsed?: boolean;
-  onCollapsedChange?: (collapsed: boolean) => void;
-  onHideRepository?: () => void;
+  /** Multi-repositório: o pane "Repositórios" entra no topo da pilha. */
+  repositoriesPane?: ViewPaneDescriptor;
 }
 
 const GIT_HIDDEN_REPOSITORIES_STORAGE_KEY = "fluentCoder.git.hiddenRepositories";
-const GIT_COLLAPSED_REPOSITORIES_STORAGE_KEY = "fluentCoder.git.collapsedRepositories";
 const GIT_FLUENT_ACTIVE_TAB_STORAGE_KEY = "fluentCoder.gitFluent.activeTab";
 const GIT_FLUENT_COLLAPSED_STORAGE_KEY = "fluentCoder.gitFluent.collapsed";
 const GIT_FLUENT_GRAPH_COLLAPSED_STORAGE_KEY = "fluentCoder.gitFluent.graphCollapsed";
@@ -214,23 +209,11 @@ const GIT_FLUENT_BRANCH_LAYOUT_STORAGE_KEY = "fluentCoder.gitFluent.branchLayout
 const GIT_FLUENT_REMOTE_BRANCH_LAYOUT_STORAGE_KEY = "fluentCoder.gitFluent.remoteBranchLayout";
 const GIT_FLUENT_TOOLBAR_DENSITY_STORAGE_KEY = "fluentCoder.gitFluent.toolbarDensity";
 const GIT_PANEL_VIEW_ORDER_STORAGE_KEY = "fluentCoder.git.panelViewOrder";
-const GIT_PANEL_VIEW_HEIGHTS_STORAGE_KEY = "fluentCoder.git.panelViewHeights";
 
 type GitPanelViewId = "changes" | "graph" | "gitFluent";
 
 const GIT_PANEL_VIEW_ORDER: GitPanelViewId[] = ["changes", "graph", "gitFluent"];
 const GIT_FLUENT_PANE_TABS = GIT_FLUENT_PRIMARY_TABS.filter((tab) => tab.id !== "graph");
-const GIT_PANEL_DEFAULT_VIEW_HEIGHTS: Record<GitPanelViewId, number> = {
-  changes: 178,
-  graph: 438,
-  gitFluent: 220,
-};
-const GIT_PANEL_MIN_VIEW_HEIGHTS: Record<GitPanelViewId, number> = {
-  changes: 120,
-  graph: 180,
-  gitFluent: 140,
-};
-const GIT_PANEL_MAX_VIEW_HEIGHT = 720;
 
 function readStringSet(key: string): Set<string> {
   try {
@@ -302,43 +285,6 @@ function readGitPanelViewOrder(): GitPanelViewId[] {
   }
 }
 
-function writeGitPanelViewOrder(order: GitPanelViewId[]) {
-  try {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(GIT_PANEL_VIEW_ORDER_STORAGE_KEY, JSON.stringify(order));
-  } catch {
-    // Local storage is only a view preference; ignore quota/privacy failures.
-  }
-}
-
-function readGitPanelViewHeights(): Record<GitPanelViewId, number> {
-  try {
-    if (typeof window === "undefined") return GIT_PANEL_DEFAULT_VIEW_HEIGHTS;
-    const raw = window.localStorage.getItem(GIT_PANEL_VIEW_HEIGHTS_STORAGE_KEY);
-    if (!raw) return GIT_PANEL_DEFAULT_VIEW_HEIGHTS;
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return GIT_PANEL_DEFAULT_VIEW_HEIGHTS;
-    return GIT_PANEL_VIEW_ORDER.reduce((acc, view) => {
-      const value = Number((parsed as Partial<Record<GitPanelViewId, number>>)[view]);
-      acc[view] = Number.isFinite(value)
-        ? Math.min(GIT_PANEL_MAX_VIEW_HEIGHT, Math.max(GIT_PANEL_MIN_VIEW_HEIGHTS[view], value))
-        : GIT_PANEL_DEFAULT_VIEW_HEIGHTS[view];
-      return acc;
-    }, {} as Record<GitPanelViewId, number>);
-  } catch {
-    return GIT_PANEL_DEFAULT_VIEW_HEIGHTS;
-  }
-}
-
-function writeGitPanelViewHeights(heights: Record<GitPanelViewId, number>) {
-  try {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(GIT_PANEL_VIEW_HEIGHTS_STORAGE_KEY, JSON.stringify(heights));
-  } catch {
-    // Local storage is only a view preference; ignore quota/privacy failures.
-  }
-}
-
 function readBooleanPreference(key: string, fallback: boolean): boolean {
   try {
     if (typeof window === "undefined") return fallback;
@@ -349,10 +295,6 @@ function readBooleanPreference(key: string, fallback: boolean): boolean {
   } catch {
     return fallback;
   }
-}
-
-function writeBooleanPreference(key: string, value: boolean) {
-  writeStringPreference(key, String(value));
 }
 
 function readGitFluentActiveTab(): GitFluentTab {
@@ -373,10 +315,6 @@ function readGitFluentToolbarDensity(): GitFluentToolbarDensity {
 
 function readHiddenRepositoryIds(): Set<string> {
   return readStringSet(GIT_HIDDEN_REPOSITORIES_STORAGE_KEY);
-}
-
-function readCollapsedRepositoryIds(): Set<string> {
-  return readStringSet(GIT_COLLAPSED_REPOSITORIES_STORAGE_KEY);
 }
 
 /** Maps a porcelain code to a single-letter badge + a CSS modifier. */
@@ -523,482 +461,172 @@ function buildBranchName(files: GitFileStatus[], commits: GitCommit[], fallbackB
   return `${normalizedPrefix}/${slug || "workspace-update"}`;
 }
 
-function GitSectionHeader({
-  title,
-  expanded,
-  onToggle,
-  count,
-  icon,
-  actions,
-  danger = false,
-  draggable = false,
-  dragging = false,
-  onDragStart,
-  onDragOver,
-  onDrop,
-  onDragEnd,
-}: {
-  title: string;
-  expanded: boolean;
-  onToggle: () => void;
-  count?: number;
-  icon?: IconAction;
-  actions?: ReactNode;
-  danger?: boolean;
-  draggable?: boolean;
-  dragging?: boolean;
-  onDragStart?: (event: DragEvent<HTMLDivElement>) => void;
-  onDragOver?: (event: DragEvent<HTMLDivElement>) => void;
-  onDrop?: (event: DragEvent<HTMLDivElement>) => void;
-  onDragEnd?: (event: DragEvent<HTMLDivElement>) => void;
-}) {
-  return (
-    <div
-      className={`git-section-header${danger ? " git-section-danger" : ""}${draggable ? " is-draggable" : ""}${dragging ? " is-dragging" : ""}`}
-      draggable={draggable}
-      onDragStart={onDragStart}
-      onDragOver={onDragOver}
-      onDrop={onDrop}
-      onDragEnd={onDragEnd}
-    >
-      <button
-        type="button"
-        className="git-section-toggle"
-        aria-expanded={expanded}
-        onClick={onToggle}
-      >
-        <span className="tree-chevron">
-          <Codicon name={expanded ? "chevronDown" : "chevronRight"} size={12} />
-        </span>
-        {icon && <Codicon name={icon} size={13} />}
-        <span>{title}</span>
-      </button>
-      <div className="git-section-actions">
-        {actions}
-        {typeof count === "number" && <span className="git-count">{count}</span>}
-      </div>
-    </div>
-  );
-}
-
-/**
- * Linha de grupo de recursos (Conflitos / Preparadas / Alterações) DENTRO da
- * view: chevron + rótulo (sem caixa alta) + contagem + ações no hover/foco.
- * Antes o grupo usava o mesmo `GitSectionHeader` da view e aparecia como
- * "ALTERAÇÕES 5" › "ALTERAÇÕES 3", sem hierarquia. Local de propósito: migra
- * para o `TreeGroupRow` compartilhado quando ele existir.
- */
-function GitResourceGroupRow({
-  label,
-  expanded,
-  onToggle,
-  count,
-  actions,
-  title,
-  danger = false,
-}: {
-  label: string;
-  expanded: boolean;
-  onToggle: () => void;
-  count: number;
-  actions?: ReactNode;
-  title?: string;
-  danger?: boolean;
-}) {
-  return (
-    <div className={`git-resource-group-row${danger ? " is-danger" : ""}`} title={title}>
-      <button type="button" className="git-resource-group-toggle" aria-expanded={expanded} onClick={onToggle}>
-        <Codicon name={expanded ? "chevronDown" : "chevronRight"} size={12} />
-        <span className="git-resource-group-label">{label}</span>
-      </button>
-      {actions && <div className="git-resource-group-actions">{actions}</div>}
-      <span className="git-resource-group-count" aria-label={`${count} arquivo${count === 1 ? "" : "s"}`}>
-        {count}
-      </span>
-    </div>
-  );
-}
-
 export function GitPanel({
   rootPath,
   workspaceRoots = [],
-  onOpenFile,
-  onOpenChanges,
-  onOpenRevision,
-  onOpenRevisionDiff,
-  historyFile = null,
-  historyTarget = null,
-  onClearHistoryFile,
-  onOpenLocalFolderInCurrentWindow,
-  onOpenLocalFolderInNewWindow,
-  gitAssistant,
-  gitAssistPreferences,
+  onOpenTerminal,
+  ...panelProps
 }: GitPanelProps) {
   const activeRepository = useActiveGitRepository();
-  const [hiddenRepoIds, setHiddenRepoIds] = useState<Set<string>>(
-    readHiddenRepositoryIds
-  );
-  const [collapsedRepoIds, setCollapsedRepoIds] = useState<Set<string>>(
-    readCollapsedRepositoryIds
-  );
-  const [repoOptionsMenu, setRepoOptionsMenu] = useState<{
-    x: number;
-    y: number;
-    items: ContextMenuItem[];
-  } | null>(null);
+  const [hiddenRepoIds, setHiddenRepoIds] = useState<Set<string>>(readHiddenRepositoryIds);
+  const [, setScanDepthTick] = useState(0);
   const localRoots = workspaceRoots.filter((root) => root.provider === "local");
-  const sshRoots = workspaceRoots.filter((root) => root.provider === "ssh");
-  const workspaceRepoRoots = [...localRoots, ...sshRoots];
-  const workspaceRepoRootKey = workspaceRepoRoots.map((root) => root.id).join("\0");
-  const visibleWorkspaceRoots = workspaceRepoRoots.filter((root) => !hiddenRepoIds.has(root.id));
-  const hiddenCount = workspaceRepoRoots.length - visibleWorkspaceRoots.length;
-  const localHiddenCount = localRoots.filter((root) => hiddenRepoIds.has(root.id)).length;
-  const sshHiddenCount = sshRoots.filter((root) => hiddenRepoIds.has(root.id)).length;
+  const multi = localRoots.length > 1 || workspaceRoots.some((root) => root.provider === "ssh");
+  const workspaceRootKey = workspaceRoots.map((root) => root.id).join("\0");
 
   useEffect(() => {
     writeStringSet(GIT_HIDDEN_REPOSITORIES_STORAGE_KEY, hiddenRepoIds);
   }, [hiddenRepoIds]);
 
   useEffect(() => {
-    writeStringSet(GIT_COLLAPSED_REPOSITORIES_STORAGE_KEY, collapsedRepoIds);
-  }, [collapsedRepoIds]);
-
-  useEffect(() => {
-    const ids = new Set(workspaceRepoRoots.map((root) => root.id));
+    const ids = new Set(workspaceRoots.map((root) => root.id));
     setHiddenRepoIds((prev) => {
       const next = new Set([...prev].filter((id) => ids.has(id)));
       return next.size === prev.size ? prev : next;
     });
-    setCollapsedRepoIds((prev) => {
-      const next = new Set([...prev].filter((id) => ids.has(id)));
-      return next.size === prev.size ? prev : next;
-    });
-  }, [workspaceRepoRootKey]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceRootKey]);
 
-  const setRepoHidden = (id: string, hidden: boolean) => {
-    setHiddenRepoIds((prev) => {
-      const next = new Set(prev);
-      if (hidden) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-  };
-  const setRepositoriesHidden = (roots: GitWorkspaceRoot[], hidden: boolean) => {
-    setHiddenRepoIds((prev) => {
-      const next = new Set(prev);
-      roots.forEach((root) => {
-        if (hidden) next.add(root.id);
-        else next.delete(root.id);
-      });
-      return next;
-    });
-  };
-  const setRepoCollapsed = (id: string, collapsed: boolean) => {
-    setCollapsedRepoIds((prev) => {
-      const next = new Set(prev);
-      if (collapsed) next.add(id);
-      else next.delete(id);
-      return next;
-    });
-  };
-  const setRepositoriesCollapsed = (roots: GitWorkspaceRoot[], collapsed: boolean) => {
-    setCollapsedRepoIds((prev) => {
-      const next = new Set(prev);
-      roots.forEach((root) => {
-        if (collapsed) next.add(root.id);
-        else next.delete(root.id);
-      });
-      return next;
-    });
-  };
-  const openRepoOptions = (event: React.MouseEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    const scanDepth = getGitScanDepth();
-    const items: ContextMenuItem[] = [
+  // Lista única (ordem do workspace): locais, aninhados/worktrees e SSH.
+  const repos = useMemo<RepositoryEntry[]>(
+    () =>
+      workspaceRoots
+        .filter((root) => !hiddenRepoIds.has(root.id))
+        .map((root) => ({
+          id: root.id,
+          name: root.name,
+          path: root.path,
+          provider: root.provider,
+          connId: root.connId,
+          status: root.status,
+          error: root.error,
+          kind: root.kind,
+        })),
+    [hiddenRepoIds, workspaceRoots]
+  );
+  const statuses = useRepositoryStatuses(multi ? repos : NO_REPOS);
+  const bulk = useRepositoryBulk(repos, statuses);
+
+  if (!multi) {
+    return (
+      <GitRepositoryPanel
+        // Um único repo: o toplevel descoberto (a pasta aberta pode ser subpasta).
+        rootPath={localRoots[0]?.path ?? rootPath}
+        rootKind={localRoots[0]?.kind}
+        {...panelProps}
+      />
+    );
+  }
+
+  const usable = (repo: RepositoryEntry) => repo.provider === "local" || Boolean(repo.connId);
+  const activeRoot =
+    repos.find((repo) => repo.id === activeRepository?.id && usable(repo)) ?? repos.find(usable) ?? null;
+  const hiddenCount = workspaceRoots.length - repos.length;
+  const scanDepth = getGitScanDepth();
+  const repositoriesPane: ViewPaneDescriptor = {
+    id: "repositories",
+    title: "Repositórios",
+    badge: repos.length,
+    badgeLabel: `${repos.length} repositórios`,
+    minBodySize: Math.min(22 * repos.length + 8, 96),
+    defaultWeight: 0.45,
+    bodyClassName: "repos-pane-body",
+    actions: [
+      {
+        id: "fetch-all",
+        icon: "gitFetch",
+        label: "Buscar todos (fetch)",
+        disabled: Boolean(bulk.running),
+        spin: bulk.running === "Buscar todos",
+        run: bulk.fetchAll,
+      },
+      {
+        id: "sync-all",
+        icon: "sync",
+        label: "Sincronizar todos",
+        disabled: Boolean(bulk.running),
+        spin: bulk.running === "Sincronizar todos",
+        run: bulk.syncAll,
+      },
       {
         id: "follow-editor",
-        label: "Repositório ativo: seguir o arquivo do editor",
         icon: "file",
+        label: "Repositório ativo: seguir o arquivo do editor",
+        overflowOnly: true,
         run: () => selectGitRepository(null),
       },
       {
-        id: "scan-depth",
-        label: `Buscar repositórios aninhados (profundidade ${scanDepth})`,
-        icon: "search",
-        submenu: Array.from({ length: GIT_SCAN_DEPTH_MAX + 1 }, (_, depth) => ({
-          id: `scan-depth-${depth}`,
-          label: depth === 0 ? "Não buscar (só as pastas)" : `${depth} nível${depth === 1 ? "" : "s"}`,
-          icon: depth === scanDepth ? "success" : "folder",
-          run: () => setGitScanDepth(depth),
-        })),
-      },
-      { id: "sep-active", label: "", separator: true },
-      {
-        id: "expand-all",
-        label: "Expandir todos os repositórios",
-        icon: "chevronDown",
-        enabled: collapsedRepoIds.size > 0,
-        run: () => setRepositoriesCollapsed(workspaceRepoRoots, false),
-      },
-      {
-        id: "collapse-all",
-        label: "Recolher todos os repositórios",
-        icon: "chevronRight",
-        enabled: workspaceRepoRoots.some((root) => !collapsedRepoIds.has(root.id)),
-        run: () => setRepositoriesCollapsed(workspaceRepoRoots, true),
-      },
-      { id: "sep-collapse-groups", label: "", separator: true },
-      {
-        id: "expand-local",
-        label: "Expandir repositórios locais",
-        icon: "folderOpened",
-        enabled: localRoots.some((root) => collapsedRepoIds.has(root.id)),
-        run: () => setRepositoriesCollapsed(localRoots, false),
-      },
-      {
-        id: "collapse-local",
-        label: "Recolher repositórios locais",
-        icon: "folder",
-        enabled: localRoots.some((root) => !collapsedRepoIds.has(root.id)),
-        run: () => setRepositoriesCollapsed(localRoots, true),
-      },
-      {
-        id: "expand-ssh",
-        label: "Expandir repositórios SSH",
-        icon: "remote",
-        enabled: sshRoots.some((root) => collapsedRepoIds.has(root.id)),
-        run: () => setRepositoriesCollapsed(sshRoots, false),
-      },
-      {
-        id: "collapse-ssh",
-        label: "Recolher repositórios SSH",
-        icon: "remote",
-        enabled: sshRoots.some((root) => !collapsedRepoIds.has(root.id)),
-        run: () => setRepositoriesCollapsed(sshRoots, true),
-      },
-      { id: "sep-collapse-repos", label: "", separator: true },
-      ...workspaceRepoRoots.map((root) => {
-        const hidden = hiddenRepoIds.has(root.id);
-        const collapsed = collapsedRepoIds.has(root.id);
-        return {
-          id: `collapse-repo-${root.id}`,
-          label: `${collapsed ? "Expandir" : "Recolher"} ${root.name}`,
-          icon: collapsed ? "chevronDown" : "chevronRight",
-          enabled: !hidden,
-          run: () => setRepoCollapsed(root.id, !collapsed),
-        } satisfies ContextMenuItem;
-      }),
-      { id: "sep-visibility", label: "", separator: true },
-      {
-        id: "show-all",
-        label: "Mostrar todos os repositórios",
+        id: "show-hidden",
         icon: "success",
-        enabled: hiddenRepoIds.size > 0,
+        label: hiddenCount ? `Mostrar repositórios ocultos (${hiddenCount})` : "Nenhum repositório oculto",
+        overflowOnly: true,
+        disabled: hiddenCount === 0,
         run: () => setHiddenRepoIds(new Set()),
       },
-      {
-        id: "hide-all",
-        label: "Ocultar todos os repositórios",
-        icon: "close",
-        enabled: visibleWorkspaceRoots.length > 0,
-        run: () => setRepositoriesHidden(workspaceRepoRoots, true),
-      },
-      { id: "sep-groups", label: "", separator: true },
-      {
-        id: "show-local",
-        label: "Mostrar repositórios locais",
-        icon: "folder",
-        enabled: localHiddenCount > 0,
-        run: () => setRepositoriesHidden(localRoots, false),
-      },
-      {
-        id: "hide-local",
-        label: "Ocultar repositórios locais",
-        icon: "folder",
-        enabled: localRoots.some((root) => !hiddenRepoIds.has(root.id)),
-        run: () => setRepositoriesHidden(localRoots, true),
-      },
-      {
-        id: "show-ssh",
-        label: "Mostrar repositórios SSH",
-        icon: "remote",
-        enabled: sshHiddenCount > 0,
-        run: () => setRepositoriesHidden(sshRoots, false),
-      },
-      {
-        id: "hide-ssh",
-        label: "Ocultar repositórios SSH",
-        icon: "remote",
-        enabled: sshRoots.some((root) => !hiddenRepoIds.has(root.id)),
-        run: () => setRepositoriesHidden(sshRoots, true),
-      },
-      { id: "sep-repos", label: "", separator: true },
-      ...workspaceRepoRoots.map((root) => {
-        const hidden = hiddenRepoIds.has(root.id);
-        return {
-          id: `repo-${root.id}`,
-          label: `${hidden ? "Mostrar" : "Ocultar"} ${root.name}`,
-          icon: hidden ? "success" : "close",
-          run: () => setRepoHidden(root.id, !hidden),
-        } satisfies ContextMenuItem;
-      }),
-    ];
-    setRepoOptionsMenu({ x: event.clientX, y: event.clientY, items });
+      ...Array.from({ length: GIT_SCAN_DEPTH_MAX + 1 }, (_, depth): PaneAction => ({
+        id: `scan-depth-${depth}`,
+        icon: depth === scanDepth ? "success" : "search",
+        label:
+          depth === 0
+            ? "Aninhados: não buscar (só as pastas)"
+            : `Aninhados: buscar até ${depth} nível${depth === 1 ? "" : "s"}`,
+        pressed: depth === scanDepth,
+        overflowOnly: true,
+        run: () => {
+          setGitScanDepth(depth);
+          setScanDepthTick((n) => n + 1);
+        },
+      })),
+    ],
+    children: (
+      <RepositoriesView
+        repos={repos}
+        activeId={activeRoot?.id ?? null}
+        onSelect={(id) => selectGitRepository(id)}
+        onOpenTerminal={onOpenTerminal}
+        onHide={(id) => setHiddenRepoIds((prev) => new Set(prev).add(id))}
+        states={statuses}
+        bulk={bulk}
+      />
+    ),
   };
-  if (localRoots.length > 1 || sshRoots.length > 0) {
+
+  if (!activeRoot) {
     return (
       <div className="git-panel">
         <div className="explorer-header git-header">
           <span className="explorer-title">CONTROLE DE CÓDIGO-FONTE</span>
-          <div className="git-actions">
-            {hiddenCount > 0 && <span className="git-hidden-count">{hiddenCount} oculto{hiddenCount === 1 ? "" : "s"}</span>}
-            <IconButton
-              icon="filterFiles"
-              size="sm"
-              label="Opções de repositórios"
-              onClick={openRepoOptions}
-            />
-          </div>
         </div>
-        <div className="git-workspace-list">
-          {visibleWorkspaceRoots.length === 0 && (
-            <div className="panel-empty">Todos os repositórios estão ocultos.</div>
-          )}
-          {visibleWorkspaceRoots.filter((root) => root.provider === "local").map((root) => (
-            <section
-              className={`git-workspace-root${activeRepository?.id === root.id ? " is-active-repo" : ""}`}
-              key={root.id}
-              aria-current={activeRepository?.id === root.id ? "true" : undefined}
-              // Interagir com um repo do SCM o torna o repositório ativo de
-              // todas as superfícies (status bar, grafo, terminal).
-              onPointerDownCapture={() => selectGitRepository(root.id)}
-            >
-              <GitRepositoryPanel
-                rootPath={root.path}
-                rootName={root.name}
-                rootKind={root.kind}
-                embedded
-                provider={root.provider}
-                collapsed={collapsedRepoIds.has(root.id)}
-                onCollapsedChange={(collapsed) => setRepoCollapsed(root.id, collapsed)}
-                onHideRepository={() => setRepoHidden(root.id, true)}
-                onOpenFile={onOpenFile}
-                onOpenChanges={onOpenChanges}
-                onOpenRevision={onOpenRevision}
-                onOpenRevisionDiff={onOpenRevisionDiff}
-                historyFile={historyFile}
-                historyTarget={historyTarget}
-                onClearHistoryFile={onClearHistoryFile}
-                onOpenLocalFolderInCurrentWindow={onOpenLocalFolderInCurrentWindow}
-                onOpenLocalFolderInNewWindow={onOpenLocalFolderInNewWindow}
-                gitAssistant={gitAssistant}
-                gitAssistPreferences={gitAssistPreferences}
-              />
-            </section>
-          ))}
-          {visibleWorkspaceRoots.filter((root) => root.provider === "ssh").map((root) => (
-            <section
-              className={`git-workspace-root remote${activeRepository?.id === root.id ? " is-active-repo" : ""}`}
-              key={root.id}
-              aria-current={activeRepository?.id === root.id ? "true" : undefined}
-              onPointerDownCapture={root.connId ? () => selectGitRepository(root.id) : undefined}
-            >
-              {root.connId ? (
-                <GitRepositoryPanel
-                  rootPath={root.path}
-                  rootName={root.name}
-                  connId={root.connId}
-                  embedded
-                  provider={root.provider}
-                  collapsed={collapsedRepoIds.has(root.id)}
-                  onCollapsedChange={(collapsed) => setRepoCollapsed(root.id, collapsed)}
-                  onHideRepository={() => setRepoHidden(root.id, true)}
-                  onOpenFile={onOpenFile}
-                  onOpenChanges={onOpenChanges}
-                  onOpenRevision={onOpenRevision}
-                  onOpenRevisionDiff={onOpenRevisionDiff}
-                  historyFile={historyFile}
-                  historyTarget={historyTarget}
-                  onClearHistoryFile={onClearHistoryFile}
-                  onOpenLocalFolderInCurrentWindow={onOpenLocalFolderInCurrentWindow}
-                  onOpenLocalFolderInNewWindow={onOpenLocalFolderInNewWindow}
-                  gitAssistant={gitAssistant}
-                  gitAssistPreferences={gitAssistPreferences}
-                />
-              ) : (
-                <div className="git-root-header is-collapsed" title={root.path}>
-                  <div className="git-root-main">
-                    <span className="git-root-spacer" aria-hidden="true" />
-                    <Codicon name="remote" size={13} />
-                    <span className="git-root-name">{root.name}</span>
-                  </div>
-                  <div className="git-root-meta">
-                    <span
-                      className="git-root-chip git-root-chip-muted"
-                      title={
-                        root.status === "error"
-                          ? `Erro SSH: ${root.error ?? "erro desconhecido"}`
-                          : `SSH · ${root.path}`
-                      }
-                    >
-                      <Codicon name="remote" size={12} />
-                      SSH
-                    </span>
-                  </div>
-                  <div className="git-root-actions">
-                    <IconButton
-                      icon="close"
-                      size="sm"
-                      label="Ocultar repositório"
-                      onClick={() => setRepoHidden(root.id, true)}
-                    />
-                  </div>
-                </div>
-              )}
-            </section>
-          ))}
-        </div>
-        {repoOptionsMenu && (
-          <TreeContextMenu
-            x={repoOptionsMenu.x}
-            y={repoOptionsMenu.y}
-            items={repoOptionsMenu.items}
-            onClose={() => setRepoOptionsMenu(null)}
-          />
-        )}
+        <ViewPaneContainer id="scm" panes={[repositoriesPane]} ariaLabel="Controle do código-fonte" />
       </div>
     );
   }
 
   return (
     <GitRepositoryPanel
-      // Um único repo: o toplevel descoberto (a pasta aberta pode ser subpasta).
-      rootPath={localRoots[0]?.path ?? rootPath}
-      onOpenFile={onOpenFile}
-      onOpenChanges={onOpenChanges}
-      onOpenRevision={onOpenRevision}
-      onOpenRevisionDiff={onOpenRevisionDiff}
-      historyFile={historyFile}
-      historyTarget={historyTarget}
-      onClearHistoryFile={onClearHistoryFile}
-      onOpenLocalFolderInCurrentWindow={onOpenLocalFolderInCurrentWindow}
-      onOpenLocalFolderInNewWindow={onOpenLocalFolderInNewWindow}
-      gitAssistant={gitAssistant}
-      gitAssistPreferences={gitAssistPreferences}
+      // Um repositório ativo por vez (seleção única, como o VS Code): trocar
+      // na view Repositórios remonta o painel do outro repo.
+      key={activeRoot.id}
+      rootPath={activeRoot.path}
+      rootName={activeRoot.name}
+      rootKind={activeRoot.kind}
+      connId={activeRoot.connId}
+      provider={activeRoot.provider}
+      repositoriesPane={repositoriesPane}
+      {...panelProps}
     />
   );
 }
+
+const NO_REPOS: RepositoryEntry[] = [];
 
 function GitRepositoryPanel({
   rootPath,
   rootName,
   rootKind,
-  embedded = false,
   connId,
   provider = "local",
-  collapsed,
-  onCollapsedChange,
-  onHideRepository,
+  repositoriesPane,
   onOpenFile,
   onOpenChanges,
   onOpenRevision,
@@ -1015,23 +643,12 @@ function GitRepositoryPanel({
   const [message, setMessage] = useState("");
   const [assistSource, setAssistSource] = useState<"agent" | "heuristic" | null>(null);
   const [commits, setCommits] = useState<GitCommit[]>([]);
-  const [localShowRepositoryBody, setLocalShowRepositoryBody] = useState(true);
-  const [showSourceControlRoot, setShowSourceControlRoot] = useState(true);
   const [showConflicts, setShowConflicts] = useState(true);
   const [showStaged, setShowStaged] = useState(true);
   const [showChanges, setShowChanges] = useState(true);
-  const [panelViewOrder, setPanelViewOrder] = useState<GitPanelViewId[]>(readGitPanelViewOrder);
-  const [panelViewHeights, setPanelViewHeights] =
-    useState<Record<GitPanelViewId, number>>(readGitPanelViewHeights);
-  const [draggingPanelView, setDraggingPanelView] = useState<GitPanelViewId | null>(null);
-  const panelViewRefs = useRef<Record<GitPanelViewId, HTMLElement | null>>({
-    changes: null,
-    graph: null,
-    gitFluent: null,
-  });
-  const [showGitGraphView, setShowGitGraphView] = useState(() =>
-    !readBooleanPreference(GIT_FLUENT_GRAPH_COLLAPSED_STORAGE_KEY, false)
-  );
+  // Ordem salva da pilha antiga (migração); o layout agora é do ViewPane.
+  const [panelViewOrder] = useState<GitPanelViewId[]>(readGitPanelViewOrder);
+  const [paneReveal, setPaneReveal] = useState<{ id: string; nonce: number } | null>(null);
   const [showGitFluentOverview, setShowGitFluentOverview] = useState(() =>
     !readBooleanPreference(GIT_FLUENT_COLLAPSED_STORAGE_KEY, false)
   );
@@ -1081,21 +698,6 @@ function GitRepositoryPanel({
     : null;
   const resolvedHistoryLine = historyBelongsHere ? historyTarget?.line : undefined;
 
-  useEffect(() => {
-    writeBooleanPreference(GIT_FLUENT_COLLAPSED_STORAGE_KEY, !showGitFluentOverview);
-  }, [showGitFluentOverview]);
-
-  useEffect(() => {
-    writeBooleanPreference(GIT_FLUENT_GRAPH_COLLAPSED_STORAGE_KEY, !showGitGraphView);
-  }, [showGitGraphView]);
-
-  useEffect(() => {
-    writeGitPanelViewOrder(panelViewOrder);
-  }, [panelViewOrder]);
-
-  useEffect(() => {
-    writeGitPanelViewHeights(panelViewHeights);
-  }, [panelViewHeights]);
 
   useEffect(() => {
     writeStringPreference(GIT_FLUENT_ACTIVE_TAB_STORAGE_KEY, activeGitFluentTab);
@@ -1333,8 +935,6 @@ function GitRepositoryPanel({
   }, [connId, rootPath, resolvedHistoryFile, resolvedHistoryLine]);
 
   const activeHistoryCommits = resolvedHistoryFile ? fileCommits : commits;
-  const showRepositoryBody =
-    embedded && typeof collapsed === "boolean" ? !collapsed : localShowRepositoryBody;
   const { conflicts, staged, changes } = useMemo(() => {
     const files = status?.files ?? [];
     return {
@@ -1406,39 +1006,29 @@ function GitRepositoryPanel({
     [remoteBranches]
   );
 
-  function toggleRepositoryBody() {
-    const next = !showRepositoryBody;
-    if (embedded && onCollapsedChange) {
-      onCollapsedChange(!next);
-    } else {
-      setLocalShowRepositoryBody(next);
-    }
-  }
-
-  if (!rootPath) {
+  if (!rootPath || (status && !status.isRepo)) {
+    const message = !rootPath
+      ? "Abra uma pasta para usar o Git."
+      : rootName
+        ? `${rootName} não é um repositório Git.`
+        : "Esta pasta não é um repositório Git.";
     return (
-      <div className={embedded ? "git-panel git-panel-embedded" : "git-panel"}>
-        {!embedded && (
-          <div className="explorer-header">
-            <span className="explorer-title">CONTROLE DE CÓDIGO-FONTE</span>
-          </div>
-        )}
-        <div className="panel-empty">Abra uma pasta para usar o Git.</div>
-      </div>
-    );
-  }
-
-  if (status && !status.isRepo) {
-    return (
-      <div className={embedded ? "git-panel git-panel-embedded" : "git-panel"}>
-        {!embedded && (
-          <div className="explorer-header">
-            <span className="explorer-title">CONTROLE DE CÓDIGO-FONTE</span>
-          </div>
-        )}
-        <div className="panel-empty">
-          {rootName ? `${rootName} não é um repositório Git.` : "Esta pasta não é um repositório Git."}
+      <div className="git-panel">
+        <div className="explorer-header">
+          <span className="explorer-title">CONTROLE DE CÓDIGO-FONTE</span>
         </div>
+        {repositoriesPane ? (
+          <ViewPaneContainer
+            id="scm"
+            ariaLabel="Controle do código-fonte"
+            panes={[
+              repositoriesPane,
+              { id: "changes", title: rootName || "Repositório", children: <div className="panel-empty">{message}</div> },
+            ]}
+          />
+        ) : (
+          <div className="panel-empty">{message}</div>
+        )}
       </div>
     );
   }
@@ -1504,7 +1094,7 @@ function GitRepositoryPanel({
 
   function selectGitFluentTab(tab: GitFluentTab) {
     setActiveGitFluentTab(tab);
-    setShowGitFluentOverview(true);
+    revealPanelView("gitFluent");
     if (tab === "compare") {
       if (!upstreamComparison) void loadUpstreamComparison();
       return;
@@ -1544,14 +1134,12 @@ function GitRepositoryPanel({
   }
 
   function openGitFluentWorkspace() {
-    setShowGitGraphView(true);
     revealPanelView("graph");
     if (commits.length === 0) void loadHistory();
   }
 
   /** Seleciona um commit na seção "Grafo" (expande e rola até ela). */
   function showCommitInGraph(commit: Pick<GitCommit, "hash">, _withFiles = false) {
-    setShowGitGraphView(true);
     // O grafo abre os detalhes (arquivos inclusos) do commit focado.
     setGraphFocus({ hash: commit.hash, nonce: Date.now() });
     revealPanelView("graph");
@@ -2619,14 +2207,6 @@ function GitRepositoryPanel({
         disabled={busy}
         onClick={() => void refresh()}
       />
-      {embedded && onHideRepository && (
-        <IconButton
-          icon="close"
-          size="sm"
-          label="Ocultar repositório"
-          onClick={onHideRepository}
-        />
-      )}
     </div>
   );
 
@@ -2686,14 +2266,7 @@ function GitRepositoryPanel({
   );
   // Cabeçalho do Git Fluent: só título + "…" (antes 6 abas-ícone + ações +
   // menu espremiam o título para "G…"). As abas vão para o topo do corpo.
-  const gitFluentHeaderActions = (
-    <IconButton
-      icon="filterFiles"
-      size="sm"
-      label="Mais ações do Git Fluent"
-      onClick={(event) => openFileMenu(event, gitFluentViewMenu())}
-    />
-  );
+
   const gitFluentBodyToolbar = (
     <GitFluentToolbar
       activeTab={gitFluentPaneActiveTab}
@@ -2707,109 +2280,9 @@ function GitRepositoryPanel({
     />
   );
 
-  const sourceControlCount = totalChanges || undefined;
-
-  function panelViewRef(view: GitPanelViewId) {
-    return (node: HTMLElement | null) => {
-      panelViewRefs.current[view] = node;
-    };
-  }
-
+  /** Expande e rola até um pane da pilha (Mostrar no grafo, abas do Git Fluent…). */
   function revealPanelView(view: GitPanelViewId) {
-    requestAnimationFrame(() => {
-      panelViewRefs.current[view]?.scrollIntoView({
-        block: "nearest",
-        inline: "nearest",
-      });
-    });
-  }
-
-  function togglePanelView(view: GitPanelViewId, expanded: boolean, setExpanded: (value: boolean) => void) {
-    const next = !expanded;
-    setExpanded(next);
-    if (next) revealPanelView(view);
-  }
-
-  function isPanelViewExpanded(view: GitPanelViewId) {
-    if (view === "changes") return showSourceControlRoot;
-    if (view === "graph") return showGitGraphView;
-    return showGitFluentOverview;
-  }
-
-  function panelBodyStyle(view: GitPanelViewId): CSSProperties {
-    return { "--git-view-height": `${panelViewHeights[view]}px` } as CSSProperties;
-  }
-
-  function startPanelViewResize(view: GitPanelViewId, event: PointerEvent<HTMLDivElement>) {
-    event.preventDefault();
-    event.stopPropagation();
-    const startY = event.clientY;
-    const startHeight = panelViewHeights[view];
-    const minHeight = GIT_PANEL_MIN_VIEW_HEIGHTS[view];
-    const maxHeight = GIT_PANEL_MAX_VIEW_HEIGHT;
-
-    const setHeight = (nextHeight: number) =>
-      setPanelViewHeights((current) =>
-        current[view] === nextHeight ? current : { ...current, [view]: nextHeight }
-      );
-
-    document.body.classList.add("git-pane-resizing");
-    startPointerDrag({
-      kind: "resize",
-      cursor: "row-resize",
-      onMove: (moveEvent) =>
-        setHeight(Math.min(maxHeight, Math.max(minHeight, startHeight + moveEvent.clientY - startY))),
-      onEnd: (committed) => {
-        document.body.classList.remove("git-pane-resizing");
-        if (!committed) setHeight(startHeight);
-      },
-    });
-  }
-
-  function renderPanelResizeHandle(view: GitPanelViewId) {
-    return (
-      <div
-        className="git-view-resize-handle"
-        role="separator"
-        aria-orientation="horizontal"
-        aria-label="Redimensionar view"
-        title="Arraste para ajustar a altura"
-        onPointerDown={(event) => startPanelViewResize(view, event)}
-      />
-    );
-  }
-
-  function movePanelView(from: GitPanelViewId, to: GitPanelViewId) {
-    if (from === to) return;
-    setPanelViewOrder((current) => {
-      const next = current.filter((view) => view !== from);
-      const targetIndex = next.indexOf(to);
-      next.splice(targetIndex === -1 ? next.length : targetIndex, 0, from);
-      return next;
-    });
-  }
-
-  function panelViewDragProps(view: GitPanelViewId) {
-    return {
-      draggable: true,
-      dragging: draggingPanelView === view,
-      onDragStart: (event: DragEvent<HTMLDivElement>) => {
-        event.dataTransfer.effectAllowed = "move";
-        event.dataTransfer.setData("text/plain", view);
-        setDraggingPanelView(view);
-      },
-      onDragOver: (event: DragEvent<HTMLDivElement>) => {
-        event.preventDefault();
-        event.dataTransfer.dropEffect = "move";
-      },
-      onDrop: (event: DragEvent<HTMLDivElement>) => {
-        event.preventDefault();
-        const dragged = event.dataTransfer.getData("text/plain") as GitPanelViewId;
-        if (GIT_PANEL_VIEW_ORDER.includes(dragged)) movePanelView(dragged, view);
-        setDraggingPanelView(null);
-      },
-      onDragEnd: () => setDraggingPanelView(null),
-    };
+    setPaneReveal({ id: view, nonce: Date.now() });
   }
 
   function commitStaged() {
@@ -2938,187 +2411,132 @@ function GitRepositoryPanel({
     );
   }
 
-  function renderChangesActions() {
-    if (changes.length === 0) return null;
+  function changesActions(): PaneAction[] {
+    if (changes.length === 0) return [];
+    return [
+      {
+        id: "discard-all",
+        icon: "discard",
+        label: "Descartar todas as alterações",
+        disabled: busy,
+        run: () =>
+          void act(async () => {
+            if (
+              !window.confirm(
+                "Descartar TODAS as alterações do diretório de trabalho? Esta ação não pode ser desfeita."
+              )
+            )
+              return;
+            await gitDiscardAll(repoRootPath, connId);
+          }),
+      },
+      {
+        id: "stage-all",
+        icon: "add",
+        label: "Preparar tudo",
+        disabled: busy,
+        run: () => void act(() => gitStageAll(repoRootPath, connId)),
+      },
+    ];
+  }
+
+  function stagedActions(): PaneAction[] {
+    if (staged.length === 0) return [];
+    return [
+      {
+        id: "open-first-staged",
+        icon: "openChanges",
+        label: "Visualizar primeiro arquivo preparado",
+        disabled: busy,
+        run: openFirstStagedChange,
+      },
+      {
+        id: "unstage-all",
+        icon: "remove",
+        label: "Remover tudo do stage",
+        disabled: busy,
+        run: () => void act(() => gitUnstageAll(repoRootPath, connId)),
+      },
+    ];
+  }
+
+  function sourceControlBody() {
     return (
       <>
-        <IconButton
-          icon="discard"
-          size="sm"
-          label="Descartar todas as alterações"
-          disabled={busy}
-          onClick={() =>
-              act(async () => {
-                if (
-                  !window.confirm(
-                    "Descartar TODAS as alterações do diretório de trabalho? Esta ação não pode ser desfeita."
-                  )
-                )
-                  return;
-                await gitDiscardAll(repoRootPath, connId);
-              })
-            }
-        />
-        <IconButton
-          icon="add"
-          size="sm"
-          label="Preparar tudo"
-          disabled={busy}
-          onClick={() => act(() => gitStageAll(repoRootPath, connId))}
-        />
-      </>
-    );
-  }
+        {renderCommitBox()}
 
-  function renderStagedActions() {
-    if (staged.length === 0) return null;
-    return (
-      <>
-        <IconButton
-          icon="openChanges"
-          size="sm"
-          label="Visualizar primeiro arquivo preparado"
-          disabled={busy || staged.length === 0}
-          onClick={openFirstStagedChange}
-        />
-        <IconButton
-          icon="remove"
-          size="sm"
-          label="Remover tudo do stage"
-          disabled={busy}
-          onClick={() => act(() => gitUnstageAll(repoRootPath, connId))}
-        />
-      </>
-    );
-  }
-
-  function renderSourceControlView(fillAvailable = false) {
-    return (
-      <section
-        key="changes"
-        className={`git-view-section git-source-views${showSourceControlRoot ? " is-expanded" : ""}${draggingPanelView === "changes" ? " is-dragging" : ""}${
-          fillAvailable ? " is-fill-available" : ""
-        }`}
-        ref={panelViewRef("changes")}
-      >
-        <GitSectionHeader
-          // A view ganha o nome do repositório (pasta única) — os grupos abaixo
-          // são "Preparadas"/"Alterações"; nada de "ALTERAÇÕES" › "ALTERAÇÕES".
-          title={embedded ? "Controle do código-fonte" : rootName || fileName(repoRootPath)}
-          icon={embedded ? "sourceControl" : "gitRepo"}
-          expanded={showSourceControlRoot}
-          onToggle={() => togglePanelView("changes", showSourceControlRoot, setShowSourceControlRoot)}
-          count={sourceControlCount}
-          {...panelViewDragProps("changes")}
-        />
-        {showSourceControlRoot && (
-          <div className="git-source-view-body" style={panelBodyStyle("changes")}>
-            {renderCommitBox()}
-
-            {conflicts.length > 0 && (
-              <section className="git-source-subsection" aria-label="Conflitos de merge">
-                <GitResourceGroupRow
-                  label="Conflitos de merge"
-                  expanded={showConflicts}
-                  onToggle={() => setShowConflicts((value) => !value)}
-                  count={conflicts.length}
-                  danger
-                />
-                {showConflicts && <div className="git-source-subsection-body">{renderConflictRows()}</div>}
-              </section>
-            )}
-
-            {staged.length > 0 && (
-              <section className="git-source-subsection" aria-label="Alterações preparadas">
-                <GitResourceGroupRow
-                  label="Preparadas"
-                  title={stagedSummaryText || undefined}
-                  expanded={showStaged}
-                  onToggle={() => setShowStaged((value) => !value)}
-                  count={staged.length}
-                  actions={renderStagedActions()}
-                />
-                {showStaged && <div className="git-source-subsection-body">{renderStagedRows()}</div>}
-              </section>
-            )}
-
-            {(changes.length > 0 || staged.length === 0) && (
-              <section className="git-source-subsection" aria-label="Alterações">
-                <GitResourceGroupRow
-                  label="Alterações"
-                  expanded={showChanges}
-                  onToggle={() => setShowChanges((value) => !value)}
-                  count={changes.length}
-                  actions={renderChangesActions()}
-                />
-                {showChanges && <div className="git-source-subsection-body">{renderChangeRows()}</div>}
-              </section>
-            )}
-          </div>
-        )}
-        {showSourceControlRoot && renderPanelResizeHandle("changes")}
-      </section>
-    );
-  }
-
-  function renderGraphView(fillAvailable = false) {
-    return (
-      <section
-        key="graph"
-        className={`git-view-section git-group git-group-graph${showGitGraphView ? " is-expanded" : ""}${draggingPanelView === "graph" ? " is-dragging" : ""}${
-          fillAvailable ? " is-fill-available" : ""
-        }`}
-        ref={panelViewRef("graph")}
-      >
-        <GitSectionHeader
-          title="Grafo"
-          icon="gitGraph"
-          expanded={showGitGraphView}
-          onToggle={() => togglePanelView("graph", showGitGraphView, setShowGitGraphView)}
-          {...panelViewDragProps("graph")}
-        />
-        {showGitGraphView && (
-          <div className="git-view-pane-body git-graph-pane-body" style={panelBodyStyle("graph")}>
-            <CommitGraphView
-              rootPath={repoRootPath}
-              connId={connId}
-              active={showGitGraphView}
-              reloadKey={graphReloadKey}
-              busy={busy}
-              onRun={(fn) => void act(fn)}
-              onPull={() => void act(() => gitPull(repoRootPath, connId))}
-              onPush={() => void act(() => gitPush(repoRootPath, connId))}
-              onFetch={() => void act(() => gitFetch(repoRootPath, connId))}
-              focusHash={graphFocus}
-              onOpenRevisionDiff={onOpenRevisionDiff}
-              onOpenRevision={onOpenRevision}
+        {conflicts.length > 0 && (
+          <section className="git-source-subsection" aria-label="Conflitos de merge">
+            <SectionHeader
+              level={2}
+              title="Conflitos de merge"
+              badge={conflicts.length}
+              badgeLabel={`${conflicts.length} arquivo${conflicts.length === 1 ? "" : "s"}`}
+              expanded={showConflicts}
+              onToggle={() => setShowConflicts((value) => !value)}
+              className="is-danger"
             />
-          </div>
+            {showConflicts && <div className="git-source-subsection-body">{renderConflictRows()}</div>}
+          </section>
         )}
-        {showGitGraphView && renderPanelResizeHandle("graph")}
-      </section>
+
+        {staged.length > 0 && (
+          <section className="git-source-subsection" aria-label="Alterações preparadas" title={stagedSummaryText || undefined}>
+            <SectionHeader
+              level={2}
+              title="Preparadas"
+              badge={staged.length}
+              badgeLabel={`${staged.length} arquivo${staged.length === 1 ? "" : "s"}`}
+              expanded={showStaged}
+              onToggle={() => setShowStaged((value) => !value)}
+              actions={stagedActions()}
+              actionsVisibility="hover"
+            />
+            {showStaged && <div className="git-source-subsection-body">{renderStagedRows()}</div>}
+          </section>
+        )}
+
+        {(changes.length > 0 || staged.length === 0) && (
+          <section className="git-source-subsection" aria-label="Alterações">
+            <SectionHeader
+              level={2}
+              title="Alterações"
+              badge={changes.length}
+              badgeLabel={`${changes.length} arquivo${changes.length === 1 ? "" : "s"}`}
+              expanded={showChanges}
+              onToggle={() => setShowChanges((value) => !value)}
+              actions={changesActions()}
+              actionsVisibility="hover"
+            />
+            {showChanges && <div className="git-source-subsection-body">{renderChangeRows()}</div>}
+          </section>
+        )}
+      </>
     );
   }
 
-  function renderGitFluentView(fillAvailable = false) {
+  function graphBody() {
     return (
-      <section
-        key="gitFluent"
-        className={`git-view-section git-group git-group-fluent${showGitFluentOverview ? " is-expanded" : ""}${draggingPanelView === "gitFluent" ? " is-dragging" : ""}${
-          fillAvailable ? " is-fill-available" : ""
-        }`}
-        ref={panelViewRef("gitFluent")}
-      >
-        <GitSectionHeader
-          title="Git Fluent"
-          icon="graph"
-          expanded={showGitFluentOverview}
-          onToggle={() => togglePanelView("gitFluent", showGitFluentOverview, setShowGitFluentOverview)}
-          actions={gitFluentHeaderActions}
-          {...panelViewDragProps("gitFluent")}
-        />
-        {showGitFluentOverview && (
-          <div className="git-fluent-board" style={panelBodyStyle("gitFluent")}>
+      <CommitGraphView
+        rootPath={repoRootPath}
+        connId={connId}
+        active
+        reloadKey={graphReloadKey}
+        busy={busy}
+        onRun={(fn) => void act(fn)}
+        onPull={() => void act(() => gitPull(repoRootPath, connId))}
+        onPush={() => void act(() => gitPush(repoRootPath, connId))}
+        onFetch={() => void act(() => gitFetch(repoRootPath, connId))}
+        focusHash={graphFocus}
+        onOpenRevisionDiff={onOpenRevisionDiff}
+        onOpenRevision={onOpenRevision}
+      />
+    );
+  }
+
+  function gitFluentBody() {
+    return (
+      <>
             {gitFluentBodyToolbar}
             {gitFluentPaneActiveTab === "compare" && (
               <GitFluentCompareView
@@ -3139,7 +2557,6 @@ function GitRepositoryPanel({
                 onSelectCommit={(commit) => showCommitInGraph(commit, true)}
                 onOpenCommitMenu={(event, commit) => openFileMenu(event, commitContextMenu(commit))}
                 onOpenGraph={() => {
-                  setShowGitGraphView(true);
                   revealPanelView("graph");
                 }}
               />
@@ -3260,76 +2677,82 @@ function GitRepositoryPanel({
                 }
               />
             )}
-          </div>
-        )}
-        {showGitFluentOverview && renderPanelResizeHandle("gitFluent")}
-      </section>
+      </>
     );
   }
 
-  function renderPanelView(view: GitPanelViewId, fillAvailable = false) {
-    if (view === "changes") return renderSourceControlView(fillAvailable);
-    if (view === "graph") return renderGraphView(fillAvailable);
-    return renderGitFluentView(fillAvailable);
-  }
+  const paneFor = (view: GitPanelViewId): ViewPaneDescriptor => {
+    if (view === "changes") {
+      return {
+        id: "changes",
+        // O pane leva o nome do repositório; os grupos abaixo são
+        // "Preparadas"/"Alterações" (nada de "ALTERAÇÕES" › "ALTERAÇÕES").
+        title: `${rootName || fileName(repoRootPath)}${rootKind && REPO_KIND_LABEL[rootKind] ? ` · ${REPO_KIND_LABEL[rootKind]}` : ""}`,
+        badge: totalChanges || undefined,
+        badgeLabel: `${totalChanges} alterações`,
+        minBodySize: 96,
+        defaultWeight: 1.1,
+        bodyClassName: "git-source-view-body",
+        actions: [
+          { id: "refresh", icon: "refresh", label: "Atualizar status", disabled: busy, run: () => void refresh() },
+          { id: "fetch", icon: "gitFetch", label: "Buscar (fetch)", disabled: busy, overflowOnly: true, run: () => void act(() => gitFetch(repoRootPath, connId)) },
+          { id: "pull", icon: "gitPull", label: "Puxar (pull)", disabled: busy || !status?.hasUpstream, overflowOnly: true, run: () => void act(() => gitPull(repoRootPath, connId)) },
+          { id: "push", icon: "gitPush", label: "Enviar (push)", disabled: busy || !status?.hasUpstream, overflowOnly: true, run: () => void act(() => gitPush(repoRootPath, connId)) },
+        ],
+        children: sourceControlBody(),
+      };
+    }
+    if (view === "graph") {
+      return {
+        id: "graph",
+        title: "Grafo",
+        minBodySize: 132,
+        defaultWeight: 1.6,
+        defaultExpanded: !readBooleanPreference(GIT_FLUENT_GRAPH_COLLAPSED_STORAGE_KEY, false),
+        bodyClassName: "git-graph-pane-body",
+        children: graphBody(),
+      };
+    }
+    return {
+      id: "gitFluent",
+      title: "Git Fluent",
+      minBodySize: 120,
+      defaultWeight: 1,
+      defaultExpanded: !readBooleanPreference(GIT_FLUENT_COLLAPSED_STORAGE_KEY, true),
+      bodyClassName: "git-fluent-board",
+      actions: [
+        {
+          id: "gitfluent-refresh",
+          icon: "refresh",
+          label: "Atualizar view atual",
+          run: () => gitFluentViewMenu()[0]?.run?.(),
+        },
+      ],
+      children: gitFluentBody(),
+    };
+  };
 
-  const expandedPanelViews = panelViewOrder.filter(isPanelViewExpanded);
-  const fillAvailablePanelView = expandedPanelViews.length === 1 ? expandedPanelViews[0] : null;
+  const panes: ViewPaneDescriptor[] = [
+    ...(repositoriesPane ? [repositoriesPane] : []),
+    ...panelViewOrder.map(paneFor),
+  ];
 
   return (
-    <div className={embedded ? "git-panel git-panel-embedded" : "git-panel"}>
-      {embedded ? (
-        <div
-          className={`git-root-header${showRepositoryBody ? "" : " is-collapsed"}`}
-          title={rootKind && REPO_KIND_LABEL[rootKind] ? `${repoRootPath} (${REPO_KIND_LABEL[rootKind]})` : repoRootPath}
-        >
-          <button
-            type="button"
-            className="git-root-main"
-            aria-expanded={showRepositoryBody}
-            onClick={toggleRepositoryBody}
-          >
-            <Codicon name={showRepositoryBody ? "chevronDown" : "chevronRight"} size={12} />
-            <Codicon
-              name={provider === "ssh" ? "remote" : rootKind === "worktree" ? "gitBranch" : "folder"}
-              size={13}
-            />
-            <span className="git-root-name">{rootName || fileName(repoRootPath)}</span>
-            {rootKind && REPO_KIND_LABEL[rootKind] && (
-              <span className="git-root-kind">{REPO_KIND_LABEL[rootKind]}</span>
-            )}
-          </button>
-          <div className="git-root-meta">
-            <span className="git-root-branch" title="Branch atual">
-              <Codicon name="gitBranch" size={12} />
-              <span className="git-root-branch-text">{status?.branch || "—"}</span>
-            </span>
-            {totalChanges > 0 && (
-              <span className="git-root-chip" title="Alterações neste repositório">
-                <Codicon name="openChanges" size={12} />
-                {totalChanges}
-              </span>
-            )}
-          </div>
-          <div className="git-root-actions">
-            {actionButtons}
-          </div>
-        </div>
-      ) : (
-        <div className="explorer-header git-header">
-          <span className="explorer-title">CONTROLE DE CÓDIGO-FONTE</span>
-          {actionButtons}
-        </div>
-      )}
-
-      {(!embedded || showRepositoryBody) && (
-        <div className="git-panel-flow">
-          {error && <div className="git-error">{error}</div>}
-          <div className="git-panel-view-stack">
-            {panelViewOrder.map((view) => renderPanelView(view, view === fillAvailablePanelView))}
-          </div>
+    <div className="git-panel">
+      <div className="explorer-header git-header">
+        <span className="explorer-title">CONTROLE DE CÓDIGO-FONTE</span>
+        {actionButtons}
       </div>
-      )}
+      {error && <div className="git-error">{error}</div>}
+      <ViewPaneContainer
+        id="scm"
+        panes={panes}
+        ariaLabel="Controle do código-fonte"
+        reveal={paneReveal}
+        onExpandedChange={(expanded) => {
+          setShowGitFluentOverview(expanded.gitFluent ?? false);
+        }}
+      />
 
       {contextMenu && (
         <TreeContextMenu

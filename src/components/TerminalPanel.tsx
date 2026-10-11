@@ -6,6 +6,7 @@ import { ViewToolbar } from "../workbench/WorkbenchViews";
 import type { TermSpawnOptions } from "../api";
 import { ptyClosed, ptyReady, subscribeExtTerminals } from "../extensions/terminalBridge";
 import { listen } from "@tauri-apps/api/event";
+import { defaultTerminalTarget } from "../git/activeRepository";
 
 interface TerminalsViewProps {
   /** A view "Terminal" está visível (ativa numa região aberta). */
@@ -98,7 +99,9 @@ export function TerminalsView({
       command?: string | null;
       title?: string;
     }) => {
-      const dir = opts?.cwd ?? cwd;
+      // "+"/primeiro terminal: abre no repositório ativo (multi-repo).
+      const fallback = opts?.cwd ? null : defaultTerminalTarget(cwd);
+      const dir = opts?.cwd ?? fallback?.cwd ?? cwd;
       if (!dir) return;
       termCounter.current += 1;
       const id = `term-${crypto.randomUUID()}`;
@@ -109,7 +112,7 @@ export function TerminalsView({
           id,
           title,
           cwd: dir,
-          connId: opts?.connId ?? undefined,
+          connId: (opts?.cwd ? opts.connId : fallback?.connId) ?? undefined,
           command: opts?.command ?? null,
         },
       ]);

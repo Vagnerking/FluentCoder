@@ -6294,6 +6294,7 @@ export default function App() {
           <GitPanel
             rootPath={rootPath}
             workspaceRoots={gitPanelRoots}
+            onOpenTerminal={handleOpenTerminalAt}
             onOpenFile={(path, name) =>
               handleOpenFile({ name, path, isDir: false }, undefined, undefined, undefined, {
                 origin: "scm",

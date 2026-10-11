@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildWorkspaceRepositories, uniqueRepoRows, type DiscoveredRepo } from "./repositories.ts";
 import {
+  defaultTerminalTarget,
   getActiveGitRepository,
   resetActiveGitRepositoryForTests,
   resolveActiveGitRepository,
@@ -105,4 +106,16 @@ test("store compartilhado notifica mudanças e a escolha explícita cede ao foca
   const before = notified;
   setGitRepositories([...repos]);
   assert.equal(notified, before, "lista igual não notifica");
+});
+
+test("terminal novo abre no repositório ativo (SSH leva a conexão)", () => {
+  resetActiveGitRepositoryForTests();
+  assert.deepEqual(defaultTerminalTarget("/w"), { cwd: "/w", connId: null });
+  const { repos } = buildWorkspaceRepositories(folders, discovered, { f3: "c1" });
+  setGitRepositories(repos);
+  selectGitRepository(repos[1].id);
+  assert.deepEqual(defaultTerminalTarget("/w"), { cwd: repos[1].root, connId: null });
+  selectGitRepository(repos[2].id);
+  assert.deepEqual(defaultTerminalTarget("/w"), { cwd: "/srv/api", connId: "c1" });
+  assert.deepEqual(defaultTerminalTarget("/w", null), { cwd: "/w", connId: null });
 });

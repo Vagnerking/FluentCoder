@@ -160,18 +160,28 @@ espelhos `ssh_git_*` de `ssh.rs`, em `src/git/*`, `GitPanel.tsx` e
   `peekGitAvatar(email)` onde não dá para esperar (hover/status bar). Nunca
   coloque `<img src="https://…">` de avatar no DOM.
 
-## Layout do painel SCM (até o ViewPane compartilhado chegar)
+## Layout do painel SCM (ViewPane) e multi-repositório
 
-- A view de commit tem o nome do repositório (pasta única) ou "Controle do
-  código-fonte" (multi-root); Conflitos › Preparadas › Alterações são linhas de
-  grupo (`GitResourceGroupRow`), não cabeçalhos de seção. Não reintroduza o
-  cartão "Index preparado".
-- Corpos das views usam `flex: 0 1 var(--git-view-height)` + `overflow` na
-  seção: encolhem e rolam, nunca desenham sobre o vizinho. Listas em grid do
-  Git Fluent usam `align-content: start`.
-- Cabeçalho do Git Fluent = título + "…"; o seletor de views é a faixa
-  `GitFluentToolbar placement="body"` no topo do corpo. Seção recolhida
-  esconde as ações (aparecem no hover/foco).
+- O SCM é um `<ViewPaneContainer id="scm">` (estado em `ui.viewPanes.scm`):
+  **Repositórios** (só com mais de um repo) › **<nome do repo>** (commit +
+  grupos) › **Grafo** › **Git Fluent**. Nada de pilha ad hoc, alturas em px
+  ou alças próprias; expandir por código usa a prop `reveal` do container.
+- Grupos Conflitos › Preparadas › Alterações são `SectionHeader level={2}`
+  com ações `PaneAction` (hover/foco). Não reintroduza o cartão "Index
+  preparado" nem cabeçalhos `git-section-header`.
+- **Um repo ativo por vez** (seleção única do VS Code): a view Repositórios
+  (`RepositoriesView`) lista repos do workspace, aninhados, worktrees e SSH
+  (desconectado aparece como tal), com branch, ↓/↑, alterações e ações
+  (sincronizar, buscar, terminal, ocultar). Clicar escolhe o ativo
+  (`selectGitRepository`), que dirige o painel abaixo, o grafo, o chip da
+  status bar e o **cwd do terminal novo** (`defaultTerminalTarget` em
+  `activeRepository.ts`, usado pelo "+" do Terminal).
+- Lote: "Buscar todos" / "Sincronizar todos" com concorrência 4
+  (`runWithConcurrency`); erro por repo em toast sem abortar os demais;
+  sincronizar = puxar se atrás, enviar se à frente (`repoSyncPlan`).
+- Status dos repos da lista: `useRepositoryStatuses` usa
+  `fetchGitStatusShared` + `subscribe` do agendador — **não** chama
+  `setTargets` (isso é do App).
 - Commit: placeholder curto ("Mensagem de commit"), atalho/branch no tooltip,
   textarea de 1–6 linhas, botão "Fazer commit (n)".
 - Erros de operação Git: `showGitToast` (`src/git/gitToasts.ts`), nunca

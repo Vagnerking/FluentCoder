@@ -1,0 +1,219 @@
+/* ---- View "Repositórios" + panes do SCM no ViewPaneContainer ----
+   (src/components/git/RepositoriesView.tsx, GitPanel.tsx) */
+
+/* Corpos que rolam por dentro (o grafo virtualizado). Seletor composto para
+   vencer o `overflow-y: auto` genérico de `.ui-view-pane-body`. */
+.ui-view-pane-body.git-graph-pane-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.ui-view-pane-body.git-source-view-body {
+  padding-bottom: var(--space-sm);
+}
+
+.ui-view-pane-body.git-fluent-board {
+  margin: 0;
+}
+
+.git-source-subsection > .ui-section-header {
+  padding-left: var(--space-xs);
+}
+
+.ui-section-header.is-danger .ui-section-header-title {
+  color: var(--color-git-conflict);
+}
+
+.repos-pane-body {
+  padding: 2px 0 var(--space-xs);
+}
+
+.repos-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.repos-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 var(--space-xs) 0 var(--space-md);
+  color: var(--text-secondary);
+  cursor: pointer;
+  outline: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.repos-row:hover {
+  background: var(--fill-subtle-hover);
+}
+
+.repos-row:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--stroke-focus);
+}
+
+/* Ativo: fundo selecionado + barra de destaque (não só cor). */
+.repos-row.is-active {
+  background: var(--fill-selected);
+  color: var(--text);
+}
+
+.repos-row.is-active::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 5px;
+  bottom: 5px;
+  width: 3px;
+  border-radius: var(--radius-xs);
+  background: var(--accent);
+}
+
+.repos-row.is-active:hover {
+  background: var(--fill-selected-hover);
+}
+
+.repos-row.is-disconnected {
+  cursor: default;
+}
+
+.repos-row.is-disconnected .repos-name {
+  color: var(--text-muted);
+}
+
+.repos-kind-icon {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.repos-row.is-active .repos-kind-icon {
+  color: var(--accent);
+}
+
+.repos-name {
+  flex: 0 0 auto;
+  max-width: 55%;
+  min-width: 40px;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repos-kind {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  font-size: var(--font-caption-xs);
+  line-height: 14px;
+}
+
+.repos-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-caption);
+  font-style: italic;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repos-meta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--font-caption);
+}
+
+.repos-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.repos-branch > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repos-sync {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.repos-changes {
+  flex: 0 0 auto;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--acrylic-control-hover);
+  color: var(--text-secondary);
+  font-size: var(--font-caption-sm);
+  line-height: 16px;
+  text-align: center;
+}
+
+/* Ações no hover/foco (sobrepõem a meta, como o VS Code). */
+.repos-actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.repos-row:hover .repos-actions,
+.repos-row:focus-within .repos-actions {
+  display: inline-flex;
+}
+
+.repos-row:hover .repos-meta,
+.repos-row:focus-within .repos-meta {
+  display: none;
+}
+
+/* Operação em andamento: o indicador fica visível sem hover. */
+.repos-actions:has(.repos-busy) {
+  display: inline-flex;
+}
+
+.repos-busy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  color: var(--accent);
+}
+
+.repos-empty {
+  padding: var(--space-sm) var(--space-md);
+  color: var(--text-muted);
+  font-size: var(--font-caption);
+}
+
+/* Sidebar estreita: some o nome da branch antes do nome do repo. */
+@container (max-width: 280px) {
+  .repos-branch {
+    display: none;
+  }
+}

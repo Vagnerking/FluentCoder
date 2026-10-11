@@ -124,6 +124,18 @@ export function getActiveGitRepository(): GitRepositoryRef | null {
   return state.active;
 }
 
+/**
+ * Pasta (e conexão SSH) de um terminal novo sem cwd explícito: o repositório
+ * ativo — o mesmo de SCM, grafo e status bar; sem repo ativo, `fallback`.
+ */
+export function defaultTerminalTarget(
+  fallback: string | null,
+  active: Pick<GitRepositoryRef, "root" | "connId"> | null = state.active
+): { cwd: string | null; connId: string | null } {
+  if (active?.root) return { cwd: active.root, connId: active.connId ?? null };
+  return { cwd: fallback, connId: null };
+}
+
 export function getGitRepositories(): GitRepositoryRef[] {
   return state.repos;
 }
