@@ -363,42 +363,27 @@
   background: rgba(210, 228, 242, 0.05);
 }
 
+/* Ações da pasta-raiz (WorkspaceRootActions): fora do layout em repouso —
+   o nome usa a linha toda — e visíveis no hover, no foco/seleção da linha
+   ou com o menu "…" aberto (VS Code). */
 .tree-root-actions {
-  display: inline-flex;
+  display: none;
+  flex: 0 0 auto;
   align-items: center;
-  gap: 2px;
-  margin-left: 2px;
-  opacity: 0.38;
-  transition: opacity 70ms ease;
-  will-change: opacity;
+  margin-left: var(--space-xxs);
 }
 
-.tree-row.workspace-root-row:hover .tree-root-actions {
-  opacity: 1;
-}
-
-.tree-root-action {
+.tree-row.workspace-root-row:hover .tree-root-actions,
+.tree-row.workspace-root-row:focus-within .tree-root-actions,
+.tree-row.workspace-root-row.focused .tree-root-actions,
+.tree-row.workspace-root-row.directory-selected .tree-root-actions,
+.tree-root-actions:has([aria-expanded="true"]) {
   display: inline-flex;
-  width: 22px;
-  height: 22px;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
 }
 
-.tree-root-action:hover:not(:disabled) {
-  background: var(--fill-subtle-hover);
-  color: var(--text);
-}
-
-.tree-root-action:disabled {
-  color: var(--text-disabled);
-  cursor: default;
+/* O nome da raiz nunca some: largura mínima + ellipsis (tooltip = title). */
+.tree-row.workspace-root-row .tree-label-stack {
+  min-width: 48px;
 }
 
 .tree-root-subtitle {

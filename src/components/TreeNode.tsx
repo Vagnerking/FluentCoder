@@ -8,6 +8,49 @@ import {
   type PendingCreation,
 } from "./ExplorerInlineCreation";
 import { ExplorerInlineRename } from "./ExplorerInlineRename";
+import { ACTION_SLOT, ActionBar, type PaneAction } from "./ui/ViewPane";
+
+/** Abaixo desta largura de linha, a raiz mostra só o "…" (o nome tem prioridade). */
+const ROOT_ROW_COMPACT_WIDTH = 240;
+/** Ações inline de uma raiz (o resto vai para o "…"), como no VS Code. */
+const ROOT_INLINE_MAX = 3;
+
+/**
+ * Ações de uma pasta-raiz do workspace: só aparecem no hover/foco/seleção da
+ * linha (CSS), no máximo 3 inline + "…", e numa linha estreita só o "…" —
+ * o nome da pasta nunca é o que encolhe até sumir.
+ */
+function WorkspaceRootActions({ actions }: { actions: PaneAction[] }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [rowWidth, setRowWidth] = useState(0);
+  useLayoutEffect(() => {
+    const row = ref.current?.parentElement;
+    if (!row) return;
+    const read = () => setRowWidth(Math.round(row.getBoundingClientRect().width));
+    read();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(read);
+    ro.observe(row);
+    return () => ro.disconnect();
+  }, []);
+  // 1 px = "medido, nada inline" (0 significaria "ainda não medido").
+  const width =
+    rowWidth === 0
+      ? 0
+      : rowWidth < ROOT_ROW_COMPACT_WIDTH
+        ? 1
+        : Math.min(rowWidth * 0.5, (ROOT_INLINE_MAX + 1) * ACTION_SLOT);
+  return (
+    <span className="tree-root-actions" ref={ref}>
+      <ActionBar
+        actions={actions}
+        width={width}
+        ariaLabel="Ações da pasta do workspace"
+        moreLabel="Mais ações da pasta"
+      />
+    </span>
+  );
+}
 
 /** A node currently being renamed inline. */
 interface RenameTarget {
@@ -258,103 +301,36 @@ export function TreeNode({
         </span>
         {deco?.badge && <span className={`tree-badge deco-${deco.kind}`}>{deco.badge}</span>}
         {isWorkspaceRoot && (
-          <span className="tree-root-actions" aria-label="Ações da pasta do workspace">
-            {!workspaceRootDisabled && onCreateWorkspaceRootFile && (
-              <button
-                className="tree-root-action"
-                type="button"
-                title="Novo arquivo nesta pasta"
-                aria-label="Novo arquivo nesta pasta"
-                disabled={workspaceRootDisabled}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  onCreateWorkspaceRootFile(node);
-                }}
-              >
-                <Codicon name="newFile" size={14} />
-              </button>
-            )}
-            {!workspaceRootDisabled && onCreateWorkspaceRootFolder && (
-              <button
-                className="tree-root-action"
-                type="button"
-                title="Nova pasta nesta pasta"
-                aria-label="Nova pasta nesta pasta"
-                disabled={workspaceRootDisabled}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  onCreateWorkspaceRootFolder(node);
-                }}
-              >
-                <Codicon name="newFolder" size={14} />
-              </button>
-            )}
-            {!workspaceRootDisabled && onRefreshWorkspaceRoot && (
-              <button
-                className="tree-root-action"
-                type="button"
-                title="Atualizar esta pasta"
-                aria-label="Atualizar esta pasta"
-                disabled={workspaceRootDisabled}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  onRefreshWorkspaceRoot(node);
-                }}
-              >
-                <Codicon name="refresh" size={14} />
-              </button>
-            )}
-            {!workspaceRootDisabled && onCollapseWorkspaceRoot && (
-              <button
-                className="tree-root-action"
-                type="button"
-                title={expanded ? "Recolher esta pasta" : "Expandir esta pasta"}
-                aria-label={expanded ? "Recolher esta pasta" : "Expandir esta pasta"}
-                disabled={workspaceRootDisabled}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  onCollapseWorkspaceRoot(node);
-                }}
-              >
-                <Codicon name={expanded ? "collapseAll" : "expandAll"} size={14} />
-              </button>
-            )}
-            {rootAction && (
-              <button
-                className="tree-root-action"
-                type="button"
-                title={rootAction.label}
-                aria-label={rootAction.label}
-                disabled={rootAction.disabled}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  rootAction.run?.(node);
-                }}
-              >
-                <Codicon name={rootAction.icon} size={14} spin={rootAction.icon === "loading"} />
-              </button>
-            )}
-            {onRemoveWorkspaceRoot && (
-              <button
-                className="tree-root-action"
-                type="button"
-                title="Remover pasta do workspace"
-                aria-label="Remover pasta do workspace"
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  onRemoveWorkspaceRoot(node);
-                }}
-              >
-                <Codicon name="close" size={14} />
-              </button>
-            )}
-          </span>
+          <WorkspaceRootActions
+            actions={[
+              ...(rootAction && workspaceRootStatus !== "connected"
+                ? [{ id: "connect", icon: rootAction.icon, label: rootAction.label, disabled: rootAction.disabled, spin: rootAction.icon === "loading", run: () => rootAction.run?.(node) }]
+                : []),
+              ...(!workspaceRootDisabled && onCreateWorkspaceRootFile
+                ? [{ id: "new-file", icon: "newFile" as const, label: "Novo arquivo nesta pasta", run: () => onCreateWorkspaceRootFile(node) }]
+                : []),
+              ...(!workspaceRootDisabled && onCreateWorkspaceRootFolder
+                ? [{ id: "new-folder", icon: "newFolder" as const, label: "Nova pasta nesta pasta", run: () => onCreateWorkspaceRootFolder(node) }]
+                : []),
+              ...(!workspaceRootDisabled && onRefreshWorkspaceRoot
+                ? [{ id: "refresh", icon: "refresh" as const, label: "Atualizar esta pasta", run: () => onRefreshWorkspaceRoot(node) }]
+                : []),
+              ...(!workspaceRootDisabled && onCollapseWorkspaceRoot
+                ? [{
+                    id: "collapse",
+                    icon: expanded ? ("collapseAll" as const) : ("expandAll" as const),
+                    label: expanded ? "Recolher esta pasta" : "Expandir esta pasta",
+                    run: () => onCollapseWorkspaceRoot(node),
+                  }]
+                : []),
+              ...(rootAction && workspaceRootStatus === "connected"
+                ? [{ id: "disconnect", icon: rootAction.icon, label: rootAction.label, overflowOnly: true, run: () => rootAction.run?.(node) }]
+                : []),
+              ...(onRemoveWorkspaceRoot
+                ? [{ id: "remove", icon: "close" as const, label: "Remover pasta do workspace", overflowOnly: true, run: () => onRemoveWorkspaceRoot(node) }]
+                : []),
+            ]}
+          />
         )}
       </div>
 
