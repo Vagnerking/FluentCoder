@@ -28,13 +28,18 @@ impl TerminalState {
         }
     }
 
-    /// Kills every live PTY child and clears the session table. Called on window
-    /// close so no shell process is left orphaned holding the app open.
+    /// Kills every live PTY child (and its process tree) and clears the session
+    /// table. Called on window close so no shell process is left orphaned holding
+    /// the app open. Waits (bounded) for the reapers so nothing is left as a
+    /// zombie when the app exits.
     pub fn shutdown_all(&self) {
-        if let Ok(mut sessions) = self.sessions.lock() {
-            for (_id, mut session) in sessions.drain() {
-                let _ = session.killer.kill();
-            }
+        let drained: Vec<PtySession> = match self.sessions.lock() {
+            Ok(mut sessions) => sessions.drain().map(|(_, s)| s).collect(),
+            Err(_) => return,
+        };
+        let reapers: Vec<_> = drained.into_iter().filter_map(close_session).collect();
+        for r in reapers {
+            let _ = r.join();
         }
     }
 
@@ -343,11 +348,138 @@ pub fn term_resize(
     Ok(())
 }
 
+/// Grace period between SIGHUP/SIGTERM and SIGKILL when closing a terminal.
+const CLOSE_GRACE: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Tears a PTY session down WITHOUT leaving zombies or orphans:
+/// 1. SIGHUP + SIGTERM to the shell's process group (the shell is a session
+///    leader — portable-pty `setsid`s it — so jobs started from the prompt,
+///    e.g. `npm run dev &`, die too); `taskkill /T` on Windows;
+/// 2. after `CLOSE_GRACE`, SIGKILL to the group and `ChildKiller::kill`;
+/// 3. `wait()` on the child so the kernel releases its process-table entry.
+///
+/// Runs on a background thread (never blocks the IPC/main thread) and returns
+/// its handle. Sessions without a `child` (ACP terminals, whose owner waits on
+/// the process) only get the killer.
+fn close_session(session: PtySession) -> Option<std::thread::JoinHandle<()>> {
+    let PtySession { writer, master, child, mut killer } = session;
+    drop(writer);
+    let Some(mut child) = child else {
+        let _ = killer.kill();
+        return None;
+    };
+    let handle = std::thread::spawn(move || {
+        match child.process_id() {
+            Some(pid) => {
+                crate::platform::process::terminate_tree(pid);
+                let deadline = std::time::Instant::now() + CLOSE_GRACE;
+                while std::time::Instant::now() < deadline {
+                    if matches!(child.try_wait(), Ok(Some(_))) {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                // Grandchildren that ignored SIGTERM/HUP (or a shell that did).
+                crate::platform::process::force_kill_tree(pid);
+            }
+            None => {}
+        }
+        let _ = killer.kill();
+        // Reap: no `<defunct>` left behind.
+        let _ = child.wait();
+        drop(master);
+    });
+    Some(handle)
+}
+
 #[tauri::command]
 pub fn term_close(id: String, state: State<'_, TerminalState>) -> Result<(), String> {
-    let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
-    if let Some(mut session) = sessions.remove(&id) {
-        let _ = session.killer.kill();
+    let session = {
+        let mut sessions = state.sessions.lock().map_err(|e| e.to_string())?;
+        sessions.remove(&id)
+    };
+    if let Some(session) = session {
+        // Reaped in the background; the handle is dropped (detached thread).
+        let _ = close_session(session);
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    fn proc_state(pid: u32) -> Option<char> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        stat.rsplit_once(')')?.1.trim_start().chars().next()
+    }
+
+    fn gone_or_not_ours(pid: u32) -> bool {
+        // macOS has no /proc: fall back to "no such process".
+        if std::path::Path::new("/proc/self/stat").exists() {
+            proc_state(pid).is_none()
+        } else {
+            unsafe { libc::kill(pid as i32, 0) != 0 }
+        }
+    }
+
+    /// Real PTY: a shell with a background job. Closing must kill the job,
+    /// kill the shell and REAP it — no zombie, no orphan.
+    #[test]
+    fn closing_a_real_pty_reaps_the_shell_and_kills_its_jobs() {
+        let pair = native_pty_system()
+            .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+            .expect("openpty");
+        let marker = std::env::temp_dir().join(format!("fluent-pty-{}", std::process::id()));
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.args(["-c", &format!("sleep 60 & echo $! > '{}'; wait", marker.display())]);
+        let child = pair.slave.spawn_command(cmd).expect("spawn");
+        drop(pair.slave);
+        let shell_pid = child.process_id().expect("pid");
+        let killer = child.clone_killer();
+        let writer = pair.master.take_writer().unwrap();
+        // Drain output so the shell never blocks on a full PTY buffer.
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 1024];
+            while matches!(reader.read(&mut buf), Ok(n) if n > 0) {}
+        });
+        let mut job_pid = None;
+        for _ in 0..200 {
+            if let Some(p) = std::fs::read_to_string(&marker).ok().and_then(|s| s.trim().parse::<u32>().ok()) {
+                job_pid = Some(p);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let job_pid = job_pid.expect("background job pid");
+        let session = PtySession { writer, master: pair.master, child: Some(child), killer };
+        close_session(session).expect("reaper").join().unwrap();
+
+        assert!(gone_or_not_ours(shell_pid), "shell {shell_pid} ficou zumbi/vivo: {:?}", proc_state(shell_pid));
+        // The job was reparented to init/subreaper after the shell died; it
+        // must be dead (at most a zombie waiting for that reaper).
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let job = proc_state(job_pid);
+        assert!(job.is_none() || job == Some('Z'), "job {job_pid} sobreviveu: {job:?}");
+        let _ = std::fs::remove_file(&marker);
+    }
+
+    #[test]
+    fn shell_builder_runs_line_then_stays_interactive() {
+        let spec = crate::platform::ShellSpec {
+            program: "/bin/bash".into(),
+            args: vec!["-l".into()],
+            kind: crate::platform::ShellKind::Posix,
+        };
+        let argv = build_shell_command(&spec, Some("ls")).get_argv().clone();
+        assert_eq!(argv[0], "/bin/bash");
+        assert_eq!(argv[1], "-lc");
+        assert!(argv[2].to_string_lossy().starts_with("ls\nexec"));
+        let argv = build_shell_command(&spec, None).get_argv().clone();
+        assert_eq!(argv.iter().map(|a| a.to_string_lossy().to_string()).collect::<Vec<_>>(), vec!["/bin/bash", "-l"]);
+        let ps = crate::platform::ShellSpec { program: "pwsh.exe".into(), args: vec![], kind: crate::platform::ShellKind::Powershell };
+        let argv = build_shell_command(&ps, Some("dir")).get_argv().clone();
+        assert_eq!(argv.iter().map(|a| a.to_string_lossy().to_string()).collect::<Vec<_>>(), vec!["pwsh.exe", "-NoExit", "-Command", "dir"]);
+    }
 }

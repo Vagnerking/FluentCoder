@@ -10,18 +10,44 @@
 use std::time::Duration;
 
 /// Plano de `taskkill` do Windows (puro, testável em qualquer SO).
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn windows_kill_tree_args(pid: u32) -> Vec<String> {
     vec!["/T".into(), "/F".into(), "/PID".into(), pid.to_string()]
 }
 
 /// Mata a árvore do processo `pid`. `grace`: quanto esperar o encerramento
 /// gracioso (Unix) antes do SIGKILL. Nunca bloqueia além de `grace` + ~50 ms.
+/// Não colhe o filho: quem tem o handle (`Child`) precisa dar `wait`.
+#[allow(dead_code)] // API síncrona para quem não tem o handle do filho
 pub fn kill_process_tree(pid: u32, grace: Duration) {
+    terminate_tree(pid);
     #[cfg(unix)]
-    unix_kill_tree(pid, grace);
+    {
+        let deadline = std::time::Instant::now() + grace;
+        while std::time::Instant::now() < deadline && alive_not_zombie(pid) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = grace;
+    force_kill_tree(pid);
+}
+
+/// Pede o encerramento da árvore: SIGHUP + SIGTERM no grupo (o que um
+/// terminal fechado manda). No Windows não há "gracioso": `taskkill /T /F`.
+pub fn terminate_tree(pid: u32) {
+    #[cfg(unix)]
+    signal_tree(pid, &[libc::SIGHUP, libc::SIGTERM]);
+    #[cfg(windows)]
+    force_kill_tree(pid);
+}
+
+/// Mata a árvore à força (SIGKILL no grupo / `taskkill /T /F`).
+pub fn force_kill_tree(pid: u32) {
+    #[cfg(unix)]
+    signal_tree(pid, &[libc::SIGKILL]);
     #[cfg(windows)]
     {
-        let _ = grace;
         let mut cmd = std::process::Command::new("taskkill");
         cmd.args(windows_kill_tree_args(pid))
             .stdin(std::process::Stdio::null())
@@ -35,7 +61,7 @@ pub fn kill_process_tree(pid: u32, grace: Duration) {
 }
 
 #[cfg(unix)]
-fn unix_kill_tree(pid: u32, grace: Duration) {
+fn signal_tree(pid: u32, signals: &[libc::c_int]) {
     let Ok(pid) = i32::try_from(pid) else { return };
     if pid <= 1 {
         return; // nunca sinalizar init / "todos os processos"
@@ -44,30 +70,30 @@ fn unix_kill_tree(pid: u32, grace: Duration) {
     unsafe {
         // Só sinaliza o grupo se `pid` for mesmo o líder dele — senão
         // `killpg` acertaria o grupo de outra pessoa (ex.: o do próprio app).
-        let pgid = libc::getpgid(pid);
-        let group = pgid == pid;
-        if group {
-            libc::killpg(pid, libc::SIGHUP);
-            libc::killpg(pid, libc::SIGTERM);
-        } else {
-            libc::kill(pid, libc::SIGTERM);
+        let group = libc::getpgid(pid) == pid;
+        for &sig in signals {
+            if group {
+                libc::killpg(pid, sig);
+            } else {
+                libc::kill(pid, sig);
+            }
         }
     }
-    let deadline = std::time::Instant::now() + grace;
-    while std::time::Instant::now() < deadline {
-        // SAFETY: sinal 0 só testa existência.
-        if unsafe { libc::kill(pid, 0) } != 0 {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
+}
+
+/// Vivo e ainda não zumbi (um zumbi "existe" para `kill(pid, 0)`).
+#[cfg(unix)]
+fn alive_not_zombie(pid: u32) -> bool {
+    let Ok(p) = i32::try_from(pid) else { return false };
+    // SAFETY: sinal 0 só testa existência.
+    if unsafe { libc::kill(p, 0) } != 0 {
+        return false;
     }
-    // SAFETY: idem; ESRCH (já saiu) é inofensivo.
-    unsafe {
-        if libc::getpgid(pid) == pid {
-            libc::killpg(pid, libc::SIGKILL);
-        } else {
-            libc::kill(pid, libc::SIGKILL);
-        }
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        // Campo 3 é o estado; o nome (campo 2) pode ter espaços, então pega
+        // o que vem depois do último ')'.
+        Ok(stat) => stat.rsplit_once(')').map(|(_, rest)| !rest.trim_start().starts_with('Z')).unwrap_or(true),
+        Err(_) => true, // sem /proc (macOS): assume vivo até o prazo
     }
 }
 
