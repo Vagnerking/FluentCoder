@@ -11,6 +11,7 @@ mod graph;
 mod lsp;
 mod mcp;
 mod package_intel;
+mod platform;
 mod razor;
 mod runner;
 mod search;
@@ -55,6 +56,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_deep_link::init())
+        // SO/capacidades em `window.__FLUENT_PLATFORM__` antes do primeiro paint.
+        .plugin(platform::init_plugin())
         .setup(|app| {
             // Explicitly stamp every window with a crisp, high-resolution icon so
             // the Windows taskbar / Alt-Tab show the app logo (a frameless,
@@ -159,6 +162,11 @@ pub fn run() {
             fs_commands::copy_path,
             fs_commands::move_path,
             fs_commands::reveal_in_explorer,
+            platform::commands::platform_info,
+            platform::commands::platform_reveal_path,
+            platform::commands::platform_open_external,
+            platform::commands::platform_open_path,
+            platform::commands::platform_default_shell,
             search::search_in_dir,
             search::cancel_search,
             search::build_search_index,

@@ -8,7 +8,8 @@ test("atalhos da Paleta: formato das extensões e dos menus viram o mesmo rótul
   assert.equal(formatKeybinding("alt+k"), "Alt+K");
   assert.equal(formatKeybinding("ctrl++"), "Ctrl++");
   assert.equal(formatKeybinding("f5"), "F5");
-  assert.equal(formatKeybinding("cmd+shift+p", true), "⌘⇧P");
+  // macOS: ordem da Apple (⌃⌥⇧⌘), sem separador.
+  assert.equal(formatKeybinding("cmd+shift+p", true), "⇧⌘P");
   assert.equal(formatKeybinding(""), undefined);
   assert.equal(formatKeybinding(undefined), undefined);
   const kbs = [
