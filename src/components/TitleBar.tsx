@@ -133,10 +133,14 @@ export function TitleBar({
             glyph itself shows the on/off state (filled vs. outlined pane). */}
         <div className="titlebar-layout" data-tauri-drag-region>
           <IconButton
-            icon="fluentChat"
+            icon={agentsOpen ? "layoutSidebarRight" : "layoutSidebarRightOff"}
             size="sm"
             className="titlebar-layout-btn"
-            label={agentsOpen ? "Ocultar Fluent Chat" : "Mostrar Fluent Chat"}
+            label={
+              agentsOpen
+                ? "Ocultar barra lateral secundária (Fluent Chat, Claude Code, Codex)"
+                : "Mostrar barra lateral secundária (Fluent Chat, Claude Code, Codex)"
+            }
             tooltipPlacement="bottom"
             pressed={agentsOpen}
             onClick={onToggleAgents}

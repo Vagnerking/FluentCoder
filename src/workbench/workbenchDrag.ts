@@ -17,7 +17,7 @@
  * A lógica fica numa fábrica com ambiente injetável para ser testável em Node.
  */
 
-export type WorkbenchDragKind = "tab" | "panel" | "activity" | "resize" | "native";
+export type WorkbenchDragKind = "tab" | "panel" | "activity" | "resize" | "native" | "view";
 
 /** Classe na raiz enquanto qualquer sessão está ativa. */
 export const DRAG_ROOT_CLASS = "workbench-dragging";

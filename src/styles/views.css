@@ -1,0 +1,315 @@
+/* ---- Registro de views: regiões, abas, arraste entre regiões ----
+   (src/workbench/: ViewContainer, DockableView, ViewDropOverlay; webviews de
+   extensão em src/extensions/ExtensionView.tsx). Contratos em
+   docs/context/views-layout.md. */
+
+/* Camadas absolutas (indicadores de soltura, iframes das extensões) se
+   posicionam relativas à janela do app. */
+.app {
+  position: relative;
+}
+
+.workbench-view-parking {
+  display: none !important;
+}
+
+/* Nó persistente de cada view (o conteúdo React vive aqui; mover a view só
+   reanexa o nó a outra região). */
+.workbench-view-node {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.workbench-view-node[hidden] {
+  display: none;
+}
+
+.view-container {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.view-container-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.view-container-empty {
+  margin: auto;
+  padding: var(--space-lg);
+  max-width: 260px;
+  text-align: center;
+  font-size: var(--font-caption);
+  color: var(--text-muted);
+}
+
+/* Cabeçalho com as abas das views (sidebar secundária e painel). */
+.view-container-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  min-height: 36px;
+  padding: 0 var(--space-xs) 0 var(--space-sm);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.view-container-panel .view-container-header {
+  background: var(--tabbar-bg);
+  border-bottom: none;
+  /* Área vazia do cabeçalho do painel: segurar e arrastar reposiciona o painel. */
+  cursor: grab;
+}
+
+.view-container-header .view-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  cursor: default;
+}
+
+.view-container-header .view-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.view-container-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  flex-shrink: 0;
+  cursor: default;
+}
+
+.view-container-toolbar:empty {
+  display: none;
+}
+
+.view-container-header > .ui-icon-button,
+.view-header > .ui-icon-button {
+  flex-shrink: 0;
+  cursor: default;
+}
+
+.view-tab {
+  /* A aba também é alça de arraste (5 px de folga antes de virar arraste). */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.view-tab.is-dragging {
+  opacity: 0.45;
+}
+
+.view-tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Ícone de extensão (SVG/PNG do pacote) como máscara monocromática: segue a
+   cor do texto como os codicons (o logotipo cru seria preto no tema escuro). */
+.view-icon-img {
+  display: inline-block;
+  flex: 0 0 auto;
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+/* Cabeçalho de título de uma view convidada na barra lateral primária. */
+.view-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  min-height: 40px;
+  padding: var(--space-xs) var(--space-xs) var(--space-xs) var(--space-md);
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.view-header-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: var(--font-caption-sm);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.view-header-title > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Arraste de view: zonas de soltura e chip ---- */
+.view-drop-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+}
+
+.view-drop-zone {
+  position: absolute;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: var(--radius-surface);
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+.view-drop-zone.is-virtual {
+  border-style: dashed;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.view-drop-zone.is-target {
+  border: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.view-drop-label {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  max-width: calc(100% - 16px);
+  padding: 4px 10px;
+  font-size: var(--font-caption);
+  font-weight: 600;
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-flyout);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.view-drop-insert {
+  position: absolute;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.view-drag-chip {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: var(--font-caption);
+  color: var(--text);
+  background: var(--color-surface-flyout);
+  border: 1px solid var(--acrylic-border-strong);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-flyout);
+  white-space: nowrap;
+}
+
+html.workbench-dragging-view,
+html.workbench-dragging-view * {
+  cursor: grabbing !important;
+}
+
+/* ---- Webviews das extensões numa camada fixa ----
+   O iframe nunca é reanexado (recarregaria): fica aqui, posicionado sobre o
+   slot da view (z 6: acima das regiões, abaixo de menus/tooltips/diálogos). */
+.ext-webview-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.ext-webview-overlay {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.ext-webview-overlay.is-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.ext-webview-slot {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* ---- "Configurar agentes" (diálogo do Fluent Chat) ---- */
+.agents-settings {
+  width: 720px;
+  max-width: calc(100vw - var(--space-xl));
+  max-height: min(82vh, 720px);
+  display: flex;
+  flex-direction: column;
+  color: var(--text);
+  background: var(--color-surface-overlay);
+  border: 1px solid var(--acrylic-border-strong);
+  border-radius: var(--radius-surface);
+  box-shadow: var(--shadow-dialog);
+  overflow: hidden;
+}
+
+.agents-settings-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-md) var(--space-sm) var(--space-lg);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.agents-settings-title {
+  flex: 1;
+  margin: 0;
+  font-size: var(--font-subtitle);
+  font-weight: 600;
+}
+
+.agents-settings-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .view-drop-zone {
+    transition: none;
+  }
+}

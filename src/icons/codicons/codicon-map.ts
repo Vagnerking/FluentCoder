@@ -224,7 +224,13 @@ export type IconAction =
   | "cloudDownload"
   | "verified"
   | "circleSlash"
-  | "pass";
+  | "pass"
+  // Views & layout (registro de views, mover entre regiões)
+  | "output"
+  | "problems"
+  | "moveView"
+  | "hideView"
+  | "layout";
 
 /** action → codicon name (without the `codicon-` prefix). */
 export const CODICON_MAP: Record<IconAction, string> = {
@@ -457,6 +463,11 @@ export const CODICON_MAP: Record<IconAction, string> = {
   verified: "verified-filled",
   circleSlash: "circle-slash",
   pass: "pass",
+  output: "output",
+  problems: "issues",
+  moveView: "arrow-swap",
+  hideView: "eye-closed",
+  layout: "layout",
 };
 
 /** Codicon names that should spin (loading/sync feedback). */

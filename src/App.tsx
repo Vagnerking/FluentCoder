@@ -6,6 +6,7 @@ import {
   useState,
   useSyncExternalStore,
   type CSSProperties,
+  type ReactNode,
   type Dispatch,
   type SetStateAction,
 } from "react";
@@ -47,7 +48,16 @@ import { defaultModeFor } from "./explorer/openWith";
 import { TitleBar } from "./components/TitleBar";
 import { ActivityBar } from "./components/ActivityBar";
 import { StatusBar } from "./components/StatusBar";
-import { TerminalPanel, type PanelTab } from "./components/TerminalPanel";
+import { TerminalsView, type PanelTab } from "./components/TerminalPanel";
+import { ProblemsPanel } from "./components/ProblemsPanel";
+import { OutputPanel } from "./components/OutputPanel";
+import { IconButton } from "./components/ui/IconButton";
+import { Menu } from "./components/ui/Menu";
+import { useViewLayoutController, WorkbenchViewsProvider } from "./workbench/WorkbenchViews";
+import { ViewContainer } from "./workbench/ViewContainer";
+import { viewMoveMenuItems } from "./workbench/DockableView";
+import { FLUENT_CHAT_VIEW, registerNativeViews } from "./workbench/nativeViews";
+import { extensionIdOfView, type ViewRegion } from "./workbench/viewRegistry";
 import { QuickOpen } from "./components/QuickOpen";
 import { SymbolSearch } from "./components/SymbolSearch";
 import { CommandPalette, type Command } from "./components/CommandPalette";
@@ -75,6 +85,7 @@ import { useFluentChat } from "./chat/useFluentChat";
 import { startTerminalTap } from "./chat/terminalTap";
 import {
   ExtensionDock,
+  prewarmExtension,
   ExtensionHostRuntime,
   ExtensionStatusItems,
   extensionPaletteCommands,
@@ -87,7 +98,6 @@ import {
   disposeWebviewTab,
   useHostedExtensions,
 } from "./extensions";
-import type { EditorStatePayload } from "./extensions/protocol";
 import { BranchPicker } from "./components/BranchPicker";
 import { useAcpClientServices } from "./agents/acpClientServices";
 import { SshConnectDialog } from "./components/SshConnectDialog";
@@ -264,6 +274,8 @@ import type { BreadcrumbRoot } from "./editor/breadcrumbs";
 /** Abas nativas do Fluent Chat na sidebar secundária. */
 const FLUENT_CHAT_TAB = "fluent-chat";
 const FLUENT_AGENTS_TAB = "fluent-agents";
+// Views nativas no registro (Explorador, Pesquisar…, Fluent Chat, painel).
+registerNativeViews();
 
 /** Returns the last path segment, handling both Windows and POSIX separators. */
 function baseName(path: string): string {
@@ -836,11 +848,39 @@ export default function App() {
   const [panelWidth, setPanelWidth] = useState(() =>
     readStoredNumber("ui.panelWidth", 360)
   );
-  // Which bottom-panel tab to focus + a nonce so the same tab can be re-focused.
-  // Lets the status bar's diagnostic counts open the panel straight to Problems.
-  const [panelTab, setPanelTab] = useState<PanelTab>("terminal");
-  const [panelTabNonce, setPanelTabNonce] = useState(0);
-  const [activeView, setActiveView] = useState("explorer");
+  // ---- Registro de views (docs/context/views-layout.md) ----
+  // Cada view (Explorador, Pesquisar, Fluent Chat, Claude Code, Codex,
+  // Terminal…) vive numa região — barra lateral primária, secundária ou
+  // painel — persistida em `ui.viewLayout`. As três regiões abrem/fecham como
+  // antes (sidebarOpen / agentsSidebarOpen / panelOpen).
+  const openRegion = useCallback((region: ViewRegion) => {
+    if (region === "primarySidebar") setSidebarOpen(true);
+    else if (region === "secondarySidebar") setAgentsSidebarOpen(true);
+    else setPanelOpen(true);
+  }, []);
+  const regionOpen = useMemo(
+    () => ({ primarySidebar: sidebarOpen, secondarySidebar: agentsSidebarOpen, panel: panelOpen }),
+    [sidebarOpen, agentsSidebarOpen, panelOpen]
+  );
+  const views = useViewLayoutController({ regionVisible: regionOpen, openRegion });
+  // View ativa da barra lateral primária (a activity bar destaca esta).
+  const activeView = views.active("primarySidebar") ?? "";
+  /** Só torna a view a ativa da região dela (sem abrir a região). */
+  const setActiveView = views.activate;
+  /** Abre a região onde a view vive e a ativa (onde quer que ela esteja). */
+  const revealView = views.reveal;
+  const viewsRef = useRef(views);
+  viewsRef.current = views;
+  /** Ctrl+` / menu Terminal: mostra a view Terminal onde ela estiver, ou fecha a região dela. */
+  const toggleTerminalView = useCallback(() => {
+    const v = viewsRef.current;
+    const region = v.regionOf("terminal");
+    if (v.isVisible("terminal") && region) {
+      if (region === "primarySidebar") setSidebarOpen(false);
+      else if (region === "secondarySidebar") setAgentsSidebarOpen(false);
+      else setPanelOpen(false);
+    } else v.reveal("terminal");
+  }, []);
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   const [symbolSearchOpen, setSymbolSearchOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -1696,11 +1736,22 @@ export default function App() {
   // ---- Fluent Chat (sidebar secundária de IA) ----
   const fluentChatViewRef = useRef<FluentChatViewHandle>(null);
   const [chatTabRequest, setChatTabRequest] = useState<{ key: string; nonce: number } | null>(null);
-  /** Abre o Fluent Chat (se fechado) numa aba nativa ("Chat"/"Agentes"). */
-  const requestChatTab = useCallback((key: string) => {
-    setAgentsSidebarOpen(true);
-    setChatTabRequest({ key, nonce: Date.now() });
-  }, []);
+  /** Abre o Fluent Chat (view do registro) numa aba nativa ("Chat"/"Agentes"). */
+  const requestChatTab = useCallback(
+    (key: string) => {
+      revealView(FLUENT_CHAT_VIEW);
+      setChatTabRequest({ key, nonce: Date.now() });
+    },
+    [revealView]
+  );
+  /** Revela a view Fluent Chat (na região onde ela estiver) e roda `then` no próximo frame. */
+  const revealFluentChat = useCallback(
+    (then?: (view: FluentChatViewHandle) => void) => {
+      requestChatTab(FLUENT_CHAT_TAB);
+      if (then) requestAnimationFrame(() => fluentChatViewRef.current && then(fluentChatViewRef.current));
+    },
+    [requestChatTab]
+  );
 
   const commands = useMemo<Command[]>(
     () => [
@@ -1730,8 +1781,7 @@ export default function App() {
         title: "Fluent Chat: Abrir",
         detail: "Fluent Chat",
         run: () => {
-          requestChatTab(FLUENT_CHAT_TAB);
-          requestAnimationFrame(() => fluentChatViewRef.current?.focusComposer());
+          revealFluentChat((v) => v.focusComposer());
         },
       },
       {
@@ -1739,8 +1789,7 @@ export default function App() {
         title: "Fluent Chat: Nova Conversa",
         detail: "Fluent Chat",
         run: () => {
-          requestChatTab(FLUENT_CHAT_TAB);
-          requestAnimationFrame(() => fluentChatViewRef.current?.newConversation());
+          revealFluentChat((v) => v.newConversation());
         },
       },
       {
@@ -1748,8 +1797,7 @@ export default function App() {
         title: "Fluent Chat: Histórico de Conversas",
         detail: "Fluent Chat",
         run: () => {
-          requestChatTab(FLUENT_CHAT_TAB);
-          requestAnimationFrame(() => fluentChatViewRef.current?.showHistory());
+          revealFluentChat((v) => v.showHistory());
         },
       },
       {
@@ -1936,7 +1984,7 @@ export default function App() {
         },
       },
     ],
-    [restartAllLsp, rootPath, ideBridge.restart, requestChatTab]
+    [restartAllLsp, rootPath, ideBridge.restart, revealFluentChat]
   );
 
   /**
@@ -2930,24 +2978,6 @@ export default function App() {
    * Lê o arquivo ativo e a seleção atual do editor, para anexar ao envio do
    * chat (como o Claude Code faz). `null` quando não há arquivo aberto.
    */
-  /**
-   * Estado do editor ativo publicado ao host de extensões VS Code (PoC) como
-   * `window.activeTextEditor`/seleção/abas. O texto só vai quando o buffer está
-   * sujo — limpo, o host lê do disco.
-   */
-  function readExtEditorState(): EditorStatePayload {
-    const files = openFiles.map((file) => file.path).filter((p) => !isVirtualTab(p));
-    if (!activePath || isVirtualTab(activePath)) return { path: null, openFiles: files };
-    const cursor = editorActionsRef.current?.getCursorState?.() ?? null;
-    const file = openFiles.find((f) => f.path === activePath);
-    return {
-      path: activePath,
-      openFiles: files,
-      ...(cursor ? { selection: { start: cursor.start, end: cursor.end } } : {}),
-      ...(file?.dirty ? { dirty: true, text: file.content } : {}),
-    };
-  }
-
   function readEditorContext(): AgentEditorContext | null {
     if (!activePath || isVirtualTab(activePath)) return null;
     const selection = editorActionsRef.current?.getSelection() ?? null;
@@ -2969,7 +2999,7 @@ export default function App() {
   const fluentChat = useFluentChat({
     rootPath: agentWorkspaceRoot,
     rootPathRef: agentWorkspaceRootRef,
-    visible: agentsSidebarOpen,
+    visible: views.isVisible(FLUENT_CHAT_VIEW),
     readEditorContext,
     readProblems: () => allProblems,
     refreshExplorer: refreshExplorerRoot,
@@ -3497,8 +3527,8 @@ export default function App() {
             connId: target?.connId,
           }
     );
-    setActiveView("git");
-  }, [gitTargetForPath]);
+    revealView("git");
+  }, [gitTargetForPath, revealView]);
 
   /**
    * Advanced explorer actions handed to the FileExplorer for épico A's file
@@ -4202,8 +4232,7 @@ export default function App() {
    *  backlinks sidebar: selecting Graph always brings Backlinks to the left so
    *  the user can inspect references while looking at the map. */
   const handleShowGraph = useCallback(() => {
-    setActiveView("graph");
-    setSidebarOpen(true);
+    revealView("graph");
     setLayout((l) => {
       for (const groupId of groupOrder(l.root)) {
         const group = l.groups[groupId];
@@ -4879,14 +4908,15 @@ export default function App() {
     setTerminalOpenCwd(cwd);
     setTerminalOpenConnId(connId ?? null);
     setTerminalOpenNonce((n) => n + 1);
-    setPanelOpen(true);
+    // A view Terminal se revela ao criar o terminal (onde ela estiver).
+    revealView("terminal");
   }, []);
 
   /** Open/focus the search panel scoped to `folderPath` (explorer "Localizar na pasta"). */
   const handleFindInFolder = useCallback((folderPath: string, rootId?: string) => {
     setSearchScope({ path: folderPath, rootId });
-    setActiveView("search");
-  }, []);
+    revealView("search");
+  }, [revealView]);
 
   // True while we're waiting for the second key of the Ctrl+K chord (e.g. the
   // "O" in the VSCode-style "Ctrl+K Ctrl+O" Open Folder binding).
@@ -4982,10 +5012,10 @@ export default function App() {
         handleNewTextFile();
         return;
       }
-      // Ctrl+` → toggle terminal panel.
+      // Ctrl+` → mostra/esconde o Terminal (na região onde a view estiver).
       if (e.key === "`") {
         e.preventDefault();
-        setPanelOpen((v) => !v);
+        toggleTerminalView();
         return;
       }
       // Ctrl+B → toggle the sidebar.
@@ -5003,8 +5033,7 @@ export default function App() {
       // Ctrl+Shift+F → Search across files (opens the Search view).
       if (key === "f" && e.shiftKey) {
         e.preventDefault();
-        setActiveView("search");
-        setSidebarOpen(true);
+        revealView("search");
         return;
       }
       // Ctrl+P → Quick Open (file search by name).
@@ -5039,7 +5068,7 @@ export default function App() {
     setRunCwd(cwd ?? rootPath);
     setRunConnId(connId ?? null);
     setRunNonce((n) => n + 1);
-    setPanelOpen(true);
+    revealView("terminal");
   }
 
   /** Jump to a problem's file/line, opening the file if needed. */
@@ -5084,8 +5113,7 @@ export default function App() {
     const handle = (mode: "run" | "debug") => (e: Event) => {
       const d = (e as CustomEvent<RunTestEventDetail>).detail;
       if (!d?.csprojPath || !d.fullyQualifiedName) return;
-      setActiveView("debug");
-      setSidebarOpen(true);
+      revealView("debug");
       setPendingTest({
         csprojPath: d.csprojPath,
         fullyQualifiedName: d.fullyQualifiedName,
@@ -5102,12 +5130,10 @@ export default function App() {
     };
   }, []);
 
-  /** Opens the bottom panel focused on a specific tab (e.g. Problems). */
+  /** Revela uma view do antigo painel inferior (Problemas, Saída, Terminal) onde ela estiver. */
   const showPanelTab = useCallback((tab: PanelTab) => {
-    setPanelTab(tab);
-    setPanelTabNonce((n) => n + 1);
-    setPanelOpen(true);
-  }, []);
+    revealView(tab);
+  }, [revealView]);
 
   /**
    * Lets the user pick which TypeScript version the TS/JS server uses — the
@@ -5627,7 +5653,7 @@ export default function App() {
         {
           id: "edit.findInFiles",
           label: "Localizar nos Arquivos",
-          run: () => setActiveView("search"),
+          run: () => revealView("search"),
         },
       ],
     };
@@ -5714,14 +5740,14 @@ export default function App() {
     const viewMenu: MenuDef = {
       label: "Exibir",
       items: [
-        { id: "view.explorer", label: "Explorador", run: () => setActiveView("explorer") },
-        { id: "view.search", label: "Pesquisar", run: () => setActiveView("search") },
+        { id: "view.explorer", label: "Explorador", run: () => revealView("explorer") },
+        { id: "view.search", label: "Pesquisar", run: () => revealView("search") },
         {
           id: "view.scm",
           label: "Controle do Código-Fonte",
-          run: () => setActiveView("git"),
+          run: () => revealView("git"),
         },
-        { id: "view.run", label: "Executar", run: () => setActiveView("debug") },
+        { id: "view.run", label: "Executar", run: () => revealView("debug") },
         { id: "view.graph", label: "Grafo de Contextos", run: handleShowGraph },
         {
           id: "view.mcp",
@@ -5823,7 +5849,7 @@ export default function App() {
         {
           id: "run.openRunView",
           label: "Abrir Executar e Depurar",
-          run: () => setActiveView("debug"),
+          run: () => revealView("debug"),
         },
       ],
     };
@@ -5835,7 +5861,7 @@ export default function App() {
           id: "terminal.new",
           label: "Novo Terminal",
           accelerator: "Ctrl+`",
-          run: () => setPanelOpen(true),
+          run: () => revealView("terminal"),
         },
         { id: "terminal.split", label: "Dividir Terminal", enabled: false },
         { id: "terminal.kill", label: "Encerrar Terminal", enabled: false },
@@ -5936,8 +5962,7 @@ export default function App() {
         title: "Extensões: Mostrar Extensões",
         detail: "Extensões",
         run: () => {
-          setActiveView("extensions");
-          setSidebarOpen(true);
+          revealView("extensions");
         },
       },
       {
@@ -5945,8 +5970,7 @@ export default function App() {
         title: "Extensões: Checar Atualizações",
         detail: "Extensões",
         run: () => {
-          setActiveView("extensions");
-          setSidebarOpen(true);
+          revealView("extensions");
           void checkExtensionUpdates(true);
         },
       },
@@ -5997,9 +6021,98 @@ export default function App() {
       }
     : undefined;
 
-  /** Pick which sidebar view the activity bar selection maps to. */
-  function renderSidebar() {
-    switch (activeView) {
+  /** Menu de contexto de um ícone da activity bar ("Mover para…"). */
+  const [activityMenu, setActivityMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  // Views "convidadas" da primária (movidas para lá, sem ícone fixo): ganham
+  // ícone na activity bar e cabeçalho de título arrastável.
+  const primaryGuests = views
+    .views("primarySidebar")
+    .filter((d) => !d.activityBar)
+    .map((d) => ({ id: d.id, label: d.title, icon: d.icon }));
+  const primaryGuestIds = useMemo(
+    () => new Set(primaryGuests.map((g) => g.id)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [primaryGuests.map((g) => g.id).join("|")]
+  );
+  const viewBadges = useMemo(
+    () => ({ problems: allProblems.length || undefined, extensions: extensionUpdateCount || undefined }),
+    [allProblems.length, extensionUpdateCount]
+  );
+
+  /** Conteúdo de cada view do registro (onde quer que ela esteja). */
+  function renderView(id: string, visible: boolean): ReactNode {
+    switch (id) {
+      case FLUENT_CHAT_VIEW:
+        // Ainda o dock antigo (Chat/Agentes + extensões) como UMA view.
+        return (
+          <ExtensionDock
+            rootPath={rootPath}
+            requestedTab={chatTabRequest}
+            nativeTabs={[
+              {
+                key: FLUENT_CHAT_TAB,
+                label: "Chat",
+                node: (
+                  <FluentChatView
+                    ref={fluentChatViewRef}
+                    chat={fluentChat}
+                    readEditorContext={readEditorContext}
+                    listFiles={listChatFiles}
+                    onOpenFile={openAgentFile}
+                    onManageAgents={() => requestChatTab(FLUENT_AGENTS_TAB)}
+                  />
+                ),
+              },
+              {
+                key: FLUENT_AGENTS_TAB,
+                label: "Agentes",
+                node: (
+                  <AgentsManager
+                    chat={fluentChat}
+                    onStartChat={(targetId) => {
+                      fluentChat.startNewConversation(targetId);
+                      revealFluentChat((v) => v.focusComposer());
+                    }}
+                  />
+                ),
+              },
+            ]}
+          />
+        );
+      case "terminal":
+        return (
+          <TerminalsView
+            visible={visible}
+            onReveal={() => revealView("terminal")}
+            cwd={rootPath}
+            runCommand={runCommand}
+            runCwd={runCwd}
+            runConnId={runConnId}
+            runNonce={runNonce}
+            openCwd={terminalOpenCwd}
+            openConnId={terminalOpenConnId}
+            openNonce={terminalOpenNonce}
+          />
+        );
+      case "problems":
+        return (
+          <div className="terminal-body">
+            <ProblemsPanel problems={allProblems} onOpenProblem={handleOpenProblem} />
+          </div>
+        );
+      case "output":
+        return (
+          <div className="terminal-body">
+            <OutputPanel />
+          </div>
+        );
+    }
+    return renderSidebarView(id);
+  }
+
+  /** Views nativas da barra lateral primária (Explorador, Pesquisar…). */
+  function renderSidebarView(view: string): ReactNode {
+    switch (view) {
       case "search":
         return (
           <SearchPanel
@@ -6101,31 +6214,7 @@ export default function App() {
       case "settings":
         return <PlaceholderPanel title="Gerenciar" />;
       default:
-        return (
-          <FileExplorer
-            rootName={activeWorkspace?.name?.toUpperCase() ?? rootName}
-            rootPath={rootPath}
-            roots={roots}
-            workspaceRoots={explorerWorkspaceRoots}
-            isWorkspace={explorerIsWorkspace}
-            activePath={activePath}
-            onOpenFile={handleOpenFromExplorer}
-            onRefreshRoot={refreshExplorerRoot}
-            decorationFor={decorationFor}
-            onPathRenamed={handlePathRenamed}
-            onPathDeleted={handlePathDeleted}
-            onOpenTerminalAt={handleOpenTerminalAt}
-            onFindInFolder={handleFindInFolder}
-            onRenameWorkspaceRoot={handleRenameWorkspaceRoot}
-            onRemoveWorkspaceRoot={handleRemoveWorkspaceRoot}
-            onConnectWorkspaceRoot={handleConnectWorkspaceRoot}
-            onDisconnectWorkspaceRoot={handleDisconnectWorkspaceRoot}
-            onAddFolderToWorkspace={handleAddFolderToWorkspace}
-            onAddSshFolderToWorkspace={handleAddSshFolderToWorkspace}
-            advancedActions={explorerAdvancedActions}
-            changedPaths={changedPaths}
-          />
-        );
+        return null;
     }
   }
 
@@ -6144,38 +6233,6 @@ export default function App() {
       onOpenRecent={handleOpenRecent}
     />
   );
-
-  // Fluent Chat: abas nativas da sidebar secundária ("Chat" e "Agentes").
-  const fluentChatTabs = [
-    {
-      key: FLUENT_CHAT_TAB,
-      label: "Chat",
-      node: (
-        <FluentChatView
-          ref={fluentChatViewRef}
-          chat={fluentChat}
-          readEditorContext={readEditorContext}
-          listFiles={listChatFiles}
-          onOpenFile={openAgentFile}
-          onManageAgents={() => requestChatTab(FLUENT_AGENTS_TAB)}
-        />
-      ),
-    },
-    {
-      key: FLUENT_AGENTS_TAB,
-      label: "Agentes",
-      node: (
-        <AgentsManager
-          chat={fluentChat}
-          onStartChat={(targetId) => {
-            fluentChat.startNewConversation(targetId);
-            requestChatTab(FLUENT_CHAT_TAB);
-            requestAnimationFrame(() => fluentChatViewRef.current?.focusComposer());
-          }}
-        />
-      ),
-    },
-  ];
 
   /** Renders one editor group (a leaf of the split grid) with all its handlers
    *  bound to that group's id. The active group also gets the imperative editor
@@ -6305,6 +6362,17 @@ export default function App() {
         onOpenCommandPalette={() => setCommandPaletteOpen(true)}
       />
 
+      <WorkbenchViewsProvider
+        controller={views}
+        renderView={renderView}
+        badges={viewBadges}
+        sidebarSide={sidebarSide}
+        panelPos={panelPos}
+        onHoverView={(id) => {
+          const ext = extensionIdOfView(id);
+          if (ext) prewarmExtension(ext);
+        }}
+      >
       <div
         className={`body${sidebarSide === "right" ? " sidebar-right" : ""}${
           draggingActivity ? " dragging-activity" : ""
@@ -6321,11 +6389,9 @@ export default function App() {
             onViewChange={(v) => {
               // The graph is an editor tab paired with the Backlinks sidebar.
               if (v === "graph") handleShowGraph();
-              else {
-                setActiveView(v);
-                // Picking a view always reveals the primary sidebar.
-                setSidebarOpen(true);
-              }
+              // Revela a view onde ela vive (primária por padrão, ou a região
+              // para onde o usuário a moveu).
+              else revealView(v);
             }}
             side={activityIndicatorSide}
             orientation={activityBarHorizontal ? "horizontal" : "vertical"}
@@ -6335,6 +6401,8 @@ export default function App() {
             }
             onDragStart={startActivityDrag}
             badges={{ extensions: extensionUpdateCount }}
+            extraViews={primaryGuests}
+            onItemContextMenu={(id, x, y) => setActivityMenu({ id, x, y })}
           />
 
           {sidebarOpen && (
@@ -6344,7 +6412,13 @@ export default function App() {
                 width: effectiveSidebarWidth,
               }}
             >
-              {renderSidebar()}
+              <ViewContainer
+                region="primarySidebar"
+                chrome="none"
+                ariaLabel="Barra lateral primária"
+                guestViews={primaryGuestIds}
+                empty={<div className="view-container-empty">Arraste uma view para cá ou use “Mover para…”.</div>}
+              />
             </aside>
           )}
         </div>
@@ -6468,28 +6542,37 @@ export default function App() {
                 }}
               />
             )}
-            {/* Always mounted (hidden when closed) so terminals keep running when
-                the panel is minimized — sessions die only on close or app exit. */}
-            <TerminalPanel
-              open={panelOpen}
-              height={panelHeight}
-              width={panelWidth}
-              pos={panelPos}
-              cwd={rootPath}
-              onClose={() => setPanelOpen(false)}
-              onDragStart={startPanelDrag}
-              problems={allProblems}
-              onOpenProblem={handleOpenProblem}
-              runCommand={runCommand}
-              runCwd={runCwd}
-              runConnId={runConnId}
-              runNonce={runNonce}
-              openCwd={terminalOpenCwd}
-              openConnId={terminalOpenConnId}
-              openNonce={terminalOpenNonce}
-              focusTab={panelTab}
-              focusNonce={panelTabNonce}
-            />
+            {/* Região "Painel": sempre montada (oculta quando fechada). As views
+                (Terminal, Problemas, Saída… ou outras movidas para cá) vêm do
+                registro; os terminais seguem vivos com o painel fechado. */}
+            <div
+              className={`terminal-panel panel-${panelPos}`}
+              style={
+                panelOpen
+                  ? panelPos === "right" || panelPos === "left"
+                    ? { width: panelWidth }
+                    : { height: panelHeight }
+                  : { display: "none" }
+              }
+            >
+              <ViewContainer
+                region="panel"
+                chrome="tabs"
+                ariaLabel="Painel"
+                onHeaderPointerDown={startPanelDrag}
+                onNativeMouseDownCapture={() => void clearActiveEditor()}
+                headerEnd={
+                  <IconButton
+                    icon="close"
+                    size="sm"
+                    label="Fechar painel"
+                    tooltipPlacement="bottom"
+                    onClick={() => setPanelOpen(false)}
+                  />
+                }
+                empty={<div className="view-container-empty">Arraste uma view para cá ou use “Mover para…”.</div>}
+              />
+            </div>
           </div>
         </main>
 
@@ -6499,7 +6582,7 @@ export default function App() {
         {agentsSidebarOpen && (
           <div
             className={`agents-resize-handle agents-resize-${agentsSide}`}
-            title="Arraste para redimensionar o Fluent Chat"
+            title="Arraste para redimensionar a barra lateral secundária"
             onPointerDown={(e) => {
               const startX = e.clientX;
               const startW = Math.max(agentsSidebarWidth, AGENTS_SIDEBAR_MIN);
@@ -6533,16 +6616,46 @@ export default function App() {
             className={`agents-dock agents-dock-${agentsSide}`}
             style={{ width: Math.max(agentsSidebarWidth, AGENTS_SIDEBAR_MIN) }}
           >
-            <ExtensionDock
-              rootPath={rootPath}
-              nativeTabs={fluentChatTabs}
-              requestedTab={chatTabRequest}
-              onOpenFile={(path, line) => void handleOpenAgentFile(path, line)}
-              readEditorState={readExtEditorState}
+            <ViewContainer
+              region="secondarySidebar"
+              chrome="tabs"
+              ariaLabel="Barra lateral secundária"
+              headerEnd={
+                <IconButton
+                  icon="close"
+                  size="sm"
+                  label="Fechar barra lateral secundária"
+                  tooltipPlacement="bottom"
+                  onClick={() => setAgentsSidebarOpen(false)}
+                />
+              }
+              empty={<div className="view-container-empty">Arraste uma view para cá ou use “Mover para…”.</div>}
             />
           </aside>
         )}
       </div>
+      </WorkbenchViewsProvider>
+
+
+      {activityMenu && (
+        <Menu
+          ariaLabel="Ações da view"
+          anchor={{ x: activityMenu.x, y: activityMenu.y }}
+          minWidth={220}
+          items={[
+            ...viewMoveMenuItems(views, activityMenu.id),
+            { id: "sep-activity", separator: true },
+            {
+              id: "activity.toggleSide",
+              label: sidebarSide === "left" ? "Mover barra lateral para a direita" : "Mover barra lateral para a esquerda",
+              icon: "layoutSidebarRight",
+              onSelect: () => setSidebarSide((s) => (s === "left" ? "right" : "left")),
+            },
+          ]}
+          onClose={() => setActivityMenu(null)}
+        />
+      )}
+
 
       {/* A tab from another window is hovering over this one. Over a tab strip →
           an insertion bar at the exact spot; elsewhere → a whole-window hint. */}
@@ -6589,21 +6702,20 @@ export default function App() {
           return true;
         }}
         closeFile={(path) => void handleCloseTab(path)}
-        showTerminalPanel={() => setPanelOpen(true)}
+        showTerminalPanel={() => revealView("terminal")}
         showOutput={(channel) => {
           showPanelTab("output");
           void channel;
         }}
         revealInExplorer={() => {
-          setSidebarOpen(true);
-          setActiveView("explorer");
+          revealView("explorer");
         }}
         filesChanged={() => {
           void refreshExplorerRoot();
           invalidateGraph();
           invalidateIndex();
         }}
-        revealAgentsSidebar={() => setAgentsSidebarOpen(true)}
+        revealAgentsSidebar={() => revealView(FLUENT_CHAT_VIEW)}
         openWebviewTab={openWebviewTab}
         revealWebviewTab={revealWebviewTab}
         retitleWebviewTab={(path, title) =>
@@ -6619,7 +6731,7 @@ export default function App() {
           })
         }
         appCommand={(command) => {
-          if (command === "terminal.focus" || command === "terminal.new") setPanelOpen(true);
+          if (command === "terminal.focus" || command === "terminal.new") revealView("terminal");
           else if (command === "workbench.action.showCommands") setCommandPaletteOpen(true);
           else if (command === "workbench.action.quickOpen") setQuickOpenOpen(true);
           else if (command === "formatDocument") editorActionsRef.current?.run("editor.action.formatDocument");

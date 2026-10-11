@@ -10,6 +10,8 @@ import { Codicon } from '../icons/codicons/Codicon';
 import type { IconAction } from '../icons/codicons/codicon-map';
 import { Tooltip } from './Tooltip';
 import { mergeActivityOrder } from './activityOrder';
+import { ViewIconGlyph } from '../workbench/ViewIconGlyph';
+import type { ViewIcon } from '../workbench/viewRegistry';
 
 interface ActivityBarProps {
   activeView: string;
@@ -26,6 +28,13 @@ interface ActivityBarProps {
   onDragStart?: (e: PointerEvent<HTMLElement>) => void;
   /** Contadores por view (ex.: atualizações de extensões); 0/ausente = sem badge. */
   badges?: Record<string, number>;
+  /**
+   * Views movidas para a barra lateral primária sem ícone fixo (Fluent Chat,
+   * Claude Code…): aparecem depois das nativas, na ordem da região.
+   */
+  extraViews?: { id: string; label: string; icon: ViewIcon }[];
+  /** Botão direito / Shift+F10 num ícone: menu da view ("Mover para…"). */
+  onItemContextMenu?: (id: string, x: number, y: number) => void;
 }
 
 // Agents são a sidebar secundária (do lado oposto), com toggle na title bar —
@@ -71,7 +80,27 @@ export function ActivityBar({
   onToggleSide,
   onDragStart,
   badges,
+  extraViews = [],
+  onItemContextMenu,
 }: ActivityBarProps) {
+  /** Menu de contexto do ícone (sem trocar o lado da barra, que é do fundo vazio). */
+  const itemMenu = (id: string) =>
+    onItemContextMenu
+      ? {
+          onContextMenu: (e: React.MouseEvent<HTMLButtonElement>) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onItemContextMenu(id, e.clientX, e.clientY);
+          },
+          onKeyDown: (e: React.KeyboardEvent<HTMLButtonElement>) => {
+            if ((e.shiftKey && e.key === 'F10') || e.key === 'ContextMenu') {
+              e.preventDefault();
+              const r = e.currentTarget.getBoundingClientRect();
+              onItemContextMenu(id, r.right, r.top);
+            }
+          },
+        }
+      : {};
   const barRef = useRef<HTMLDivElement>(null);
   const [indicatorOffset, setIndicatorOffset] = useState<number | null>(null);
   const horizontal = orientation === 'horizontal';
@@ -185,7 +214,7 @@ export function ActivityBar({
 
     return () => resizeObserver.disconnect();
     // `order` re-runs this after a reorder so the indicator tracks the active icon.
-  }, [activeView, horizontal, order]);
+  }, [activeView, horizontal, order, extraViews.length]);
 
   return (
     <div
@@ -235,6 +264,7 @@ export function ActivityBar({
             aria-label={badges?.[v.id] ? `${v.label} (${badges[v.id]})` : v.label}
             style={horizontalItemStyle}
             onClick={() => onViewChange(v.id)}
+            {...itemMenu(v.id)}
             onDragStart={(e) => {
               dragIdRef.current = v.id;
               e.dataTransfer.effectAllowed = 'move';
@@ -274,6 +304,20 @@ export function ActivityBar({
               </span>
             ) : null}
           </button>
+          </Tooltip>
+        ))}
+        {extraViews.map((v) => (
+          <Tooltip key={v.id} label={v.label} placement={tipPlacement}>
+            <button
+              className={`activity-item activity-item-guest${activeView === v.id ? ' active' : ''}`}
+              data-view={v.id}
+              aria-label={v.label}
+              style={horizontalItemStyle}
+              onClick={() => onViewChange(v.id)}
+              {...itemMenu(v.id)}
+            >
+              <ViewIconGlyph icon={v.icon} size={20} />
+            </button>
           </Tooltip>
         ))}
       </div>

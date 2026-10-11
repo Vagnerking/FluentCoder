@@ -1,34 +1,18 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type PointerEvent,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { TerminalView } from "./TerminalView";
-import { ProblemsPanel } from "./ProblemsPanel";
-import { OutputPanel } from "./OutputPanel";
 import { Codicon } from "../icons/codicons/Codicon";
-import { Tabs, type TabsItem } from "./ui/Tabs";
 import { IconButton } from "./ui/IconButton";
-import type { Problem } from "../types";
+import { ViewToolbar } from "../workbench/WorkbenchViews";
 import type { TermSpawnOptions } from "../api";
 import { ptyClosed, ptyReady, subscribeExtTerminals } from "../extensions/terminalBridge";
 import { listen } from "@tauri-apps/api/event";
 
-interface TerminalPanelProps {
-  open: boolean;
-  height: number;
-  /** Panel width when docked to a side (right/left). */
-  width?: number;
-  /** Where the panel is docked relative to the editor. */
-  pos?: "bottom" | "right" | "left";
+interface TerminalsViewProps {
+  /** A view "Terminal" está visível (ativa numa região aberta). */
+  visible: boolean;
+  /** Pede para revelar a view (criar/mostrar um terminal a foca, onde estiver). */
+  onReveal: () => void;
   cwd: string | null;
-  onClose: () => void;
-  /** Begins dragging the panel to reposition it (from empty header area). */
-  onDragStart?: (e: PointerEvent<HTMLElement>) => void;
-  problems: Problem[];
-  onOpenProblem: (problem: Problem) => void;
   /** Command line a "Run" requested, or null for a plain interactive shell. */
   runCommand?: string | null;
   /** Working directory for the requested run command. */
@@ -43,32 +27,10 @@ interface TerminalPanelProps {
   openConnId?: string | null;
   /** Bumps on each "Abrir no Terminal" to spawn a fresh terminal at `openCwd`. */
   openNonce?: number;
-  /** Tab to focus (e.g. the status bar opening Problems), applied on nonce bump. */
-  focusTab?: PanelTab;
-  /** Bumps to (re)apply `focusTab`, even if it's the same tab as before. */
-  focusNonce?: number;
 }
 
+/** Abas do painel inferior antes do registro de views (ids estáveis das views). */
 export type PanelTab = "terminal" | "problems" | "output";
-
-const DEFAULT_TAB_ORDER: PanelTab[] = ["problems", "output", "terminal"];
-
-/** Reads the persisted tab order, validating it still holds exactly the known tabs. */
-function readTabOrder(): PanelTab[] {
-  try {
-    const parsed = JSON.parse(localStorage.getItem("ui.panelTabOrder") ?? "");
-    if (
-      Array.isArray(parsed) &&
-      parsed.length === DEFAULT_TAB_ORDER.length &&
-      DEFAULT_TAB_ORDER.every((t) => parsed.includes(t))
-    ) {
-      return parsed as PanelTab[];
-    }
-  } catch {
-    /* missing or malformed — fall back */
-  }
-  return DEFAULT_TAB_ORDER;
-}
 
 /** Last path segment, used to name a terminal after its folder. */
 function baseName(path: string): string {
@@ -93,16 +55,16 @@ interface TermInstance {
   pseudo?: boolean;
 }
 
-export function TerminalPanel({
-  open,
-  height,
-  width = 360,
-  pos = "bottom",
+/**
+ * View "Terminal" do registro (padrão: painel). Fica SEMPRE montada (retém o
+ * conteúdo quando oculta) para os shells continuarem rodando com o painel
+ * fechado ou a view movida para outra região — só morrem ao fechar a sessão
+ * ou o app. As ações (+ / encerrar) vão para o cabeçalho da região.
+ */
+export function TerminalsView({
+  visible,
+  onReveal,
   cwd,
-  onClose,
-  onDragStart,
-  problems,
-  onOpenProblem,
   runCommand,
   runCwd = null,
   runConnId = null,
@@ -110,15 +72,9 @@ export function TerminalPanel({
   openCwd = null,
   openConnId = null,
   openNonce = 0,
-  focusTab,
-  focusNonce = 0,
-}: TerminalPanelProps) {
-  const [activeTab, setActiveTab] = useState<PanelTab>("terminal");
-  // Drag-reorderable tab order (VSCode-style), persisted across sessions. The drop
-  // target tracks which side (before/after) so a tab can reach either end.
-  const [tabOrder, setTabOrder] = useState<PanelTab[]>(readTabOrder);
-  const dragTabRef = useRef<PanelTab | null>(null);
-  const [dropTab, setDropTab] = useState<{ tab: PanelTab; after: boolean } | null>(null);
+}: TerminalsViewProps) {
+  const revealRef = useRef(onReveal);
+  revealRef.current = onReveal;
 
   // Drag-reorderable terminal list. Terminals are live sessions (not persisted
   // across app restarts), so this order is session-scoped by nature.
@@ -133,14 +89,6 @@ export function TerminalPanel({
   // Whether we've already auto-created the first terminal this mount, so closing
   // every terminal by hand doesn't immediately respawn one.
   const seededRef = useRef(false);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("ui.panelTabOrder", JSON.stringify(tabOrder));
-    } catch {
-      /* storage unavailable — ignore */
-    }
-  }, [tabOrder]);
 
   /** Spawns a new terminal and focuses it (switches to the terminal tab). */
   const createTerminal = useCallback(
@@ -166,7 +114,7 @@ export function TerminalPanel({
         },
       ]);
       setActiveTermId(id);
-      setActiveTab("terminal");
+      revealRef.current();
     },
     [cwd]
   );
@@ -210,7 +158,7 @@ export function TerminalPanel({
           );
         } else if (a.type === "show") {
           setActiveTermId(a.ptyId);
-          setActiveTab("terminal");
+          revealRef.current();
         } else if (a.type === "dispose") {
           closeTerminal(a.ptyId);
         } else if (a.type === "rename") {
@@ -263,37 +211,11 @@ export function TerminalPanel({
   // folder open. Not re-run after the user closes them all (seededRef guards it),
   // and not while the panel is hidden — so we don't spawn a shell nobody asked for.
   useEffect(() => {
-    if (open && !seededRef.current && activeTab === "terminal" && cwd) {
+    if (visible && !seededRef.current && cwd) {
       seededRef.current = true;
       createTerminal();
     }
-  }, [open, activeTab, cwd, createTerminal]);
-
-  // Focus a specific tab on request (e.g. the status bar opening Problems).
-  useEffect(() => {
-    if (focusNonce > 0 && focusTab) setActiveTab(focusTab);
-  }, [focusNonce, focusTab]);
-
-  /** Panel tabs in their (reorderable) order; Problemas carries a count badge. */
-  const tabItems: TabsItem<PanelTab>[] = tabOrder.map((tab) => ({
-    value: tab,
-    label: tab === "problems" ? "Problemas" : tab === "output" ? "Saída" : "Terminal",
-    badge: tab === "problems" && problems.length ? problems.length : undefined,
-  }));
-
-  /** Drops the dragged tab before/after `target`, reordering the bar. */
-  function reorderTabs(target: PanelTab, after: boolean) {
-    const from = dragTabRef.current;
-    dragTabRef.current = null;
-    setDropTab(null);
-    if (!from || from === target) return;
-    setTabOrder((prev) => {
-      const next = prev.filter((t) => t !== from);
-      const idx = next.indexOf(target) + (after ? 1 : 0);
-      next.splice(idx, 0, from);
-      return next;
-    });
-  }
+  }, [visible, cwd, createTerminal]);
 
   /** Drops the dragged terminal before/after `targetId`, reordering the list. */
   function reorderTerminals(targetId: string, after: boolean) {
@@ -316,103 +238,28 @@ export function TerminalPanel({
   const showTermList = terminals.length >= 1;
 
   return (
-    // Stays mounted while hidden (display:none) so terminals keep running when
-    // the panel is minimized — the shells only die on close or app exit.
-    <div
-      className={`terminal-panel panel-${pos}`}
-      style={
-        open
-          ? pos === "right" || pos === "left"
-            ? { width }
-            : { height }
-          : { display: "none" }
-      }
-    >
-      <div
-        className="terminal-header"
-        onPointerDown={(e) => {
-          // Drag-to-reposition starts only from empty header area — not the tabs
-          // (which reorder) or the action buttons.
-          if (
-            onDragStart &&
-            !(e.target as HTMLElement).closest(".terminal-tab, .terminal-actions")
-          ) {
-            onDragStart(e);
-          }
-        }}
-      >
-        {/*
-          Panel tabs: the shared <Tabs> primitive (WAI-ARIA tablist, roving
-          tabIndex, ←/→/Home/End with selection following focus). The tabs stay
-          drag-reorderable through per-tab props; `.terminal-tab` keeps the
-          header's "drag the panel from empty space" check working.
-        */}
-        <Tabs
-          className="terminal-tabs"
-          ariaLabel="Painel inferior"
+    <div className="terminal-panel-view">
+      <ViewToolbar>
+        <IconButton
+          icon="add"
           size="sm"
-          items={tabItems}
-          value={activeTab}
-          onChange={setActiveTab}
-          tabProps={(item) => {
-            const tab = item.value;
-            return {
-              draggable: true,
-              className: `terminal-tab${
-                dropTab?.tab === tab ? (dropTab.after ? " drop-after" : " drop-before") : ""
-              }`,
-              onDragStart: () => {
-                dragTabRef.current = tab;
-              },
-              onDragEnd: () => {
-                dragTabRef.current = null;
-                setDropTab(null);
-              },
-              onDragOver: (e) => {
-                if (!dragTabRef.current || dragTabRef.current === tab) return;
-                e.preventDefault();
-                const rect = e.currentTarget.getBoundingClientRect();
-                const after = e.clientX > rect.left + rect.width / 2;
-                if (dropTab?.tab !== tab || dropTab.after !== after) {
-                  setDropTab({ tab, after });
-                }
-              },
-              onDrop: (e) => {
-                e.preventDefault();
-                const rect = e.currentTarget.getBoundingClientRect();
-                reorderTabs(tab, e.clientX > rect.left + rect.width / 2);
-              },
-            };
-          }}
+          label="Novo terminal"
+          tooltipPlacement="bottom"
+          onClick={() => createTerminal()}
+          disabled={!cwd}
         />
-        <div className="terminal-actions">
-          {activeTab === "terminal" && (
-            <>
-              <IconButton
-                icon="add"
-                size="sm"
-                label="Novo terminal"
-                onClick={() => createTerminal()}
-                disabled={!cwd}
-              />
-              {activeTermId && (
-                <IconButton
-                  icon="trash"
-                  size="sm"
-                  label="Encerrar terminal"
-                  onClick={() => closeTerminal(activeTermId)}
-                />
-              )}
-            </>
-          )}
-          <IconButton icon="close" size="sm" label="Fechar painel" onClick={onClose} />
-        </div>
-      </div>
+        {activeTermId && (
+          <IconButton
+            icon="trash"
+            size="sm"
+            label="Encerrar terminal"
+            tooltipPlacement="bottom"
+            onClick={() => closeTerminal(activeTermId)}
+          />
+        )}
+      </ViewToolbar>
       <div className="terminal-body">
-        <div
-          className="terminal-pane"
-          style={{ display: activeTab === "terminal" ? undefined : "none" }}
-        >
+        <div className="terminal-pane">
           {terminals.length === 0 ? (
             <div className="panel-empty">
               {cwd
@@ -532,10 +379,6 @@ export function TerminalPanel({
             </div>
           )}
         </div>
-        {activeTab === "problems" && (
-          <ProblemsPanel problems={problems} onOpenProblem={onOpenProblem} />
-        )}
-        {activeTab === "output" && <OutputPanel />}
       </div>
     </div>
   );
