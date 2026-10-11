@@ -8,6 +8,7 @@
  * Contratos e regras de segurança: docs/context/extensoes-vscode.md
  * ("Gerenciamento de extensões").
  */
+import { openThemePicker } from "../../theme/ThemePicker";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
@@ -459,6 +460,15 @@ function installedActions(info: InstalledInfo, report: CompatibilityReport | und
   const runnable = info.builtin || (report ? RUNNABLE.has(report.verdict) : false) || trusted;
   if (unverified && !trusted) acts.push({ label: "Executar sem avaliação…", icon: "run", onClick: () => vm.requestTrust(info) });
   if (trusted) acts.push({ label: "Revogar a liberação sem avaliação", icon: "lock", onClick: () => void setUnverifiedAllowed(info, false) });
+  // Temas (somente contribuições: nada da extensão é executado). O seletor
+  // pré-visualiza ao vivo nas setas, como no VS Code.
+  const contributes = (info.manifest?.contributes ?? {}) as Record<string, unknown>;
+  if (info.enabled && Array.isArray(contributes.themes) && contributes.themes.length)
+    acts.push({ label: "Aplicar tema", onClick: () => openThemePicker("color", { extensionId: info.id }) });
+  if (info.enabled && Array.isArray(contributes.iconThemes) && contributes.iconThemes.length)
+    acts.push({ label: "Aplicar ícones", onClick: () => openThemePicker("fileIcon", { extensionId: info.id }) });
+  if (info.enabled && Array.isArray(contributes.productIconThemes) && contributes.productIconThemes.length)
+    acts.push({ label: "Aplicar ícones do produto", onClick: () => openThemePicker("productIcon", { extensionId: info.id }) });
   if (info.enabled) acts.push({ label: "Desabilitar", icon: "circleSlash", onClick: () => void setExtensionEnabled(info.id, false) });
   else
     acts.push({

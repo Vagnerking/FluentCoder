@@ -111,6 +111,7 @@ import { SshConnectDialog } from "./components/SshConnectDialog";
 import { RemoteFolderBrowser } from "./components/RemoteFolderBrowser";
 import { RemoteConnectionMenu } from "./components/RemoteConnectionMenu";
 import { QuickPick, type QuickPickItem } from "./components/QuickPick";
+import { ThemePickerHost, themePaletteCommands } from "./theme/ThemePicker";
 import { QuickInput } from "./components/QuickInput";
 import {
   acpPrompt,
@@ -6283,7 +6284,7 @@ export default function App() {
         alert(`Falha ao executar o comando da extensão:\n${message}`)
       ),
     ];
-    return [...commands, ...preferenceCommands, ...extensions, ...ssh, ...fromMenus];
+    return [...commands, ...preferenceCommands, ...themePaletteCommands(), ...extensions, ...ssh, ...fromMenus];
   }, [commands, preferenceCommands, menus, openSshFlow, hostedExtensions, showPanelTab]);
   // Comandos da Paleta = comandos dos atalhos do usuário (keybindings.json).
   useEffect(() => {
@@ -6900,6 +6901,8 @@ export default function App() {
       {/* Iframes das views de extensão (Claude Code, Codex…), posicionados
           sobre a view onde ela estiver: mover não recarrega o webview. */}
       <ExtensionWebviewLayer model={extensionViews} />
+      {/* Seletores de tema (Paleta / view Extensões) com prévia ao vivo. */}
+      <ThemePickerHost />
 
       {activityMenu && (
         <Menu
