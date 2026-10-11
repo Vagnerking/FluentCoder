@@ -1856,6 +1856,14 @@ export default function App() {
         run: () => setAgentsDialogOpen(true),
       },
       {
+        // Volta cada view (Explorador, Fluent Chat, Claude, Codex, Terminal…)
+        // para a região/ordem padrão; não mexe em larguras nem no que está aberto.
+        id: "workbench.resetViewLayout",
+        title: "Exibir: Restaurar Posições Padrão das Views",
+        detail: "Layout",
+        run: () => viewsRef.current.resetLayout(),
+      },
+      {
         // Os processos dos agentes (Claude/Codex/ACP) não são servidores de
         // linguagem: ficam fora do reset de LSP (derrubariam um turno em
         // andamento). Reiniciar aqui mata todos; o próximo envio sobe o

@@ -61,6 +61,8 @@ VS Code) e o layout responsivo das regiões. Código em `src/workbench/`.
   regiões abertas + faixas nas bordas para as fechadas (soltar abre a
   região); a sob o ponteiro destaca e diz "Mover para …"; barra de inserção
   entre as abas (hit-testing puro em `viewDrop.ts`).
+- Paleta "Exibir: Restaurar Posições Padrão das Views" zera `ui.viewLayout`
+  (não mexe em larguras nem no que está aberto).
 - Mover abre a região de destino e torna a view a ativa de lá; a origem recai
   na vizinha.
 - Sidebar secundária e painel mostram **abas** (`DockableViewTabs`, tablist
