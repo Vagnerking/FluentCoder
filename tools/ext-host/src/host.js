@@ -121,7 +121,8 @@ class ExtensionHost {
     this.pending = new Map();
     this.nextRequest = 1;
     this.appConnected = !!opts.appConnected;
-    this.watchers = new WatchService((m) => this.log(m));
+    // `files.watcherExclude` lido a cada walk/evento (muda sem reiniciar o host).
+    this.watchers = new WatchService((m) => this.log(m), { excludes: () => this.config.lookup('files.watcherExclude') });
     this.comments = new CommentService(this);
     this.tasks = new TaskService(this);
     this.quickInputs = new QuickInputService(this);
