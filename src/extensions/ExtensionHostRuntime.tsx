@@ -40,6 +40,7 @@ import {
   webviewTabPath,
 } from "./webviewTabs";
 import { loadPersistedPanels, restoreOrder, savePersistedPanels } from "./panelRestore";
+import { publishLanguages } from "./languages";
 import { hideQuickInput, setQuickInput, type QuickInputState } from "./quickInputModel";
 import { clearCommentThreads, removeCommentThread, upsertCommentThread, type CommentThreadInfo } from "./comments";
 import { applyProgressItem, applyStatusBarItem, applyStatusMessage, clearStatusItems } from "./statusBar";
@@ -287,6 +288,8 @@ export function ExtensionHostRuntime(props: ExtensionHostRuntimeProps) {
           savePersistedPanels(p.rootPath, (ev as { panels: unknown }).panels);
           break;
         case "hostReady": {
+          // Registro de linguagens do Monaco → `languages.getLanguages/match` no host.
+          publishLanguages();
           // Host novo (startup ou reinício): os painéis da sessão anterior voltam.
           const panels = restoreOrder(loadPersistedPanels(p.rootPath));
           if (panels.length === 0) break;

@@ -49,6 +49,8 @@ test('universo da API: em dia com o vscode.d.ts e >= a versão anunciada pelo sh
   assert.deepEqual(committed, build(), 'rode node tools/ext-host/discovery/api-surface.js');
   const [a, b] = [committed.vscodeVersion, VSCODE_VERSION].map((v) => v.split('.').map(Number));
   assert.ok(a[0] > b[0] || (a[0] === b[0] && (a[1] > b[1] || (a[1] === b[1] && a[2] >= b[2]))), `d.ts ${committed.vscodeVersion} < shim ${VSCODE_VERSION}`);
+  // Política (shim/api.js): a API anunciada É a do universo — subiu o .d.ts, revise e suba o shim.
+  assert.deepEqual(a.slice(0, 2), b.slice(0, 2), `shim ${VSCODE_VERSION} ≠ universo ${committed.vscodeVersion}`);
   assert.ok(inSurface('window', 'createWebviewPanel'));
   assert.ok(inSurface('Uri'));
   assert.ok(!inSurface('diff'));

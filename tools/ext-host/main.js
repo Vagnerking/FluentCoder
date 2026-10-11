@@ -189,6 +189,9 @@ const handlers = {
   setWorkspaceFolders(p) {
     host.setWorkspaceFolders(p.folders || []);
   },
+  setLanguages(p) {
+    host.setLanguages(p.languages);
+  },
   respond(p) {
     host.respond(p.requestId, p.result);
   },

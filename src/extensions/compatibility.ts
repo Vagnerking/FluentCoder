@@ -204,6 +204,30 @@ const FEATURE_APIS = new Set([
   "workspace.registerTextDocumentContentProvider",
 ]);
 
+/**
+ * Extensões embutidas do VS Code (`vscode.*`) que EXPORTAM API para outras
+ * extensões e não existem neste app (dependência delas = bloqueio). As demais
+ * `vscode.*` (linguagens básicas, temas) só contribuem gramáticas/configuração.
+ * `*-language-features` também contam como provedoras.
+ */
+export const VSCODE_API_BUILTINS: Record<string, string> = {
+  "vscode.git": "a API `vscode.git` (repositórios, estado, diff) ainda não é exposta às extensões",
+  "vscode.git-base": "a API `vscode.git-base` ainda não é exposta às extensões",
+  "vscode.github": "a integração GitHub do VS Code não existe aqui",
+  "vscode.github-authentication": "sem provedor de autenticação do GitHub",
+  "vscode.microsoft-authentication": "sem provedor de autenticação da Microsoft",
+  "vscode.npm": "a API de scripts npm do VS Code não existe aqui",
+  "vscode.ipynb": "sem editor de notebook",
+  "vscode.emmet": "a API do Emmet do VS Code não existe aqui",
+  "vscode.references-view": "a view de referências do VS Code não existe aqui",
+  "vscode.simple-browser": "o navegador embutido do VS Code não existe aqui",
+  "vscode.debug-auto-launch": "sem adaptadores de depuração de extensões",
+  "vscode.extension-editing": "recursos de edição de extensões do VS Code não existem aqui",
+  "vscode.configuration-editing": "recursos de edição de configuração do VS Code não existem aqui",
+  "vscode.merge-conflict": "a API de conflitos de merge do VS Code não existe aqui",
+  "vscode.tunnel-forwarding": "túneis do VS Code não existem aqui",
+};
+
 const CONTRIB_LABEL: Record<string, string> = {
   commands: "Comandos",
   configuration: "Configurações",
@@ -371,9 +395,23 @@ export function classify(input: ClassifyInput, caps: Capabilities): Compatibilit
 
   // dependências
   const deps = strList(m.extensionDependencies).map((d) => d.toLowerCase());
-  const missing = deps.filter((d) => !input.installedIds?.has(d));
-  if (missing.length) add("blocker", "dependencies", `Depende de ${listNames(missing)}, que não está instalada.`);
-  else if (deps.length) add("info", "dependencies-ok", `Depende de ${listNames(deps)} (instalada).`);
+  const builtinDeps = deps.filter((d) => d.startsWith("vscode."));
+  const missing = deps.filter((d) => !d.startsWith("vscode.") && !input.installedIds?.has(d));
+  if (missing.length)
+    add("blocker", "dependencies", `Depende de ${listNames(missing)}, que não ${missing.length === 1 ? "está instalada" : "estão instaladas"} — instale ${missing.length === 1 ? "a dependência" : "as dependências"} pela loja primeiro.`);
+  else if (deps.length > builtinDeps.length) add("info", "dependencies-ok", `Depende de ${listNames(deps.filter((d) => !d.startsWith("vscode.")))} (instalada).`);
+  // `vscode.*` = extensões EMBUTIDAS do VS Code (nunca vêm da loja como
+  // dependência comum): as que exportam API que este app não provê bloqueiam;
+  // as de linguagem/tema (só gramática e configuração) não fazem falta para o
+  // código rodar — só o realce delas não existe aqui.
+  const apiProviders = builtinDeps.filter((d) => VSCODE_API_BUILTINS[d] !== undefined || d.endsWith("-language-features"));
+  const contribOnly = builtinDeps.filter((d) => !apiProviders.includes(d));
+  if (apiProviders.length) {
+    const notes = apiProviders.map((d) => VSCODE_API_BUILTINS[d]).filter(Boolean);
+    add("blocker", "dependencies-builtin", `Depende de ${listNames(apiProviders)}, embutida do VS Code que este app não provê${notes.length ? ` (${notes[0]})` : ""}.`);
+  }
+  if (contribOnly.length)
+    add("limit", "dependencies-builtin-contrib", `Depende de ${listNames(contribOnly)} (gramática/linguagem embutida do VS Code): o realce dela não existe aqui, mas o código da extensão não precisa dela para rodar.`);
   const pack = strList(m.extensionPack);
   if (pack.length) add("info", "extension-pack", `Pacote de extensões: as ${pack.length} extensões do pacote não são instaladas automaticamente.`);
 

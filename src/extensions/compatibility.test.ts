@@ -44,7 +44,7 @@ test("código analisado só com APIs implementadas: Compatível", () => {
 test("bloqueios: engine, plataforma, só web, API ausente chamada, dependência", () => {
   const engine = classify({ manifest: { ...base, engines: { vscode: "^1.200.0" }, main: "a.js" }, hostPlatform: host, apiScan: scan([]) }, caps);
   assert.equal(engine.verdict, "incompatible");
-  assert.ok(engine.reasons[0].message.includes("1.106.0"));
+  assert.ok(engine.reasons[0].message.includes(caps.hostVersion));
   assert.equal(classify({ manifest: { ...base, main: "a.js" }, targetPlatform: "darwin-arm64", hostPlatform: host, apiScan: scan([]) }, caps).verdict, "incompatible");
   assert.equal(classify({ manifest: { ...base, browser: "./web.js" }, hostPlatform: host }, caps).verdict, "incompatible");
   const absent = classify({ manifest: { ...base, main: "a.js", contributes: { commands: [{ command: "a", title: "A" }] } }, hostPlatform: host, apiScan: scan([["languages.registerDocumentFormattingEditProvider", 1], ["commands.registerCommand", 1]]) }, caps);

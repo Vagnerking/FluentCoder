@@ -7,7 +7,8 @@ const path = require('path');
 const { spawn } = require('child_process');
 const readline = require('readline');
 
-const { ExtensionHost } = require('../src/host');
+const { ExtensionHost, scoreSelector } = require('../src/host');
+const { VSCODE_VERSION } = require('../src/shim/api');
 const { fsPathToUrlPath, urlPathToFsPath } = require('../src/server');
 
 /** Extensão de teste mínima: webview view que ecoa mensagens. */
@@ -90,7 +91,7 @@ test('host: ativa a extensão, resolve a view, serve HTML/recursos e ecoa mensag
     // round trip webview → extensão → webview
     host.webviewMessage(info.handle, { type: 'ping' });
     const reply = events.find((e) => e.event === 'postMessage' && e.handle === info.handle);
-    assert.deepEqual(reply.message, { echo: { type: 'ping' }, version: '1.106.0', appName: 'Fluent Coder' });
+    assert.deepEqual(reply.message, { echo: { type: 'ping' }, version: VSCODE_VERSION, appName: 'Fluent Coder' });
 
     // vscode.diff resolve conteúdo de esquema virtual + arquivo
     await host.executeCommand('vscode.diff', 'fake-left:/b.ts', require('../src/shim/types').Uri.file(path.join(workspace, 'b.ts')), 'Diff de teste');

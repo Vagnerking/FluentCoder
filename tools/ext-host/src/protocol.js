@@ -42,6 +42,9 @@ const SCHEMAS = {
   disposeWebview: (p) => isObj(p) && isStr(p.handle, 64),
   setTheme: (p) => isObj(p) && (p.vars === undefined || isObj(p.vars)) && isOptStr(p.kind, 32),
   setWorkspaceFolders: (p) => isObj(p) && arr(p.folders || [], isPath, 64),
+  setLanguages: (p) =>
+    isObj(p) &&
+    arr(p.languages, (l) => isObj(l) && isStr(l.id, 128) && /^[\w.+#-]+$/.test(l.id) && optArr(l.aliases, (s) => isStr(s, 256), 64) && optArr(l.extensions, (s) => isStr(s, 256), 512), 2000),
   respond: (p) => isObj(p) && isNum(p.requestId),
   executeCommand: (p) => isObj(p) && isStr(p.command, 512) && (p.args === undefined || Array.isArray(p.args)),
   listCommands: () => true,

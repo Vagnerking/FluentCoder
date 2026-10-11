@@ -92,6 +92,8 @@ class ExtensionHost {
     this.debugWebviews = !!opts.debugWebviews;
     this.wrapApi = opts.wrapApi;
     this.language = opts.language || 'pt-br';
+    /** Linguagens do registro do Monaco (o app manda em `setLanguages`); antes disso, as básicas. */
+    this.languageIds = [...DEFAULT_LANGUAGE_IDS];
     this.appRoot = opts.appRoot || path.resolve(__dirname, '..');
     this.secretsBackend = opts.secretsBackend === 'keyring' ? 'keyring' : 'file';
     this.sessionId = crypto.randomUUID();
@@ -234,6 +236,16 @@ class ExtensionHost {
   }
 
   // ---------------------------------------------------------- workspace
+  /** Registro de linguagens do Monaco (ids únicos, na ordem do app). */
+  setLanguages(list) {
+    const ids = [];
+    for (const l of list || []) {
+      const id = typeof l === 'string' ? l : l && l.id;
+      if (typeof id === 'string' && id && !ids.includes(id)) ids.push(id);
+    }
+    if (ids.length) this.languageIds = ids;
+  }
+
   setWorkspaceFolders(paths) {
     const before = this.workspaceFolders || [];
     this.workspaceFolders = paths.map((p, index) => ({ uri: Uri.file(path.resolve(p)), name: path.basename(p), index }));
@@ -1698,6 +1710,59 @@ class ExtensionHost {
   }
 }
 
+/** Linguagens conhecidas antes de o app mandar o registro real do Monaco. */
+const DEFAULT_LANGUAGE_IDS = ['plaintext', 'typescript', 'javascript', 'csharp', 'razor', 'json', 'markdown'];
+
+/**
+ * Pontuação de um `DocumentSelector` para um documento — o algoritmo de
+ * `languages.match` do VS Code (`languageSelector.ts`): 10 = casamento exato
+ * (linguagem, esquema ou padrão), 5 = curinga `*`, 0 = não casa. Lista = maior
+ * pontuação. Documentos daqui são sempre "sincronizados"; `notebookType` não
+ * casa (sem editor de notebook).
+ */
+function scoreSelector(selector, doc) {
+  if (!selector || !doc) return 0;
+  if (Array.isArray(selector)) {
+    let ret = 0;
+    for (const s of selector) {
+      const v = scoreSelector(s, doc);
+      if (v === 10) return 10;
+      if (v > ret) ret = v;
+    }
+    return ret;
+  }
+  const languageId = doc.languageId;
+  const uri = doc.uri;
+  if (typeof selector === 'string') {
+    if (selector === '*') return 5;
+    return selector === languageId ? 10 : 0;
+  }
+  if (typeof selector !== 'object') return 0;
+  const { language, scheme, pattern, notebookType } = selector;
+  let ret = 0;
+  if (scheme) {
+    if (uri && scheme === uri.scheme) ret = 10;
+    else if (scheme === '*') ret = 5;
+    else return 0;
+  }
+  if (language) {
+    if (language === languageId) ret = 10;
+    else if (language === '*') ret = Math.max(ret, 5);
+    else return 0;
+  }
+  if (notebookType) return 0;
+  if (pattern) {
+    const { globToRegExp } = require('./shim/api');
+    const fsPath = uri && uri.fsPath ? uri.fsPath.split(path.sep).join('/') : '';
+    const pat = typeof pattern === 'string' ? pattern : pattern.pattern;
+    const base = typeof pattern === 'object' && pattern.baseUri ? pattern.baseUri.fsPath : typeof pattern === 'object' && pattern.base ? pattern.base : null;
+    const target = base ? path.relative(base, uri.fsPath).split(path.sep).join('/') : fsPath;
+    if (typeof pat !== 'string' || !(target === pat || globToRegExp(pat).test(target))) return 0;
+    ret = 10;
+  }
+  return ret;
+}
+
 /** `DocumentSelector` (string de linguagem, filtro ou lista) casa com o documento? */
 function matchSelector(selector, doc) {
   if (!selector) return false;
@@ -1842,4 +1907,4 @@ function summarize(m) {
   return s.length > 300 ? s.slice(0, 300) + '…' : s;
 }
 
-module.exports = { ExtensionHost, installRequireHook, sanitizeDecorationOptions, iconDataUri, matchSelector, pathKey, os, Range };
+module.exports = { ExtensionHost, installRequireHook, sanitizeDecorationOptions, iconDataUri, matchSelector, scoreSelector, DEFAULT_LANGUAGE_IDS, pathKey, os, Range };

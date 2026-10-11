@@ -66,6 +66,7 @@ respostas); respostas `{id, result|error}`; eventos `{event, …}`.
 | ciclo de vida | `initialize` (workspaceFolders, dataDir, language, `secrets: "keyring"`, debugWebviews), `listInstalled`, `loadExtension`, `activate`, `shutdown` |
 | webviews | `resolveView`, `webviewMessage`, `webviewState`, `webviewVisible`, `webviewUrl`, `disposeWebview`, `setTheme`, `restoreWebviewPanels` (painéis da sessão anterior) |
 | editor | `documentOpened`, `documentChanged` (mudanças incrementais 0-based + versão + dirty + undo/redo), `documentClosed`, `documentSaved`, `editorsChanged` (ativo, visíveis, abas), `selectionChanged`, `visibleRangesChanged`, `diagnostics`, `windowState` |
+| linguagens | `setLanguages` (registro do Monaco: `[{id, aliases, extensions}]`, ids `[\w.+#-]`, ≤ 2000) → `languages.getLanguages`/`match` |
 | ações | `executeCommand`, `listCommands`, `evaluateWhen` (lista de `when` → booleanos, best effort), `runKeybinding`, `diffAction` (accept/reject + texto final), `diffEdited` (texto do lado direito editado na revisão), `diffClosed`, `terminalOpened` (pid, `shellIntegration` pedida; cols/rows no pseudoterminal), `terminalShell` (OSC 633: ready/cwd/start/data/end), `terminalInput`/`terminalResize` (pseudoterminal), `terminalClosed` (exitCode), `handleUri`, `provideCodeLenses`, `executeCodeLens`, `cancelProgress`, `respond`, `setWorkspaceFolders` |
 | comentários | `commentAction` (botão de um thread: só comandos que o thread oferece; com `text` num comentário em edição = corpo novo), `commentReaction`, `commentingRanges`, `commentCreateThread` ("+" numa faixa comentável), `commentDisposeTemplate` (cancelar o rascunho), `commentThreads` (snapshot) |
 | quick input | `quickInputEvent` (value/accept/hide/active/selection/button/itemButton) |
@@ -631,6 +632,23 @@ avaliada" (regra 20). O host ignora entrada com `dir` inseguro ou cujo
   plataforma ignorados). Mesmo id nas duas → **vence a gerenciada**; a
   do VS Code aparece como `shadowedVersion`. O host recebe a pasta no
   `initialize` (`extensionsDir`, vindo do `ext_host_start`).
+- **Versão da API anunciada** (`VSCODE_VERSION` em `shim/api.js`, hoje
+  1.108.2; vira `vscode.version` e o `hostVersion` do `engines.vscode`):
+  POLÍTICA = a versão do `vscode.d.ts` de onde sai o universo da API
+  (`vscode-api-surface.json`; o teste `apiScan.test.js` exige o mesmo
+  major.minor). É crível porque TODA API desse universo é classificada pelo
+  `capabilities.json` (implementada/parcial/stub) ou conta como ausente: quem
+  declara `^1.108` e chama algo que o shim não tem é barrado pela API usada, não
+  pelo número. Subiu o `@codingame/monaco-vscode-api` → regenere o universo,
+  revise as APIs novas e suba a versão (os portões gravados com a anterior
+  são reavaliados).
+- **`extensionDependencies`**: `vscode.*` são embutidas do VS Code, não
+  dependências da loja. As que EXPORTAM API (`vscode.git`, `vscode.git-base`,
+  `vscode.github-authentication`, `*-language-features`…, tabela
+  `VSCODE_API_BUILTINS` em `compatibility.ts`) → bloqueio; as de linguagem/tema
+  (`vscode.docker`, `vscode.yaml`, `vscode.powershell`…) → limitação (o código
+  roda; só o realce delas não existe). Dependência da loja não instalada →
+  bloqueio pedindo para instalá-la pela loja.
 - **`supported` = portão de compatibilidade** (não mais allowlist fixa):
   habilitada **e** veredito `compatible`/`partial` gravado para a mesma
   versão e a mesma API do shim (`VSCODE_VERSION`). **Embutidas** (Claude

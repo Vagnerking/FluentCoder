@@ -86,6 +86,26 @@ test("ErrorLens: `browser` igual ao `main` não tira o bundle da análise", () =
   assert.ok(scan!.bindings > 0 && scan!.paths.some(([p]) => p === "languages.onDidChangeDiagnostics"));
 });
 
+test("ErrorLens (`engines ^1.107`): passa no engine da API anunciada e roda", () => {
+  const { report } = run("errorlens");
+  assert.ok(!codes(report).includes("engine"), JSON.stringify(report.reasons));
+  assert.ok(RUNNABLE.has(report.verdict), report.verdict);
+  assert.equal(report.analyzed.code, true);
+});
+
+test("dependências `vscode.*`: embutida de API bloqueia; de gramática só limita; da loja pede instalação", () => {
+  const base = { name: "x", publisher: "a", version: "1.0.0", engines: { vscode: "^1.80.0" } };
+  const docker = classify({ manifest: { ...base, extensionDependencies: ["vscode.docker", "vscode.yaml"], contributes: { commands: [{ command: "a", title: "A" }] } }, hostPlatform: "linux-x64" }, caps);
+  assert.ok(docker.reasons.some((r) => r.code === "dependencies-builtin-contrib" && r.severity === "limit"));
+  assert.ok(!docker.reasons.some((r) => r.severity === "blocker"), JSON.stringify(docker.reasons));
+  const ruby = classify({ manifest: { ...base, extensionDependencies: ["vscode.git"], contributes: { commands: [{ command: "a", title: "A" }] } }, hostPlatform: "linux-x64" }, caps);
+  assert.ok(ruby.reasons.some((r) => r.code === "dependencies-builtin" && r.severity === "blocker" && r.message.includes("vscode.git")));
+  const ts = classify({ manifest: { ...base, extensionDependencies: ["vscode.typescript-language-features"] }, hostPlatform: "linux-x64" }, caps);
+  assert.ok(ts.reasons.some((r) => r.code === "dependencies-builtin"));
+  const shell = classify({ manifest: { ...base, extensionDependencies: ["ms-azuretools.vscode-containers"] }, hostPlatform: "linux-x64" }, caps);
+  assert.ok(shell.reasons.some((r) => r.code === "dependencies" && /pela loja/.test(r.message)));
+});
+
 test("keymap puro (jupyter-keymap): atalhos para comandos que não existem aqui → Incompatível", () => {
   const { report } = run("keymap");
   assert.equal(report.verdict, "incompatible");

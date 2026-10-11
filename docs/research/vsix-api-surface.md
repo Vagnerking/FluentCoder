@@ -75,6 +75,7 @@ Uso real confirmado nos bundles (grep em `~/.vscode/extensions`, somente leitura
 | `createFileSystemWatcher` | implementado | `fs.watch` sem polling, glob, pastas pesadas puladas |
 | `languages.getDiagnostics` | implementado | markers do Monaco + coleções das extensões (viram markers) |
 | `languages.registerCodeLensProvider` | implementado | lentes no Monaco |
+| `languages.getLanguages` / `languages.match` | implementado | registro REAL de linguagens do Monaco (o app manda `setLanguages` a cada `hostReady`); `match` com o algoritmo de pontuação do VS Code (10/5/0: linguagem, esquema, padrão glob/`RelativePattern`; `notebookType` não casa) |
 | status bar / `withProgress` / output channels | implementado | itens na barra do app (Tooltip); progresso cancelável (aviso com barra + Cancelar em Notification, spinner clicável em Window/SCM); canais na aba Saída |
 | diálogos (`showMessage`/`QuickPick`/`InputBox`/arquivo) | implementado | `createQuickPick`/`createInputBox` completos (itens, ativos, selecionados, botões, `busy`, passos, `validationMessage`), `canPickMany`, `validateInput` ao vivo |
 | `createWebviewPanel` / custom editor | implementado | abas reais da grade de editores (`viewColumn`/Beside/`preserveFocus`, `reveal`, `onDidChangeViewState`, `dispose`, `TabInputWebview`/`TabInputCustom`); **restaurados ao reiniciar** (serializer / custom editor); views de sidebar seguem no Fluent Chat |

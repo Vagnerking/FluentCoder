@@ -10,8 +10,17 @@ const { WebviewPanel } = require('./webview');
 
 const { Disposable, EventEmitter, Uri, FileSystemError, FileType, CancellationTokenSource } = types;
 
-/** Versão do VS Code anunciada às extensões (satisfaz ^1.94 e ^1.96.2). */
-const VSCODE_VERSION = '1.106.0';
+/**
+ * Versão da API do VS Code anunciada às extensões e usada no `engines.vscode`
+ * do classificador. POLÍTICA: é a versão do `vscode.d.ts` de onde sai o
+ * universo da API (`src/extensions/vscode-api-surface.json`, teste
+ * `apiScan.test.js` confere major.minor). Toda API desse universo é
+ * classificada pelo `capabilities.json` (implementada/parcial/stub) ou conta
+ * como AUSENTE — então quem declara `^1.108` e chama algo que o shim não tem é
+ * barrado pela API usada, não pelo número. Subir o `@codingame/monaco-vscode-api`
+ * (e com ele o .d.ts) exige revisar as APIs novas e então subir esta versão.
+ */
+const VSCODE_VERSION = '1.108.2';
 
 function noopDisposable() {
   return new Disposable(() => {});
@@ -784,11 +793,14 @@ function createVscodeApi(host, ext) {
       return host.getDiagnostics(uri);
     },
     onDidChangeDiagnostics: host.events.diagnostics.event,
-    getLanguages: () => Promise.resolve(['plaintext', 'typescript', 'javascript', 'csharp', 'razor', 'json', 'markdown']),
+    // Registro REAL de linguagens do Monaco (o app manda em `setLanguages`).
+    getLanguages: () => Promise.resolve([...host.languageIds]),
     createDiagnosticCollection(name) {
       return createDiagnosticCollection(host, name || ext.id);
     },
-    match: () => 0,
+    // Algoritmo do VS Code (10 exato, 5 curinga, 0 não casa) — o
+    // vscode-languageclient decide a sincronização de documentos com ele.
+    match: (selector, document) => require('../host').scoreSelector(selector, document),
     setTextDocumentLanguage: (doc) => Promise.resolve(doc),
   };
   languages.registerCodeLensProvider = (selector, provider) => host.registerCodeLensProvider(ext, selector, provider);

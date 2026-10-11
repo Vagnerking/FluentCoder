@@ -1,6 +1,6 @@
 {
   "$comment": "GERADO por tools/ext-host/discovery/capabilities.js — não editar à mão.",
-  "hostVersion": "1.106.0",
+  "hostVersion": "1.108.2",
   "proposedPrefixes": [
     "chat.",
     "lm.",
