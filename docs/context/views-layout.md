@@ -148,3 +148,6 @@ VS Code) e o layout responsivo das regiões. Código em `src/workbench/`.
    do título para o corpo.
 3. Grupos internos (Preparadas/Alterações/Conflitos, Local/Remotos…) →
    `<SectionHeader level={2} … />` (recolhível com `expanded`/`onToggle`).
+4. Datas e autores nas listas: `formatRelativeDate` (curta, pt-BR) com
+   `formatAbsoluteDate` no tooltip, `formatAuthor`/`authorInitials` em
+   `src/ui/format.ts` (testados) — nada de ISO cru nem autor "Y".
