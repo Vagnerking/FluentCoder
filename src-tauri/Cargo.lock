@@ -1635,6 +1635,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-deep-link",
  "tauri-plugin-dialog",
+ "tempfile",
  "tokio",
  "tokio-tungstenite",
  "trash",

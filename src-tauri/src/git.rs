@@ -1,7 +1,8 @@
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+pub(crate) mod runner;
 
 /// Returns the current git branch name for the repository containing `path`,
 /// or `None` when the folder isn't a git repo (or HEAD is detached/unborn).
@@ -9,7 +10,11 @@ use std::process::Command;
 /// Reads `.git/HEAD` directly instead of shelling out to `git`, so it works
 /// even where the git CLI isn't on PATH and adds no process-spawn latency.
 #[tauri::command]
-pub fn git_branch(path: String) -> Option<String> {
+pub async fn git_branch(path: String) -> Option<String> {
+    runner::blocking(move || git_branch_blocking(path)).await
+}
+
+fn git_branch_blocking(path: String) -> Option<String> {
     let git_dir = find_git_dir(Path::new(&path))?;
     let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
     let head = head.trim();
@@ -176,26 +181,18 @@ pub struct GitCommitFile {
 
 /// Runs `git <args>` in `cwd`, returning stdout on success or a combined
 /// stdout+stderr error string on failure (so the UI can show what went wrong).
-fn run_git(cwd: &str, args: &[&str]) -> Result<String, String> {
-    let mut command = Command::new("git");
-    command.args(args).current_dir(cwd);
-    crate::child_process::hide_console_window(&mut command);
-    let output = command
-        .output()
-        .map_err(|e| format!("Falha ao executar git: {e}"))?;
+///
+/// Delegates to [`runner::run`] (timeouts, cancel, stable env). Callers are
+/// always inside a `*_blocking` fn that runs off the main thread.
+pub(crate) fn run_git(cwd: &str, args: &[&str]) -> Result<String, String> {
+    runner::run(cwd, args)
+}
 
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let msg = if stderr.trim().is_empty() {
-            stdout
-        } else {
-            stderr
-        };
-        Err(msg.trim().to_string())
-    }
+/// Cancels in-flight git processes for `path` (all repos when `None`). With
+/// `network_only` (the default from the UI), only fetch/pull/push are killed.
+#[tauri::command]
+pub fn git_cancel(path: Option<String>, network_only: Option<bool>) -> usize {
+    runner::cancel_running(path.as_deref(), network_only.unwrap_or(true))
 }
 
 /// The empty, non-erroring status returned when a folder isn't a git repo.
@@ -218,7 +215,11 @@ fn is_not_repo_error(error: &str) -> bool {
 
 /// Collects working-tree status: branch, ahead/behind, and per-file changes.
 #[tauri::command]
-pub fn git_status(path: String) -> Result<GitStatus, String> {
+pub async fn git_status(path: String) -> Result<GitStatus, String> {
+    runner::blocking(move || git_status_blocking(path)).await
+}
+
+fn git_status_blocking(path: String) -> Result<GitStatus, String> {
     // Not a repo? Return an empty, non-erroring status so the UI can say so.
     match run_git(&path, &["rev-parse", "--is-inside-work-tree"]) {
         Ok(_) => {}
@@ -239,7 +240,11 @@ pub fn git_status(path: String) -> Result<GitStatus, String> {
 
 /// Lists linked worktrees for the repository containing `path`.
 #[tauri::command]
-pub fn git_worktrees(path: String) -> Result<Vec<GitWorktreeInfo>, String> {
+pub async fn git_worktrees(path: String) -> Result<Vec<GitWorktreeInfo>, String> {
+    runner::blocking(move || git_worktrees_blocking(path)).await
+}
+
+fn git_worktrees_blocking(path: String) -> Result<Vec<GitWorktreeInfo>, String> {
     match run_git(&path, &["rev-parse", "--is-inside-work-tree"]) {
         Ok(_) => {}
         Err(error) if is_not_repo_error(&error) => return Ok(Vec::new()),
@@ -254,12 +259,11 @@ pub fn git_worktrees(path: String) -> Result<Vec<GitWorktreeInfo>, String> {
 /// Adds a linked worktree. When `create_branch` is true, `branch` is created
 /// from HEAD; otherwise `branch_or_ref` may be an existing branch, tag or sha.
 #[tauri::command]
-pub fn git_worktree_add(
-    path: String,
-    target: String,
-    branch_or_ref: Option<String>,
-    create_branch: bool,
-) -> Result<(), String> {
+pub async fn git_worktree_add(path: String, target: String, branch_or_ref: Option<String>, create_branch: bool) -> Result<(), String> {
+    runner::blocking(move || git_worktree_add_blocking(path, target, branch_or_ref, create_branch)).await
+}
+
+fn git_worktree_add_blocking(path: String, target: String, branch_or_ref: Option<String>, create_branch: bool) -> Result<(), String> {
     let branch_or_ref = branch_or_ref.unwrap_or_default();
     let branch_or_ref = branch_or_ref.trim();
     if target.trim().is_empty() {
@@ -275,7 +279,11 @@ pub fn git_worktree_add(
 
 /// Removes a linked worktree. `force` passes `--force` for dirty/broken entries.
 #[tauri::command]
-pub fn git_worktree_remove(path: String, worktree_path: String, force: bool) -> Result<(), String> {
+pub async fn git_worktree_remove(path: String, worktree_path: String, force: bool) -> Result<(), String> {
+    runner::blocking(move || git_worktree_remove_blocking(path, worktree_path, force)).await
+}
+
+fn git_worktree_remove_blocking(path: String, worktree_path: String, force: bool) -> Result<(), String> {
     if worktree_path.trim().is_empty() {
         return Err("Informe a worktree para remover.".into());
     }
@@ -288,7 +296,11 @@ pub fn git_worktree_remove(path: String, worktree_path: String, force: bool) -> 
 
 /// Prunes stale worktree metadata, mirroring `git worktree prune`.
 #[tauri::command]
-pub fn git_worktree_prune(path: String) -> Result<(), String> {
+pub async fn git_worktree_prune(path: String) -> Result<(), String> {
+    runner::blocking(move || git_worktree_prune_blocking(path)).await
+}
+
+fn git_worktree_prune_blocking(path: String) -> Result<(), String> {
     run_git(&path, &["worktree", "prune"]).map(|_| ())
 }
 
@@ -525,7 +537,11 @@ pub struct GitBranchInfo {
 /// subject, plus ahead/behind vs. its upstream. Returns an empty list when not a
 /// git repo.
 #[tauri::command]
-pub fn git_branches(path: String) -> Result<Vec<GitBranchInfo>, String> {
+pub async fn git_branches(path: String) -> Result<Vec<GitBranchInfo>, String> {
+    runner::blocking(move || git_branches_blocking(path)).await
+}
+
+fn git_branches_blocking(path: String) -> Result<Vec<GitBranchInfo>, String> {
     if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Ok(Vec::new());
     }
@@ -547,7 +563,11 @@ pub fn git_branches(path: String) -> Result<Vec<GitBranchInfo>, String> {
 
 /// Lists remote-tracking branches, most-recently-committed first.
 #[tauri::command]
-pub fn git_remote_branches(path: String) -> Result<Vec<GitBranchInfo>, String> {
+pub async fn git_remote_branches(path: String) -> Result<Vec<GitBranchInfo>, String> {
+    runner::blocking(move || git_remote_branches_blocking(path)).await
+}
+
+fn git_remote_branches_blocking(path: String) -> Result<Vec<GitBranchInfo>, String> {
     if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Ok(Vec::new());
     }
@@ -565,7 +585,11 @@ pub fn git_remote_branches(path: String) -> Result<Vec<GitBranchInfo>, String> {
 
 /// Lists configured remotes with fetch/push URLs.
 #[tauri::command]
-pub fn git_remotes(path: String) -> Result<Vec<GitRemoteInfo>, String> {
+pub async fn git_remotes(path: String) -> Result<Vec<GitRemoteInfo>, String> {
+    runner::blocking(move || git_remotes_blocking(path)).await
+}
+
+fn git_remotes_blocking(path: String) -> Result<Vec<GitRemoteInfo>, String> {
     if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Ok(Vec::new());
     }
@@ -575,7 +599,11 @@ pub fn git_remotes(path: String) -> Result<Vec<GitRemoteInfo>, String> {
 
 /// Adds a Git remote (`git remote add <name> <url>`).
 #[tauri::command]
-pub fn git_remote_add(path: String, name: String, url: String) -> Result<(), String> {
+pub async fn git_remote_add(path: String, name: String, url: String) -> Result<(), String> {
+    runner::blocking(move || git_remote_add_blocking(path, name, url)).await
+}
+
+fn git_remote_add_blocking(path: String, name: String, url: String) -> Result<(), String> {
     let name = name.trim();
     let url = url.trim();
     if name.is_empty() {
@@ -589,7 +617,11 @@ pub fn git_remote_add(path: String, name: String, url: String) -> Result<(), Str
 
 /// Removes a Git remote (`git remote remove <name>`).
 #[tauri::command]
-pub fn git_remote_remove(path: String, name: String) -> Result<(), String> {
+pub async fn git_remote_remove(path: String, name: String) -> Result<(), String> {
+    runner::blocking(move || git_remote_remove_blocking(path, name)).await
+}
+
+fn git_remote_remove_blocking(path: String, name: String) -> Result<(), String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("Nome do remoto vazio.".to_string());
@@ -599,7 +631,11 @@ pub fn git_remote_remove(path: String, name: String) -> Result<(), String> {
 
 /// Renames a Git remote (`git remote rename <old> <new>`).
 #[tauri::command]
-pub fn git_remote_rename(path: String, old_name: String, new_name: String) -> Result<(), String> {
+pub async fn git_remote_rename(path: String, old_name: String, new_name: String) -> Result<(), String> {
+    runner::blocking(move || git_remote_rename_blocking(path, old_name, new_name)).await
+}
+
+fn git_remote_rename_blocking(path: String, old_name: String, new_name: String) -> Result<(), String> {
     let old_name = old_name.trim();
     let new_name = new_name.trim();
     if old_name.is_empty() || new_name.is_empty() {
@@ -610,7 +646,11 @@ pub fn git_remote_rename(path: String, old_name: String, new_name: String) -> Re
 
 /// Updates a Git remote fetch URL (`git remote set-url <name> <url>`).
 #[tauri::command]
-pub fn git_remote_set_url(path: String, name: String, url: String) -> Result<(), String> {
+pub async fn git_remote_set_url(path: String, name: String, url: String) -> Result<(), String> {
+    runner::blocking(move || git_remote_set_url_blocking(path, name, url)).await
+}
+
+fn git_remote_set_url_blocking(path: String, name: String, url: String) -> Result<(), String> {
     let name = name.trim();
     let url = url.trim();
     if name.is_empty() {
@@ -717,7 +757,11 @@ fn parse_track(track: &str) -> (u32, u32, bool) {
 /// string is surfaced to the UI, e.g. when the working tree has conflicting
 /// local changes git refuses to discard.
 #[tauri::command]
-pub fn git_checkout(path: String, branch: String) -> Result<(), String> {
+pub async fn git_checkout(path: String, branch: String) -> Result<(), String> {
+    runner::blocking(move || git_checkout_blocking(path, branch)).await
+}
+
+fn git_checkout_blocking(path: String, branch: String) -> Result<(), String> {
     if branch.trim().is_empty() {
         return Err("Nome de branch vazio.".to_string());
     }
@@ -727,7 +771,11 @@ pub fn git_checkout(path: String, branch: String) -> Result<(), String> {
 /// Creates a new branch from the current HEAD and checks it out
 /// (`git checkout -b <name>`). Fails if the name already exists or is invalid.
 #[tauri::command]
-pub fn git_create_branch(path: String, name: String) -> Result<(), String> {
+pub async fn git_create_branch(path: String, name: String) -> Result<(), String> {
+    runner::blocking(move || git_create_branch_blocking(path, name)).await
+}
+
+fn git_create_branch_blocking(path: String, name: String) -> Result<(), String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("Nome de branch vazio.".to_string());
@@ -737,7 +785,11 @@ pub fn git_create_branch(path: String, name: String) -> Result<(), String> {
 
 /// Renames a local branch.
 #[tauri::command]
-pub fn git_rename_branch(path: String, old_name: String, new_name: String) -> Result<(), String> {
+pub async fn git_rename_branch(path: String, old_name: String, new_name: String) -> Result<(), String> {
+    runner::blocking(move || git_rename_branch_blocking(path, old_name, new_name)).await
+}
+
+fn git_rename_branch_blocking(path: String, old_name: String, new_name: String) -> Result<(), String> {
     let old_name = old_name.trim();
     let new_name = new_name.trim();
     if old_name.is_empty() || new_name.is_empty() {
@@ -748,7 +800,11 @@ pub fn git_rename_branch(path: String, old_name: String, new_name: String) -> Re
 
 /// Deletes a local branch. Uses `-D` when `force` is true.
 #[tauri::command]
-pub fn git_delete_branch(path: String, name: String, force: bool) -> Result<(), String> {
+pub async fn git_delete_branch(path: String, name: String, force: bool) -> Result<(), String> {
+    runner::blocking(move || git_delete_branch_blocking(path, name, force)).await
+}
+
+fn git_delete_branch_blocking(path: String, name: String, force: bool) -> Result<(), String> {
     let name = name.trim();
     if name.is_empty() {
         return Err("Nome de branch vazio.".to_string());
@@ -759,7 +815,11 @@ pub fn git_delete_branch(path: String, name: String, force: bool) -> Result<(), 
 
 /// Deletes a remote branch via `git push <remote> --delete <branch>`.
 #[tauri::command]
-pub fn git_delete_remote_branch(path: String, remote: String, branch: String) -> Result<String, String> {
+pub async fn git_delete_remote_branch(path: String, remote: String, branch: String) -> Result<String, String> {
+    runner::blocking(move || git_delete_remote_branch_blocking(path, remote, branch)).await
+}
+
+fn git_delete_remote_branch_blocking(path: String, remote: String, branch: String) -> Result<String, String> {
     let remote = remote.trim();
     let branch = branch.trim();
     if remote.is_empty() {
@@ -773,11 +833,11 @@ pub fn git_delete_remote_branch(path: String, remote: String, branch: String) ->
 
 /// Creates a local branch tracking a remote branch, then checks it out.
 #[tauri::command]
-pub fn git_checkout_remote_branch(
-    path: String,
-    remote_branch: String,
-    local_name: String,
-) -> Result<(), String> {
+pub async fn git_checkout_remote_branch(path: String, remote_branch: String, local_name: String) -> Result<(), String> {
+    runner::blocking(move || git_checkout_remote_branch_blocking(path, remote_branch, local_name)).await
+}
+
+fn git_checkout_remote_branch_blocking(path: String, remote_branch: String, local_name: String) -> Result<(), String> {
     let remote_branch = remote_branch.trim();
     let local_name = local_name.trim();
     if remote_branch.is_empty() {
@@ -791,31 +851,51 @@ pub fn git_checkout_remote_branch(
 
 /// Stages a single path (`git add -- <path>`).
 #[tauri::command]
-pub fn git_stage(path: String, file: String) -> Result<(), String> {
+pub async fn git_stage(path: String, file: String) -> Result<(), String> {
+    runner::blocking(move || git_stage_blocking(path, file)).await
+}
+
+fn git_stage_blocking(path: String, file: String) -> Result<(), String> {
     run_git(&path, &["add", "--", &file]).map(|_| ())
 }
 
 /// Unstages a single path (`git reset -- <path>`), keeping working changes.
 #[tauri::command]
-pub fn git_unstage(path: String, file: String) -> Result<(), String> {
+pub async fn git_unstage(path: String, file: String) -> Result<(), String> {
+    runner::blocking(move || git_unstage_blocking(path, file)).await
+}
+
+fn git_unstage_blocking(path: String, file: String) -> Result<(), String> {
     run_git(&path, &["reset", "--", &file]).map(|_| ())
 }
 
 /// Unstages every staged path (`git reset`), keeping working changes.
 #[tauri::command]
-pub fn git_unstage_all(path: String) -> Result<(), String> {
+pub async fn git_unstage_all(path: String) -> Result<(), String> {
+    runner::blocking(move || git_unstage_all_blocking(path)).await
+}
+
+fn git_unstage_all_blocking(path: String) -> Result<(), String> {
     run_git(&path, &["reset"]).map(|_| ())
 }
 
 /// Stages everything (`git add -A`).
 #[tauri::command]
-pub fn git_stage_all(path: String) -> Result<(), String> {
+pub async fn git_stage_all(path: String) -> Result<(), String> {
+    runner::blocking(move || git_stage_all_blocking(path)).await
+}
+
+fn git_stage_all_blocking(path: String) -> Result<(), String> {
     run_git(&path, &["add", "-A"]).map(|_| ())
 }
 
 /// Commits the staged changes with `message`.
 #[tauri::command]
-pub fn git_commit(path: String, message: String) -> Result<(), String> {
+pub async fn git_commit(path: String, message: String) -> Result<(), String> {
+    runner::blocking(move || git_commit_blocking(path, message)).await
+}
+
+fn git_commit_blocking(path: String, message: String) -> Result<(), String> {
     if message.trim().is_empty() {
         return Err("A mensagem de commit não pode estar vazia.".to_string());
     }
@@ -824,13 +904,21 @@ pub fn git_commit(path: String, message: String) -> Result<(), String> {
 
 /// Fetches from the default remote (`git fetch`).
 #[tauri::command]
-pub fn git_fetch(path: String) -> Result<(), String> {
+pub async fn git_fetch(path: String) -> Result<(), String> {
+    runner::blocking(move || git_fetch_blocking(path)).await
+}
+
+fn git_fetch_blocking(path: String) -> Result<(), String> {
     run_git(&path, &["fetch"]).map(|_| ())
 }
 
 /// Fetches from one configured remote.
 #[tauri::command]
-pub fn git_fetch_remote(path: String, remote: String) -> Result<(), String> {
+pub async fn git_fetch_remote(path: String, remote: String) -> Result<(), String> {
+    runner::blocking(move || git_fetch_remote_blocking(path, remote)).await
+}
+
+fn git_fetch_remote_blocking(path: String, remote: String) -> Result<(), String> {
     let remote = remote.trim();
     if remote.is_empty() {
         return Err("Nome do remoto vazio.".to_string());
@@ -840,13 +928,21 @@ pub fn git_fetch_remote(path: String, remote: String) -> Result<(), String> {
 
 /// Pulls from the upstream branch (`git pull`).
 #[tauri::command]
-pub fn git_pull(path: String) -> Result<String, String> {
+pub async fn git_pull(path: String) -> Result<String, String> {
+    runner::blocking(move || git_pull_blocking(path)).await
+}
+
+fn git_pull_blocking(path: String) -> Result<String, String> {
     run_git(&path, &["pull"])
 }
 
 /// Pushes the current branch (`git push`).
 #[tauri::command]
-pub fn git_push(path: String) -> Result<String, String> {
+pub async fn git_push(path: String) -> Result<String, String> {
+    runner::blocking(move || git_push_blocking(path)).await
+}
+
+fn git_push_blocking(path: String) -> Result<String, String> {
     run_git(&path, &["push"])
 }
 
@@ -854,7 +950,11 @@ pub fn git_push(path: String) -> Result<String, String> {
 /// (`git push -u <remote> <branch>`), so a never-pushed branch gets a tracking
 /// ref. Prefers the "origin" remote, else the first configured one.
 #[tauri::command]
-pub fn git_publish(path: String) -> Result<String, String> {
+pub async fn git_publish(path: String) -> Result<String, String> {
+    runner::blocking(move || git_publish_blocking(path)).await
+}
+
+fn git_publish_blocking(path: String) -> Result<String, String> {
     let branch = run_git(&path, &["rev-parse", "--abbrev-ref", "HEAD"])?
         .trim()
         .to_string();
@@ -876,7 +976,11 @@ pub fn git_publish(path: String) -> Result<String, String> {
 /// file is removed from disk instead (it has no HEAD version). Irreversible — the
 /// UI confirms first.
 #[tauri::command]
-pub fn git_discard_file(path: String, file: String, untracked: bool) -> Result<(), String> {
+pub async fn git_discard_file(path: String, file: String, untracked: bool) -> Result<(), String> {
+    runner::blocking(move || git_discard_file_blocking(path, file, untracked)).await
+}
+
+fn git_discard_file_blocking(path: String, file: String, untracked: bool) -> Result<(), String> {
     if untracked {
         run_git(&path, &["clean", "-f", "--", &file]).map(|_| ())
     } else {
@@ -898,7 +1002,11 @@ pub fn git_discard_file(path: String, file: String, untracked: bool) -> Result<(
 /// Discards ALL working-tree changes: reverts tracked files to HEAD and removes
 /// untracked files/dirs. Irreversible — the UI confirms first.
 #[tauri::command]
-pub fn git_discard_all(path: String) -> Result<(), String> {
+pub async fn git_discard_all(path: String) -> Result<(), String> {
+    runner::blocking(move || git_discard_all_blocking(path)).await
+}
+
+fn git_discard_all_blocking(path: String) -> Result<(), String> {
     run_git(
         &path,
         &[
@@ -933,7 +1041,11 @@ pub struct GitStashFile {
 
 /// Stashes the working tree (including untracked, `-u`), with an optional message.
 #[tauri::command]
-pub fn git_stash_push(path: String, message: Option<String>) -> Result<String, String> {
+pub async fn git_stash_push(path: String, message: Option<String>) -> Result<String, String> {
+    runner::blocking(move || git_stash_push_blocking(path, message)).await
+}
+
+fn git_stash_push_blocking(path: String, message: Option<String>) -> Result<String, String> {
     let msg = message.unwrap_or_default();
     let mut args: Vec<&str> = vec!["stash", "push", "-u"];
     if !msg.trim().is_empty() {
@@ -945,7 +1057,11 @@ pub fn git_stash_push(path: String, message: Option<String>) -> Result<String, S
 
 /// Lists the stash entries (newest first), or an empty list when not a repo.
 #[tauri::command]
-pub fn git_stash_list(path: String) -> Result<Vec<GitStashEntry>, String> {
+pub async fn git_stash_list(path: String) -> Result<Vec<GitStashEntry>, String> {
+    runner::blocking(move || git_stash_list_blocking(path)).await
+}
+
+fn git_stash_list_blocking(path: String) -> Result<Vec<GitStashEntry>, String> {
     if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Ok(Vec::new());
     }
@@ -975,7 +1091,11 @@ pub(crate) fn parse_stash_list(raw: &str) -> Vec<GitStashEntry> {
 
 /// Lists files contained in a stash entry without applying it.
 #[tauri::command]
-pub fn git_stash_files(path: String, index: u32) -> Result<Vec<GitStashFile>, String> {
+pub async fn git_stash_files(path: String, index: u32) -> Result<Vec<GitStashFile>, String> {
+    runner::blocking(move || git_stash_files_blocking(path, index)).await
+}
+
+fn git_stash_files_blocking(path: String, index: u32) -> Result<Vec<GitStashFile>, String> {
     let raw = run_git(
         &path,
         &[
@@ -1020,25 +1140,41 @@ pub(crate) fn parse_stash_files(raw: &str) -> Vec<GitStashFile> {
 
 /// Applies a stash entry, keeping it in the list (`git stash apply`).
 #[tauri::command]
-pub fn git_stash_apply(path: String, index: u32) -> Result<String, String> {
+pub async fn git_stash_apply(path: String, index: u32) -> Result<String, String> {
+    runner::blocking(move || git_stash_apply_blocking(path, index)).await
+}
+
+fn git_stash_apply_blocking(path: String, index: u32) -> Result<String, String> {
     run_git(&path, &["stash", "apply", &format!("stash@{{{index}}}")])
 }
 
 /// Pops a stash entry (apply + drop) (`git stash pop`).
 #[tauri::command]
-pub fn git_stash_pop(path: String, index: u32) -> Result<String, String> {
+pub async fn git_stash_pop(path: String, index: u32) -> Result<String, String> {
+    runner::blocking(move || git_stash_pop_blocking(path, index)).await
+}
+
+fn git_stash_pop_blocking(path: String, index: u32) -> Result<String, String> {
     run_git(&path, &["stash", "pop", &format!("stash@{{{index}}}")])
 }
 
 /// Drops a stash entry without applying it (`git stash drop`).
 #[tauri::command]
-pub fn git_stash_drop(path: String, index: u32) -> Result<(), String> {
+pub async fn git_stash_drop(path: String, index: u32) -> Result<(), String> {
+    runner::blocking(move || git_stash_drop_blocking(path, index)).await
+}
+
+fn git_stash_drop_blocking(path: String, index: u32) -> Result<(), String> {
     run_git(&path, &["stash", "drop", &format!("stash@{{{index}}}")]).map(|_| ())
 }
 
 /// Reverts a commit by creating a new inverse commit (`git revert --no-edit`).
 #[tauri::command]
-pub fn git_revert_commit(path: String, commit: String) -> Result<String, String> {
+pub async fn git_revert_commit(path: String, commit: String) -> Result<String, String> {
+    runner::blocking(move || git_revert_commit_blocking(path, commit)).await
+}
+
+fn git_revert_commit_blocking(path: String, commit: String) -> Result<String, String> {
     let commit = commit.trim();
     if commit.is_empty() {
         return Err("Commit vazio para revert.".to_string());
@@ -1048,7 +1184,11 @@ pub fn git_revert_commit(path: String, commit: String) -> Result<String, String>
 
 /// Undoes the last commit while keeping its changes staged (`git reset --soft`).
 #[tauri::command]
-pub fn git_undo_last_commit(path: String) -> Result<String, String> {
+pub async fn git_undo_last_commit(path: String) -> Result<String, String> {
+    runner::blocking(move || git_undo_last_commit_blocking(path)).await
+}
+
+fn git_undo_last_commit_blocking(path: String) -> Result<String, String> {
     run_git(&path, &["reset", "--soft", "HEAD~1"])
 }
 
@@ -1094,7 +1234,11 @@ pub struct BlameHunk {
 /// Returns per-line blame info for `file` (absolute path) inside repo at `root`.
 /// Lines that have never been committed get placeholder values with empty `short`.
 #[tauri::command]
-pub fn git_blame(root: String, file: String) -> Result<Vec<BlameHunk>, String> {
+pub async fn git_blame(root: String, file: String) -> Result<Vec<BlameHunk>, String> {
+    runner::blocking(move || git_blame_blocking(root, file)).await
+}
+
+fn git_blame_blocking(root: String, file: String) -> Result<Vec<BlameHunk>, String> {
     if run_git(&root, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Ok(Vec::new());
     }
@@ -1386,7 +1530,11 @@ fn format_relative_time(ts: i64) -> String {
 
 /// Returns the most recent commits (newest first), capped to `limit`.
 #[tauri::command]
-pub fn git_log(path: String, limit: u32) -> Result<Vec<GitCommit>, String> {
+pub async fn git_log(path: String, limit: u32) -> Result<Vec<GitCommit>, String> {
+    runner::blocking(move || git_log_blocking(path, limit)).await
+}
+
+fn git_log_blocking(path: String, limit: u32) -> Result<Vec<GitCommit>, String> {
     if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Ok(Vec::new());
     }
@@ -1403,7 +1551,11 @@ pub fn git_log(path: String, limit: u32) -> Result<Vec<GitCommit>, String> {
 /// Returns recent commits across all refs with parent hashes and decorations,
 /// enough for a GitLens-like graph inside the Source Control panel.
 #[tauri::command]
-pub fn git_graph(path: String, limit: u32) -> Result<Vec<GitGraphCommit>, String> {
+pub async fn git_graph(path: String, limit: u32) -> Result<Vec<GitGraphCommit>, String> {
+    runner::blocking(move || git_graph_blocking(path, limit)).await
+}
+
+fn git_graph_blocking(path: String, limit: u32) -> Result<Vec<GitGraphCommit>, String> {
     if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Ok(Vec::new());
     }
@@ -1428,7 +1580,11 @@ pub fn git_graph(path: String, limit: u32) -> Result<Vec<GitGraphCommit>, String
 /// Lists commits that are only on HEAD (`ahead`) or only on @{upstream}
 /// (`behind`), mirroring GitLens' "Compare with upstream" view.
 #[tauri::command]
-pub fn git_compare_upstream(path: String, limit: u32) -> Result<GitUpstreamComparison, String> {
+pub async fn git_compare_upstream(path: String, limit: u32) -> Result<GitUpstreamComparison, String> {
+    runner::blocking(move || git_compare_upstream_blocking(path, limit)).await
+}
+
+fn git_compare_upstream_blocking(path: String, limit: u32) -> Result<GitUpstreamComparison, String> {
     if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Ok(GitUpstreamComparison {
             upstream: String::new(),
@@ -1466,7 +1622,11 @@ pub fn git_compare_upstream(path: String, limit: u32) -> Result<GitUpstreamCompa
 /// Reuses the same `GitCommit` shape as `git_log`, adding `--follow` so renames
 /// are tracked across history. Returns an empty list when not a repo.
 #[tauri::command]
-pub fn git_log_file(path: String, file: String, limit: u32) -> Result<Vec<GitCommit>, String> {
+pub async fn git_log_file(path: String, file: String, limit: u32) -> Result<Vec<GitCommit>, String> {
+    runner::blocking(move || git_log_file_blocking(path, file, limit)).await
+}
+
+fn git_log_file_blocking(path: String, file: String, limit: u32) -> Result<Vec<GitCommit>, String> {
     if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Ok(Vec::new());
     }
@@ -1493,12 +1653,11 @@ pub fn git_log_file(path: String, file: String, limit: u32) -> Result<Vec<GitCom
 /// exact line evolved through prior revisions instead of merely listing every
 /// commit that touched the file.
 #[tauri::command]
-pub fn git_log_line(
-    path: String,
-    file: String,
-    line: u32,
-    limit: u32,
-) -> Result<Vec<GitCommit>, String> {
+pub async fn git_log_line(path: String, file: String, line: u32, limit: u32) -> Result<Vec<GitCommit>, String> {
+    runner::blocking(move || git_log_line_blocking(path, file, line, limit)).await
+}
+
+fn git_log_line_blocking(path: String, file: String, line: u32, limit: u32) -> Result<Vec<GitCommit>, String> {
     if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Ok(Vec::new());
     }
@@ -1527,11 +1686,11 @@ pub fn git_log_line(
 
 /// Returns the file contents exactly as they were at `commit`.
 #[tauri::command]
-pub fn git_show_file_at_commit(
-    path: String,
-    file: String,
-    commit: String,
-) -> Result<String, String> {
+pub async fn git_show_file_at_commit(path: String, file: String, commit: String) -> Result<String, String> {
+    runner::blocking(move || git_show_file_at_commit_blocking(path, file, commit)).await
+}
+
+fn git_show_file_at_commit_blocking(path: String, file: String, commit: String) -> Result<String, String> {
     if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Err("Esta pasta não é um repositório Git.".into());
     }
@@ -1542,7 +1701,11 @@ pub fn git_show_file_at_commit(
 
 /// Returns the file contents currently staged in the Git index.
 #[tauri::command]
-pub fn git_show_file_staged(path: String, file: String) -> Result<String, String> {
+pub async fn git_show_file_staged(path: String, file: String) -> Result<String, String> {
+    runner::blocking(move || git_show_file_staged_blocking(path, file)).await
+}
+
+fn git_show_file_staged_blocking(path: String, file: String) -> Result<String, String> {
     if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Err("Esta pasta não é um repositório Git.".into());
     }
@@ -1557,12 +1720,11 @@ pub fn git_show_file_staged(path: String, file: String) -> Result<String, String
 ///   are handled by `git show`).
 /// - `working`: changes between `commit` and the current working file.
 #[tauri::command]
-pub fn git_diff_file_revision(
-    path: String,
-    file: String,
-    commit: String,
-    compare_to: String,
-) -> Result<String, String> {
+pub async fn git_diff_file_revision(path: String, file: String, commit: String, compare_to: String) -> Result<String, String> {
+    runner::blocking(move || git_diff_file_revision_blocking(path, file, commit, compare_to)).await
+}
+
+fn git_diff_file_revision_blocking(path: String, file: String, commit: String, compare_to: String) -> Result<String, String> {
     if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Err("Esta pasta não é um repositório Git.".into());
     }
@@ -1599,7 +1761,11 @@ pub fn git_diff_file_revision(
 /// Returns the working-tree patch for a tracked file versus HEAD. This backs the
 /// VS Code-like "Open Changes" action from Explorer/Source Control.
 #[tauri::command]
-pub fn git_diff_file(path: String, file: String) -> Result<String, String> {
+pub async fn git_diff_file(path: String, file: String) -> Result<String, String> {
+    runner::blocking(move || git_diff_file_blocking(path, file)).await
+}
+
+fn git_diff_file_blocking(path: String, file: String) -> Result<String, String> {
     if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Err("Esta pasta não é um repositório Git.".into());
     }
@@ -1620,7 +1786,11 @@ pub fn git_diff_file(path: String, file: String) -> Result<String, String> {
 /// Returns the staged/index patch for a tracked file versus HEAD. This backs the
 /// VS Code-like staged changes view from Source Control.
 #[tauri::command]
-pub fn git_diff_file_staged(path: String, file: String) -> Result<String, String> {
+pub async fn git_diff_file_staged(path: String, file: String) -> Result<String, String> {
+    runner::blocking(move || git_diff_file_staged_blocking(path, file)).await
+}
+
+fn git_diff_file_staged_blocking(path: String, file: String) -> Result<String, String> {
     if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Err("Esta pasta não é um repositório Git.".into());
     }
@@ -1640,7 +1810,11 @@ pub fn git_diff_file_staged(path: String, file: String) -> Result<String, String
 
 /// Lists files changed by a commit for the GitLens-like Commit Details card.
 #[tauri::command]
-pub fn git_commit_files(path: String, commit: String) -> Result<Vec<GitCommitFile>, String> {
+pub async fn git_commit_files(path: String, commit: String) -> Result<Vec<GitCommitFile>, String> {
+    runner::blocking(move || git_commit_files_blocking(path, commit)).await
+}
+
+fn git_commit_files_blocking(path: String, commit: String) -> Result<Vec<GitCommitFile>, String> {
     if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Err("Esta pasta não é um repositório Git.".into());
     }
@@ -1944,7 +2118,11 @@ pub struct GitSnapshot {
 /// whatever the agent changes next. Errors only when `path` isn't a git repo —
 /// callers should treat that as "revert unavailable" rather than fatal.
 #[tauri::command]
-pub fn git_snapshot_create(path: String) -> Result<GitSnapshot, String> {
+pub async fn git_snapshot_create(path: String) -> Result<GitSnapshot, String> {
+    runner::blocking(move || git_snapshot_create_blocking(path)).await
+}
+
+fn git_snapshot_create_blocking(path: String) -> Result<GitSnapshot, String> {
     if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Err("O workspace não é um repositório git.".into());
     }
@@ -1965,7 +2143,11 @@ pub fn git_snapshot_create(path: String) -> Result<GitSnapshot, String> {
 /// discarding everything the agent changed since. Tracked files are reset to the
 /// snapshot; files the agent newly created (untracked) are removed.
 #[tauri::command]
-pub fn git_snapshot_restore(path: String, snapshot_id: String, head: String) -> Result<(), String> {
+pub async fn git_snapshot_restore(path: String, snapshot_id: String, head: String) -> Result<(), String> {
+    runner::blocking(move || git_snapshot_restore_blocking(path, snapshot_id, head)).await
+}
+
+fn git_snapshot_restore_blocking(path: String, snapshot_id: String, head: String) -> Result<(), String> {
     if run_git(&path, &["rev-parse", "--is-inside-work-tree"]).is_err() {
         return Err("O workspace não é um repositório git.".into());
     }
@@ -2005,6 +2187,31 @@ pub fn git_snapshot_restore(path: String, snapshot_id: String, head: String) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Compile-time guard: the git commands Tauri invokes are `async fn`s
+    /// (futures), so Tauri runs them on its async runtime — never on the main
+    /// thread. Building the future does not run it.
+    #[test]
+    fn git_commands_are_async() {
+        fn is_future<F: std::future::Future>(_: F) {}
+        let p = || String::from("/nonexistent");
+        is_future(git_status(p()));
+        is_future(git_branch(p()));
+        is_future(git_fetch(p()));
+        is_future(git_fetch_remote(p(), p()));
+        is_future(git_pull(p()));
+        is_future(git_push(p()));
+        is_future(git_publish(p()));
+        is_future(git_commit(p(), p()));
+        is_future(git_checkout(p(), p()));
+        is_future(git_log(p(), 30));
+        is_future(git_graph(p(), 80));
+        is_future(git_log_file(p(), p(), 50));
+        is_future(git_log_line(p(), p(), 1, 50));
+        is_future(git_blame(p(), p()));
+        is_future(git_stash_push(p(), None));
+        is_future(git_worktrees(p()));
+    }
 
     #[test]
     fn porcelain_v2_rename_uses_destination_path() {

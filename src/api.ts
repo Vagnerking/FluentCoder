@@ -1385,6 +1385,15 @@ export function gitCommit(path: string, message: string, connId?: string): Promi
   if (remote) return invoke("ssh_git_commit", { connId: remote.connId, root: path, message });
   return invoke("git_commit", { path, message });
 }
+/**
+ * Cancela fetch/pull/push locais em andamento no repo `path` (todos os repos
+ * quando omitido). Os comandos git locais rodam fora da main thread e têm
+ * timeout; isto é o "cancelar" explícito. Devolve quantos processos sinalizou.
+ */
+export function gitCancel(path?: string, networkOnly = true): Promise<number> {
+  return invoke<number>("git_cancel", { path: path ?? null, networkOnly });
+}
+
 export function gitFetch(path: string, connId?: string): Promise<void> {
   if (connId) return invoke<string>("ssh_git_fetch", { connId, root: path }).then(() => {});
   const remote = getActiveRemote();

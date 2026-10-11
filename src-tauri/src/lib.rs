@@ -192,6 +192,7 @@ pub fn run() {
             mcp::mcp_write_project_config,
             snap::snap_set_max_button_rect,
             git::git_branch,
+            git::git_cancel,
             git::git_branches,
             git::git_remote_branches,
             git::git_remotes,
