@@ -39,3 +39,16 @@ espelhos `ssh_git_*` de `ssh.rs`, em `src/git/*`, `GitPanel.tsx` e
 - Datas relativas vêm de `%at` formatado em pt-BR (`format_relative_time`),
   iguais às do blame/CodeLens.
 - Grafo usa `--branches --remotes --tags HEAD`, não `--all` (exclui `refs/stash`).
+
+## Status (`src-tauri/src/git/status.rs`)
+
+- `git status --porcelain=v2 -z --branch`: caminhos crus (acentos, espaços,
+  aspas), rename com `origPath`, conflito `u` com 10 campos antes do caminho.
+  Detached sai do `# branch.oid` (sem spawn extra).
+- `GitStatus.root` = `rev-parse --show-toplevel`. **Os caminhos de
+  `files[]` são relativos a `root`**, não à pasta do workspace consultada
+  (que pode ser subpasta do repo). Junte caminhos e rode operações a partir de
+  `root` (`joinRepoPath(status.root, f.path)`).
+- Branch: `symbolic-ref --short -q HEAD` (nome completo, `feat/x`), destacado
+  `(abc1234…)`; leitura de `HEAD` só como fallback sem CLI, seguindo `.git`
+  arquivo (`gitdir:`) de worktrees/submódulos.

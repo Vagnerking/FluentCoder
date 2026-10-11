@@ -48,6 +48,8 @@ import { getQuickOpenExcludeGlobs, getQuickOpenMaxFiles } from "./settings/quick
 
 /** Raw shape returned by the Rust `git_status` (snake_case from serde). */
 interface RawGitStatus {
+  /** Repo top-level; status paths are relative to it. Older backends omit it. */
+  root?: string;
   branch: string;
   ahead: number;
   behind: number;
@@ -1274,6 +1276,7 @@ export async function gitStatus(path: string, connId?: string): Promise<GitStatu
     ? await invoke<RawGitStatus>("ssh_git_status", { connId: remote.connId, root: path })
     : await invoke<RawGitStatus>("git_status", { path });
   return {
+    root: raw.root || (raw.is_repo ? path : ""),
     branch: raw.branch,
     ahead: raw.ahead,
     behind: raw.behind,

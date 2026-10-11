@@ -2571,19 +2571,28 @@ pub async fn ssh_git_status(
     state: State<'_, SshState>,
 ) -> Result<crate::git::GitStatus, String> {
     let conn = get_conn(&state, &conn_id).await?;
-    if exec_git(&conn, &root, &["rev-parse", "--is-inside-work-tree"])
-        .await
-        .is_err()
-    {
-        return Ok(crate::git::empty_status());
-    }
-    let raw = exec_git(&conn, &root, &["status", "--porcelain=v2", "--branch"]).await?;
-    let mut status = crate::git::parse_status_v2(&raw);
-    if status.branch == "(detached)" {
-        if let Ok(sha) = exec_git(&conn, &root, &["rev-parse", "--short", "HEAD"]).await {
-            status.branch = format!("({}…)", sha.trim());
+    // 1 exec (antes 2–3): toplevel + `status --porcelain=v2 -z --branch`. O
+    // detached sai do `# branch.oid`, sem outro rev-parse.
+    let mut results = exec_git_batch(
+        &conn,
+        &root,
+        &[
+            owned(&["rev-parse", "--show-toplevel"]),
+            owned(&crate::git::status::STATUS_ARGS),
+        ],
+    )
+    .await?
+    .into_iter();
+    let toplevel = match results.next().unwrap_or_else(|| Ok(String::new())) {
+        Ok(top) => top.trim().to_string(),
+        Err(error) if crate::git::is_not_repo_error(&error) => {
+            return Ok(crate::git::empty_status())
         }
-    }
+        Err(error) => return Err(error),
+    };
+    let raw = results.next().unwrap_or_else(|| Ok(String::new()))?;
+    let mut status = crate::git::parse_status_v2(&raw);
+    status.root = toplevel;
     Ok(status)
 }
 

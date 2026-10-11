@@ -359,7 +359,10 @@ export interface ProjectFile {
 
 /** A changed path in `git status`, mirroring the Rust `GitFileStatus`. */
 export interface GitFileStatus {
+  /** Path relative to the repository top-level (`GitStatus.root`), raw (`-z`). */
   path: string;
+  /** Original path of a rename/copy. */
+  origPath?: string;
   /** Two-letter porcelain code, e.g. " M", "A ", "??", "UU". */
   code: string;
   staged: boolean;
@@ -370,6 +373,12 @@ export interface GitFileStatus {
 
 /** Overall repo state, mirroring the Rust `GitStatus`. */
 export interface GitStatus {
+  /**
+   * Repository top-level (`git rev-parse --show-toplevel`). `files[].path` are
+   * relative to THIS — not to the workspace folder that was queried, which can
+   * be a subfolder of the repo. Empty when not a repo.
+   */
+  root: string;
   branch: string;
   ahead: number;
   behind: number;

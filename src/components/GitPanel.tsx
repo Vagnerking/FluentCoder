@@ -1318,7 +1318,10 @@ function GitRepositoryPanel({
     );
   }
 
-  const repoRootPath = rootPath;
+  // Status paths are relative to the repo top-level, which may differ from the
+  // workspace folder (a subfolder of the repo opened as root). Every git call
+  // below runs from — and joins paths against — the top-level.
+  const repoRootPath = status?.root || rootPath;
   const assistLabel =
     assistSource === "agent"
       ? "Última sugestão gerada pelo agente"
@@ -1486,13 +1489,13 @@ function GitRepositoryPanel({
     const fallback = buildCommitMessage(sourceFiles, commits);
     try {
       const recentCommits =
-        commits.length > 0 ? commits : await gitLog(rootPath, 16, connId);
+        commits.length > 0 ? commits : await gitLog(repoRootPath, 16, connId);
       if (commits.length === 0) setCommits(recentCommits);
       const result = await suggestWithGitAssistant(
         {
           kind: "commitMessage",
-          repoName: rootName || fileName(rootPath),
-          rootPath,
+          repoName: rootName || fileName(repoRootPath),
+          rootPath: repoRootPath,
           branch: status?.branch || "workspace",
           provider,
           files: sourceFiles,
@@ -1517,7 +1520,7 @@ function GitRepositoryPanel({
     let recentCommits = commits;
     try {
       if (recentCommits.length === 0) {
-        recentCommits = await gitLog(rootPath, 12, connId);
+        recentCommits = await gitLog(repoRootPath, 12, connId);
         setCommits(recentCommits);
       }
     } catch {
@@ -1527,8 +1530,8 @@ function GitRepositoryPanel({
     const result = await suggestWithGitAssistant(
       {
         kind: "branchName",
-        repoName: rootName || fileName(rootPath),
-        rootPath,
+        repoName: rootName || fileName(repoRootPath),
+        rootPath: repoRootPath,
         branch: status?.branch || "workspace",
         provider,
         files: sourceFiles,
@@ -1545,7 +1548,7 @@ function GitRepositoryPanel({
     const name = raw.trim();
     if (!name) return;
     await act(async () => {
-      await gitCreateBranch(rootPath, name, connId);
+      await gitCreateBranch(repoRootPath, name, connId);
       await loadBranches();
     });
   };
@@ -1557,7 +1560,7 @@ function GitRepositoryPanel({
       if (raw === null) return;
       const localName = raw.trim();
       if (!localName) return;
-      await gitCheckoutRemoteBranch(rootPath, branch.name, localName, connId);
+      await gitCheckoutRemoteBranch(repoRootPath, branch.name, localName, connId);
       await loadBranches();
     });
 
@@ -1574,7 +1577,7 @@ function GitRepositoryPanel({
         )
       )
         return;
-      await gitDeleteRemoteBranch(rootPath, parts.remote, parts.branch, connId);
+      await gitDeleteRemoteBranch(repoRootPath, parts.remote, parts.branch, connId);
       await Promise.all([loadBranches(), loadRemotes(), loadCommitGraph()]);
     });
 
@@ -1585,7 +1588,7 @@ function GitRepositoryPanel({
         setError(`Nao foi possivel identificar o remoto de ${branch.name}.`);
         return;
       }
-      await gitFetchRemote(rootPath, parts.remote, connId);
+      await gitFetchRemote(repoRootPath, parts.remote, connId);
       await Promise.all([loadBranches(), loadRemotes(), loadCommitGraph()]);
     });
 
@@ -1595,7 +1598,7 @@ function GitRepositoryPanel({
       if (raw === null) return;
       const nextName = raw.trim();
       if (!nextName || nextName === branch.name) return;
-      await gitRenameBranch(rootPath, branch.name, nextName, connId);
+      await gitRenameBranch(repoRootPath, branch.name, nextName, connId);
       await loadBranches();
     });
 
@@ -1606,7 +1609,7 @@ function GitRepositoryPanel({
       const force = window.confirm(
         `Forçar exclusão de "${branch.name}"?\n\nOK usa git branch -D. Cancelar usa git branch -d.`
       );
-      await gitDeleteBranch(rootPath, branch.name, force, connId);
+      await gitDeleteBranch(repoRootPath, branch.name, force, connId);
       await loadBranches();
     });
 
@@ -1620,13 +1623,13 @@ function GitRepositoryPanel({
       if (rawUrl === null) return;
       const url = rawUrl.trim();
       if (!url) return;
-      await gitRemoteAdd(rootPath, name, url, connId);
+      await gitRemoteAdd(repoRootPath, name, url, connId);
       await loadRemotes();
     });
 
   const fetchRemote = (remote: GitRemoteInfo) =>
     act(async () => {
-      await gitFetchRemote(rootPath, remote.name, connId);
+      await gitFetchRemote(repoRootPath, remote.name, connId);
       await Promise.all([loadRemotes(), loadBranches(), loadCommitGraph()]);
     });
 
@@ -1641,10 +1644,10 @@ function GitRepositoryPanel({
       const nextUrl = rawUrl.trim();
       if (!nextUrl) return;
       if (nextName !== remote.name) {
-        await gitRemoteRename(rootPath, remote.name, nextName, connId);
+        await gitRemoteRename(repoRootPath, remote.name, nextName, connId);
       }
       if (nextUrl !== remote.fetchUrl) {
-        await gitRemoteSetUrl(rootPath, nextName, nextUrl, connId);
+        await gitRemoteSetUrl(repoRootPath, nextName, nextUrl, connId);
       }
       await Promise.all([loadRemotes(), loadBranches()]);
     });
@@ -1652,7 +1655,7 @@ function GitRepositoryPanel({
   const removeRemote = (remote: GitRemoteInfo) =>
     act(async () => {
       if (!window.confirm(`Remover o remoto "${remote.name}"?`)) return;
-      await gitRemoteRemove(rootPath, remote.name, connId);
+      await gitRemoteRemove(repoRootPath, remote.name, connId);
       await Promise.all([loadRemotes(), loadBranches()]);
     });
 
@@ -1661,7 +1664,7 @@ function GitRepositoryPanel({
     let recentCommits = commits;
     try {
       if (recentCommits.length === 0) {
-        recentCommits = await gitLog(rootPath, 12, connId);
+        recentCommits = await gitLog(repoRootPath, 12, connId);
         setCommits(recentCommits);
       }
     } catch {
@@ -1681,13 +1684,13 @@ function GitRepositoryPanel({
       : false;
     const rawTarget = window.prompt(
       "Pasta da nova worktree",
-      siblingWorktreePath(rootPath, branchOrRef || "worktree"),
+      siblingWorktreePath(repoRootPath, branchOrRef || "worktree"),
     );
     if (rawTarget === null) return;
     const target = rawTarget.trim();
     if (!target) return;
     await act(async () => {
-      await gitWorktreeAdd(rootPath, target, branchOrRef || undefined, createBranch, connId);
+      await gitWorktreeAdd(repoRootPath, target, branchOrRef || undefined, createBranch, connId);
       setActiveGitFluentTab("worktrees");
     });
   };
@@ -1700,12 +1703,12 @@ function GitRepositoryPanel({
       if (!branchOrRef) return;
       const rawTarget = window.prompt(
         "Pasta da nova worktree",
-        siblingWorktreePath(rootPath, branchOrRef),
+        siblingWorktreePath(repoRootPath, branchOrRef),
       );
       if (rawTarget === null) return;
       const target = rawTarget.trim();
       if (!target) return;
-      await gitWorktreeAdd(rootPath, target, branchOrRef, false, connId);
+      await gitWorktreeAdd(repoRootPath, target, branchOrRef, false, connId);
       setActiveGitFluentTab("worktrees");
     });
 
@@ -1713,7 +1716,7 @@ function GitRepositoryPanel({
     act(async () => {
       if (worktree.current) return;
       if (!window.confirm(`Remover a worktree "${shortPath(worktree.path)}"?`)) return;
-      await gitWorktreeRemove(rootPath, worktree.path, false, connId);
+      await gitWorktreeRemove(repoRootPath, worktree.path, false, connId);
       setActiveGitFluentTab("worktrees");
     });
 
@@ -1744,28 +1747,28 @@ function GitRepositoryPanel({
         )
       )
         return;
-      await gitDiscardFile(rootPath, f.path, f.untracked, connId);
+      await gitDiscardFile(repoRootPath, f.path, f.untracked, connId);
     });
 
   // Clicar num item do SCM abre a COMPARAÇÃO com os lados certos (HEAD/Index/
   // Working tree); conflitos e não rastreados abrem o arquivo. Nunca liga blame.
   const openSourceControlItem = (f: GitFileStatus, group: ScmGroup) => {
-    const absolutePath = `${rootPath}/${f.path}`;
+    const absolutePath = joinRepoPath(repoRootPath, f.path);
     const target = scmOpenTarget(f, group);
     if (target.kind === "diff" && onOpenChanges) {
-      onOpenChanges(absolutePath, rootPath, connId, target.view, target.diff);
+      onOpenChanges(absolutePath, repoRootPath, connId, target.view, target.diff);
     } else {
       onOpenFile(absolutePath, fileName(f.path));
     }
   };
 
   const openStashFile = (stash: GitStashEntry, file: GitStashFile) => {
-    const absolutePath = joinRepoPath(rootPath, file.path);
+    const absolutePath = joinRepoPath(repoRootPath, file.path);
     const ref = `stash@{${stash.index}}`;
     if (onOpenRevisionDiff) {
-      onOpenRevisionDiff(absolutePath, ref, ref, "previous", rootPath, connId);
+      onOpenRevisionDiff(absolutePath, ref, ref, "previous", repoRootPath, connId);
     } else if (onOpenRevision) {
-      onOpenRevision(absolutePath, ref, ref, rootPath, connId);
+      onOpenRevision(absolutePath, ref, ref, repoRootPath, connId);
     } else {
       onOpenFile(absolutePath, fileName(file.path));
     }
@@ -1978,7 +1981,7 @@ function GitRepositoryPanel({
       run: () =>
         act(async () => {
           if (!window.confirm(`Reverter o commit ${commit.short}?`)) return;
-          await gitRevertCommit(rootPath, commit.hash, connId);
+          await gitRevertCommit(repoRootPath, commit.hash, connId);
           await Promise.all([loadCommitGraph(), loadHistory()]);
         }),
     },
@@ -1990,7 +1993,7 @@ function GitRepositoryPanel({
       label: branch.current ? "Branch atual" : "Checkout",
       icon: "arrowLeft",
       enabled: !branch.current,
-      run: () => act(() => gitCheckout(rootPath, branch.name, connId).then(loadBranches)),
+      run: () => act(() => gitCheckout(repoRootPath, branch.name, connId).then(loadBranches)),
     },
     {
       id: "show-tip",
@@ -2152,13 +2155,13 @@ function GitRepositoryPanel({
       id: "apply",
       label: "Aplicar",
       icon: "add",
-      run: () => act(() => gitStashApply(rootPath, stash.index, connId)),
+      run: () => act(() => gitStashApply(repoRootPath, stash.index, connId)),
     },
     {
       id: "pop",
       label: "Pop",
       icon: "gitPull",
-      run: () => act(() => gitStashPop(rootPath, stash.index, connId)),
+      run: () => act(() => gitStashPop(repoRootPath, stash.index, connId)),
     },
     menuSeparator("sep-stash-actions"),
     {
@@ -2168,7 +2171,7 @@ function GitRepositoryPanel({
       run: () =>
         act(async () => {
           if (!window.confirm("Descartar este stash?")) return;
-          await gitStashDrop(rootPath, stash.index, connId);
+          await gitStashDrop(repoRootPath, stash.index, connId);
         }),
     },
   ];
@@ -2342,7 +2345,7 @@ function GitRepositoryPanel({
       label: "Fetch",
       icon: "sync",
       enabled: !busy,
-      run: () => act(() => gitFetch(rootPath, connId)),
+      run: () => act(() => gitFetch(repoRootPath, connId)),
     },
     {
       id: "git-fluent-pull",
@@ -2350,7 +2353,7 @@ function GitRepositoryPanel({
       icon: "gitPull",
       enabled: !busy && Boolean(status?.hasUpstream),
       title: status?.hasUpstream ? undefined : "A branch atual não tem upstream configurado.",
-      run: () => act(() => gitPull(rootPath, connId)),
+      run: () => act(() => gitPull(repoRootPath, connId)),
     },
     {
       id: "git-fluent-push",
@@ -2358,7 +2361,7 @@ function GitRepositoryPanel({
       icon: "gitPush",
       enabled: !busy && Boolean(status?.hasUpstream),
       title: status?.hasUpstream ? undefined : "A branch atual não tem upstream configurado.",
-      run: () => act(() => gitPush(rootPath, connId)),
+      run: () => act(() => gitPush(repoRootPath, connId)),
     },
     {
       id: "git-fluent-stash",
@@ -2403,7 +2406,7 @@ function GitRepositoryPanel({
       id: "open",
       label: "Abrir Arquivo",
       icon: "file",
-      run: () => onOpenFile(`${rootPath}/${f.path}`, fileName(f.path)),
+      run: () => onOpenFile(joinRepoPath(repoRootPath, f.path), fileName(f.path)),
     };
     const openChanges: ContextMenuItem = {
       id: "openChanges",
@@ -2416,8 +2419,8 @@ function GitRepositoryPanel({
             (() => {
               const target = scmOpenTarget(f, group === "conflict" ? "changes" : group);
               onOpenChanges(
-                `${rootPath}/${f.path}`,
-                rootPath,
+                joinRepoPath(repoRootPath, f.path),
+                repoRootPath,
                 connId,
                 group === "staged" ? "staged" : "working",
                 target.kind === "diff" ? target.diff : undefined
@@ -2434,7 +2437,7 @@ function GitRepositoryPanel({
           id: "resolve",
           label: "Marcar como resolvido",
           icon: "success",
-          run: () => act(() => gitStage(rootPath, f.path, connId)),
+          run: () => act(() => gitStage(repoRootPath, f.path, connId)),
         },
       ];
     }
@@ -2447,7 +2450,7 @@ function GitRepositoryPanel({
           id: "unstage",
           label: "Remover do stage",
           icon: "remove",
-          run: () => act(() => gitUnstage(rootPath, f.path, connId)),
+          run: () => act(() => gitUnstage(repoRootPath, f.path, connId)),
         },
       ];
     }
@@ -2459,7 +2462,7 @@ function GitRepositoryPanel({
         id: "stage",
         label: "Preparar (stage)",
         icon: "add",
-        run: () => act(() => gitStage(rootPath, f.path, connId)),
+        run: () => act(() => gitStage(repoRootPath, f.path, connId)),
       },
       {
         id: "discard",
@@ -2504,10 +2507,10 @@ function GitRepositoryPanel({
   };
 
   function stashGitFluentChanges() {
-    if (!rootPath) return;
+    if (!repoRootPath) return;
     const raw = window.prompt("Mensagem do stash (opcional):");
     if (raw === null) return;
-    void act(() => gitStashPush(rootPath, raw || undefined, connId));
+    void act(() => gitStashPush(repoRootPath, raw || undefined, connId));
   }
 
   const historyScope = resolvedHistoryFile
@@ -2522,7 +2525,7 @@ function GitRepositoryPanel({
     : {
         type: "repository",
         label: "Histórico do repositório",
-        detail: status?.branch ? `Branch ${status.branch}` : rootName || fileName(rootPath),
+        detail: status?.branch ? `Branch ${status.branch}` : rootName || fileName(repoRootPath),
       } as const;
   const gitFluentPaneActiveTab: GitFluentTab =
     activeGitFluentTab === "graph" ? "contributors" : activeGitFluentTab;
@@ -2538,7 +2541,7 @@ function GitRepositoryPanel({
       onRefreshGraph={() => void loadCommitGraph()}
       onRefreshStashes={() => void loadStashes()}
       onCreateWorktree={() => void createWorktree()}
-      onPruneWorktrees={() => act(() => gitWorktreePrune(rootPath, connId))}
+      onPruneWorktrees={() => act(() => gitWorktreePrune(repoRootPath, connId))}
       onRefreshCompare={() => void loadUpstreamComparison()}
       onRefreshHistory={() => void loadHistory()}
       onRefreshRepository={loadGitFluentRepositorySnapshot}
@@ -2556,7 +2559,7 @@ function GitRepositoryPanel({
       onRefreshGraph={() => void loadCommitGraph()}
       onRefreshStashes={() => void loadStashes()}
       onCreateWorktree={() => void createWorktree()}
-      onPruneWorktrees={() => act(() => gitWorktreePrune(rootPath, connId))}
+      onPruneWorktrees={() => act(() => gitWorktreePrune(repoRootPath, connId))}
       onRefreshCompare={() => void loadUpstreamComparison()}
       onRefreshHistory={() => void loadHistory()}
       onRefreshRepository={loadGitFluentRepositorySnapshot}
@@ -3166,7 +3169,7 @@ function GitRepositoryPanel({
       {embedded ? (
         <div
           className={`git-root-header${showRepositoryBody ? "" : " is-collapsed"}`}
-          title={rootPath}
+          title={repoRootPath}
         >
           <button
             type="button"
@@ -3176,7 +3179,7 @@ function GitRepositoryPanel({
           >
             <Codicon name={showRepositoryBody ? "chevronDown" : "chevronRight"} size={12} />
             <Codicon name={provider === "ssh" ? "remote" : "folder"} size={13} />
-            <span className="git-root-name">{rootName || fileName(rootPath)}</span>
+            <span className="git-root-name">{rootName || fileName(repoRootPath)}</span>
           </button>
           <div className="git-root-meta">
             <span className="git-root-branch" title="Branch atual">

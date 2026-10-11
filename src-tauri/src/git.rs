@@ -1,51 +1,24 @@
 use serde::Serialize;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 
 pub(crate) mod history;
+pub(crate) mod status;
 pub(crate) mod runner;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-/// Returns the current git branch name for the repository containing `path`,
-/// or `None` when the folder isn't a git repo (or HEAD is detached/unborn).
-///
-/// Reads `.git/HEAD` directly instead of shelling out to `git`, so it works
-/// even where the git CLI isn't on PATH and adds no process-spawn latency.
+/// Returns the current git branch name for the repository containing `path`
+/// (full name, e.g. `feat/x`), `(abc1234…)` when detached, or `None` when the
+/// folder isn't a git repo. Resolved with `git symbolic-ref`, so worktrees and
+/// submodules (where `.git` is a file) work; falls back to reading `HEAD`
+/// (following `gitdir:`) only when the git CLI is missing.
 #[tauri::command]
 pub async fn git_branch(path: String) -> Option<String> {
     runner::blocking(move || git_branch_blocking(path)).await
 }
 
 fn git_branch_blocking(path: String) -> Option<String> {
-    let git_dir = find_git_dir(Path::new(&path))?;
-    let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
-    let head = head.trim();
-
-    // Normal case: "ref: refs/heads/<branch>".
-    if let Some(rest) = head.strip_prefix("ref: ") {
-        return rest.rsplit('/').next().map(|s| s.to_string());
-    }
-
-    // Detached HEAD: HEAD holds a raw commit sha. Show a short hash.
-    if head.len() >= 7 {
-        return Some(format!("({}…)", &head[..7]));
-    }
-    None
-}
-
-/// Walks up from `start` looking for a `.git` directory, so the branch resolves
-/// even when a subfolder of the repo is opened.
-fn find_git_dir(start: &Path) -> Option<PathBuf> {
-    let mut current = Some(start);
-    while let Some(dir) = current {
-        let candidate = dir.join(".git");
-        if candidate.is_dir() {
-            return Some(candidate);
-        }
-        current = dir.parent();
-    }
-    None
+    status::current_branch(&path)
 }
 
 // ---------------------------------------------------------------------------
@@ -59,35 +32,42 @@ fn find_git_dir(start: &Path) -> Option<PathBuf> {
 /// One changed path in `git status`, classified for the SCM list.
 #[derive(Serialize)]
 pub struct GitFileStatus {
-    /// Path relative to the repo root.
-    path: String,
+    /// Path relative to the repo root (raw: `-z`, no quoting).
+    pub(crate) path: String,
+    /// Original path of a rename/copy (porcelain v2 type `2`).
+    #[serde(rename = "origPath", skip_serializing_if = "Option::is_none")]
+    pub(crate) orig_path: Option<String>,
     /// Two-letter porcelain code, e.g. " M", "A ", "??", "MM", "UU".
-    code: String,
+    pub(crate) code: String,
     /// Whether the change is (at least partly) staged in the index.
-    staged: bool,
+    pub(crate) staged: bool,
     /// Whether the file is untracked ("??").
-    untracked: bool,
+    pub(crate) untracked: bool,
     /// Whether the file is unmerged (a merge/rebase conflict).
-    conflicted: bool,
+    pub(crate) conflicted: bool,
 }
 
 /// Overall repo state shown above the file list.
 #[derive(Serialize)]
 pub struct GitStatus {
+    /// Repository top-level (`rev-parse --show-toplevel`). File paths are
+    /// relative to THIS, not to the workspace folder that was queried — a
+    /// folder inside a repo must join paths against `root`. Empty if not a repo.
+    pub(crate) root: String,
     /// Current branch, or a short sha when detached. Empty if not a repo.
     /// `pub(crate)` so the remote-git layer can refine a detached HEAD.
     pub(crate) branch: String,
     /// Commits the local branch is ahead of its upstream.
-    ahead: u32,
+    pub(crate) ahead: u32,
     /// Commits the local branch is behind its upstream.
-    behind: u32,
+    pub(crate) behind: u32,
     /// True when `path` is inside a git work tree.
-    is_repo: bool,
+    pub(crate) is_repo: bool,
     /// True when an upstream tracking branch is configured (enables push/pull).
-    has_upstream: bool,
+    pub(crate) has_upstream: bool,
     /// Number of unmerged (conflicted) paths — non-zero during a merge/rebase.
-    conflicted: u32,
-    files: Vec<GitFileStatus>,
+    pub(crate) conflicted: u32,
+    pub(crate) files: Vec<GitFileStatus>,
 }
 
 /// One linked worktree in the repository.
@@ -202,6 +182,7 @@ pub fn git_cancel(path: Option<String>, network_only: Option<bool>) -> usize {
 /// Shared by the local and remote (SSH) status commands.
 pub fn empty_status() -> GitStatus {
     GitStatus {
+        root: String::new(),
         branch: String::new(),
         ahead: 0,
         behind: 0,
@@ -223,21 +204,15 @@ pub async fn git_status(path: String) -> Result<GitStatus, String> {
 }
 
 fn git_status_blocking(path: String) -> Result<GitStatus, String> {
-    // Not a repo? Return an empty, non-erroring status so the UI can say so.
-    match run_git(&path, &["rev-parse", "--is-inside-work-tree"]) {
-        Ok(_) => {}
+    // 2 spawns: toplevel (também é o teste de repo) + status -z.
+    let root = match run_git(&path, &["rev-parse", "--show-toplevel"]) {
+        Ok(root) => root.trim().to_string(),
         Err(error) if is_not_repo_error(&error) => return Ok(empty_status()),
         Err(error) => return Err(error),
-    }
-
-    // --porcelain=v2 --branch gives both branch/ahead/behind headers and files.
-    let raw = run_git(&path, &["status", "--porcelain=v2", "--branch"])?;
-    let mut status = parse_status_v2(&raw);
-    if status.branch == "(detached)" {
-        if let Ok(sha) = run_git(&path, &["rev-parse", "--short", "HEAD"]) {
-            status.branch = format!("({}…)", sha.trim());
-        }
-    }
+    };
+    let raw = run_git(&path, &status::STATUS_ARGS)?;
+    let mut status = status::parse_status(&raw);
+    status.root = root;
     Ok(status)
 }
 
@@ -411,104 +386,10 @@ pub(crate) fn parse_worktrees(raw: &str, current_root: &str) -> Vec<GitWorktreeI
     worktrees
 }
 
-/// Parses `git status --porcelain=v2 --branch` output into a {@link GitStatus}
-/// (always `is_repo = true`; the caller checks repo-ness first). A detached HEAD
-/// is left as `"(detached)"` for the caller to refine with a short sha. Shared by
-/// the local and remote (SSH) status commands.
+/// Parses `git status --porcelain=v2 --branch [-z]` output (see
+/// [`status::parse_status`]). Shared by the local and remote (SSH) status.
 pub fn parse_status_v2(raw: &str) -> GitStatus {
-    let mut branch = String::new();
-    let mut ahead = 0u32;
-    let mut behind = 0u32;
-    let mut has_upstream = false;
-    let mut conflicted = 0u32;
-    let mut files: Vec<GitFileStatus> = Vec::new();
-
-    for line in raw.lines() {
-        if let Some(rest) = line.strip_prefix("# branch.head ") {
-            branch = rest.trim().to_string();
-        } else if let Some(rest) = line.strip_prefix("# branch.ab ") {
-            has_upstream = true;
-            // Format: "+<ahead> -<behind>"
-            for tok in rest.split_whitespace() {
-                if let Some(n) = tok.strip_prefix('+') {
-                    ahead = n.parse().unwrap_or(0);
-                } else if let Some(n) = tok.strip_prefix('-') {
-                    behind = n.parse().unwrap_or(0);
-                }
-            }
-        } else if let Some(rest) = line.strip_prefix("1 ") {
-            // Ordinary changed entry: "<XY> <sub> ... <path>"
-            push_v2_entry(rest, false, &mut files);
-        } else if let Some(rest) = line.strip_prefix("2 ") {
-            // Renamed/copied: path is "<new>\t<orig>"; keep the new path.
-            push_v2_entry(rest, true, &mut files);
-        } else if let Some(rest) = line.strip_prefix("u ") {
-            // Unmerged (merge/rebase conflict): "<XY> <sub> ... <path>".
-            let mut parts = rest.splitn(2, ' ');
-            let code = parts.next().unwrap_or("UU").to_string();
-            let tail = parts.next().unwrap_or("");
-            let path = tail.rsplit(' ').next().unwrap_or(tail).to_string();
-            conflicted += 1;
-            files.push(GitFileStatus {
-                path,
-                code,
-                staged: false,
-                untracked: false,
-                conflicted: true,
-            });
-        } else if let Some(rest) = line.strip_prefix("? ") {
-            files.push(GitFileStatus {
-                path: rest.trim().to_string(),
-                code: "??".to_string(),
-                staged: false,
-                untracked: true,
-                conflicted: false,
-            });
-        }
-    }
-
-    GitStatus {
-        branch,
-        ahead,
-        behind,
-        is_repo: true,
-        has_upstream,
-        conflicted,
-        files,
-    }
-}
-
-/// Parses the tail of a porcelain v2 "1"/"2" line into a GitFileStatus.
-/// The XY status field is the first token; the path is the last field.
-fn push_v2_entry(rest: &str, renamed: bool, files: &mut Vec<GitFileStatus>) {
-    let mut parts = rest.splitn(2, ' ');
-    let xy = parts.next().unwrap_or("..").to_string();
-    let tail = parts.next().unwrap_or("");
-    // The path is everything after the 7 metadata columns; the simplest robust
-    // approach is to take the substring after the last metadata field. Porcelain
-    // v2 separates the path with a single space after the score/sha columns, and
-    // a rename uses a tab between new and original. We split off the path as the
-    // final whitespace-tab segment.
-    let field_count = if renamed { 8 } else { 7 };
-    let path_field = tail
-        .splitn(field_count, ' ')
-        .nth(field_count - 1)
-        .unwrap_or(tail);
-    let path = if renamed {
-        path_field.split('\t').next().unwrap_or(path_field)
-    } else {
-        path_field
-    }
-    .to_string();
-
-    let staged = xy.chars().next().map(|c| c != '.').unwrap_or(false);
-    files.push(GitFileStatus {
-        path,
-        code: xy,
-        staged,
-        untracked: false,
-        conflicted: false,
-    });
+    status::parse_status(raw)
 }
 
 /// One local branch in the branch picker (issue #16), with the metadata needed
