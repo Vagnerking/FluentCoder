@@ -184,9 +184,33 @@ export function isFluentWorkspaceFile(path: string): boolean {
   return path.toLocaleLowerCase().endsWith(FLUENT_WORKSPACE_EXTENSION);
 }
 
+/**
+ * Caminho de pasta de um `.code-workspace`: `uri` `file://` vira caminho e
+ * caminhos relativos são resolvidos a partir da pasta do arquivo (como no VS Code).
+ */
+export function resolveCodeWorkspaceFolder(raw: string, workspaceFilePath?: string | null): string {
+  let p = raw.trim();
+  if (/^file:\/\//i.test(p)) {
+    p = decodeURIComponent(p.replace(/^file:\/\//i, ""));
+    if (/^\/[a-zA-Z]:/.test(p)) p = p.slice(1);
+  }
+  const isAbs = p.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith("\\\\");
+  if (isAbs || !workspaceFilePath) return p;
+  const sep = workspaceFilePath.includes("\\") && !workspaceFilePath.includes("/") ? "\\" : "/";
+  const parts = workspaceFilePath.replace(/\\/g, "/").split("/");
+  parts.pop();
+  for (const seg of p.replace(/\\/g, "/").split("/")) {
+    if (!seg || seg === ".") continue;
+    if (seg === "..") parts.pop();
+    else parts.push(seg);
+  }
+  return parts.join("/").replace(/\//g, sep) || p;
+}
+
 export function fluentWorkspaceFromCodeWorkspace(
   value: CodeWorkspaceFile,
-  name = "Workspace"
+  name = "Workspace",
+  workspaceFilePath?: string | null
 ): FluentWorkspaceFile {
   return {
     fluentWorkspace: FLUENT_WORKSPACE_VERSION,
@@ -194,7 +218,7 @@ export function fluentWorkspaceFromCodeWorkspace(
     folders: (value.folders ?? [])
       .map((folder) => ({
         name: folder.name,
-        path: folder.path ?? folder.uri ?? "",
+        path: resolveCodeWorkspaceFolder(folder.path ?? folder.uri ?? "", workspaceFilePath),
       }))
       .filter((folder) => folder.path.trim() !== ""),
     git: { mode: "perFolder" },

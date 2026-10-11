@@ -159,3 +159,31 @@ EditorConfig do VS Code. O Rust (`editorconfig_chain`) devolve a cadeia até
 
 O cache é invalidado quando um `.editorconfig` é salvo pelo app e quando a
 janela volta ao foco (editado fora).
+
+## Compatibilidade com os arquivos do VS Code
+
+| Arquivo | O que o app faz |
+|---|---|
+| `.vscode/settings.json` | Camada workspace (pasta única) ou pasta (multi-root). Chaves mapeadas valem no app; as desconhecidas são preservadas e repassadas ao host de extensões. Escrita vai para `.fluent/settings.json` (ou `.vscode/`, por `fluent.settings.workspaceWriteTarget`). |
+| `.code-workspace` | Lido como JSONC; pastas relativas ao arquivo (e `uri` `file://`) resolvidas; `settings` vira a camada workspace e a escrita no escopo Workspace edita o próprio arquivo (comentários preservados); `extensions.recommendations`, `tasks` e `launch` também são lidos. |
+| `.vscode/extensions.json` | `recommendations` − `unwantedRecommendations` → seção "Recomendadas pelo workspace" da view Extensões (instala pelo catálogo Open VSX configurado). `extensions.ignoreRecommendations` esconde. |
+| `.vscode/tasks.json` | Tipos `shell`/`process` (com `args`, `options.cwd`, blocos `windows`/`linux`/`osx`, `dependsOn` em sequência) e `npm` (`npm run <script>`, `path`) rodam no terminal integrado: seção "Do VS Code (.vscode)" do Executar e Depurar, Paleta "Tarefas: Executar Tarefa…" e **Ctrl+Shift+B** ("Executar Tarefa de Build": a `isDefault` do grupo build). Outros tipos aparecem desabilitados com o motivo. `problemMatcher` não é interpretado. |
+| `.vscode/launch.json` | Sem depurador genérico: configurações `launch` de `node`/`pwa-node` (`node program`), `coreclr`/`clr`/`dotnet` (`dotnet program.dll` ou `dotnet run --project`) e `python`/`debugpy` viram "Executar sem depurar" (o `preLaunchTask` roda antes). `attach` e tipos sem equivalente ficam desabilitados — a depuração .NET continua pela seção netcoredbg. |
+| Variáveis | `${workspaceFolder}`, `${workspaceFolderBasename}`, `${file}`, `${fileBasename}`, `${fileBasenameNoExtension}`, `${fileExtname}`, `${fileDirname}`, `${relativeFile}`, `${cwd}`, `${pathSeparator}`, `${env:X}` (vazio no WebView), `${config:x}` (settings). `${input:…}`/`${command:…}` ficam literais. |
+| `.editorconfig` | Ver "EditorConfig" acima. |
+| `keybindings.json` (usuário) | `<app_config>/User/keybindings.json`, formato do VS Code: `{ key, command, when?, args? }`; `-comando` remove um atalho padrão; acordes (`ctrl+k ctrl+s`). Ids do VS Code comuns são traduzidos (`workbench.action.files.save` → `menu.file.save`…, tabela em `keybindings.ts`); `editor.action.*` roda no editor focado e ids de extensões vão ao host. `when` suporta `!`, `&&`, `\|\|`, `==`, `!=`, `=~ /re/`, `<`/`>`, `in`/`not in` e as chaves `editorTextFocus`, `editorFocus`, `textInputFocus`, `inputFocus`, `terminalFocus`, `resourceLangId`, `resourceExtname`, `resourceFilename`, `resourcePath`, `sideBarVisible`, `workspaceFolderCount` e `config.*`. Ctrl e ⌘ são equivalentes (CtrlCmd), como nos menus. |
+| `settings.json` do VS Code do usuário | Nunca lido nem escrito (regra das extensões hospedadas). |
+
+### Atalhos: convivência com o handler do App
+
+O handler de teclado do `App.tsx` continua tratando os atalhos embutidos
+(`DEFAULT_APP_KEYBINDINGS` os descreve como dados para a tela de atalhos). O
+listener de `keybindingRuntime.ts` roda na fase de CAPTURA:
+
+- regra do usuário (ou embutida que o App não trata, como `Ctrl+,`) → executa e
+  consome a tecla;
+- embutida tratada pelo App e não alterada → não intervém;
+- embutida removida pelo usuário (`-comando`) → a tecla segue para o editor, mas
+  o App a ignora (`isKeyClaimed` no início do `onKeyDown`);
+- o 1º acorde de uma sequência nunca é consumido (os acordes do Monaco, como
+  Ctrl+K Ctrl+C, continuam funcionando).

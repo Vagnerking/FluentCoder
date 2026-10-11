@@ -116,6 +116,18 @@ test("converts a basic VS Code code-workspace file to Fluent Workspace format", 
   assert.deepEqual(normalized.settings, { "files.exclude": { "**/bin": true } });
 });
 
+test("code-workspace: pastas relativas ao arquivo e uri file://", () => {
+  const fluent = fluentWorkspaceFromCodeWorkspace(
+    { folders: [{ path: "../web" }, { path: "." }, { uri: "file:///c%3A/repos/api" }, { path: "/abs/x" }] },
+    "stack",
+    "/home/u/ws/stack.code-workspace"
+  );
+  assert.deepEqual(
+    fluent.folders.map((f) => f.path),
+    ["/home/u/web", "/home/u/ws", "c:/repos/api", "/abs/x"]
+  );
+});
+
 test("recognizes fluent workspace paths case-insensitively", () => {
   assert.equal(isFluentWorkspaceFile("C:/work/BlackRed.fluent-workspace"), true);
   assert.equal(isFluentWorkspaceFile("C:/work/BlackRed.code-workspace"), false);

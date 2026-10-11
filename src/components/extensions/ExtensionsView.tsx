@@ -31,6 +31,7 @@ import {
 } from "../../extensions/catalog";
 import { RUNNABLE, VERDICT_LABEL, classify, type CompatibilityReport, type Verdict } from "../../extensions/compatibility";
 import { CAPABILITIES } from "../../extensions/capabilities";
+import { useWorkspaceRecommendations } from "../../settings/useWorkspaceRecommendations";
 import { ExtensionCard, VerdictBadge, type CardAction } from "./ExtensionCard";
 import { ExtensionDetails, type DetailsTarget } from "./ExtensionDetails";
 import {
@@ -644,6 +645,23 @@ export function ExtensionsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [st.loaded, sourcesKey]);
 
+  // Recomendadas pelo workspace (`.vscode/extensions.json` / `extensions` do
+  // arquivo de workspace), com a mesma checagem de disponibilidade nas fontes.
+  const workspaceRecs = useWorkspaceRecommendations();
+  const workspaceRecsKey = workspaceRecs.map((r) => r.id).join("|");
+  useEffect(() => {
+    if (!st.loaded || workspaceRecs.length === 0) return;
+    let alive = true;
+    for (const rec of workspaceRecs) {
+      setRecStatus((r) => (r[rec.id] ? r : { ...r, [rec.id]: "loading" }));
+      void resolveRecommendation(rec, enabledSources).then((s) => alive && setRecStatus((r) => ({ ...r, [rec.id]: s })));
+    }
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [st.loaded, sourcesKey, workspaceRecsKey]);
+
   useEffect(() => {
     const t = window.setTimeout(() => setDebounced(query.trim()), SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(t);
@@ -924,6 +942,15 @@ export function ExtensionsView() {
                 </ul>
               </>
             )}
+          </Section>
+        )}
+        {workspaceRecs.length > 0 && (
+          <Section id="recommended-workspace" title="Recomendadas pelo workspace" count={workspaceRecs.length}>
+            <ul className="ext-list">
+              {workspaceRecs.map((rec) => (
+                <RecommendedCard key={rec.id} rec={rec} status={recStatus[rec.id] ?? "loading"} vm={vm} />
+              ))}
+            </ul>
           </Section>
         )}
         <Section id="recommended" title="Recomendadas" count={RECOMMENDED.length}>

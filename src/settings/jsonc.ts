@@ -444,3 +444,66 @@ function removeProperty(text: string, obj: JsonNode, idx: number): string {
   if (start <= obj.offset) start = obj.offset + 1;
   return splice(text, start, endOfProp - start, "");
 }
+
+// ------------------------------------------------------------------ listas
+// (keybindings.json é uma lista na raiz)
+
+/** Acrescenta `value` ao fim da lista da raiz (cria `[ ]` se o texto está vazio). */
+export function appendToJsoncArray(text: string, value: unknown, format: JsoncFormat = {}): string {
+  const eol = format.eol ?? detectEol(text);
+  const { root } = parseTree(text);
+  const indent = format.indent ?? "  ";
+  if (!root || root.type !== "array") {
+    const trivia = !root && text.trim() ? text.replace(/\s*$/, eol) : "";
+    return `${trivia}[${eol}${indent}${stringify(value, indent, indent, eol)}${eol}]${eol}`;
+  }
+  const items = root.children ?? [];
+  const closing = root.offset + root.length - 1;
+  const rootIndent = lineIndent(text, root.offset);
+  if (items.length === 0) {
+    const inner = text.slice(root.offset + 1, closing).replace(/\s*$/, "");
+    const childIndent = rootIndent + indent;
+    return text.slice(0, root.offset + 1) + inner + eol + childIndent + stringify(value, indent, childIndent, eol) + eol + rootIndent + text.slice(closing);
+  }
+  const last = items[items.length - 1];
+  const childIndent = lineIndent(text, last.offset);
+  const rendered = stringify(value, indent, childIndent, eol);
+  if (last.commaOffset !== undefined) return splice(text, last.commaOffset + 1, 0, eol + childIndent + rendered + ",");
+  return splice(text, last.offset + last.length, 0, "," + eol + childIndent + rendered);
+}
+
+/** Remove o item `index` da lista da raiz (comentários dos outros itens preservados). */
+export function removeFromJsoncArray(text: string, index: number): string {
+  const { root } = parseTree(text);
+  if (!root || root.type !== "array") return text;
+  const items = root.children ?? [];
+  const item = items[index];
+  if (!item) return text;
+  if (index < items.length - 1) {
+    let start = item.offset;
+    const lineStart = text.lastIndexOf("\n", start - 1) + 1;
+    const ownLine = /^[ \t]*$/.test(text.slice(lineStart, start));
+    let end = (item.commaOffset ?? item.offset + item.length) + 1;
+    const rest = (ownLine ? /^[ \t]*(\r?\n)?/ : /^[ \t]*/).exec(text.slice(end));
+    if (ownLine) start = lineStart;
+    if (rest) end += rest[0].length;
+    return splice(text, start, end - start, "");
+  }
+  const endOfItem = item.commaOffset !== undefined ? item.commaOffset + 1 : item.offset + item.length;
+  if (index > 0) {
+    const prev = items[index - 1];
+    const from = prev.offset + prev.length;
+    return splice(text, from, endOfItem - from, "");
+  }
+  return splice(text, root.offset + 1, endOfItem - root.offset - 1, "");
+}
+
+/** Troca o item `index` da lista da raiz. */
+export function replaceInJsoncArray(text: string, index: number, value: unknown, format: JsoncFormat = {}): string {
+  const eol = format.eol ?? detectEol(text);
+  const { root } = parseTree(text);
+  const item = root?.type === "array" ? root.children?.[index] : undefined;
+  if (!item) return appendToJsoncArray(text, value, format);
+  const base = lineIndent(text, item.offset);
+  return splice(text, item.offset, item.length, stringify(value, format.indent ?? "  ", base, eol));
+}

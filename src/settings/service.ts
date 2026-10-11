@@ -176,7 +176,7 @@ export class SettingsService {
     }
     const files = this.layerFiles();
     const read = await this.io.read(files);
-    for (const f of files) this.texts.set(f, read[f] ?? null);
+    for (const f of files) this.setText(f, read[f] ?? null);
     this.recompute();
     await this.io.watch(files).catch(() => {});
   }
@@ -188,7 +188,7 @@ export class SettingsService {
     const wanted = files.filter((f) => paths.some((p) => f === p || f.startsWith(p.replace(/[\\/]+$/, "") + "/") || f.startsWith(p.replace(/[\\/]+$/, "") + "\\")));
     const targets = wanted.length ? wanted : files;
     const read = await this.io.read(targets);
-    for (const f of targets) this.texts.set(f, read[f] ?? null);
+    for (const f of targets) this.setText(f, read[f] ?? null);
     this.recompute();
     // Pasta nova pode ter surgido: refaz o watch.
     await this.io.watch(files).catch(() => {});
@@ -362,14 +362,14 @@ export class SettingsService {
     if (value === undefined && !current.trim()) return null;
     const next = setJsoncValue(current, jsonPathSegs, value, { indent: current.trim() ? undefined : "  " });
     if (next === current) return null;
-    this.texts.set(path, next);
+    this.setText(path, next);
     this.recompute();
     return { path, text: next };
   }
 
   /** Grava o texto inteiro de um arquivo de camada (editor JSON, migração). */
   async writeText(path: string, text: string): Promise<void> {
-    this.texts.set(path, text);
+    this.setText(path, text);
     this.recompute();
     if (this.io) await this.io.write(path, text);
   }
@@ -404,6 +404,20 @@ export class SettingsService {
   };
 
   getVersion = (): number => this.version;
+
+  private textListeners = new Set<(path: string) => void>();
+
+  /** Um arquivo de camada mudou de texto (ex.: keybindings.json, que não gera chaves). */
+  onDidChangeText(cb: (path: string) => void): () => void {
+    this.textListeners.add(cb);
+    return () => this.textListeners.delete(cb);
+  }
+
+  private setText(path: string, text: string | null): void {
+    const before = this.texts.get(path);
+    this.texts.set(path, text);
+    if ((before ?? null) !== text) for (const l of [...this.textListeners]) l(path);
+  }
 
   private emit(keys: Set<string>): void {
     if (keys.size === 0) return;

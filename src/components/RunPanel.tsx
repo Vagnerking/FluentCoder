@@ -17,6 +17,9 @@ import {
   type DotnetTestResult,
 } from "../api";
 import type { RunConfig } from "../types";
+import { loadVscodeRunEntries, type VscodeRunEntries } from "../settings/vscodeFiles";
+import { taskCommandLine } from "../settings/vscodeCompat";
+import { getPlatform } from "../platform/os";
 import {
   debugSession,
   type VariableView,
@@ -364,6 +367,8 @@ function RunRootSection({
           )}
         </div>
 
+        {!target.connId && <VscodeSection rootPath={target.path} onRun={(cmd) => onRun(cmd, target.path)} />}
+
         {suggestions.length > 0 && (
           <div className="run-group">
             <SectionHeader level={2} title="Detectadas no projeto" badge={suggestions.length} />
@@ -391,6 +396,77 @@ function RunRootSection({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * `.vscode/tasks.json` e `.vscode/launch.json` (compatibilidade com o VS Code):
+ * tarefas shell/process/npm rodam no terminal (com `dependsOn`); configurações
+ * node/coreclr/python com `program` rodam "sem depurar" (o `preLaunchTask`
+ * roda antes). O que não tem equivalente aparece desabilitado com o motivo.
+ */
+function VscodeSection({ rootPath, onRun }: { rootPath: string; onRun: (command: string) => void }) {
+  const [entries, setEntries] = useState<VscodeRunEntries | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void loadVscodeRunEntries(rootPath).then((e) => alive && setEntries(e));
+    return () => {
+      alive = false;
+    };
+  }, [rootPath]);
+  if (!entries || (!entries.hasTasks && !entries.hasLaunch)) return null;
+  const windows = getPlatform().os === "windows";
+  const launchLine = (cmd: string, cwd: string, pre: string | null) => {
+    const task = pre ? entries.tasks.find((t) => t.label === pre) : undefined;
+    const preLine = task ? taskCommandLine(task, entries.tasks, windows) : null;
+    const main = cwd ? `cd '${cwd}' ${windows ? ";" : "&&"} ${cmd}` : cmd;
+    return preLine ? `${preLine} ${windows ? ";" : "&&"} ${main}` : main;
+  };
+  return (
+    <div className="run-group">
+      <SectionHeader level={2} title="Do VS Code (.vscode)" badge={entries.tasks.length + entries.launches.length} />
+      {entries.tasks.map((t, i) => {
+        const line = taskCommandLine(t, entries.tasks, windows);
+        return (
+          <div key={`task-${i}`} className={`run-row${line ? "" : " is-disabled"}`} title={line ?? t.unsupported}>
+            <IconButton
+              icon="run"
+              size="sm"
+              label={line ? `Executar tarefa: ${t.label}` : `Tarefa não suportada: ${t.label}`}
+              className="run-play"
+              disabled={!line}
+              onClick={() => line && onRun(line)}
+            />
+            <div className="run-info">
+              <span className="run-name">
+                {t.label}
+                {t.group && <span className="run-tag">{t.group === "build" ? "build" : "teste"}{t.isDefault ? " · padrão" : ""}</span>}
+              </span>
+              <span className="run-cmd">{line ?? t.unsupported ?? "sem comando"}</span>
+            </div>
+          </div>
+        );
+      })}
+      {entries.launches.map((l, i) => (
+        <div key={`launch-${i}`} className={`run-row${l.command ? "" : " is-disabled"}`} title={l.command ?? l.unsupported}>
+          <IconButton
+            icon="run"
+            size="sm"
+            label={l.command ? `Executar sem depurar: ${l.name}` : `Configuração sem equivalente: ${l.name}`}
+            className="run-play"
+            disabled={!l.command}
+            onClick={() => l.command && onRun(launchLine(l.command, l.cwd, l.preLaunchTask))}
+          />
+          <div className="run-info">
+            <span className="run-name">
+              {l.name}
+              <span className="run-tag">launch · {l.type || "?"}</span>
+            </span>
+            <span className="run-cmd">{l.command ?? l.unsupported}</span>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

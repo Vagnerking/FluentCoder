@@ -37,6 +37,7 @@ import { bootSettings } from "./settings/bootstrap";
 import { installWorkbenchSettings } from "./settings/applyWorkbench";
 import { installThemeSettings } from "./settings/applyTheme";
 import { installMonacoSettingsBridge } from "./settings/monacoBridge";
+import { installKeybindings } from "./settings/keybindingRuntime";
 import { getPlatform } from "./platform/os";
 import { installNativeDragGuard } from "./workbench/workbenchDrag";
 
@@ -80,6 +81,8 @@ installWorkbenchSettings();
 // Subconjunto das settings → serviço de configuração do VS Code no Monaco
 // (servidores de linguagem e modelos); as opções travadas do editor ficam fora.
 installMonacoSettingsBridge(whenMonacoReady);
+// keybindings.json do usuário (formato VS Code, com `when`).
+installKeybindings();
 
 void settingsReady.then(() => {
   // A preferência de acrílico vem das settings.

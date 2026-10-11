@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseJsonc, parseJsoncObject, setJsoncValue } from "./jsonc.ts";
+import { appendToJsoncArray, parseJsonc, parseJsoncObject, removeFromJsoncArray, replaceInJsoncArray, setJsoncValue } from "./jsonc.ts";
 
 const SAMPLE = `// Configurações do usuário
 {
@@ -96,4 +96,19 @@ test("round-trip: várias edições seguidas continuam JSONC válido", () => {
     assert.deepEqual(parseJsonc(text).errors, [], text);
   }
   assert.ok(text.includes("// fonte"));
+});
+
+test("listas (keybindings.json): acrescentar, trocar e remover preservando comentários", () => {
+  let text = '// Atalhos\n[\n  // salvar\n  { "key": "ctrl+s", "command": "a" }\n]\n';
+  text = appendToJsoncArray(text, { key: "ctrl+k", command: "b" });
+  assert.deepEqual(parseJsonc(text).errors, []);
+  assert.equal((parseJsonc(text).value as unknown[]).length, 2);
+  assert.ok(text.includes("// salvar"));
+  text = replaceInJsoncArray(text, 1, { key: "ctrl+j", command: "c" });
+  assert.equal((parseJsonc(text).value as { command: string }[])[1].command, "c");
+  text = removeFromJsoncArray(text, 0);
+  assert.deepEqual(parseJsonc(text).value, [{ key: "ctrl+j", command: "c" }]);
+  assert.ok(text.startsWith("// Atalhos"));
+  assert.equal(appendToJsoncArray("", { a: 1 }), '[\n  {\n    "a": 1\n  }\n]\n');
+  assert.deepEqual(parseJsonc(removeFromJsoncArray("[1]", 0)).value, []);
 });

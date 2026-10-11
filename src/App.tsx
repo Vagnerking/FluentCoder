@@ -294,9 +294,14 @@ import { diffSideLabel, diffTabName } from "./editor/openRouting";
 import { openTabInList, setTabPinned, tabsKeptAfterClose } from "./components/editor/tabLogic";
 import type { BreadcrumbRoot } from "./editor/breadcrumbs";
 import { settings } from "./settings/instance";
+import { parseJsoncObject } from "./settings/jsonc";
 import { useSetting, useSyncedSetting } from "./settings/react";
 import { prepareSave, useActiveIndentation } from "./settings/editorRuntime";
 import { useAutoSave } from "./settings/useAutoSave";
+import { isKeyClaimed, runCommand as runAppCommand, setAppCommands, setWhenContextProvider } from "./settings/keybindingRuntime";
+import { defaultBuildTask, taskCommandLine, type VscodeTask } from "./settings/vscodeCompat";
+import { loadVscodeRunEntries } from "./settings/vscodeFiles";
+import { getPlatform } from "./platform/os";
 import { useWorkspaceSettingsSync } from "./settings/useWorkspaceSettingsSync";
 
 /** Abas nativas do Fluent Chat na sidebar secundária. */
@@ -3770,6 +3775,7 @@ export default function App() {
   const autoSaveFiles = useMemo(() => Object.values(layout.groups).flatMap((g) => g.files), [layout.groups]);
   useAutoSave(autoSaveFiles, activePath, isVirtualTab, saveFile);
   const activeIndentation = useActiveIndentation();
+  const autoSaveMode = useSetting<string>("files.autoSave");
 
   /** Remove a tab from `openFiles`, moving focus off it if it was active. */
   /** Removes a tab from a group, moving focus off it and collapsing an emptied
@@ -4492,7 +4498,9 @@ export default function App() {
     const normalized = isFluentWorkspaceFile(path)
       ? parseWorkspaceFile(contents, path)
       : normalizeWorkspaceFile(
-          fluentWorkspaceFromCodeWorkspace(JSON.parse(contents), baseName(path)),
+          // `.code-workspace` é JSONC (comentários, vírgula final) e as pastas
+          // são relativas ao arquivo.
+          fluentWorkspaceFromCodeWorkspace(parseJsoncObject(contents), baseName(path), path),
           path
         );
     return { ...normalized, filePath: path, dirty: false };
@@ -5056,6 +5064,8 @@ export default function App() {
     }
 
     function onKeyDown(e: KeyboardEvent) {
+      // Atalho embutido removido/remapeado no keybindings.json do usuário.
+      if (isKeyClaimed(e)) return;
       const mod = e.ctrlKey || e.metaKey;
 
       // --- Ctrl+K chord: arm, then resolve the second stroke. ---
@@ -5660,7 +5670,12 @@ export default function App() {
           run: hasEditor ? handleSaveAs : undefined,
         },
         { id: "file.sep3", label: "", separator: true },
-        { id: "file.autoSave", label: "Salvamento Automático", enabled: false },
+        {
+          // files.autoSave: liga "após um intervalo" / desliga (outros modos na tela de Configurações).
+          id: "file.autoSave",
+          label: autoSaveMode === "off" ? "Salvamento Automático" : "Salvamento Automático ✓",
+          run: () => void settings.update("files.autoSave", autoSaveMode === "off" ? "afterDelay" : "off", "user").catch(() => {}),
+        },
         { id: "file.revert", label: "Reverter Arquivo", enabled: false },
         { id: "file.sep4", label: "", separator: true },
         {
@@ -5977,7 +5992,13 @@ export default function App() {
         { id: "terminal.split", label: "Dividir Terminal", enabled: false },
         { id: "terminal.kill", label: "Encerrar Terminal", enabled: false },
         { id: "terminal.sep1", label: "", separator: true },
-        { id: "terminal.runTask", label: "Executar Tarefa…", enabled: false },
+        { id: "terminal.runTask", label: "Executar Tarefa…", run: () => void runAppCommand("tasks.run") },
+        {
+          id: "terminal.runBuildTask",
+          label: "Executar Tarefa de Build…",
+          accelerator: "Ctrl+Shift+B",
+          run: () => void runAppCommand("tasks.runBuild"),
+        },
       ],
     };
 
@@ -6009,6 +6030,7 @@ export default function App() {
       helpMenu,
     ];
   }, [
+    autoSaveMode,
     hasEditor,
     rootPath,
     activeWorkspace,
@@ -6045,6 +6067,124 @@ export default function App() {
   const extensionUpdateCount = useExtensionUpdateCount();
   useEffect(() => scheduleStartupUpdateCheck(), []);
   const extensionDiffs = useExtensionDiffs();
+  /** Abre um arquivo de configuração (cria com o conteúdo inicial se não existe). */
+  const openConfigFile = useCallback(
+    async (path: string | null | undefined, initial: string) => {
+      if (!path) return;
+      if (settings.textOf(path) == null) {
+        try {
+          await settings.writeText(path, initial);
+        } catch (err) {
+          alert(`Não foi possível criar ${path}:\n${err}`);
+          return;
+        }
+      }
+      await handleOpenFile({ name: baseName(path), path, isDir: false });
+    },
+    [handleOpenFile]
+  );
+
+  /** `.vscode/tasks.json` (+ tasks do arquivo de workspace) no terminal integrado. */
+  const runVscodeTask = useCallback(async (pick: "choose" | "build") => {
+    const root = agentWorkspaceRoot;
+    if (!root) {
+      alert("Abra uma pasta local para executar tarefas.");
+      return;
+    }
+    const { tasks } = await loadVscodeRunEntries(root, lastRealFile);
+    const windows = getPlatform().os === "windows";
+    const run = (t: VscodeTask) => {
+      const line = taskCommandLine(t, tasks, windows);
+      if (line) handleRun(line, root);
+      else alert(`A tarefa "${t.label}" não pode ser executada: ${t.unsupported ?? "sem comando"}.`);
+    };
+    if (pick === "build") {
+      const build = defaultBuildTask(tasks);
+      if (build) return run(build);
+    }
+    const runnable = tasks.filter((t) => t.command || t.dependsOn.length);
+    if (runnable.length === 0) {
+      alert("Nenhuma tarefa encontrada em .vscode/tasks.json.");
+      return;
+    }
+    setQuickPick({
+      title: pick === "build" ? "Selecionar a tarefa de build" : "Executar Tarefa",
+      placeholder: "Tarefas de .vscode/tasks.json…",
+      items: runnable.map((t) => ({
+        id: t.label,
+        label: t.label,
+        detail: t.command ?? `depende de: ${t.dependsOn.join(", ")}`,
+        icon: t.group === "build" ? "debug" : "run",
+        keywords: `${t.group ?? ""} tarefa task`,
+      })),
+      onPick: (it) => {
+        const t = runnable.find((x) => x.label === it.id);
+        if (t) run(t);
+      },
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentWorkspaceRoot, lastRealFile]);
+
+  const preferenceCommands = useMemo<Command[]>(
+    () => [
+      {
+        id: "settings.openJson",
+        title: "Preferências: Abrir Configurações do Usuário (JSON)",
+        detail: "Preferências",
+        run: () => void openConfigFile(settings.settingsPaths?.userSettings, "{\n}\n"),
+      },
+      {
+        id: "settings.openWorkspaceJson",
+        title: "Preferências: Abrir Configurações do Workspace (JSON)",
+        detail: "Preferências",
+        run: () => {
+          const path = settings.fileFor("workspace");
+          if (!path) alert("Abra uma pasta ou workspace para ter configurações de workspace.");
+          else void openConfigFile(path, "{\n}\n");
+        },
+      },
+      {
+        id: "keybindings.openJson",
+        title: "Preferências: Abrir Atalhos de Teclado (JSON)",
+        detail: "Preferências",
+        run: () =>
+          void openConfigFile(
+            settings.settingsPaths?.userKeybindings,
+            '// Atalhos do usuário (formato do VS Code). Ex.:\n// { "key": "ctrl+shift+s", "command": "menu.file.saveAs" }\n// "-comando" remove um atalho padrão.\n[\n]\n'
+          ),
+      },
+      {
+        id: "tasks.run",
+        title: "Tarefas: Executar Tarefa…",
+        detail: "Terminal",
+        run: () => void runVscodeTask("choose"),
+      },
+      {
+        id: "tasks.runBuild",
+        title: "Tarefas: Executar Tarefa de Build",
+        detail: "Terminal",
+        keybinding: "Ctrl+Shift+B",
+        run: () => void runVscodeTask("build"),
+      },
+      { id: "view.zoomIn", title: "Exibir: Aumentar Zoom", detail: "Exibir", keybinding: "Ctrl+=", run: () => setUiScale((s) => stepUiScale(s, 1)) },
+      { id: "view.zoomOut", title: "Exibir: Diminuir Zoom", detail: "Exibir", keybinding: "Ctrl+-", run: () => setUiScale((s) => stepUiScale(s, -1)) },
+      { id: "view.zoomReset", title: "Exibir: Redefinir Zoom", detail: "Exibir", keybinding: "Ctrl+0", run: () => setUiScale(UI_SCALE_DEFAULT) },
+    ],
+    [openConfigFile, runVscodeTask, setUiScale]
+  );
+
+  // `when` dos atalhos do usuário: arquivo/linguagem ativos e o layout.
+  const whenStateRef = useRef<Record<string, unknown>>({});
+  whenStateRef.current = {
+    resourceLangId: activeFile ? languageForFile(activeFile.name, activeFile.path) : undefined,
+    resourceExtname: activeFile ? (/\.[^./\\]+$/.exec(activeFile.name)?.[0] ?? "") : undefined,
+    resourceFilename: activeFile?.name,
+    resourcePath: activeFile?.path,
+    sideBarVisible: sidebarOpen,
+    workspaceFolderCount: activeWorkspace ? activeWorkspace.folders.length : rootPath ? 1 : 0,
+  };
+  useEffect(() => setWhenContextProvider(() => whenStateRef.current), []);
+
   const paletteCommands = useMemo<Command[]>(() => {
     const fromMenus: Command[] = menus.flatMap((menu) =>
       menu.items
@@ -6105,8 +6245,14 @@ export default function App() {
         alert(`Falha ao executar o comando da extensão:\n${message}`)
       ),
     ];
-    return [...commands, ...extensions, ...ssh, ...fromMenus];
-  }, [commands, menus, openSshFlow, hostedExtensions, showPanelTab]);
+    return [...commands, ...preferenceCommands, ...extensions, ...ssh, ...fromMenus];
+  }, [commands, preferenceCommands, menus, openSshFlow, hostedExtensions, showPanelTab]);
+  // Comandos da Paleta = comandos dos atalhos do usuário (keybindings.json).
+  useEffect(() => {
+    setAppCommands(
+      paletteCommands.map((c) => ({ id: c.id, title: c.title, detail: c.detail, keybinding: c.keybinding, run: () => c.run() }))
+    );
+  }, [paletteCommands]);
 
   const titleWorkspaceSegment = workspaceContextDisplay
     ? workspaceContextDisplay.name
