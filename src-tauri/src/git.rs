@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::collections::HashMap;
 
+pub(crate) mod discovery;
 pub(crate) mod history;
 pub(crate) mod status;
 pub(crate) mod watcher;

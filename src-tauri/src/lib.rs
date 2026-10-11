@@ -195,6 +195,7 @@ pub fn run() {
             git::git_branch,
             git::git_cancel,
             git::watcher::git_watch_set,
+            git::discovery::git_repos_discover,
             git::git_branches,
             git::git_remote_branches,
             git::git_remotes,

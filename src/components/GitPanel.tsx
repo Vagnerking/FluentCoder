@@ -83,8 +83,11 @@ import {
   fetchGitStatusShared,
   gitEventTouchesRefs,
   requestGitRefresh,
+  useActiveGitRepository,
   useGitRefresh,
 } from "../git/useGitStatuses";
+import { selectGitRepository } from "../git/activeRepository";
+import { GIT_SCAN_DEPTH_MAX, getGitScanDepth, setGitScanDepth } from "../git/gitSettings";
 import {
   GIT_FLUENT_PRIMARY_TABS,
   GIT_FLUENT_TABS,
@@ -173,10 +176,20 @@ export interface GitWorkspaceRoot {
   connId?: string;
   status?: "connected" | "connecting" | "error";
   error?: string;
+  /** `main` | `worktree` | `submodule` | `nested` (descoberta local). */
+  kind?: string;
 }
+
+const REPO_KIND_LABEL: Record<string, string> = {
+  worktree: "worktree",
+  submodule: "submódulo",
+  nested: "aninhado",
+};
 
 interface GitRepositoryPanelProps extends Omit<GitPanelProps, "workspaceRoots"> {
   rootName?: string;
+  /** Tipo do repo descoberto (`worktree`, `submodule`, `nested`). */
+  rootKind?: string;
   embedded?: boolean;
   connId?: string;
   provider?: "local" | "ssh";
@@ -567,6 +580,7 @@ export function GitPanel({
   gitAssistant,
   gitAssistPreferences,
 }: GitPanelProps) {
+  const activeRepository = useActiveGitRepository();
   const [hiddenRepoIds, setHiddenRepoIds] = useState<Set<string>>(
     readHiddenRepositoryIds
   );
@@ -645,7 +659,26 @@ export function GitPanel({
   };
   const openRepoOptions = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
+    const scanDepth = getGitScanDepth();
     const items: ContextMenuItem[] = [
+      {
+        id: "follow-editor",
+        label: "Repositório ativo: seguir o arquivo do editor",
+        icon: "file",
+        run: () => selectGitRepository(null),
+      },
+      {
+        id: "scan-depth",
+        label: `Buscar repositórios aninhados (profundidade ${scanDepth})`,
+        icon: "search",
+        submenu: Array.from({ length: GIT_SCAN_DEPTH_MAX + 1 }, (_, depth) => ({
+          id: `scan-depth-${depth}`,
+          label: depth === 0 ? "Não buscar (só as pastas)" : `${depth} nível${depth === 1 ? "" : "s"}`,
+          icon: depth === scanDepth ? "success" : "folder",
+          run: () => setGitScanDepth(depth),
+        })),
+      },
+      { id: "sep-active", label: "", separator: true },
       {
         id: "expand-all",
         label: "Expandir todos os repositórios",
@@ -778,10 +811,18 @@ export function GitPanel({
             <div className="panel-empty">Todos os repositórios estão ocultos.</div>
           )}
           {visibleWorkspaceRoots.filter((root) => root.provider === "local").map((root) => (
-            <section className="git-workspace-root" key={root.id}>
+            <section
+              className={`git-workspace-root${activeRepository?.id === root.id ? " is-active-repo" : ""}`}
+              key={root.id}
+              aria-current={activeRepository?.id === root.id ? "true" : undefined}
+              // Interagir com um repo do SCM o torna o repositório ativo de
+              // todas as superfícies (status bar, grafo, terminal).
+              onPointerDownCapture={() => selectGitRepository(root.id)}
+            >
               <GitRepositoryPanel
                 rootPath={root.path}
                 rootName={root.name}
+                rootKind={root.kind}
                 embedded
                 provider={root.provider}
                 collapsed={collapsedRepoIds.has(root.id)}
@@ -802,7 +843,12 @@ export function GitPanel({
             </section>
           ))}
           {visibleWorkspaceRoots.filter((root) => root.provider === "ssh").map((root) => (
-            <section className="git-workspace-root remote" key={root.id}>
+            <section
+              className={`git-workspace-root remote${activeRepository?.id === root.id ? " is-active-repo" : ""}`}
+              key={root.id}
+              aria-current={activeRepository?.id === root.id ? "true" : undefined}
+              onPointerDownCapture={root.connId ? () => selectGitRepository(root.id) : undefined}
+            >
               {root.connId ? (
                 <GitRepositoryPanel
                   rootPath={root.path}
@@ -872,7 +918,8 @@ export function GitPanel({
 
   return (
     <GitRepositoryPanel
-      rootPath={rootPath}
+      // Um único repo: o toplevel descoberto (a pasta aberta pode ser subpasta).
+      rootPath={localRoots[0]?.path ?? rootPath}
       onOpenFile={onOpenFile}
       onOpenChanges={onOpenChanges}
       onOpenRevision={onOpenRevision}
@@ -891,6 +938,7 @@ export function GitPanel({
 function GitRepositoryPanel({
   rootPath,
   rootName,
+  rootKind,
   embedded = false,
   connId,
   provider = "local",
@@ -3191,7 +3239,7 @@ function GitRepositoryPanel({
       {embedded ? (
         <div
           className={`git-root-header${showRepositoryBody ? "" : " is-collapsed"}`}
-          title={repoRootPath}
+          title={rootKind && REPO_KIND_LABEL[rootKind] ? `${repoRootPath} (${REPO_KIND_LABEL[rootKind]})` : repoRootPath}
         >
           <button
             type="button"
@@ -3200,8 +3248,14 @@ function GitRepositoryPanel({
             onClick={toggleRepositoryBody}
           >
             <Codicon name={showRepositoryBody ? "chevronDown" : "chevronRight"} size={12} />
-            <Codicon name={provider === "ssh" ? "remote" : "folder"} size={13} />
+            <Codicon
+              name={provider === "ssh" ? "remote" : rootKind === "worktree" ? "gitBranch" : "folder"}
+              size={13}
+            />
             <span className="git-root-name">{rootName || fileName(repoRootPath)}</span>
+            {rootKind && REPO_KIND_LABEL[rootKind] && (
+              <span className="git-root-kind">{REPO_KIND_LABEL[rootKind]}</span>
+            )}
           </button>
           <div className="git-root-meta">
             <span className="git-root-branch" title="Branch atual">

@@ -73,3 +73,19 @@ espelhos `ssh_git_*` de `ssh.rs`, em `src/git/*`, `GitPanel.tsx` e
   teto global `DEFAULT_DIR_CAP` (2048) somado entre repos; repo que não cabe
   fica `git-only` e o frontend faz polling. Neste repo: 77 diretórios
   observados de 28 211 (node_modules/target/worktrees ignorados).
+
+## Repositórios e repositório ativo
+
+- `git_repos_discover(folders, maxDepth)` (`src-tauri/src/git/discovery.rs`):
+  repos deduplicados por toplevel; aninhados até `git.repositoryScanMaxDepth`
+  (localStorage, padrão 1, máx. 5; ignora node_modules/target/dist/…);
+  `kind` = `main` | `worktree` | `submodule` | `nested` com `parentRoot`.
+- Frontend: `buildWorkspaceRepositories` (`src/git/repositories.ts`) gera a
+  lista única de repos (alvos de status/SCM) e o mapa pasta → repo. **Nunca**
+  trate "pasta do workspace" como "repositório": uma subpasta de um repo é o
+  mesmo repo; a status bar soma por `repoId` (`uniqueRepoRows`).
+- Repo ativo único (`src/git/activeRepository.ts`): escolha explícita (clique
+  no repo do SCM) > repo mais profundo que contém o arquivo focado > primeiro.
+  React: `useActiveGitRepository()`; fora do React:
+  `getActiveGitRepository()`/`subscribeActiveGitRepository()` (ex.: cwd de
+  terminal novo).

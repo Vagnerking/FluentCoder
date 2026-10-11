@@ -1389,6 +1389,19 @@ export function gitCommit(path: string, message: string, connId?: string): Promi
   return invoke("git_commit", { path, message });
 }
 /**
+ * Descobre os repositórios locais das pastas do workspace: deduplicados por
+ * toplevel (uma subpasta de um repo é o mesmo repo), com aninhados até
+ * `maxDepth` níveis, worktrees e submódulos. Ver `git/discovery.rs`.
+ */
+export function gitReposDiscover(
+  folders: string[],
+  maxDepth: number
+): Promise<import("./git/repositories").DiscoveredRepo[]> {
+  if (folders.length === 0) return Promise.resolve([]);
+  return invoke("git_repos_discover", { folders, maxDepth });
+}
+
+/**
  * Cancela fetch/pull/push locais em andamento no repo `path` (todos os repos
  * quando omitido). Os comandos git locais rodam fora da main thread e têm
  * timeout; isto é o "cancelar" explícito. Devolve quantos processos sinalizou.

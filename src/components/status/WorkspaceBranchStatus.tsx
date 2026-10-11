@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Codicon } from "../../icons/codicons/Codicon";
+import { uniqueRepoRows } from "../../git/repositories";
 
 export interface WorkspaceBranchStatusRoot {
   id: string;
@@ -15,6 +16,10 @@ export interface WorkspaceBranchStatusRoot {
   ahead?: number;
   behind?: number;
   hasUpstream?: boolean;
+  /** Repo ao qual a pasta pertence (toplevel + conexão); pastas do mesmo repo somam uma vez. */
+  repoId?: string;
+  /** Pasta SSH sem conexão ativa: "desconectada", não "sem Git". */
+  disconnected?: boolean;
 }
 
 export interface WorkspaceBranchStatusContext {
@@ -65,10 +70,12 @@ export function WorkspaceBranchStatus({
   const [query, setQuery] = useState("");
   const branches = workspace.branches ?? [];
   const hasBranchMenu = branches.length > 0;
-  const repoRoots = branches.filter((root) => root.isRepo);
+  // Uma linha por REPO para somas/contagens: pasta + subpasta do mesmo repo
+  // (ou duas pastas SSH no mesmo toplevel) não dobram alterações/ahead/behind.
+  const repoRoots = uniqueRepoRows(branches);
   const repoCount = repoRoots.length;
   const remoteCount = branches.filter((root) => root.remote).length;
-  const missingGitCount = branches.filter((root) => !root.isRepo).length;
+  const missingGitCount = branches.filter((root) => !root.isRepo && !root.disconnected).length;
   const changedRepoCount = repoRoots.filter((root) => (root.changes ?? 0) > 0).length;
   const conflictedRepoCount = repoRoots.filter((root) => (root.conflicted ?? 0) > 0).length;
   const totalChanges = repoRoots.reduce((total, root) => total + (root.changes ?? 0), 0);
@@ -160,7 +167,7 @@ export function WorkspaceBranchStatus({
       ? [
           "Branches:",
           ...branches.map((root) => {
-            const branch = root.isRepo ? root.branch || "sem branch" : "não é repositório Git";
+            const branch = root.isRepo ? root.branch || "sem branch" : root.disconnected ? "desconectada" : "não é repositório Git";
             return `- ${root.name}${root.remote ? " (SSH)" : ""}: ${branch}`;
           }),
         ].join("\n")
@@ -338,7 +345,7 @@ export function WorkspaceBranchStatus({
                           aria-label={
                             root.isRepo
                               ? `${root.name}, branch ${root.branch || "sem branch"}`
-                              : `${root.name}, sem Git`
+                              : `${root.name}, ${root.disconnected ? "desconectada" : "sem Git"}`
                           }
                           onClick={() => openBranchPicker(root)}
                           onKeyDown={(event) => {
@@ -360,7 +367,7 @@ export function WorkspaceBranchStatus({
                           </span>
                           <span className="status-workspace-branch-name" title={root.branch ?? undefined}>
                             <Codicon name={root.isRepo ? "gitBranch" : "error"} size={12} />
-                            {root.isRepo ? root.branch || "sem branch" : "sem Git"}
+                            {root.isRepo ? root.branch || "sem branch" : root.disconnected ? "desconectada" : "sem Git"}
                           </span>
                           <span className={`status-workspace-branch-health${conflicts > 0 ? " conflict" : ""}`}>
                             {hasHealth ? (

@@ -1,6 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { gitStatus } from "../api";
 import type { GitStatus } from "../types";
+import {
+  getActiveGitRepository,
+  getGitRepositories,
+  subscribeActiveGitRepository,
+  type GitRepositoryRef,
+} from "./activeRepository";
 import {
   getGitRefreshScheduler,
   gitRepoKey,
@@ -119,6 +125,16 @@ export function requestGitRefresh(
 export function gitEventTouchesRefs(event: GitRefreshEvent): boolean {
   if (event.reasons.some((r) => r === "op" || r === "fetch" || r === "manual" || r === "visible")) return true;
   return event.scopes.some((s) => s === "head" || s === "refs" || s === "operation");
+}
+
+/** Repositório ativo compartilhado (SCM, grafo, status bar, terminal). */
+export function useActiveGitRepository(): GitRepositoryRef | null {
+  return useSyncExternalStore(subscribeActiveGitRepository, getActiveGitRepository, getActiveGitRepository);
+}
+
+/** Repositórios conhecidos (descobertos + SSH), deduplicados por toplevel. */
+export function useGitRepositoryList(): GitRepositoryRef[] {
+  return useSyncExternalStore(subscribeActiveGitRepository, getGitRepositories, getGitRepositories);
 }
 
 function sameStatus(a: GitStatus | null, b: GitStatus | null): boolean {

@@ -23,7 +23,7 @@ import {
 } from "./lsp/buildDiagnostics";
 import { FileExplorer } from "./components/FileExplorer";
 import { SearchPanel } from "./components/SearchPanel";
-import { GitPanel } from "./components/GitPanel";
+import { GitPanel, type GitWorkspaceRoot } from "./components/GitPanel";
 import { RunPanel, type PendingTest } from "./components/RunPanel";
 import { PackagesPanel } from "./components/PackagesPanel";
 import { ExtensionsView } from "./components/extensions/ExtensionsView";
@@ -129,6 +129,7 @@ import {
   gitLogFile,
   gitShowFileStaged,
   gitShowFileAtCommit,
+  gitReposDiscover,
   isFreshWindow,
   listProjectFiles,
   dotnetNewList,
@@ -259,7 +260,19 @@ import { agentRunOptions, buildAgentPrompt, createLocalId } from "./agents/store
 import { useIdeBridge } from "./agents/ideBridge";
 import { ClaudeDiffReview } from "./components/ClaudeDiffReview";
 import { getGitRefreshScheduler, onGitAutoFetched } from "./git/gitRefresh";
-import { requestGitRefresh, useGitStatuses } from "./git/useGitStatuses";
+import {
+  requestGitRefresh,
+  useActiveGitRepository,
+  useGitStatuses,
+} from "./git/useGitStatuses";
+import { setGitFocusPath, setGitRepositories } from "./git/activeRepository";
+import {
+  buildWorkspaceRepositories,
+  type DiscoveredRepo,
+  type WorkspaceFolderLike,
+} from "./git/repositories";
+import { getGitScanDepth, onGitSettingsChange } from "./git/gitSettings";
+import { joinRepoPath } from "./git/gitUi";
 import {
   DEFAULT_GIT_ASSIST_PREFERENCES,
   buildGitAssistPrompt,
@@ -1094,51 +1107,97 @@ export default function App() {
     () => localStorage.getItem("git.autofetch") !== "off"
   );
 
-  const activeGitTarget = useMemo(() => {
+  // ---- Repositórios Git ----------------------------------------------------
+  // "Repositório" ≠ "pasta do workspace": o backend descobre os repos das
+  // pastas (dedupe por toplevel, aninhados até git.repositoryScanMaxDepth,
+  // worktrees, submódulos). Uma subpasta de um repo já listado não vira um
+  // segundo repo (nem dobra os contadores da status bar).
+  const [discoveredRepos, setDiscoveredRepos] = useState<DiscoveredRepo[] | null>(null);
+  const [gitScanDepth, setGitScanDepthState] = useState(getGitScanDepth);
+  const [gitDiscoveryNonce, setGitDiscoveryNonce] = useState(0);
+  useEffect(() => onGitSettingsChange(() => setGitScanDepthState(getGitScanDepth())), []);
+  const gitWorkspaceFolders = useMemo<WorkspaceFolderLike[]>(() => {
+    if (activeWorkspace) {
+      return activeWorkspace.folders.map((folder) => ({
+        id: folder.id,
+        name: folder.name,
+        path: folder.path,
+        provider: folder.provider,
+      }));
+    }
+    if (!rootPath) return [];
+    return [
+      {
+        id: "__root__",
+        name: rootName ?? baseName(rootPath),
+        path: rootPath,
+        provider: remoteSession ? "ssh" : "local",
+      },
+    ];
+  }, [activeWorkspace, remoteSession, rootName, rootPath]);
+  const gitSshConnIds = useMemo<Record<string, string | undefined>>(() => {
+    const ids: Record<string, string | undefined> = {};
+    for (const folder of gitWorkspaceFolders) {
+      if (folder.provider !== "ssh") continue;
+      if (folder.id === "__root__") {
+        ids[folder.id] = remoteSession?.connId;
+        continue;
+      }
+      const conn = workspaceSshConnections[folder.id];
+      if (conn?.status === "connected" && conn.connId) ids[folder.id] = conn.connId;
+    }
+    return ids;
+  }, [gitWorkspaceFolders, remoteSession?.connId, workspaceSshConnections]);
+  const localGitFolderKey = gitWorkspaceFolders
+    .filter((folder) => folder.provider === "local")
+    .map((folder) => folder.path)
+    .join("\u0000");
+  useEffect(() => {
+    const paths = localGitFolderKey ? localGitFolderKey.split("\u0000") : [];
+    let cancelled = false;
+    setDiscoveredRepos((prev) => (paths.length === 0 ? [] : prev));
+    if (paths.length === 0) return;
+    gitReposDiscover(paths, gitScanDepth)
+      .then((repos) => {
+        if (!cancelled) setDiscoveredRepos(repos);
+      })
+      .catch(() => {
+        if (!cancelled) setDiscoveredRepos(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [gitDiscoveryNonce, gitScanDepth, localGitFolderKey]);
+  const { repos: gitRepositories, folderRepo: gitFolderRepo } = useMemo(
+    () => buildWorkspaceRepositories(gitWorkspaceFolders, discoveredRepos, gitSshConnIds),
+    [discoveredRepos, gitSshConnIds, gitWorkspaceFolders]
+  );
+  useEffect(() => setGitRepositories(gitRepositories), [gitRepositories]);
+  // O arquivo focado escolhe o repo ativo (o mais profundo que o contém),
+  // salvo escolha explícita no SCM/status bar.
+  useEffect(() => {
     const candidatePath = activePath && !isVirtualTab(activePath) ? activePath : rootPath;
-    let owner:
-      | {
-          id: string;
-          name: string;
-          path: string;
-          provider: "local" | "ssh";
-        }
-      | null = null;
-
-    if (activeWorkspace && candidatePath) {
-      for (const folder of activeWorkspace.folders) {
+    let focusConnId: string | null = null;
+    if (candidatePath) {
+      let owner: WorkspaceFolderLike | null = null;
+      for (const folder of gitWorkspaceFolders) {
         if (!pathWithinRoot(candidatePath, folder.path)) continue;
         if (!owner || folder.path.length > owner.path.length) owner = folder;
       }
+      if (owner?.provider === "ssh") focusConnId = gitSshConnIds[owner.id] ?? null;
     }
-
-    if (owner) {
-      if (owner.provider === "ssh") {
-        const conn = workspaceSshConnections[owner.id];
-        if (conn?.status !== "connected" || !conn.connId) return null;
-        return {
-          rootPath: owner.path,
-          connId: conn.connId,
-          label: owner.name,
-          provider: owner.provider,
-        };
-      }
-      return {
-        rootPath: owner.path,
-        connId: undefined,
-        label: owner.name,
-        provider: owner.provider,
-      };
-    }
-
-    if (!rootPath) return null;
+    setGitFocusPath(candidatePath, focusConnId);
+  }, [activePath, gitSshConnIds, gitWorkspaceFolders, rootPath]);
+  const activeGitRepository = useActiveGitRepository();
+  const activeGitTarget = useMemo(() => {
+    if (!activeGitRepository) return null;
     return {
-      rootPath,
-      connId: remoteSession?.connId,
-      label: rootName ?? baseName(rootPath),
-      provider: remoteSession ? ("ssh" as const) : ("local" as const),
+      rootPath: activeGitRepository.root,
+      connId: activeGitRepository.connId,
+      label: activeGitRepository.name,
+      provider: activeGitRepository.provider,
     };
-  }, [activePath, activeWorkspace, remoteSession, rootName, rootPath, workspaceSshConnections]);
+  }, [activeGitRepository]);
 
   const branchPickerGitTarget = useMemo<WorkspaceGitTarget | null>(() => {
     if (branchPickerTarget) return branchPickerTarget;
@@ -1201,29 +1260,17 @@ export default function App() {
     [activeWorkspace, remoteSession, rootPath, workspaceSshConnections]
   );
 
-  const workspaceGitTargets = useMemo<WorkspaceGitTarget[]>(() => {
-    if (!activeWorkspace) return [];
-    return activeWorkspace.folders.flatMap((folder) => {
-      if (folder.provider === "ssh") {
-        const conn = workspaceSshConnections[folder.id];
-        if (conn?.status !== "connected" || !conn.connId) return [];
-        return [{ id: folder.id, rootPath: folder.path, connId: conn.connId }];
-      }
-      return [{ id: folder.id, rootPath: folder.path }];
-    });
-  }, [activeWorkspace, workspaceSshConnections]);
+  const workspaceGitTargets = useMemo<WorkspaceGitTarget[]>(
+    () => gitRepositories.map((repo) => ({ id: repo.id, rootPath: repo.root, connId: repo.connId })),
+    [gitRepositories]
+  );
 
   // Status de TODOS os alvos git vem de um agendador único (src/git/gitRefresh):
   // watcher do backend para repos locais, polling adaptativo só para SSH /
   // watcher degradado, pausado com a janela oculta. Antes havia dois
   // setInterval(5s) (root ativa + todas as roots, incluindo a ativa de novo).
-  const gitStatusTargets = useMemo<WorkspaceGitTarget[]>(() => {
-    if (activeWorkspace) return workspaceGitTargets;
-    if (!rootPath) return [];
-    return [{ id: "__root__", rootPath, connId: remoteSession?.connId }];
-  }, [activeWorkspace, remoteSession?.connId, rootPath, workspaceGitTargets]);
   const { states: gitStatusStates, refresh: requestGitStatusRefresh } =
-    useGitStatuses(gitStatusTargets);
+    useGitStatuses(workspaceGitTargets);
   const workspaceGitStates = useMemo<Record<string, WorkspaceGitState>>(
     () => (activeWorkspace ? gitStatusStates : {}),
     [activeWorkspace, gitStatusStates]
@@ -1248,6 +1295,8 @@ export default function App() {
   }, [activeGitTarget, gitState]);
 
   const refreshWorkspaceGitStatuses = useCallback(async () => {
+    // Refaz também a descoberta (um repo aninhado pode ter sido clonado).
+    setGitDiscoveryNonce((n) => n + 1);
     requestGitStatusRefresh(null, "manual");
   }, [requestGitStatusRefresh]);
 
@@ -1316,16 +1365,18 @@ export default function App() {
   // path → decoration (label color + git badge), rebuilt only when an input
   // changes. The lookup normalizes separators so callers can pass any path.
   const decorations = useMemo(() => {
-    if (!activeWorkspace) return buildDecorations(rootPath, gitState, allProblems);
+    if (!activeWorkspace) return buildDecorations(gitState?.root || rootPath, gitState, allProblems);
 
     const merged = new Map<string, FileDecoration>();
     for (const target of workspaceGitTargets) {
       const rootProblems = allProblems.filter((problem) =>
         pathWithinRoot(problem.path, target.rootPath)
       );
+      const status = workspaceGitStates[target.id]?.status ?? null;
+      // Caminhos do status são relativos ao toplevel do repo.
       const rootDecorations = buildDecorations(
-        target.rootPath,
-        workspaceGitStates[target.id]?.status ?? null,
+        status?.root || target.rootPath,
+        status,
         rootProblems
       );
       for (const [path, decoration] of rootDecorations) {
@@ -1347,11 +1398,11 @@ export default function App() {
       return workspaceGitTargets.flatMap((target) => {
         const status = workspaceGitStates[target.id]?.status;
         if (!status?.isRepo) return [];
-        return status.files.map((f) => `${target.rootPath}/${f.path}`);
+        return status.files.map((f) => joinRepoPath(status.root || target.rootPath, f.path));
       });
     }
     if (!rootPath || !gitState?.isRepo) return [];
-    return gitState.files.map((f) => `${rootPath}/${f.path}`);
+    return gitState.files.map((f) => joinRepoPath(gitState.root || rootPath, f.path));
   }, [activeWorkspace, gitState, rootPath, workspaceGitStates, workspaceGitTargets]);
 
   const explorerWorkspaceRoots = useMemo(
@@ -1367,6 +1418,33 @@ export default function App() {
       }),
     [activeWorkspace, workspaceSshConnections]
   );
+
+  // Raízes do SCM: um item por REPOSITÓRIO (não por pasta), mais as pastas SSH
+  // ainda sem conexão (para mostrar "conectando/erro").
+  const gitPanelRoots = useMemo<GitWorkspaceRoot[]>(() => {
+    const roots: GitWorkspaceRoot[] = gitRepositories.map((repo) => ({
+      id: repo.id,
+      name: repo.name,
+      path: repo.root,
+      provider: repo.provider,
+      connId: repo.connId,
+      status: repo.provider === "ssh" ? "connected" : undefined,
+      kind: repo.kind,
+    }));
+    for (const folder of activeWorkspace?.folders ?? []) {
+      if (folder.provider !== "ssh" || gitSshConnIds[folder.id]) continue;
+      const ssh = workspaceSshConnections[folder.id];
+      roots.push({
+        id: folder.id,
+        name: folder.name,
+        path: folder.path,
+        provider: "ssh",
+        status: ssh?.status,
+        error: ssh?.error,
+      });
+    }
+    return roots;
+  }, [activeWorkspace, gitRepositories, gitSshConnIds, workspaceSshConnections]);
 
   // Raízes para os breadcrumbs: as pastas do workspace (multi-root, inclusive
   // SSH) ou a pasta única aberta (local ou sessão SSH da janela).
@@ -1529,10 +1607,15 @@ export default function App() {
           }
         : null);
     const branches = activeWorkspace.folders.map((folder) => {
-      const gitState = workspaceGitStates[folder.id] ?? null;
+      const repoId = gitFolderRepo[folder.id];
+      const gitState = repoId ? workspaceGitStates[repoId] ?? null : null;
       const status = gitState?.status ?? null;
+      const sshConn = folder.provider === "ssh" ? workspaceSshConnections[folder.id] : undefined;
       return {
         id: folder.id,
+        // Mesmo repo em duas pastas (pasta + subpasta) soma uma vez só.
+        repoId: status?.isRepo ? `${gitState?.connId ?? "local"}::${status.root || repoId}` : undefined,
+        disconnected: folder.provider === "ssh" && sshConn?.status !== "connected",
         name: folder.name,
         path: folder.path,
         connId: gitState?.connId,
@@ -1554,7 +1637,7 @@ export default function App() {
       remote: Boolean(activeRoot?.workspaceRemote || activeRoot?.connId),
       branches,
     };
-  }, [activeContextTarget, activeWorkspace, explorerIsWorkspace, workspaceGitStates]);
+  }, [activeContextTarget, activeWorkspace, explorerIsWorkspace, gitFolderRepo, workspaceGitStates, workspaceSshConnections]);
 
   // Lets Search/Problems jump to a line in the active editor, optionally
   // selecting a range on that line (search results highlight the matched term).
@@ -6196,7 +6279,7 @@ export default function App() {
         return (
           <GitPanel
             rootPath={rootPath}
-            workspaceRoots={explorerWorkspaceRoots}
+            workspaceRoots={gitPanelRoots}
             onOpenFile={(path, name) =>
               handleOpenFile({ name, path, isDir: false }, undefined, undefined, undefined, {
                 origin: "scm",
