@@ -29,6 +29,7 @@ import "./styles/tooltip.css";
 import "./styles/workbench.css";
 import "./styles/extensions.css";
 import "./styles/views.css";
+import "./styles/view-pane.css";
 import "./theme/acrylic.css";
 import { applyAcrylicFlyouts } from "./theme/acrylic";
 import { installNativeDragGuard } from "./workbench/workbenchDrag";

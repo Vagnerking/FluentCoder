@@ -11,3 +11,11 @@ export { Switch, type SwitchProps } from "./Switch";
 export { Tabs, type TabsItem, type TabsProps } from "./Tabs";
 export { Menu, type MenuItemSpec, type MenuProps, type MenuAnchor, type MenuCloseReason } from "./Menu";
 export { Input, SearchBox, Textarea, type InputProps, type SearchBoxProps, type TextareaProps } from "./Input";
+export {
+  ViewPaneContainer,
+  SectionHeader,
+  ActionBar,
+  type ViewPaneDescriptor,
+  type SectionHeaderProps,
+  type PaneAction,
+} from "./ViewPane";
