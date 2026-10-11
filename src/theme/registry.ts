@@ -1,118 +1,135 @@
 /**
- * Registro de temas (cores e ícones) — interface mínima entre as settings
- * (`workbench.colorTheme` / `workbench.iconTheme`, pickers da tela de
- * Configurações) e o motor de temas.
+ * Registro de temas — interface MÍNIMA usada pela tela de Configurações
+ * (pickers de `workbench.colorTheme`/`workbench.iconTheme`). Mesma API pública
+ * do registro da frente de temas (branch w2/temas: `list`, `get`, `active`,
+ * `configured`, `apply`, `restore`, `onDidChange`, `registerThemeProvider`);
+ * na integração a implementação de lá substitui esta, e o adaptador de
+ * settings dela (`setSettingsBackend`) passa a apontar para `src/settings/`.
  *
- * O core registra os temas embutidos; temas de extensões (contributes.themes /
- * iconThemes) entram por `registerColorThemeProvider`/`registerIconThemeProvider`
- * — o motor de temas é quem sabe aplicá-los. Quem aplica a setting é
- * `src/settings/applyTheme.ts`.
+ * Aqui só existem os temas embutidos; `src/settings/applyTheme.ts` aplica a
+ * setting por este registro.
  */
+import { settings } from "../settings/instance.ts";
 
-export type ThemeKind = "dark" | "light" | "hc-dark" | "hc-light";
+export type ThemeKind = "color" | "fileIcon" | "productIcon";
 
-export interface ColorThemeInfo {
-  /** Valor gravado em `workbench.colorTheme` (o `label` do VS Code). */
+export type ThemeOrigin = { type: "builtin" } | { type: "extension"; extensionId: string; extensionName: string };
+
+export interface ThemeEntry {
+  kind: ThemeKind;
   id: string;
   label: string;
-  kind: ThemeKind;
-  /** `core` ou id da extensão. */
-  source: string;
+  uiTheme?: "vs" | "vs-dark" | "hc-black" | "hc-light";
+  origin: ThemeOrigin;
   description?: string;
 }
 
-export interface IconThemeInfo {
-  /** Valor gravado em `workbench.iconTheme` (`null` = sem ícones de arquivo). */
-  id: string;
-  label: string;
-  source: string;
+export interface ThemeChangeEvent {
+  kind: ThemeKind;
+  type: "list" | "active";
+  preview?: boolean;
 }
 
-export interface ColorThemeProvider {
-  id: string;
-  list(): ColorThemeInfo[];
-  /** Aplica o tema; `false` se não é deste provedor. */
-  apply(id: string): boolean | Promise<boolean>;
+export interface ThemeKindProvider {
+  kind: ThemeKind;
+  defaultId: string;
+  entries(): ThemeEntry[];
+  applyEntry(entry: ThemeEntry): Promise<void>;
 }
 
-export interface IconThemeProvider {
-  id: string;
-  list(): IconThemeInfo[];
-  apply(id: string | null): boolean | Promise<boolean>;
+export interface ThemeRegistry {
+  list(kind: ThemeKind): readonly ThemeEntry[];
+  get(kind: ThemeKind, id: string): ThemeEntry | undefined;
+  active(kind: ThemeKind): ThemeEntry | undefined;
+  configured(kind: ThemeKind): string;
+  apply(kind: ThemeKind, id: string, opts?: { preview?: boolean }): Promise<void>;
+  restore(kind: ThemeKind): Promise<void>;
+  onDidChange(listener: (e: ThemeChangeEvent) => void): () => void;
 }
 
-export const DEFAULT_COLOR_THEME = "Fluent Acrylic Dark";
+export const THEME_SETTING: Record<ThemeKind, string> = {
+  color: "workbench.colorTheme",
+  fileIcon: "workbench.iconTheme",
+  productIcon: "workbench.productIconTheme",
+};
+
+export const DEFAULT_COLOR_THEME = "Fluent Escuro";
 export const DEFAULT_ICON_THEME = "material-icon-theme";
 
-type Listener = () => void;
+const providers = new Map<ThemeKind, ThemeKindProvider>();
+const activeId = new Map<ThemeKind, string>();
+const listeners = new Set<(e: ThemeChangeEvent) => void>();
 
-class ThemeRegistry {
-  private colorProviders = new Map<string, ColorThemeProvider>();
-  private iconProviders = new Map<string, IconThemeProvider>();
-  private listeners = new Set<Listener>();
-
-  registerColorThemeProvider(p: ColorThemeProvider): () => void {
-    this.colorProviders.set(p.id, p);
-    this.changed();
-    return () => {
-      if (this.colorProviders.get(p.id) === p) this.colorProviders.delete(p.id);
-      this.changed();
-    };
-  }
-
-  registerIconThemeProvider(p: IconThemeProvider): () => void {
-    this.iconProviders.set(p.id, p);
-    this.changed();
-    return () => {
-      if (this.iconProviders.get(p.id) === p) this.iconProviders.delete(p.id);
-      this.changed();
-    };
-  }
-
-  listColorThemes(): ColorThemeInfo[] {
-    return [...this.colorProviders.values()].flatMap((p) => p.list());
-  }
-
-  listIconThemes(): IconThemeInfo[] {
-    return [...this.iconProviders.values()].flatMap((p) => p.list());
-  }
-
-  async applyColorTheme(id: string): Promise<boolean> {
-    for (const p of this.colorProviders.values()) {
-      if (p.list().some((t) => t.id === id) && (await p.apply(id))) return true;
+function emit(e: ThemeChangeEvent): void {
+  for (const l of [...listeners]) {
+    try {
+      l(e);
+    } catch {
+      /* ignora */
     }
-    return false;
-  }
-
-  async applyIconTheme(id: string | null): Promise<boolean> {
-    for (const p of this.iconProviders.values()) {
-      if ((id === null || p.list().some((t) => t.id === id)) && (await p.apply(id))) return true;
-    }
-    return false;
-  }
-
-  /** Avisa quando provedores/temas mudam (pickers relistam). */
-  onDidChange(cb: Listener): () => void {
-    this.listeners.add(cb);
-    return () => this.listeners.delete(cb);
-  }
-
-  /** Provedores chamam quando a lista deles muda (extensão instalada…). */
-  changed(): void {
-    for (const l of [...this.listeners]) l();
   }
 }
 
-export const themeRegistry = new ThemeRegistry();
+function find(kind: ThemeKind, id: string): ThemeEntry | undefined {
+  const list = providers.get(kind)?.entries() ?? [];
+  return list.find((e) => e.id === id) ?? list.find((e) => e.id.toLowerCase() === id.toLowerCase() || e.label === id);
+}
 
-// Embutidos: o tema escuro Fluent (único hoje) e o Material Icon Theme.
-themeRegistry.registerColorThemeProvider({
-  id: "core",
-  list: () => [{ id: DEFAULT_COLOR_THEME, label: "Fluent Acrylic Dark", kind: "dark", source: "core", description: "Tema padrão (Windows 11)" }],
-  apply: (id) => id === DEFAULT_COLOR_THEME,
+async function applyEntry(kind: ThemeKind, entry: ThemeEntry, preview: boolean): Promise<void> {
+  await providers.get(kind)!.applyEntry(entry);
+  activeId.set(kind, entry.id);
+  emit({ kind, type: "active", preview });
+}
+
+export const themeRegistry: ThemeRegistry = {
+  list: (kind) => providers.get(kind)?.entries() ?? [],
+  get: (kind, id) => find(kind, id),
+  active: (kind) => {
+    const id = activeId.get(kind);
+    return id ? find(kind, id) : undefined;
+  },
+  configured: (kind) => {
+    const v = settings.get<string | null>(THEME_SETTING[kind]);
+    return typeof v === "string" && v ? v : providers.get(kind)?.defaultId ?? "";
+  },
+  async apply(kind, id, opts = {}) {
+    const entry = find(kind, id);
+    if (!entry) throw new Error(`tema não encontrado: ${id}`);
+    if (!opts.preview) await settings.update(THEME_SETTING[kind], entry.id, "user");
+    await applyEntry(kind, entry, !!opts.preview);
+  },
+  async restore(kind) {
+    const p = providers.get(kind);
+    if (!p) return;
+    const entry = find(kind, themeRegistry.configured(kind)) ?? find(kind, p.defaultId);
+    if (entry) await applyEntry(kind, entry, false);
+  },
+  onDidChange(listener) {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  },
+};
+
+export function registerThemeProvider(provider: ThemeKindProvider): Promise<void> {
+  providers.set(provider.kind, provider);
+  emit({ kind: provider.kind, type: "list" });
+  return themeRegistry.restore(provider.kind).catch(() => {});
+}
+
+export function notifyThemeListChanged(kind: ThemeKind): void {
+  emit({ kind, type: "list" });
+}
+
+// Embutidos.
+void registerThemeProvider({
+  kind: "color",
+  defaultId: DEFAULT_COLOR_THEME,
+  entries: () => [{ kind: "color", id: DEFAULT_COLOR_THEME, label: "Fluent Escuro", uiTheme: "vs-dark", origin: { type: "builtin" }, description: "Tema padrão (Windows 11)" }],
+  applyEntry: async () => {},
 });
-themeRegistry.registerIconThemeProvider({
-  id: "core",
-  list: () => [{ id: DEFAULT_ICON_THEME, label: "Material Icon Theme", source: "core" }],
-  apply: (id) => id === DEFAULT_ICON_THEME,
+void registerThemeProvider({
+  kind: "fileIcon",
+  defaultId: DEFAULT_ICON_THEME,
+  entries: () => [{ kind: "fileIcon", id: DEFAULT_ICON_THEME, label: "Material Icon Theme", origin: { type: "builtin" } }],
+  applyEntry: async () => {},
 });

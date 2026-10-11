@@ -187,3 +187,31 @@ listener de `keybindingRuntime.ts` roda na fase de CAPTURA:
   o App a ignora (`isKeyClaimed` no início do `onKeyDown`);
 - o 1º acorde de uma sequência nunca é consumido (os acordes do Monaco, como
   Ctrl+K Ctrl+C, continuam funcionando).
+
+## Tela de Configurações e de Atalhos
+
+- **Configurações** (`src/components/settings/SettingsEditor.tsx`, aba
+  `fluentcoder://settings`, modo `settings`): abre por **Ctrl+,**, Paleta
+  "Preferências: Abrir Configurações" ou a engrenagem "Gerenciar" da activity
+  bar. Busca com destaque (`@modified`, `@lang:<id>` — edita o override
+  `"[id]"` —, `@ext:<id>`, `@tag:<tag>`, `@id:<chave>`), árvore de categorias
+  (vira um Select abaixo de 720 px), escopo Usuário / Workspace / Pasta (Select
+  das raízes no multi-root), indicador de modificado + "Restaurar padrão",
+  "Também modificado em…", controles por tipo (Switch, Select, número com
+  stepper, texto, cor, lista; objetos → "Editar no settings.json"), pickers de
+  tema/ícones a partir de `src/theme/registry.ts` e "Abrir settings.json" do
+  escopo. Settings `application`/`machine` só no Usuário; `window` não vai
+  para Pasta.
+- **Atalhos de Teclado** (`KeybindingsEditor.tsx`, `fluentcoder://keybindings`):
+  **Ctrl+K Ctrl+S**, Paleta ou Ajuda ▸ Atalhos de Teclado. Lista os comandos da
+  Paleta com atalho, `when` e origem (Padrão/Usuário/Extensão), busca por
+  comando ou tecla (`@source:user`), gravação de atalho (até 2 acordes),
+  conflitos marcados e remover/restaurar — sempre por edição pontual do
+  `keybindings.json`.
+- **JSON**: `settingsJsonMonaco.ts` valida (`fluent-settings`: tipo, enum,
+  mínimo/máximo, override de linguagem indevido, chave desconhecida como
+  informação) e completa chaves/valores nos `settings.json`, no `settings` dos
+  arquivos de workspace e os comandos do `keybindings.json` — na mesma instância
+  do Monaco, sem servidor novo.
+- Paleta: "Preferências: Abrir Configurações", "…do Usuário (JSON)", "…do
+  Workspace (JSON)", "Abrir Atalhos de Teclado", "…(JSON)".

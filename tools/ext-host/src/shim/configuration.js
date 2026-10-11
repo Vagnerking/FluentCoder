@@ -82,7 +82,7 @@ const CORE_DEFAULTS = {
   'editor.fontSize': 14,
   'editor.fontFamily': '',
   'editor.wordWrap': 'off',
-  'workbench.colorTheme': 'Fluent Acrylic Dark',
+  'workbench.colorTheme': 'Fluent Escuro',
   'terminal.integrated.defaultProfile.linux': null,
   'terminal.integrated.defaultProfile.windows': null,
   'terminal.integrated.defaultProfile.osx': null,

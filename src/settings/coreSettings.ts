@@ -68,7 +68,7 @@ export const CORE_SETTINGS: SettingSchema[] = [
 
   // ------------------------------------------------------------- Aparência
   ...group("appearance", "window", [
-    { key: "workbench.colorTheme", title: "Tema de cores", default: "Fluent Acrylic Dark", description: "Tema de cores do editor e da interface. Temas de extensões aparecem quando instalados." },
+    { key: "workbench.colorTheme", title: "Tema de cores", default: "Fluent Escuro", description: "Tema de cores do editor e da interface. Temas de extensões aparecem quando instalados." },
     { key: "workbench.iconTheme", title: "Tema de ícones", default: "material-icon-theme", type: ["string", "null"], description: "Tema de ícones de arquivos e pastas." },
     { key: "workbench.colorCustomizations", title: "Cores personalizadas", default: {}, editor: "json", description: "Sobrescreve cores do tema atual (ex.: { \"editor.background\": \"#1e1e1e\" })." },
     { key: "fluent.ui.density", title: "Densidade", default: "comfortable", enum: ["compact", "comfortable", "spacious"], enumLabels: ["Compacta", "Confortável", "Espaçosa"], description: "Altura das linhas das listas, abas e barras." },

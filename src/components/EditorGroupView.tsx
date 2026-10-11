@@ -18,6 +18,8 @@ import { EditorPane } from "./EditorPane";
 import { ImagePreview } from "./ImagePreview";
 import { MediaPreview } from "./MediaPreview";
 import { GraphView } from "./GraphView";
+import { SettingsEditor } from "./settings/SettingsEditor";
+import { KeybindingsEditor } from "./settings/KeybindingsEditor";
 import type { GitRevisionDiffTarget } from "../api";
 import { ExtensionWebviewTab, handleOfWebviewTab } from "../extensions";
 import { EditorActions, type EditorActionItem } from "./editor/EditorActions";
@@ -259,7 +261,7 @@ export function EditorGroupView(props: EditorGroupViewProps) {
         decorationFor: props.decorationFor,
         }}
         breadcrumbs={
-          active && mode !== "graph" && mode !== "webview"
+          active && mode !== "graph" && mode !== "webview" && mode !== "settings" && mode !== "keybindings"
             ? {
                 file: active,
                 roots: props.breadcrumbRoots,
@@ -307,6 +309,10 @@ export function EditorGroupView(props: EditorGroupViewProps) {
             kind={mode}
             connId={active.workspaceRemote?.connId}
           />
+        ) : active && mode === "settings" ? (
+          <SettingsEditor onOpenFile={(p) => props.onOpenPath(p)} />
+        ) : active && mode === "keybindings" ? (
+          <KeybindingsEditor onOpenFile={(p) => props.onOpenPath(p)} />
         ) : active && mode === "webview" ? null : active && mode === "graph" ? (
           <GraphView
             rootPath={props.graphRootPath ?? props.rootPath}

@@ -334,6 +334,13 @@ function isGraphTab(path: string): boolean {
   return path === GRAPH_URI;
 }
 
+/** Abas sintéticas da tela de Configurações e de Atalhos de Teclado. */
+const SETTINGS_URI = "fluentcoder://settings";
+const KEYBINDINGS_URI = "fluentcoder://keybindings";
+function isPreferencesTab(path: string): boolean {
+  return path === SETTINGS_URI || path === KEYBINDINGS_URI;
+}
+
 const GIT_REVISION_URI_PREFIX = "fluentcoder://git/";
 const GIT_DIFF_URI_PREFIX = "fluentcoder://git-diff/";
 function gitRevisionUri(filePath: string, shortHash: string): string {
@@ -362,7 +369,7 @@ function isGitDiffTab(path: string): boolean {
  *  extensões): sem arquivo no disco — fora do salvar, da sessão e do contexto
  *  de editor dos agentes. */
 function isVirtualTab(path: string): boolean {
-  return isGraphTab(path) || isGitRevisionTab(path) || isGitDiffTab(path) || isWebviewTabPath(path);
+  return isGraphTab(path) || isPreferencesTab(path) || isGitRevisionTab(path) || isGitDiffTab(path) || isWebviewTabPath(path);
 }
 
 type ActiveWorkspace = NormalizedWorkspace & {
@@ -4375,6 +4382,23 @@ export default function App() {
     });
   }, []);
 
+  /** Abre (ou foca) a aba de Configurações / Atalhos de Teclado. */
+  const openPreferencesTab = useCallback((kind: "settings" | "keybindings") => {
+    const path = kind === "settings" ? SETTINGS_URI : KEYBINDINGS_URI;
+    setLayout((l) => {
+      for (const groupId of groupOrder(l.root)) {
+        if (l.groups[groupId]?.files.some((f) => f.path === path)) return activateFile(l, groupId, path);
+      }
+      return openInGroup(l, l.activeGroup, {
+        path,
+        name: kind === "settings" ? "Configurações" : "Atalhos de Teclado",
+        content: "",
+        dirty: false,
+        mode: kind,
+      });
+    });
+  }, []);
+
   /**
    * Painel de webview de extensão (`createWebviewPanel`) como aba da grade:
    * `viewColumn` 1…N = grupo N, Beside = grupo à direita (ou um novo ao lado),
@@ -6012,7 +6036,7 @@ export default function App() {
           id: "help.keyboardShortcuts",
           label: "Atalhos de Teclado",
           accelerator: "Ctrl+K Ctrl+S",
-          run: () => setHelpDialog("shortcuts"),
+          run: () => openPreferencesTab("keybindings"),
         },
         { id: "help.sep2", label: "", separator: true },
         { id: "help.about", label: "Sobre", run: () => setHelpDialog("about") },
@@ -6128,6 +6152,20 @@ export default function App() {
   const preferenceCommands = useMemo<Command[]>(
     () => [
       {
+        id: "settings.open",
+        title: "Preferências: Abrir Configurações",
+        detail: "Preferências",
+        keybinding: "Ctrl+,",
+        run: () => openPreferencesTab("settings"),
+      },
+      {
+        id: "keybindings.open",
+        title: "Preferências: Abrir Atalhos de Teclado",
+        detail: "Preferências",
+        keybinding: "Ctrl+K Ctrl+S",
+        run: () => openPreferencesTab("keybindings"),
+      },
+      {
         id: "settings.openJson",
         title: "Preferências: Abrir Configurações do Usuário (JSON)",
         detail: "Preferências",
@@ -6170,7 +6208,7 @@ export default function App() {
       { id: "view.zoomOut", title: "Exibir: Diminuir Zoom", detail: "Exibir", keybinding: "Ctrl+-", run: () => setUiScale((s) => stepUiScale(s, -1)) },
       { id: "view.zoomReset", title: "Exibir: Redefinir Zoom", detail: "Exibir", keybinding: "Ctrl+0", run: () => setUiScale(UI_SCALE_DEFAULT) },
     ],
-    [openConfigFile, runVscodeTask, setUiScale]
+    [openConfigFile, openPreferencesTab, runVscodeTask, setUiScale]
   );
 
   // `when` dos atalhos do usuário: arquivo/linguagem ativos e o layout.
@@ -6665,6 +6703,8 @@ export default function App() {
             onViewChange={(v) => {
               // The graph is an editor tab paired with the Backlinks sidebar.
               if (v === "graph") handleShowGraph();
+              // "Gerenciar" abre a aba de Configurações (como a engrenagem do VS Code).
+              else if (v === "settings") openPreferencesTab("settings");
               // Revela a view onde ela vive (primária por padrão, ou a região
               // para onde o usuário a moveu).
               else revealView(v);

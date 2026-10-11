@@ -38,6 +38,7 @@ import { installWorkbenchSettings } from "./settings/applyWorkbench";
 import { installThemeSettings } from "./settings/applyTheme";
 import { installMonacoSettingsBridge } from "./settings/monacoBridge";
 import { installKeybindings } from "./settings/keybindingRuntime";
+import { installSettingsJsonSupport } from "./settings/settingsJsonMonaco";
 import { installExtHostSettingsBridge } from "./settings/extHostBridge";
 import { getPlatform } from "./platform/os";
 import { installNativeDragGuard } from "./workbench/workbenchDrag";
@@ -84,6 +85,8 @@ installWorkbenchSettings();
 installMonacoSettingsBridge(whenMonacoReady);
 // keybindings.json do usuário (formato VS Code, com `when`).
 installKeybindings();
+// Validação + completion dos settings.json/keybindings.json no editor.
+void whenMonacoReady.then(installSettingsJsonSupport).catch(() => {});
 installExtHostSettingsBridge();
 
 void settingsReady.then(() => {

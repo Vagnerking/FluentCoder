@@ -30,7 +30,7 @@ export interface RawDirEntry {
  * the choice so the App can route the buffer to the right view. `"webview"` is
  * a VS Code extension's webview panel (`createWebviewPanel`) as an editor tab.
  */
-export type OpenMode = "text" | "image" | "video" | "audio" | "graph" | "diff" | "webview";
+export type OpenMode = "text" | "image" | "video" | "audio" | "graph" | "diff" | "webview" | "settings" | "keybindings";
 
 /** One file in the workspace "context graph" (Obsidian-style map). */
 export interface GraphNode {
