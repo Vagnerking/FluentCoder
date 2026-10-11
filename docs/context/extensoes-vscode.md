@@ -738,6 +738,31 @@ Comandos Tauri: `extensions_paths`, `extensions_list`,
 `extensions_check_updates`;
 evento `extensions://progress` (`metadata`/`download`/`extract`/`commit`).
 
+### View: agrupamento e avaliação preguiçosa
+
+- **Instaladas por origem**: "No app" (aberta) e "Do VS Code" (somente
+  leitura; recolhida por padrão, com contagem; abre sozinha quando
+  a pesquisa acha algo lá). O aberto/recolhido de cada seção fica no
+  `localStorage` (`ext.section.<id>`).
+- **Abrir a view não avalia tudo** (eram 62 avaliações + 62 escritas do
+  índice): a fila de fundo (concorrência 2) só pega o que o portão precisa —
+  gerenciadas pelo app, embutidas e as do VS Code habilitadas — com veredito
+  gravado desatualizado (outra versão/shim). As demais são avaliadas quando o
+  card entra na área visível (`IntersectionObserver`) ou os detalhes abrem;
+  até lá o selo usa o portão gravado no índice (mesma versão e shim).
+- **Sem O(N²) em disco**: `extensions_local_details(id, path)` usa o caminho
+  que a UI já tem (filho DIRETO da pasta do app ou da do VS Code, conferido no
+  realpath, `package.json` do mesmo id) em vez de redescobrir tudo por item; a
+  varredura tem cache em memória por pasta (versão + mtime/tamanho do
+  `package.json` e do `main` + `SCANNER_VERSION`).
+- **Portão em lote**: vereditos vão para `extensions_set_gates` (uma escrita
+  do índice, só do que mudou, debounce de 400 ms) + um único refresh do host.
+  Do VS Code e desabilitada: não grava (nada a liberar); habilitar ou liberar
+  sem avaliação grava antes (`ensureGate`).
+- Avisos no topo: ícone com a própria largura, texto flexível e ações que
+  descem de linha em barras estreitas; erro de listagem oferece "Tentar
+  novamente".
+
 ### Pré-avaliação da loja (veredito antes de instalar)
 
 `extensions_preflight(fonte, ns, nome, versão?, includeCode)`

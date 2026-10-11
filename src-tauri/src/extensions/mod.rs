@@ -339,15 +339,77 @@ pub fn local_details(ext_dir: &Path, pkg: &Value) -> LocalDetails {
             let bytes = std::fs::read(&p).ok()?;
             openvsx::icon_data_uri(&bytes, None, &p.to_string_lossy())
         });
-    LocalDetails { readme, changelog, icon, api_scan: store::scan_extension(ext_dir, pkg) }
+    LocalDetails { readme, changelog, icon, api_scan: cached_scan(ext_dir, pkg) }
+}
+
+/// Cache da varredura por pasta, invalidado pela versão do manifesto, pelo
+/// mtime/tamanho do `package.json` e do `main` e pelo `SCANNER_VERSION`: abrir
+/// a view de novo (ou reavaliar) não relê bundles de dezenas de MB.
+fn cached_scan(ext_dir: &Path, pkg: &Value) -> store::ApiScan {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (String, store::ApiScan)>>> = OnceLock::new();
+    let stamp = |p: &Path| {
+        std::fs::metadata(p)
+            .ok()
+            .map(|m| format!("{}:{}", m.len(), m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0)))
+            .unwrap_or_default()
+    };
+    let main = pkg.get("main").and_then(Value::as_str).unwrap_or("");
+    let key = format!(
+        "{}|{}|{}|{}|{}",
+        scan::SCANNER_VERSION,
+        pkg.get("version").and_then(Value::as_str).unwrap_or(""),
+        stamp(&ext_dir.join("package.json")),
+        stamp(&ext_dir.join(main.trim_start_matches("./"))),
+        stamp(&ext_dir.join(format!("{}.js", main.trim_start_matches("./"))))
+    );
+    let dir = std::fs::canonicalize(ext_dir).unwrap_or_else(|_| ext_dir.to_path_buf());
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some((k, s)) = cache.lock().ok().and_then(|c| c.get(&dir).cloned()) {
+        if k == key {
+            return s;
+        }
+    }
+    let s = store::scan_extension(ext_dir, pkg);
+    if let Ok(mut c) = cache.lock() {
+        if c.len() > 512 {
+            c.clear();
+        }
+        c.insert(dir, (key, s.clone()));
+    }
+    s
+}
+
+/// Pasta de uma extensão pelo caminho que a UI já tem (`InstalledInfo.path`),
+/// sem redescobrir tudo: tem de ser filha DIRETA da pasta gerenciada ou da do
+/// VS Code (conferido no realpath) e o `package.json` tem de ser do id pedido.
+pub fn resolve_installed_path(dir: &Path, vscode_dir: Option<&Path>, id: &str, raw: &str) -> Option<(PathBuf, Value)> {
+    let p = std::fs::canonicalize(raw).ok()?;
+    let parent = p.parent()?;
+    let roots = [Some(dir), vscode_dir].into_iter().flatten().filter_map(|r| std::fs::canonicalize(r).ok());
+    if !roots.into_iter().any(|r| r == parent) {
+        return None;
+    }
+    let meta = std::fs::metadata(p.join("package.json")).ok()?;
+    if meta.len() > 4 << 20 {
+        return None;
+    }
+    let pkg: Value = serde_json::from_slice(&std::fs::read(p.join("package.json")).ok()?).ok()?;
+    let pid = format!("{}.{}", pkg.get("publisher")?.as_str()?, pkg.get("name")?.as_str()?).to_lowercase();
+    (pid == id).then_some((p, pkg))
 }
 
 #[tauri::command]
-pub async fn extensions_local_details(app: AppHandle, id: String) -> Result<LocalDetails, String> {
+pub async fn extensions_local_details(app: AppHandle, id: String, path: Option<String>) -> Result<LocalDetails, String> {
     let id = normalize_id(&id)?;
     let dir = managed_dir(&app)?;
     let vdir = store::vscode_extensions_dir();
     tokio::task::spawn_blocking(move || {
+        // Caminho conhecido pela UI: O(1) (antes: `discover()` inteiro por item = O(N²) em disco).
+        if let Some((p, pkg)) = path.as_deref().and_then(|raw| resolve_installed_path(&dir, vdir.as_deref(), &id, raw)) {
+            return Ok(local_details(&p, &pkg));
+        }
         let found = store::discover(&dir, vdir.as_deref()).into_iter().find(|e| e.id == id).ok_or("extensão não encontrada")?;
         Ok(local_details(Path::new(&found.path), &found.manifest))
     })
@@ -647,6 +709,27 @@ mod tests {
         let found = store::discover(&dir, Some(&vdir));
         assert_eq!(found.iter().find(|f| f.id == "acme.tool").unwrap().location, "app");
         assert!(import_from_vscode(&dir, &vdir, "acme.missing").is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(vdir).unwrap();
+    }
+
+    #[test]
+    fn local_details_by_path_is_confined_and_cached() {
+        let dir = tmpdir("ldp");
+        let vdir = tmpdir("ldpv");
+        vsix::extract_payload(std::io::Cursor::new(fixture_vsix("acme", "tool", "1.0.0", None)), &vdir.join("acme.tool-1.0.0"), vsix::Limits::default()).unwrap();
+        let p = vdir.join("acme.tool-1.0.0");
+        let (found, pkg) = resolve_installed_path(&dir, Some(&vdir), "acme.tool", &p.to_string_lossy()).unwrap();
+        assert_eq!(found, std::fs::canonicalize(&p).unwrap());
+        // id divergente, pasta fora das raízes, subpasta e `..` → recusados
+        assert!(resolve_installed_path(&dir, Some(&vdir), "acme.outra", &p.to_string_lossy()).is_none());
+        assert!(resolve_installed_path(&dir, None, "acme.tool", &p.to_string_lossy()).is_none());
+        assert!(resolve_installed_path(&dir, Some(&vdir), "acme.tool", &p.join("out").to_string_lossy()).is_none());
+        assert!(resolve_installed_path(&dir, Some(&vdir), "acme.tool", &format!("{}/../acme.tool-1.0.0/out/..", p.display())).is_some(), "normalizado no realpath");
+        let a = local_details(&found, &pkg).api_scan;
+        let b = local_details(&found, &pkg).api_scan;
+        assert_eq!(a, b);
+        assert!(a.paths.iter().any(|(k, _)| k == "window.showInformationMessage"));
         std::fs::remove_dir_all(dir).unwrap();
         std::fs::remove_dir_all(vdir).unwrap();
     }

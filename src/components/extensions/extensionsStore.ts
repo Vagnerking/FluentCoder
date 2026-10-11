@@ -47,6 +47,8 @@ export interface ExtensionsState {
   /** Prévia de compatibilidade dos resultados da loja (antes de instalar), por `previewKey`. */
   previews: Record<string, PreviewState>;
   error: string | null;
+  /** O erro veio da listagem: a view oferece "Tentar novamente". */
+  errorRetry: boolean;
   notice: string | null;
 }
 
@@ -67,6 +69,7 @@ let state: ExtensionsState = {
   needsRestart: [],
   previews: {},
   error: null,
+  errorRetry: false,
   notice: null,
 };
 const listeners = new Set<() => void>();
@@ -106,18 +109,25 @@ function listenProgress(): void {
 
 let loadPromise: Promise<void> | null = null;
 
-/** Carrega (ou recarrega) instaladas + fontes e avalia a compatibilidade. */
+/**
+ * Carrega (ou recarrega) instaladas + fontes. NÃO avalia todas: só entram na
+ * fila de fundo as que o portão precisa (gerenciadas pelo app e as do VS Code
+ * habilitadas) e cujo veredito gravado não vale para esta versão/shim; as
+ * demais são avaliadas quando o card aparece (`requestEvaluate`) ou os
+ * detalhes abrem.
+ */
 export function loadExtensions(force = false): Promise<void> {
   if (loadPromise && !force) return loadPromise;
   listenProgress();
-  set({ loading: true, error: null });
+  set({ loading: true, error: null, errorRetry: false });
   loadPromise = (async () => {
     try {
       const [paths, installed, sources] = await Promise.all([extensionsApi.paths(), extensionsApi.list(), extensionsApi.sources()]);
       set((s) => ({ platform: paths.platform, installed, sources, loaded: true, updates: pruneUpdates(s.updates, installed) }));
-      void evaluateAll();
+      evaluateBackground();
     } catch (err) {
-      set({ error: `Não foi possível listar as extensões: ${msg(err)}` });
+      loadPromise = null;
+      set({ error: `Não foi possível listar as extensões: ${msg(err)}`, errorRetry: true });
     } finally {
       set({ loading: false });
     }
@@ -125,21 +135,87 @@ export function loadExtensions(force = false): Promise<void> {
   return loadPromise;
 }
 
-const evaluated = new Map<string, string>(); // id → "versão@host" já avaliada
+const evaluated = new Map<string, string>(); // id → "versão@host@origem" já avaliada
 
-async function evaluateAll(): Promise<void> {
-  const queue = [...state.installed];
-  const worker = async () => {
-    for (let info = queue.shift(); info; info = queue.shift()) await evaluate(info).catch(() => {});
-  };
-  await Promise.all([worker(), worker(), worker()]);
+/** O portão gravado no índice vale para esta versão e este shim? */
+export function gateCurrent(info: Pick<InstalledInfo, "gate" | "version">): boolean {
+  return !!info.gate && info.gate.version === info.version && info.gate.hostVersion === CAPABILITIES.hostVersion;
 }
 
-/** Classifica uma instalada (com a varredura do código) e grava o veredito do portão. */
+/** O portão importa para o host: gerenciada pelo app, embutida ou do VS Code habilitada. */
+const gateMatters = (info: InstalledInfo) => info.location === "app" || info.enabled || info.builtin;
+
+// Fila de avaliação (concorrência 2) — cada item lê a pasta da extensão uma vez
+// (varredura com cache no Rust por mtime/versão).
+const EVAL_CONCURRENCY = 2;
+const evalQueue: InstalledInfo[] = [];
+const evalQueued = new Set<string>();
+let evalActive = 0;
+
+function pumpEvaluations(): void {
+  while (evalActive < EVAL_CONCURRENCY && evalQueue.length) {
+    const info = evalQueue.shift()!;
+    evalActive++;
+    void evaluate(info)
+      .catch(() => {})
+      .finally(() => {
+        evalQueued.delete(info.id);
+        evalActive--;
+        pumpEvaluations();
+      });
+  }
+}
+
+/** Pede a avaliação de uma instalada (card visível, detalhes) — dedup, sem bloquear a UI. */
+export function requestEvaluate(info: InstalledInfo, front = false): void {
+  const key = `${info.version}@${CAPABILITIES.hostVersion}@${info.location}`;
+  if ((evaluated.get(info.id) === key && state.reports[info.id]) || evalQueued.has(info.id)) return;
+  evalQueued.add(info.id);
+  if (front) evalQueue.unshift(info);
+  else evalQueue.push(info);
+  pumpEvaluations();
+}
+
+/** Fundo: só o que o portão precisa e está desatualizado. */
+function evaluateBackground(): void {
+  for (const info of state.installed) if (gateMatters(info) && !gateCurrent(info)) requestEvaluate(info);
+}
+
+// Vereditos gravados em LOTE (uma escrita do índice + um refresh do host).
+const pendingGates = new Map<string, { verdict: string; version: string; hostVersion: string }>();
+let gateTimer: ReturnType<typeof setTimeout> | null = null;
+let gateFlush: Promise<void> | null = null;
+
+/** Grava os vereditos pendentes agora (antes de habilitar/liberar). */
+export async function flushGates(): Promise<void> {
+  if (gateTimer) clearTimeout(gateTimer);
+  gateTimer = null;
+  if (gateFlush) await gateFlush;
+  if (!pendingGates.size) return;
+  const gates = [...pendingGates].map(([id, gate]) => ({ id, gate }));
+  pendingGates.clear();
+  gateFlush = (async () => {
+    await extensionsApi.setGates(gates).catch(() => {});
+    await syncHost();
+  })();
+  try {
+    await gateFlush;
+  } finally {
+    gateFlush = null;
+  }
+}
+
+function queueGate(id: string, gate: { verdict: string; version: string; hostVersion: string }): void {
+  pendingGates.set(id, gate);
+  if (gateTimer) clearTimeout(gateTimer);
+  gateTimer = setTimeout(() => void flushGates(), 400);
+}
+
+/** Classifica uma instalada (com a varredura do código) e agenda o veredito do portão. */
 export async function evaluate(info: InstalledInfo): Promise<CompatibilityReport> {
   const key = `${info.version}@${CAPABILITIES.hostVersion}@${info.location}`;
   if (evaluated.get(info.id) === key && state.reports[info.id]) return state.reports[info.id];
-  const details = await extensionsApi.localDetails(info.id);
+  const details = await extensionsApi.localDetails(info.id, info.path);
   const report = classify(
     {
       manifest: info.manifest,
@@ -154,11 +230,20 @@ export async function evaluate(info: InstalledInfo): Promise<CompatibilityReport
   evaluated.set(info.id, key);
   set((s) => ({ reports: { ...s.reports, [info.id]: report }, details: { ...s.details, [info.id]: details } }));
   const g = info.gate;
-  if (!g || g.verdict !== report.verdict || g.version !== info.version || g.hostVersion !== CAPABILITIES.hostVersion) {
-    await extensionsApi.setGate(info.id, { verdict: report.verdict, version: info.version, hostVersion: CAPABILITIES.hostVersion }).catch(() => {});
-    await syncHost();
-  }
+  const stale = !g || g.verdict !== report.verdict || g.version !== info.version || g.hostVersion !== CAPABILITIES.hostVersion;
+  // Só grava quando o portão importa (do VS Code e desabilitada: nada a liberar;
+  // grava quando o usuário habilitar — `ensureGate`).
+  if (stale && gateMatters(info)) queueGate(info.id, { verdict: report.verdict, version: info.version, hostVersion: CAPABILITIES.hostVersion });
   return report;
+}
+
+/** Avalia e grava o portão AGORA (antes de habilitar ou liberar). */
+async function ensureGate(info: InstalledInfo): Promise<void> {
+  const report = await evaluate(info);
+  if (!gateCurrent(info) || info.gate?.verdict !== report.verdict) {
+    pendingGates.set(info.id, { verdict: report.verdict, version: info.version, hostVersion: CAPABILITIES.hostVersion });
+  }
+  await flushGates();
 }
 
 /** O host em execução relê a lista (extensão nova fica carregável sem reiniciar). */
@@ -174,7 +259,7 @@ async function reloadInstalled(): Promise<void> {
   const installed = await extensionsApi.list();
   set((s) => ({ installed, updates: pruneUpdates(s.updates, installed) }));
   writeUpdateCache(state.lastUpdateCheck ?? Date.now(), state.updates);
-  await evaluateAll();
+  evaluateBackground();
   await syncHost();
 }
 
@@ -183,7 +268,7 @@ function markRestart(id: string): void {
 }
 
 async function run(id: string, label: string, op: () => Promise<string | void>): Promise<boolean> {
-  set((s) => ({ busy: { ...s.busy, [id]: label }, error: null, notice: null }));
+  set((s) => ({ busy: { ...s.busy, [id]: label }, error: null, errorRetry: false, notice: null }));
   try {
     const notice = await op();
     await reloadInstalled();
@@ -314,6 +399,7 @@ export function isTrusted(info: Pick<InstalledInfo, "version" | "trust">): boole
  */
 export function setUnverifiedAllowed(info: InstalledInfo, allow: boolean): Promise<boolean> {
   return run(info.id, allow ? "Liberando…" : "Revogando…", async () => {
+    if (allow) await ensureGate(info); // o host só aceita a liberação junto com o portão `unknown` desta versão
     await extensionsApi.setTrust(info.id, allow ? { version: info.version, hostVersion: CAPABILITIES.hostVersion } : null);
     if (allow && !info.enabled) await extensionsApi.setEnabled(info.id, true);
     if (!allow) markRestart(info.id);
@@ -325,6 +411,8 @@ export function setUnverifiedAllowed(info: InstalledInfo, allow: boolean): Promi
 
 export function setExtensionEnabled(id: string, enabled: boolean): Promise<boolean> {
   return run(id, enabled ? "Habilitando…" : "Desabilitando…", async () => {
+    const info = state.installed.find((i) => i.id === id);
+    if (enabled && info) await ensureGate(info);
     await extensionsApi.setEnabled(id, enabled);
     if (!enabled) markRestart(id);
   });
@@ -364,7 +452,7 @@ export async function restartHost(): Promise<void> {
 }
 
 export function dismissMessages(): void {
-  set({ error: null, notice: null });
+  set({ error: null, errorRetry: false, notice: null });
 }
 
 // ---------------------------------------------------------------- atualizações

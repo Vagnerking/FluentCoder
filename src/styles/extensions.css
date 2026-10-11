@@ -54,6 +54,12 @@
   padding: var(--space-xs) var(--space-md);
 }
 
+.ext-section-note {
+  margin: 0;
+  font-size: var(--font-caption);
+  line-height: var(--line-height-caption);
+}
+
 .ext-muted {
   color: var(--text-muted);
   font-size: var(--font-caption);
@@ -79,10 +85,33 @@
   border-radius: var(--radius-control);
 }
 
-.ext-banner > span {
-  flex: 1;
+/* Ícone com a largura dele; o texto ocupa o resto; as ações vão para a linha
+   de baixo quando a barra lateral é estreita (antes o ícone, também um span,
+   levava metade da largura e o texto quebrava palavra por palavra). */
+.ext-banner {
+  flex-wrap: wrap;
+}
+
+.ext-banner > .codicon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.ext-banner-text {
+  flex: 1 1 8rem;
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+}
+
+.ext-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-xs);
+  min-width: 0;
+  max-width: 100%;
+  margin-left: auto;
 }
 
 .ext-banner-error {

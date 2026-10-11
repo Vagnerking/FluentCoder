@@ -42,8 +42,10 @@ import {
   loadExtensions,
   restartHost,
   saveSources,
+  gateCurrent,
   isTrusted,
   previewKey,
+  requestEvaluate,
   requestPreview,
   setExtensionEnabled,
   setUnverifiedAllowed,
@@ -363,13 +365,54 @@ function SourcesDialog({ sources, onClose }: { sources: CatalogSource[]; onClose
 
 // ----------------------------------------------------------------- seções
 
-function Section({ title, count, children, actions, defaultOpen = true, id }: { title: string; count?: number; children: React.ReactNode; actions?: React.ReactNode; defaultOpen?: boolean; id: string }) {
-  const [open, setOpen] = useState(defaultOpen);
+const SECTION_KEY = (id: string) => `ext.section.${id}`;
+
+function readSectionOpen(id: string, fallback: boolean): boolean {
+  try {
+    const v = localStorage.getItem(SECTION_KEY(id));
+    return v === null ? fallback : v === "1";
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Seção recolhível da view (estado lembrado por seção no `localStorage`).
+ * `forceOpen` abre sem mudar a preferência (ex.: pesquisa com resultados).
+ */
+function Section({
+  title,
+  count,
+  children,
+  actions,
+  defaultOpen = true,
+  forceOpen = false,
+  id,
+}: {
+  title: string;
+  count?: number;
+  children: React.ReactNode;
+  actions?: React.ReactNode;
+  defaultOpen?: boolean;
+  forceOpen?: boolean;
+  id: string;
+}) {
+  const [stored, setStored] = useState(() => readSectionOpen(id, defaultOpen));
+  const open = forceOpen || stored;
+  const toggle = () => {
+    const next = !open;
+    setStored(next);
+    try {
+      localStorage.setItem(SECTION_KEY(id), next ? "1" : "0");
+    } catch {
+      /* armazenamento indisponível: só nesta sessão */
+    }
+  };
   const bodyId = `ext-section-${id}`;
   return (
     <section className="ext-section" aria-labelledby={`${bodyId}-h`}>
       <div className="ext-section-header">
-        <button type="button" className="ext-section-toggle" aria-expanded={open} aria-controls={bodyId} id={`${bodyId}-h`} onClick={() => setOpen((v) => !v)}>
+        <button type="button" className="ext-section-toggle" aria-expanded={open} aria-controls={bodyId} id={`${bodyId}-h`} onClick={toggle}>
           <Codicon name={open ? "chevronDown" : "chevronRight"} size={14} />
           <span className="ext-section-title">{title}</span>
           {count !== undefined && <span className="ext-count">{count}</span>}
@@ -428,14 +471,41 @@ function installedActions(info: InstalledInfo, report: CompatibilityReport | und
   return acts;
 }
 
+/** Avalia a instalada quando o card entra na área visível (uma vez; a fila deduplica). */
+function useEvaluateWhenVisible(info: InstalledInfo, done: boolean): (el: HTMLLIElement | null) => void {
+  const [el, setEl] = useState<HTMLLIElement | null>(null);
+  useEffect(() => {
+    if (!el || done) return;
+    if (typeof IntersectionObserver === "undefined") {
+      requestEvaluate(info);
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          requestEvaluate(info);
+          io.disconnect();
+        }
+      },
+      { rootMargin: "200px 0px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [el, done, info]);
+  return setEl;
+}
+
 function InstalledCard({ info, vm }: { info: InstalledInfo; vm: ViewModel }) {
   const report = vm.st.reports[info.id];
   const update = vm.updatesById.get(info.id);
   const det = vm.st.details[info.id];
-  const verdict: Verdict | null = report?.verdict ?? (info.gate?.version === info.version ? (info.gate.verdict as Verdict) : null);
+  // Sem relatório desta sessão: o veredito gravado no índice (mesma versão e shim) serve de selo.
+  const verdict: Verdict | null = report?.verdict ?? (gateCurrent(info) ? (info.gate!.verdict as Verdict) : null);
   const progress = vm.st.progress[info.id];
+  const cardRef = useEvaluateWhenVisible(info, !!report);
   return (
     <ExtensionCard
+      cardRef={cardRef}
       id={info.id}
       displayName={info.displayName}
       publisher={info.publisher}
@@ -659,6 +729,7 @@ export function ExtensionsView() {
     requestTrust: setTrustTarget,
     openDetails: (t) => {
       if (t.kind === "registry") requestPreview(t.sourceId, t.namespace, t.name);
+      else requestEvaluate(t.info, true);
       setDetails(t);
     },
   };
@@ -673,7 +744,10 @@ export function ExtensionsView() {
   const q = query.trim().toLowerCase();
   const installed = st.installed
     .filter((i) => !q || i.id.includes(q) || i.displayName.toLowerCase().includes(q) || i.description.toLowerCase().includes(q))
-    .sort((a, b) => Number(b.location === "app") - Number(a.location === "app") || Number(b.enabled) - Number(a.enabled) || a.displayName.localeCompare(b.displayName));
+    .sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.displayName.localeCompare(b.displayName, "pt-BR"));
+  // Agrupadas por origem: a pasta do app primeiro; as do VS Code (somente leitura) recolhidas por padrão.
+  const inApp = installed.filter((i) => i.location === "app");
+  const fromVscode = installed.filter((i) => i.location === "vscode");
   const updates = st.updates.filter((u) => st.installed.some((i) => i.id === u.id));
 
   // Detalhes: ações recalculadas com o estado atual.
@@ -735,26 +809,37 @@ export function ExtensionsView() {
       {st.needsRestart.length > 0 && (
         <div className="ext-banner" role="status">
           <Codicon name="info" />
-          <span>
+          <span className="ext-banner-text">
             {st.needsRestart.join(", ")} {st.needsRestart.length === 1 ? "estava ativa" : "estavam ativas"}: a mudança vale após reiniciar o host.
           </span>
-          <Button size="sm" variant="primary" onClick={() => void restartHost()}>
-            Reiniciar Host de Extensões
-          </Button>
+          <div className="ext-banner-actions">
+            <Button size="sm" variant="primary" onClick={() => void restartHost()}>
+              Reiniciar Host de Extensões
+            </Button>
+          </div>
         </div>
       )}
       {st.error && (
         <div className="ext-banner ext-banner-error" role="alert">
           <Codicon name="error" />
-          <span>{st.error}</span>
-          <IconButton icon="close" label="Dispensar" size="sm" onClick={dismissMessages} />
+          <span className="ext-banner-text">{st.error}</span>
+          <div className="ext-banner-actions">
+            {st.errorRetry && (
+              <Button size="sm" onClick={() => void loadExtensions(true)}>
+                Tentar novamente
+              </Button>
+            )}
+            <IconButton icon="close" label="Dispensar" size="sm" onClick={dismissMessages} />
+          </div>
         </div>
       )}
       {st.notice && !st.error && (
         <div className="ext-banner ext-banner-ok" role="status">
           <Codicon name="success" />
-          <span>{st.notice}</span>
-          <IconButton icon="close" label="Dispensar" size="sm" onClick={dismissMessages} />
+          <span className="ext-banner-text">{st.notice}</span>
+          <div className="ext-banner-actions">
+            <IconButton icon="close" label="Dispensar" size="sm" onClick={dismissMessages} />
+          </div>
         </div>
       )}
 
@@ -812,17 +897,35 @@ export function ExtensionsView() {
             </ul>
           </Section>
         )}
-        <Section id="installed" title="Instaladas" count={installed.length}>
-          {installed.length === 0 ? (
-            <p className="ext-muted ext-pad">{q ? "Nenhuma instalada corresponde à pesquisa." : "Nenhuma extensão instalada. Pesquise acima ou instale uma recomendada."}</p>
+        <Section id="installed-app" title="No app" count={inApp.length}>
+          {inApp.length === 0 ? (
+            <p className="ext-muted ext-pad">
+              {q ? "Nenhuma instalada no app corresponde à pesquisa." : "Nenhuma extensão na pasta do app. Pesquise acima, instale uma recomendada ou importe uma do VS Code."}
+            </p>
           ) : (
             <ul className="ext-list">
-              {installed.map((info) => (
+              {inApp.map((info) => (
                 <InstalledCard key={info.id} info={info} vm={vm} />
               ))}
             </ul>
           )}
         </Section>
+        {(fromVscode.length > 0 || !q) && (
+          <Section id="installed-vscode" title="Do VS Code" count={fromVscode.length} defaultOpen={false} forceOpen={!!q && fromVscode.length > 0}>
+            {fromVscode.length === 0 ? (
+              <p className="ext-muted ext-pad">Nenhuma extensão em ~/.vscode/extensions.</p>
+            ) : (
+              <>
+                <p className="ext-muted ext-pad ext-section-note">Somente leitura: lidas direto da pasta do VS Code, sem alterá-la. Começam desabilitadas; o veredito aparece quando cada uma fica visível.</p>
+                <ul className="ext-list">
+                  {fromVscode.map((info) => (
+                    <InstalledCard key={info.id} info={info} vm={vm} />
+                  ))}
+                </ul>
+              </>
+            )}
+          </Section>
+        )}
         <Section id="recommended" title="Recomendadas" count={RECOMMENDED.length}>
           <ul className="ext-list">
             {RECOMMENDED.map((rec) => (

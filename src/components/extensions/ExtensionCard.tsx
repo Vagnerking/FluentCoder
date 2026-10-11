@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 import { Codicon } from "../../icons/codicons/Codicon";
 import type { IconAction } from "../../icons/codicons/codicon-map";
 import { Tooltip } from "../Tooltip";
@@ -38,6 +38,8 @@ export interface ExtensionCardProps {
   progress?: number | null;
   actions: CardAction[];
   onOpen: () => void;
+  /** Ref do `<li>` (avaliação preguiçosa quando o card aparece). */
+  cardRef?: Ref<HTMLLIElement>;
 }
 
 const VERDICT_ICON: Record<Verdict, IconAction> = {
@@ -85,9 +87,9 @@ export function ExtensionIcon({ src, name }: { src?: string | null; name: string
 
 /** Card de uma extensão (instalada, recomendada ou resultado da loja). */
 export function ExtensionCard(props: ExtensionCardProps) {
-  const { id, displayName, publisher, publisherVerified, version, description, icon, sourceLabel, verdict, reasons, preview, status, busy, progress, actions, onOpen } = props;
+  const { id, displayName, publisher, publisherVerified, version, description, icon, sourceLabel, verdict, reasons, preview, status, busy, progress, actions, onOpen, cardRef } = props;
   return (
-    <li className={`ext-card${busy ? " is-busy" : ""}`} aria-busy={busy ? true : undefined}>
+    <li ref={cardRef} className={`ext-card${busy ? " is-busy" : ""}`} aria-busy={busy ? true : undefined}>
       <ExtensionIcon src={icon} name={displayName} />
       <div className="ext-card-body">
         <div className="ext-card-title-row">

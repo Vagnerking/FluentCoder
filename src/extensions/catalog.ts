@@ -173,7 +173,8 @@ export interface InstallProgress {
 export const extensionsApi = {
   paths: () => invoke<ExtensionPaths>("extensions_paths"),
   list: () => invoke<InstalledInfo[]>("extensions_list"),
-  localDetails: (id: string) => invoke<LocalDetails>("extensions_local_details", { id }),
+  /** `path` (de `InstalledInfo.path`) evita redescobrir todas as extensões no Rust. */
+  localDetails: (id: string, path?: string) => invoke<LocalDetails>("extensions_local_details", { id, path: path ?? null }),
   sources: () => invoke<CatalogSource[]>("extensions_sources_list"),
   saveSources: (sources: CatalogSource[]) => invoke<CatalogSource[]>("extensions_sources_save", { sources }),
   search: (sourceId: string, query: string, offset = 0, size = 20) => invoke<SearchResult>("extensions_search", { sourceId, query, offset, size }),
