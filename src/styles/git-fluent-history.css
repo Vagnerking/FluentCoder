@@ -232,7 +232,7 @@
 
 .git-fluent-timeline-row code {
   color: var(--text-muted);
-  font-family: var(--font-mono, "Cascadia Mono", Consolas, monospace);
+  font-family: var(--font-mono);
   font-size: var(--font-caption-xs);
   line-height: 16px;
 }

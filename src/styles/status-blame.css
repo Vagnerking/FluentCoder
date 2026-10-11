@@ -120,7 +120,7 @@
 
 .status-blame-menu-action.primary {
   color: #7fd7ff;
-  font-family: "Cascadia Code", "Consolas", monospace;
+  font-family: var(--font-mono);
   background: rgba(96, 205, 255, 0.08);
   border-color: rgba(96, 205, 255, 0.12);
 }

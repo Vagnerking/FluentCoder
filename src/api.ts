@@ -781,10 +781,18 @@ export async function sshMovePath(
   );
 }
 
-/** Opens the OS file manager with `path` selected (Windows `explorer /select,`). */
-export function revealInExplorer(workspaceRoot: string, path: string): Promise<void> {
+/**
+ * Opens the OS file manager with `path` selected: Explorer (`/select,`) on
+ * Windows, Finder (`open -R`) on macOS, the desktop's file manager via D-Bus
+ * `FileManager1.ShowItems` on Linux (fallback: `xdg-open` on the parent). The
+ * path must live under `workspaceRoot`. See `src-tauri/src/platform/`.
+ */
+export function revealInFileManager(workspaceRoot: string, path: string): Promise<void> {
   return invoke("reveal_in_explorer", { workspaceRoot, path });
 }
+
+/** @deprecated nome antigo (Windows-only); use {@link revealInFileManager}. */
+export const revealInExplorer = revealInFileManager;
 
 /**
  * Writes `text` to the OS clipboard. Uses the WebView clipboard API, which is

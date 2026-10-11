@@ -32,7 +32,7 @@
   border: 0;
   border-radius: 0;
   background: transparent;
-  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-ui);
   contain: content;
   animation: git-panel-section-in 110ms var(--ease-standard, ease-out);
 }

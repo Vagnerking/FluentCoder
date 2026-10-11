@@ -35,7 +35,7 @@
 
 .search-match-line { flex-shrink: 0; width: 30px; text-align: right; color: var(--text-disabled); font-variant-numeric: tabular-nums; }
 
-.search-match-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: "Cascadia Code", "Consolas", monospace; }
+.search-match-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
 
 .search-file-name { display: flex; align-items: center; gap: 6px; }
 

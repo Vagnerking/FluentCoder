@@ -7,6 +7,7 @@ import { Codicon } from "../icons/codicons/Codicon";
 import { useSnapLayout } from "../snap/useSnapLayout";
 import type { MenuDef } from "../types";
 import logoUrl from "../assets/fluent-coder.png";
+import { formatKeybinding, formatShortcutsInText, getPlatform } from "../platform";
 
 interface TitleBarProps {
   /** Text shown centred in the bar (e.g. active file name). */
@@ -55,7 +56,9 @@ export function TitleBar({
   // `:hover` it — the backend relays the OS hover instead.
   const [maxHover, setMaxHover] = useState(false);
   const maxBtnRef = useRef<HTMLButtonElement>(null);
-  useSnapLayout(maxBtnRef, setMaxHover);
+  const { capabilities } = getPlatform();
+  useSnapLayout(maxBtnRef, setMaxHover, capabilities.snapLayouts);
+  const quickOpenKey = formatKeybinding("Ctrl+P") ?? "Ctrl+P";
 
   // Keep the maximize/restore glyph in sync with the real window state.
   useEffect(() => {
@@ -104,12 +107,12 @@ export function TitleBar({
               type="button"
               className="command-center-search"
               onClick={onOpenQuickOpen}
-              aria-label={`Pesquisar arquivos (Ctrl+P). ${title}`}
+              aria-label={`Pesquisar arquivos (${quickOpenKey}). ${title}`}
             >
               <Codicon name="search" className="command-center-icon" />
               <span className="command-center-label">{title}</span>
               <kbd className="command-center-kbd" aria-hidden="true">
-                Ctrl+P
+                {quickOpenKey}
               </kbd>
             </button>
             {onOpenCommandPalette && (
@@ -117,7 +120,7 @@ export function TitleBar({
                 icon="commandPalette"
                 size="sm"
                 className="command-center-palette"
-                label="Paleta de comandos (Ctrl+Shift+P)"
+                label={formatShortcutsInText("Paleta de comandos (Ctrl+Shift+P)")}
                 tooltipPlacement="bottom"
                 onClick={onOpenCommandPalette}
               />
@@ -150,9 +153,9 @@ export function TitleBar({
             size="sm"
             className="titlebar-layout-btn"
             label={
-              sidebarOpen
-                ? "Ocultar barra lateral (Ctrl+B)"
-                : "Mostrar barra lateral (Ctrl+B)"
+              formatShortcutsInText(
+                sidebarOpen ? "Ocultar barra lateral (Ctrl+B)" : "Mostrar barra lateral (Ctrl+B)"
+              )
             }
             tooltipPlacement="bottom"
             pressed={sidebarOpen}
@@ -169,6 +172,9 @@ export function TitleBar({
           />
         </div>
 
+        {/* macOS: a janela é decorada e os semáforos nativos já existem —
+            desenhar minimizar/maximizar/fechar de novo duplicaria os controles. */}
+        {capabilities.customCaptionButtons && (
         <div className="window-controls" data-tauri-drag-region>
           <Tooltip label="Minimizar" placement="bottom">
             <button
@@ -219,6 +225,7 @@ export function TitleBar({
             </button>
           </Tooltip>
         </div>
+        )}
       </div>
     </div>
   );

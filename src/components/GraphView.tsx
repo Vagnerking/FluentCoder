@@ -1,5 +1,6 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import { fontStacks } from "../platform/fonts";
 import { buildGraphAgentDigest } from "../api";
 import { getCachedGraph, invalidateGraph, loadGraph } from "../graph/graphCache";
 import {
@@ -1066,7 +1067,7 @@ export function GraphView({
         if (lit && appear > 0.6 && (showLabels || p.id === hov || isActive || p.id === S.focus)) {
           ctx.globalAlpha = appear;
           ctx.fillStyle = p.id === hov || isActive ? S.colors.text : S.colors.textDim;
-          ctx.font = `${11 / S.view.k}px -apple-system, "Segoe UI", system-ui, sans-serif`;
+          ctx.font = `${11 / S.view.k}px ${fontStacks().ui}`;
           ctx.textAlign = "center";
           ctx.textBaseline = "top";
           ctx.fillText(p.name, p.x, p.y + r + 2 / S.view.k);

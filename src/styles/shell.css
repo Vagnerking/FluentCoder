@@ -24,6 +24,13 @@ html.platform-macos .titlebar {
   -webkit-backdrop-filter: none;
 }
 
+/* TitleBar already skips the caption buttons on macOS
+   (`capabilities.customCaptionButtons`); this guards any stale markup so the
+   native traffic lights are never duplicated. */
+html.platform-macos .window-controls {
+  display: none;
+}
+
 /* Linux: frameless + transparent window (no Mica, no OS-rounded corners), so
    the app paints its own solid, rounded window surface with a hairline edge —
    matching the Windows 11 frame. A maximized window goes square and edgeless. */

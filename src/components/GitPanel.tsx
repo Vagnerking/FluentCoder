@@ -368,7 +368,11 @@ function badge(file: GitFileStatus): { letter: string; kind: string } {
 
 function openExternal(url: string | undefined) {
   if (!url) return;
-  window.open(url, "_blank", "noopener,noreferrer");
+  // `window.open` não chega ao navegador do SO no WebKitGTK/WKWebView: abre
+  // pelo adaptador de plataforma (rundll32 / open / xdg-open, só http(s)).
+  void import("../platform/commands")
+    .then((m) => m.openExternal(url))
+    .catch((err) => console.error("Falha ao abrir o link externo:", err));
 }
 
 function shortPath(path: string): string {

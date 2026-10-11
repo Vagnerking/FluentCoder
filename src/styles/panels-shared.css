@@ -35,7 +35,7 @@
 /* Compact <Select size="sm"> no cabeçalho da região, pelo conteúdo. */
 .output-channel-select { width: auto; min-width: 120px; max-width: 240px; }
 
-.output-lines { flex: 1; min-height: 0; overflow: auto; padding: 4px 8px; font-family: var(--font-mono, ui-monospace, "Cascadia Code", "Consolas", monospace); font-size: var(--font-caption); line-height: 1.5; color: var(--text-secondary); }
+.output-lines { flex: 1; min-height: 0; overflow: auto; padding: 4px 8px; font-family: var(--font-mono); font-size: var(--font-caption); line-height: 1.5; color: var(--text-secondary); }
 
 .output-line { white-space: pre-wrap; overflow-wrap: break-word; }
 
@@ -162,7 +162,7 @@
 .ext-webview-debug {
   flex-shrink: 0;
   padding: 2px 8px;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   font-size: var(--font-caption-xs);
   color: var(--text-muted);
   border-top: 1px dashed var(--border-subtle);

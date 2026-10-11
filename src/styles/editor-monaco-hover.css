@@ -135,7 +135,7 @@
 
 .monaco-hover .fc-blame-action.primary {
   color: #7fd7ff;
-  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-mono);
 }
 
 .monaco-hover .fc-blame-action.text {
@@ -165,7 +165,7 @@
   display: inline-flex;
   gap: 6px;
   margin-left: 6px;
-  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-mono);
 }
 
 .monaco-hover .fc-blame-section-title {

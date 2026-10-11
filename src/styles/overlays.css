@@ -589,7 +589,7 @@
 
 .about-shortcut-label { font-size: var(--font-base); color: var(--text); }
 
-.about-shortcut-keys { font-size: var(--font-caption-sm); color: var(--text-muted); background: var(--acrylic-control); border: 1px solid var(--acrylic-border); border-radius: var(--radius-control); padding: 2px 6px; font-family: var(--font-mono, monospace); }
+.about-shortcut-keys { font-size: var(--font-caption-sm); color: var(--text-muted); background: var(--acrylic-control); border: 1px solid var(--acrylic-border); border-radius: var(--radius-control); padding: 2px 6px; font-family: var(--font-mono); }
 
 /* ---- Confirm dialog (reusable Fluent 2 modal: unsaved guard, delete, …) ----
    The action row uses the shared <Button> primitive (`.ui-button-*`). */

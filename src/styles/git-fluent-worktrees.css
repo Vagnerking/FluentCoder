@@ -91,7 +91,7 @@
 
 .git-worktree-head {
   color: var(--text-muted);
-  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-family: var(--font-mono);
   font-size: var(--font-caption-xs);
 }
 

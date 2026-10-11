@@ -279,7 +279,7 @@
   margin-left: 23px;
   font-size: var(--font-caption-sm);
   color: var(--text-muted);
-  font-family: "Cascadia Code", "Consolas", monospace;
+  font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

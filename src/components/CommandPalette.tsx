@@ -183,11 +183,17 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
                 {hit.command.detail && (
                   <span className="quick-open-path">{hit.command.detail}</span>
                 )}
-                {formatKeybinding(hit.command.keybinding) && (
-                  <kbd className="command-palette-kbd" aria-label={`Atalho: ${formatKeybinding(hit.command.keybinding)}`}>
-                    {formatKeybinding(hit.command.keybinding)}
-                  </kbd>
-                )}
+                {(() => {
+                  // Rótulo no formato do SO (Ctrl+P / ⌘P).
+                  const kb = formatKeybinding(hit.command.keybinding);
+                  return (
+                    kb && (
+                      <kbd className="command-palette-kbd" aria-label={`Atalho: ${kb}`}>
+                        {kb}
+                      </kbd>
+                    )
+                  );
+                })()}
               </div>
             ))
           )}

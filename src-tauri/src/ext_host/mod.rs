@@ -291,49 +291,19 @@ pub fn ext_host_stop(state: State<'_, ExtHostState>) {
 }
 
 /// Só http(s)/mailto saem para o navegador/cliente do sistema.
+#[cfg(test)]
 fn is_safe_external_url(url: &str) -> bool {
-    let lower = url.trim().to_ascii_lowercase();
-    (lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("mailto:"))
-        && !url.chars().any(|c| c.is_control())
+    crate::platform::is_safe_external_url(url)
 }
 
 /// `vscode.env.openExternal` / links clicados nos webviews das extensões.
+/// A abertura em si (allowlist + rundll32/open/xdg-open) é do adaptador de
+/// plataforma; `async` para nunca esperar processo na main thread.
 #[tauri::command]
-pub fn ext_host_open_external(url: String) -> Result<(), String> {
-    if !is_safe_external_url(&url) {
-        return Err(format!("URL externa recusada: {url}"));
-    }
-    #[cfg(target_os = "windows")]
-    let mut cmd = {
-        use std::os::windows::process::CommandExt;
-        let mut c = Command::new("rundll32");
-        c.args(["url.dll,FileProtocolHandler", &url]);
-        c.creation_flags(0x0800_0000);
-        c
-    };
-    #[cfg(target_os = "macos")]
-    let mut cmd = {
-        let mut c = Command::new("open");
-        c.arg(&url);
-        c
-    };
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut cmd = {
-        let mut c = Command::new("xdg-open");
-        c.arg(&url);
-        c
-    };
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(|mut child| {
-            // Colhe o processo para não deixar zumbi.
-            std::thread::spawn(move || {
-                let _ = child.wait();
-            });
-        })
-        .map_err(|e| format!("Falha ao abrir {url}: {e}"))
+pub async fn ext_host_open_external(url: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::platform::open_external_url(&url))
+        .await
+        .map_err(|e| format!("open_external join error: {e}"))?
 }
 
 #[cfg(test)]

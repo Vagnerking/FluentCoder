@@ -41,6 +41,8 @@ import type {
 } from "../types";
 import { EDITOR_OPTIONS } from "./editorOptions.ts";
 import { palette } from "../theme/palette";
+import { openExternal } from "../platform/commands";
+import { fontStacks, formatShortcutsInText } from "../platform";
 
 // Console-only debug logging. (It used to mirror to a hardcoded path on another
 // machine and fire an IPC file write — with an ever-growing buffer — on EVERY
@@ -542,7 +544,7 @@ function fallbackAvatarDataUri(author: string): string {
     `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">
       <rect width="28" height="28" rx="14" fill="${color}"/>
       <text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle"
-        font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="700" fill="#fff">${initials}</text>
+        font-family="${fontStacks().ui.replace(/"/g, "'")}" font-size="11" font-weight="700" fill="#fff">${initials}</text>
     </svg>`
   );
   return `data:image/svg+xml,${svg}`;
@@ -1011,7 +1013,7 @@ export function EditorPane({
   };
   gitHoverActionsRef.openRemoteCommit = (url) => {
     if (!url) return;
-    window.open(url, "_blank", "noopener,noreferrer");
+    void openExternal(url).catch((err) => console.error("Falha ao abrir o link externo:", err));
   };
   gitHoverActionsRef.openRevision = (path, hash, shortHash) => {
     if (!path || !hash) return;
@@ -1026,7 +1028,7 @@ export function EditorPane({
   };
   packageHoverActionsRef.openRegistry = (url) => {
     if (!url) return;
-    window.open(url, "_blank", "noopener,noreferrer");
+    void openExternal(url).catch((err) => console.error("Falha ao abrir o link externo:", err));
   };
 
   // IDs of active decorations so we can replace them atomically.
@@ -2181,7 +2183,7 @@ export function EditorPane({
       <div className="editor-empty">
         <div className="editor-empty-inner">
           <h2>Fluent Coder</h2>
-          <p>Abra uma pasta pelo menu Arquivo (ou Ctrl+K Ctrl+O) para começar.</p>
+          <p>{formatShortcutsInText("Abra uma pasta pelo menu Arquivo (ou Ctrl+K Ctrl+O) para começar.")}</p>
         </div>
       </div>
     );
@@ -2334,7 +2336,7 @@ export function EditorPane({
         readOnlyMessage: { value: file.sourceLabel ?? "Esta revisão é somente leitura." },
         codeLens: true,
         codeLensFontSize: 12,
-        codeLensFontFamily: "Segoe UI Variable, Segoe UI, sans-serif",
+        codeLensFontFamily: fontStacks().ui,
         lineDecorationsWidth: 13,
       }}
     />
@@ -2397,7 +2399,7 @@ export function EditorPane({
                 }
                 onClick={() =>
                   file.revisionRemoteUrl &&
-                  window.open(file.revisionRemoteUrl, "_blank", "noopener,noreferrer")
+                  void openExternal(file.revisionRemoteUrl).catch((err) => console.error("Falha ao abrir o link externo:", err))
                 }
               >
                 <span className="codicon codicon-link-external" aria-hidden="true" />

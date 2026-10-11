@@ -117,7 +117,7 @@
   cursor: pointer;
   font: inherit;
   font-size: var(--font-caption-xs);
-  font-family: "Cascadia Code", "Consolas", monospace;
+  font-family: var(--font-mono);
 }
 
 .git-commit-chip:hover {
@@ -131,7 +131,7 @@
 .git-commit-diffstat {
   display: inline-flex;
   gap: 5px;
-  font-family: "Cascadia Code", "Consolas", monospace;
+  font-family: var(--font-mono);
 }
 
 .git-commit-diffstat .add { color: #8fe0ad; }

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
+import { fontStacks } from "../platform/fonts";
 import { FitAddon } from "@xterm/addon-fit";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -59,7 +60,8 @@ export function TerminalView({ id, cwd, connId, command, spawn, attach, pseudo, 
       // (F2-AUD-001); also fills in the previously-missing ANSI red/green/
       // yellow/magenta so colored CLI output renders correctly.
       theme: { ...terminalTheme },
-      fontFamily: '"Cascadia Code", "Consolas", monospace',
+      // Mono do SO (Cascadia / SF Mono / JetBrains Mono → DejaVu Sans Mono).
+      fontFamily: fontStacks().mono,
       fontSize: 13,
       lineHeight: 1.2,
       cursorBlink: true,

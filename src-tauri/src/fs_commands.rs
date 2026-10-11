@@ -33,36 +33,14 @@ fn validate_child_path(workspace_root: &str, parent: &str, name: &str) -> Result
     {
         return Err("O nome contém caracteres inválidos.".into());
     }
+    // Device names (`CON`, `COM1`…) are unusable only on Windows; on Linux and
+    // macOS they are ordinary (if non-portable) names, so they are allowed.
     let stem = name
         .split('.')
         .next()
         .unwrap_or_default()
         .to_ascii_uppercase();
-    if matches!(
-        stem.as_str(),
-        "CON"
-            | "PRN"
-            | "AUX"
-            | "NUL"
-            | "COM1"
-            | "COM2"
-            | "COM3"
-            | "COM4"
-            | "COM5"
-            | "COM6"
-            | "COM7"
-            | "COM8"
-            | "COM9"
-            | "LPT1"
-            | "LPT2"
-            | "LPT3"
-            | "LPT4"
-            | "LPT5"
-            | "LPT6"
-            | "LPT7"
-            | "LPT8"
-            | "LPT9"
-    ) {
+    if cfg!(windows) && is_windows_reserved_stem(&stem) {
         return Err("Esse nome é reservado pelo Windows.".into());
     }
     if Path::new(name)
@@ -83,6 +61,15 @@ fn validate_child_path(workspace_root: &str, parent: &str, name: &str) -> Result
         return Err("O destino selecionado não é uma pasta.".into());
     }
     Ok(parent.join(name))
+}
+
+/// Windows device names that can't be used as a file or folder stem.
+fn is_windows_reserved_stem(stem: &str) -> bool {
+    const RESERVED: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    RESERVED.contains(&stem)
 }
 
 /// Canonicalizes `path` and confirms it stays under `workspace_root`.
@@ -510,7 +497,7 @@ pub fn rename_path(
 #[tauri::command]
 pub fn delete_to_trash(workspace_root: String, path: String) -> Result<(), String> {
     let target = validate_existing_path(&workspace_root, &path)?;
-    trash::delete(&target).map_err(|e| format!("Não foi possível mover para a Lixeira: {e}"))
+    crate::platform::move_to_trash(&target)
 }
 
 /// Copies `src` (file or directory, recursive) into `dest_parent`, resolving any
@@ -569,27 +556,21 @@ pub fn move_path(
     entry_for(dest, is_dir)
 }
 
-/// Opens the OS file manager with `path` selected. On Windows this runs
-/// `explorer /select,<path>`; `explorer.exe` returns a non-zero exit code even
-/// on success, so the exit status is intentionally ignored.
+/// Opens the OS file manager with `path` selected — Explorer (`/select,`) on
+/// Windows, Finder (`open -R`) on macOS and, on Linux, the desktop's file
+/// manager via `org.freedesktop.FileManager1.ShowItems` (falling back to
+/// `xdg-open` on the parent folder). See `platform::reveal_in_file_manager`.
+///
+/// `async` + `spawn_blocking`: the D-Bus call waits for a reply, which must
+/// never block the main thread.
 #[tauri::command]
-pub fn reveal_in_explorer(workspace_root: String, path: String) -> Result<(), String> {
-    let target = validate_existing_path(&workspace_root, &path)?;
-    let target_str = target.to_string_lossy().to_string();
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .arg("/select,")
-            .arg(&target_str)
-            .spawn()
-            .map_err(|e| format!("Não foi possível abrir o Explorer: {e}"))?;
-        Ok(())
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = target_str;
-        Err("Revelar no Explorer só é suportado no Windows.".into())
-    }
+pub async fn reveal_in_explorer(workspace_root: String, path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let target = validate_existing_path(&workspace_root, &path)?;
+        crate::platform::reveal_in_file_manager(&target)
+    })
+    .await
+    .map_err(|e| format!("reveal join error: {e}"))?
 }
 
 #[cfg(test)]
@@ -733,12 +714,29 @@ mod tests {
     fn rejects_windows_reserved_or_invalid_names() {
         let root = workspace();
         let root_text = root.to_string_lossy().to_string();
-        for name in ["CON", "aux.txt", "nome.", "nome ", "a/b"] {
+        let reserved: &[&str] = if cfg!(windows) { &["CON", "aux.txt"] } else { &[] };
+        for name in reserved.iter().copied().chain(["nome.", "nome ", "a/b"]) {
             assert!(
                 create_file(root_text.clone(), root_text.clone(), name.into()).is_err(),
                 "{name} deveria ser rejeitado"
             );
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn windows_device_names_are_detected_case_insensitively_by_stem() {
+        assert!(super::is_windows_reserved_stem("CON"));
+        assert!(super::is_windows_reserved_stem("LPT9"));
+        assert!(!super::is_windows_reserved_stem("CONSOLE"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_allows_windows_device_names() {
+        let root = workspace();
+        let root_text = root.to_string_lossy().to_string();
+        assert!(create_file(root_text.clone(), root_text, "con.txt".into()).is_ok());
         fs::remove_dir_all(root).unwrap();
     }
 

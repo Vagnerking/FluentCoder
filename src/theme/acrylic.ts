@@ -10,6 +10,8 @@
  * `--color-surface-flyout`). Ver src/theme/acrylic.css.
  */
 
+import { getPlatform } from "../platform/os.ts";
+
 export interface AcrylicEnv {
   supportsBackdrop: boolean;
   platform: "windows" | "macos" | "linux" | "other";
@@ -31,9 +33,7 @@ export function acrylicAllowed(env: AcrylicEnv): boolean {
 function detect(): AcrylicEnv {
   const css = typeof CSS !== "undefined" && typeof CSS.supports === "function" ? CSS : null;
   const supportsBackdrop = !!css && (css.supports("backdrop-filter", "blur(2px)") || css.supports("-webkit-backdrop-filter", "blur(2px)"));
-  const ua =
-    (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ?? navigator.platform ?? "";
-  const platform = /win/i.test(ua) ? "windows" : /mac/i.test(ua) ? "macos" : /linux/i.test(ua) ? "linux" : "other";
+  const platform = getPlatform().os;
   let reducedTransparency = false;
   try {
     reducedTransparency = window.matchMedia?.("(prefers-reduced-transparency: reduce)").matches ?? false;

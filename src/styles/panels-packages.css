@@ -87,11 +87,11 @@
 
 .packages-line { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; font-size: var(--font-caption-sm); color: var(--text-muted); }
 
-.packages-line code { padding: 1px 4px; border-radius: var(--radius-sm); background: rgba(0,0,0,0.18); color: var(--text-secondary); font-family: "Cascadia Code", "Consolas", monospace; font-size: var(--font-caption-xs); }
+.packages-line code { padding: 1px 4px; border-radius: var(--radius-sm); background: rgba(0,0,0,0.18); color: var(--text-secondary); font-family: var(--font-mono); font-size: var(--font-caption-xs); }
 
 .packages-scripts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
 
-.packages-script { min-height: 18px; font-family: "Cascadia Code", "Consolas", monospace; font-size: var(--font-caption-xs); }
+.packages-script { min-height: 18px; font-family: var(--font-mono); font-size: var(--font-caption-xs); }
 
 .packages-dependencies { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; padding-top: 7px; border-top: 1px solid rgba(210,228,242,0.08); }
 
@@ -99,11 +99,11 @@
 
 .packages-dependency-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
 
-.packages-dependency-version { font-family: "Cascadia Code", "Consolas", monospace; color: var(--text-muted); }
+.packages-dependency-version { font-family: var(--font-mono); color: var(--text-muted); }
 
 .packages-dependency-ok { color: #73c991; font-weight: 700; }
 
-.packages-dependency-outdated { color: #ff6b8a; font-family: "Cascadia Code", "Consolas", monospace; font-size: var(--font-caption-xs); font-weight: 700; }
+.packages-dependency-outdated { color: #ff6b8a; font-family: var(--font-mono); font-size: var(--font-caption-xs); font-weight: 700; }
 
 .packages-dependency-risk { color: #e2c08d; font-size: var(--font-caption-xs); font-weight: 800; }
 

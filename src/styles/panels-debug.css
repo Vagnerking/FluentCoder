@@ -137,7 +137,7 @@
 }
 
 .debug-output {
-  font-family: "Cascadia Code", Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-caption-sm);
   line-height: 1.5;
   max-height: 180px;

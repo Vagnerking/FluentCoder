@@ -72,3 +72,10 @@ test("samePath stays case-sensitive for POSIX paths", () => {
     false
   );
 });
+
+test("samePath ignores case for POSIX paths only where the FS is case-insensitive (macOS)", () => {
+  assert.equal(samePath("/Users/u/Titulo.cs", "/users/u/titulo.cs", true), true);
+  assert.equal(samePath("/home/u/Titulo.cs", "/home/u/titulo.cs", false), false);
+  assert.equal(pathForWorkspaceDisplay("/Users/U/Proj/src/a.ts", "/Users/u/proj", true), "src/a.ts");
+  assert.equal(pathForWorkspaceDisplay("/home/U/proj/a.ts", "/home/u/proj", false), "/home/U/proj/a.ts");
+});

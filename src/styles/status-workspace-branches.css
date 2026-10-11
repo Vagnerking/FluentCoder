@@ -117,7 +117,7 @@
   gap: 4px;
   color: var(--text-muted);
   font-size: var(--font-caption-sm);
-  font-family: var(--font-mono, "Cascadia Code", "Consolas", monospace);
+  font-family: var(--font-mono);
   text-align: right;
 }
 
@@ -180,7 +180,7 @@
 .status-workspace-branch-row.clickable .status-workspace-branch-name::after {
   content: "›";
   color: var(--text-muted);
-  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-ui);
   font-size: var(--font-base);
   line-height: 1;
 }

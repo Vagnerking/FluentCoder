@@ -10,6 +10,7 @@ import * as monaco from "monaco-editor";
 import { whenMonacoReady } from "../monaco-loader";
 import { Codicon } from "../icons/codicons/Codicon";
 import { languageForFile } from "../language";
+import { formatShortcutsInText } from "../platform";
 import type { PendingDiff } from "../agents/ideBridge";
 
 interface Props {
@@ -161,7 +162,7 @@ export function ClaudeDiffReview({ diff, queued, rootPath, onAccept, onReject, s
             ref={acceptRef}
             type="button"
             className="confirm-button confirm-primary"
-            title="Aceitar e salvar (Ctrl+Enter)"
+            title={formatShortcutsInText("Aceitar e salvar (Ctrl+Enter)")}
             disabled={saving}
             aria-busy={saving}
             onClick={() => actionsRef.current.accept()}

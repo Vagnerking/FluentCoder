@@ -422,18 +422,11 @@ pub fn acp_terminal_snapshot(id: String) -> Option<Value> {
 fn command_for(command: &str, args: &[String]) -> CommandBuilder {
     let is_line = args.is_empty() && command.contains(char::is_whitespace) && which::which(command).is_err();
     if is_line {
-        #[cfg(windows)]
-        {
-            let mut c = CommandBuilder::new("cmd.exe");
-            c.args(["/C", command]);
-            return c;
-        }
-        #[cfg(not(windows))]
-        {
-            let mut c = CommandBuilder::new("/bin/sh");
-            c.args(["-c", command]);
-            return c;
-        }
+        // `cmd.exe /C` no Windows, `/bin/sh -c` no Unix (adaptador de plataforma).
+        let inv = crate::platform::current().shell_line(command);
+        let mut c = CommandBuilder::new(&inv.program);
+        c.args(&inv.args);
+        return c;
     }
     let mut c = CommandBuilder::new(command);
     c.args(args);

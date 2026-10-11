@@ -42,6 +42,10 @@ pub fn run() {
         return;
     }
 
+    // Aberto pelo Dock/`.desktop` (macOS/Linux): herda o PATH do shell de login
+    // para achar git/dotnet/node/claude. Antes de qualquer thread do Tauri.
+    platform::login_env::apply_login_shell_path();
+
     let initial_workspace_files = workspace_open::workspace_files_from_args(&args);
     // Deep link `fluent-coder://<extensão>/…` (Linux/Windows abrem um processo
     // novo com a URL no argv): repassa à instância já aberta e sai. Sem

@@ -21,56 +21,65 @@ use tauri::{AppHandle, Emitter, Manager};
 /// nuget.org's flat container.
 const ROSLYN_VERSION: &str = "5.0.0-1.25277.114";
 
-/// NuGet package id for the platform-specific Roslyn LSP build.
-/// Microsoft ships per-RID packages: `Microsoft.CodeAnalysis.LanguageServer.<rid>`.
-fn roslyn_package_id() -> &'static str {
-    #[cfg(all(windows, target_arch = "x86_64"))]
-    {
-        "microsoft.codeanalysis.languageserver.win-x64"
-    }
-    #[cfg(all(windows, target_arch = "aarch64"))]
-    {
-        "microsoft.codeanalysis.languageserver.win-arm64"
-    }
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    {
-        "microsoft.codeanalysis.languageserver.linux-x64"
-    }
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        "microsoft.codeanalysis.languageserver.osx-arm64"
-    }
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    {
-        "microsoft.codeanalysis.languageserver.osx-x64"
-    }
+/// Pinned SHA-256 of each per-RID Roslyn `.nupkg` (`ROSLYN_VERSION`), as
+/// `(rid, sha256)`. Every target we build for has a real hash: the download is
+/// ALWAYS verified, there is no "unverified" escape hatch any more.
+///
+/// Provenance (2026-10-10): each package was downloaded from the nuget.org
+/// flat container and hashed; the SHA-512 of the same bytes matched the
+/// `packageHash` published in the nuget.org catalog entry of every package, and
+/// `win-x64` matches the hash pinned before this table existed.
+const ROSLYN_SHA256: &[(&str, &str)] = &[
+    ("win-x64", "7c96c59532a81f710be95a48e6dd25c4e4d17875a37f5a7171a90e82f8ab57a6"),
+    ("win-arm64", "1a4327d42272f8024ad12902fbf1c5f5668696a690a1546f97315ac9f395f33b"),
+    ("linux-x64", "b2c7e032f884fe0cdaaa8cee5057f59a861f84f840c3c1eb001a6ed24c828efe"),
+    ("linux-arm64", "7657c8175f583e6cd9b975d89894305b733cc9a4a09e81838382f4b921722c5f"),
+    ("osx-x64", "7903d0c0dabea8c5ac1d24d611bb4c70c2f6f2c5adbc8f122da3203c596e94a1"),
+    ("osx-arm64", "66d2376d737958916f10e943be64229a61f6e4bb8a5f191063a148be26bfab1e"),
+];
+
+/// RID .NET deste binário, ou um erro amigável (em vez de falha de compilação
+/// num alvo sem pacote publicado, como Windows 32 bits).
+fn roslyn_rid() -> Result<&'static str, String> {
+    crate::platform::host_dotnet_rid().ok_or_else(|| {
+        format!(
+            "O servidor C# (Roslyn) não é publicado para {}-{}.",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        )
+    })
 }
 
-/// Expected SHA-256 of the downloaded `.nupkg`, per RID (the hash differs per
-/// platform package). A zeroed value means "unverified" — verification is
-/// skipped for that RID until a real hash is pinned. Only `win-x64` was
-/// downloaded and verified in this environment.
-fn roslyn_sha256() -> &'static str {
-    #[cfg(all(windows, target_arch = "x86_64"))]
-    {
-        // Verified against api.nuget.org flat-container, 62.7 MB .nupkg.
-        "7c96c59532a81f710be95a48e6dd25c4e4d17875a37f5a7171a90e82f8ab57a6"
-    }
-    #[cfg(not(all(windows, target_arch = "x86_64")))]
-    {
-        // Unverified for this RID — fill in after downloading the real package.
-        "0000000000000000000000000000000000000000000000000000000000000000"
-    }
+/// NuGet package id for the platform-specific Roslyn LSP build.
+/// Microsoft ships per-RID packages: `Microsoft.CodeAnalysis.LanguageServer.<rid>`.
+fn roslyn_package_id(rid: &str) -> String {
+    format!("microsoft.codeanalysis.languageserver.{rid}")
+}
+
+/// Expected SHA-256 of the downloaded `.nupkg` for `rid`.
+fn roslyn_sha256(rid: &str) -> Option<&'static str> {
+    ROSLYN_SHA256.iter().find(|(r, _)| *r == rid).map(|(_, h)| *h)
 }
 
 /// Builds the NuGet flat-container download URL for the pinned version.
-fn roslyn_download_url() -> String {
-    let id = roslyn_package_id();
+fn roslyn_download_url(rid: &str) -> String {
+    let id = roslyn_package_id(rid);
     format!(
         "https://api.nuget.org/v3-flatcontainer/{id}/{ver}/{id}.{ver}.nupkg",
         id = id,
         ver = ROSLYN_VERSION
     )
+}
+
+/// Verifies `bytes` against the pinned hash. A missing pin is an ERROR (never
+/// a silent skip): we refuse to run an unverified language server.
+pub(crate) fn verify_pinned_sha256(bytes: &[u8], expected: Option<&str>, what: &str) -> Result<(), String> {
+    let expected = expected.ok_or_else(|| format!("Sem hash fixado para {what}; download recusado."))?;
+    let actual = sha256_hex(bytes);
+    if actual != expected {
+        return Err(format!("Download corrompido de {what} (hash {actual} != esperado {expected})."));
+    }
+    Ok(())
 }
 
 /// Name of the server executable inside the extracted package.
@@ -165,24 +174,17 @@ pub async fn ensure_roslyn_server(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("failed to create cache dir: {e}"))?;
 
     // --- Download ---
+    let rid = roslyn_rid().inspect_err(|m| emit_progress(app, "error", m))?;
     emit_progress(app, "downloading", "Baixando o servidor C# (Roslyn)…");
-    let url = roslyn_download_url();
+    let url = roslyn_download_url(rid);
     let bytes = download_bytes(&url).await.map_err(|e| {
         let msg = format!("Não foi possível baixar o servidor C#. Verifique a conexão. ({e})");
         emit_progress(app, "error", &msg);
         msg
     })?;
 
-    // --- Verify hash (skipped for RIDs whose hash isn't pinned yet) ---
-    let expected = roslyn_sha256();
-    if expected != "0000000000000000000000000000000000000000000000000000000000000000" {
-        let actual = sha256_hex(&bytes);
-        if actual != expected {
-            let msg = format!("Download corrompido (hash {actual} != esperado {expected}).");
-            emit_progress(app, "error", &msg);
-            return Err(msg);
-        }
-    }
+    // --- Verify hash (always: every RID has a pinned hash) ---
+    verify_pinned_sha256(&bytes, roslyn_sha256(rid), &format!("Roslyn {rid}")).inspect_err(|m| emit_progress(app, "error", m))?;
 
     // --- Extract (the .nupkg is a ZIP) — on a blocking thread so the synchronous
     //     std::fs/zip I/O doesn't stall the async runtime (CodeRabbit). ---
@@ -255,20 +257,16 @@ pub(crate) fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), String> {
 
 /// Locates `dotnet` on the PATH. Returns a descriptive error if absent.
 pub fn detect_dotnet() -> Result<String, String> {
-    let program = if cfg!(windows) {
-        "dotnet.exe"
-    } else {
-        "dotnet"
-    };
+    let program = crate::platform::current().exe_name("dotnet");
 
     // `dotnet --version` succeeds iff the SDK/runtime is reachable.
-    let mut command = std::process::Command::new(program);
+    let mut command = std::process::Command::new(&program);
     command.arg("--version");
     crate::child_process::hide_console_window(&mut command);
     let probe = command.output();
 
     match probe {
-        Ok(out) if out.status.success() => Ok(program.to_string()),
+        Ok(out) if out.status.success() => Ok(program),
         _ => Err(
             "Para usar o IntelliSense C#, instale o .NET SDK (https://dotnet.microsoft.com/download)."
                 .to_string(),
@@ -287,6 +285,25 @@ pub fn detect_dotnet() -> Result<String, String> {
 
 /// Pinned C# extension version whose bundled Roslyn supports Razor cohosting.
 const CSHARP_EXT_VERSION: &str = "2.144.9";
+
+/// Pinned SHA-256 of the C# extension VSIX (`CSHARP_EXT_VERSION`) per
+/// marketplace target platform. The marketplace publishes no hash metadata, so
+/// these were computed (2026-10-10) from the bytes served by the versioned
+/// `vspackage` endpoint after gzip decoding (the same bytes reqwest hands us).
+/// A marketplace version is immutable, so any later mismatch means tampering
+/// or corruption and the download is rejected.
+const CSHARP_EXT_SHA256: &[(&str, &str)] = &[
+    ("win32-x64", "c4b3dad8b21804bdaf9c24dbf96143346e62bf4546c6ace977591af748618617"),
+    ("win32-arm64", "b85d226aa888e48eec6509b14af8fb0cea1d0ec5e1d52c35710b71150bf4d161"),
+    ("linux-x64", "b1fd459ac656dfb6caef27716db0c8b0bccb90baeca42a0ecc459a33e982f9de"),
+    ("linux-arm64", "7bd77bdfeabe4e4b338ab8f25c9ce7a7d3138eb1f4f6bb87f0b07b6f339dd697"),
+    ("darwin-x64", "40446be8eb1f287dd33d093d8626ee768d3952be8790994947d9ae5ea01e4670"),
+    ("darwin-arm64", "a8f7452d05a4809118d85129f14d64e7e40477804b771eff56b8c09ce977b04e"),
+];
+
+fn csharp_ext_sha256(platform: &str) -> Option<&'static str> {
+    CSHARP_EXT_SHA256.iter().find(|(p, _)| *p == platform).map(|(_, h)| *h)
+}
 
 /// VS Marketplace target-platform tag for the current OS/arch (None if unknown).
 fn csharp_ext_target_platform() -> Option<&'static str> {
@@ -377,6 +394,8 @@ async fn download_and_extract_csharp_ext(app: &AppHandle, cache: &Path) -> Resul
         emit_progress(app, "error", &m);
         m
     })?;
+    verify_pinned_sha256(&bytes, csharp_ext_sha256(platform), &format!("extensão C# {platform}"))
+        .inspect_err(|m| emit_progress(app, "error", m))?;
     // Extract on a blocking thread (synchronous zip I/O off the async runtime).
     emit_progress(app, "extracting", "Extraindo o servidor C#/Razor…");
     let extract_dir = cache.to_path_buf();
@@ -479,6 +498,59 @@ pub async fn roslyn_launch_command(
     _project_root: &Path,
 ) -> Result<(String, Vec<String>), String> {
     standalone_launch_command(app).await
+}
+
+#[cfg(test)]
+mod pin_tests {
+    use super::*;
+
+    #[test]
+    fn every_supported_target_has_a_pinned_roslyn_hash() {
+        for (os, arch) in [
+            ("windows", "x86_64"),
+            ("windows", "aarch64"),
+            ("linux", "x86_64"),
+            ("linux", "aarch64"),
+            ("macos", "x86_64"),
+            ("macos", "aarch64"),
+        ] {
+            let rid = crate::platform::dotnet_rid(os, arch).expect("rid");
+            let h = roslyn_sha256(rid).unwrap_or_else(|| panic!("sem hash para {rid}"));
+            assert_eq!(h.len(), 64);
+            assert!(h.chars().all(|c| c.is_ascii_hexdigit()) && h != "0".repeat(64));
+        }
+        assert!(roslyn_rid().is_ok(), "o alvo deste build tem pacote Roslyn");
+    }
+
+    #[test]
+    fn every_csharp_ext_platform_has_a_pinned_vsix_hash() {
+        for plat in ["win32-x64", "win32-arm64", "linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"] {
+            let h = csharp_ext_sha256(plat).unwrap_or_else(|| panic!("sem hash para {plat}"));
+            assert_eq!(h.len(), 64);
+        }
+        if let Some(p) = csharp_ext_target_platform() {
+            assert!(csharp_ext_sha256(p).is_some());
+        }
+    }
+
+    #[test]
+    fn verification_rejects_mismatch_and_missing_pin() {
+        let ok = sha256_hex(b"abc");
+        assert!(verify_pinned_sha256(b"abc", Some(&ok), "x").is_ok());
+        assert!(verify_pinned_sha256(b"abd", Some(&ok), "x").is_err());
+        assert!(verify_pinned_sha256(b"abc", None, "x").is_err());
+    }
+
+    #[test]
+    fn download_url_uses_rid_package() {
+        assert_eq!(
+            roslyn_download_url("linux-arm64"),
+            format!(
+                "https://api.nuget.org/v3-flatcontainer/microsoft.codeanalysis.languageserver.linux-arm64/{v}/microsoft.codeanalysis.languageserver.linux-arm64.{v}.nupkg",
+                v = ROSLYN_VERSION
+            )
+        );
+    }
 }
 
 #[cfg(all(test, unix))]

@@ -13,9 +13,8 @@ body,
 }
 
 body {
-  /* Segoe UI Variable is the Windows 11 system font; graceful fallbacks. */
-  font-family: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI",
-    system-ui, sans-serif;
+  /* System UI font per OS (Segoe UI Variable / SF / Cantarell…): tokens.css. */
+  font-family: var(--font-ui);
   font-size: 13px; /* = --font-base (kept literal: the global UI density contract) */
   color: var(--text-secondary);
   /* Fully transparent so the Mica backdrop is what we see between surfaces. */

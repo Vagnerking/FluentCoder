@@ -8,6 +8,7 @@ import type { IconAction } from "../icons/codicons/codicon-map";
 import type { BlameHunk, GitStatus } from "../types";
 import { GitStatusItem } from "./GitStatusItem";
 import { languageLabel } from "../language";
+import { openExternal } from "../platform/commands";
 import type { GitRevisionDiffTarget } from "../api";
 import {
   WorkspaceBranchStatus,
@@ -765,7 +766,7 @@ export function StatusBar({
                   title="Abrir commit remoto"
                   onClick={() =>
                     runBlameAction(() =>
-                      window.open(currentLineBlame.hunk.remoteUrl, "_blank", "noopener,noreferrer")
+                      void openExternal(currentLineBlame.hunk.remoteUrl!).catch((err) => console.error("Falha ao abrir o link externo:", err))
                     )
                   }
                 >

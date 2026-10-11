@@ -50,13 +50,14 @@ export function buildVscodeThemeVars(resolve: Resolve): Record<string, string> {
 
   return {
     // Tipografia
-    "--vscode-font-family": FONT_UI,
+    // Pilhas por SO (tokens.css → html.platform-*); as constantes são o fallback.
+    "--vscode-font-family": t("--font-ui", FONT_UI),
     "--vscode-font-size": "13px",
     "--vscode-font-weight": "normal",
-    "--vscode-editor-font-family": FONT_MONO,
+    "--vscode-editor-font-family": t("--font-mono", FONT_MONO),
     "--vscode-editor-font-size": "13px",
     "--vscode-editor-font-weight": "normal",
-    "--monaco-monospace-font": FONT_MONO,
+    "--monaco-monospace-font": t("--font-mono", FONT_MONO),
     // Base
     "--vscode-foreground": text,
     "--vscode-descriptionForeground": textMuted,
@@ -187,7 +188,7 @@ export function buildVscodeThemeVars(resolve: Resolve): Record<string, string> {
     "--vscode-chat-requestBorder": border,
     "--vscode-chat-slashCommandBackground": selected,
     "--vscode-chat-slashCommandForeground": accent,
-    "--vscode-chat-font-family": FONT_UI,
+    "--vscode-chat-font-family": t("--font-ui", FONT_UI),
     "--vscode-chat-font-size": "13px",
     // Identidade Fluent extra (as extensões ignoram; útil para overrides)
     "--fluent-radius-control": radius,

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
 import type { MenuDef, MenuItem } from "../types";
 import { Menu, type MenuCloseReason, type MenuItemSpec } from "./ui/Menu";
+import { isMac } from "../platform/os";
 
 interface MenuBarProps {
   menus: MenuDef[];
@@ -116,8 +117,11 @@ export function MenuBar({ menus }: MenuBarProps) {
     setOverflowOpen(false);
   }, []);
 
-  // Alt focuses/closes the bar (only meaningful for inline menus).
+  // Alt focuses/closes the bar (only meaningful for inline menus). Not on
+  // macOS: there Option is a typing modifier (accents, symbols) and menus
+  // aren't reached through Alt.
   useEffect(() => {
+    if (isMac()) return;
     function handleAlt(e: KeyboardEvent) {
       if (e.key !== "Alt" || e.ctrlKey || e.shiftKey || e.metaKey) return;
       e.preventDefault();

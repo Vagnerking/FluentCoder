@@ -16,7 +16,7 @@
 .git-file-row:hover .git-file-action,
 .git-file-row:focus-within .git-file-action { opacity: 1; }
 
-.git-file-badge { width: 16px; text-align: center; flex-shrink: 0; font-size: var(--font-caption); font-weight: 700; font-family: "Cascadia Code", "Consolas", monospace; }
+.git-file-badge { width: 16px; text-align: center; flex-shrink: 0; font-size: var(--font-caption); font-weight: 700; font-family: var(--font-mono); }
 
 .git-badge-modified { color: var(--color-git-modified); }
 

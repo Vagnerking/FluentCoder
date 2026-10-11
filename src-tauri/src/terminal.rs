@@ -123,12 +123,7 @@ fn integrated_shell_command(opts: &TermSpawnOptions, dir: &std::path::Path) -> O
     }
     let program = match opts.shell_path.as_deref().filter(|s| !s.trim().is_empty()) {
         Some(shell) => which::which(shell).ok()?,
-        None => std::path::PathBuf::from(
-            std::env::var("SHELL")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| "/bin/bash".to_string()),
-        ),
+        None => std::path::PathBuf::from(crate::platform::default_shell().program),
     };
     let kind = crate::shell_integration::shell_kind(&program.to_string_lossy())?;
     if let Err(e) = crate::shell_integration::install_scripts(dir) {
@@ -161,37 +156,43 @@ fn integrated_shell_command(opts: &TermSpawnOptions, dir: &std::path::Path) -> O
 }
 
 fn shell_command_inner(line: Option<&str>) -> CommandBuilder {
-    #[cfg(windows)]
-    {
-        let mut cmd = CommandBuilder::new("powershell.exe");
-        if let Some(line) = line {
-            // -NoExit keeps the prompt after the command finishes; -Command runs it.
-            cmd.arg("-NoExit");
-            cmd.arg("-Command");
-            cmd.arg(line);
-        }
-        cmd
-    }
-    #[cfg(not(windows))]
-    {
-        let shell = std::env::var("SHELL")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| "/bin/bash".to_string());
-        let mut cmd = CommandBuilder::new(&shell);
-        cmd.env("TERM", "xterm-256color");
-        cmd.env("COLORTERM", "truecolor");
-        match line {
-            Some(line) => {
-                // Run the command, then replace the shell with an interactive one
-                // so the output stays visible and the session keeps going.
-                cmd.arg("-lc");
-                cmd.arg(format!("{line}\nexec \"$0\" -l"));
+    build_shell_command(&crate::platform::default_shell(), line)
+}
+
+/// Monta o comando do PTY a partir do shell resolvido pelo adaptador de
+/// plataforma (`pwsh`/`powershell` no Windows; `$SHELL`, zsh no macOS, bash no
+/// Linux). Puro sobre `ShellSpec`, para ser testável.
+fn build_shell_command(shell: &crate::platform::ShellSpec, line: Option<&str>) -> CommandBuilder {
+    use crate::platform::ShellKind;
+    let mut cmd = CommandBuilder::new(&shell.program);
+    match shell.kind {
+        ShellKind::Powershell => {
+            if let Some(line) = line {
+                // -NoExit keeps the prompt after the command finishes; -Command runs it.
+                cmd.arg("-NoExit");
+                cmd.arg("-Command");
+                cmd.arg(line);
             }
-            None => cmd.arg("-l"),
         }
-        cmd
+        ShellKind::Posix => {
+            cmd.env("TERM", "xterm-256color");
+            cmd.env("COLORTERM", "truecolor");
+            match line {
+                Some(line) => {
+                    // Run the command, then replace the shell with an interactive one
+                    // so the output stays visible and the session keeps going.
+                    cmd.arg("-lc");
+                    cmd.arg(format!("{line}\nexec \"$0\" -l"));
+                }
+                None => {
+                    for a in &shell.args {
+                        cmd.arg(a);
+                    }
+                }
+            }
+        }
     }
+    cmd
 }
 
 #[tauri::command]

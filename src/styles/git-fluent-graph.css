@@ -150,7 +150,7 @@
   justify-self: end;
   color: var(--text-muted);
   font-size: var(--font-caption-xs);
-  font-family: var(--font-mono, "Cascadia Mono", Consolas, monospace);
+  font-family: var(--font-mono);
   line-height: 18px;
 }
 

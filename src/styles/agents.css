@@ -133,7 +133,7 @@
 .agent-message-markdown h4 { font-size: var(--font-body); }
 
 .agent-message-markdown code {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   font-size: var(--font-caption);
   padding: 1px 5px;
   border-radius: var(--radius-control);
@@ -193,7 +193,7 @@
 
 /* Variante monospace: um `code` inline que é caminho de arquivo. */
 .agent-file-link.code {
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   font-size: var(--font-caption);
   padding: 1px 5px;
   border-radius: var(--radius-control);
@@ -249,7 +249,7 @@
   border: 0;
   background: none;
   color: inherit;
-  font-family: var(--font-mono, monospace);
+  font-family: var(--font-mono);
   font-size: var(--font-caption);
   line-height: 18px;
   white-space: pre;

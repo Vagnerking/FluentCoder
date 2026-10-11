@@ -17,6 +17,7 @@
 
 pub mod commands;
 pub mod linux;
+pub mod login_env;
 pub mod macos;
 pub mod process;
 pub mod windows;
@@ -46,6 +47,7 @@ impl Os {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn as_str(self) -> &'static str {
         match self {
             Os::Windows => "windows",
@@ -153,6 +155,7 @@ pub trait Platform: Send + Sync {
     /// Nome do executável (`dotnet` → `dotnet.exe` no Windows).
     fn exe_name(&self, base: &str) -> String;
     /// Diretório de dados do usuário (APPDATA, Application Support, XDG).
+    #[allow(dead_code)]
     fn user_data_dir(&self, env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf>;
     /// Diretório home do usuário.
     fn home_dir(&self, env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf>;

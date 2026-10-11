@@ -8,7 +8,7 @@ import {
   movePath,
   renamePath,
   readDir,
-  revealInExplorer,
+  revealInFileManager,
   sshCopyPath,
   sshCreateFile,
   sshCreateFolder,
@@ -18,6 +18,7 @@ import {
   sshRenamePath,
 } from "../api";
 import type { ContextMenuItem, FileNode, FileDecoration } from "../types";
+import { formatShortcutsInText, platformLabels } from "../platform";
 import { IconButton } from "./ui/IconButton";
 import { FileIcon } from "../icon-theme/material/FileIcon";
 import {
@@ -548,7 +549,7 @@ export function FileExplorer({
       if (clipboard?.path === node.path) setClipboard(null);
       await onRefreshRoot();
       setRefreshVersion((v) => v + 1);
-      setStatus("Item movido para a Lixeira.");
+      setStatus(`Item movido para a ${platformLabels().trash}.`);
     } catch (cause) {
       setStatus(`Não foi possível excluir: ${String(cause)}`);
     } finally {
@@ -637,17 +638,17 @@ export function FileExplorer({
         const ok = await copyTextToClipboard(node.path);
         setStatus(
           ok
-            ? "Caminho remoto copiado. O Explorer do Windows não abre roots SSH diretamente."
-            : "Explorer local não abre roots SSH e não foi possível copiar o caminho remoto."
+            ? platformLabels().remoteRevealUnavailable
+            : `O ${platformLabels().fileManager} não abre roots SSH e não foi possível copiar o caminho remoto.`
         );
         return;
       }
       const operationRoot = rootForPath(node.path);
       if (!operationRoot) return;
       try {
-        await revealInExplorer(operationRoot, node.path);
+        await revealInFileManager(operationRoot, node.path);
       } catch (cause) {
-        setStatus(`Não foi possível revelar no Explorer: ${String(cause)}`);
+        setStatus(`Não foi possível revelar no ${platformLabels().fileManager}: ${String(cause)}`);
       }
     },
     [rootForPath, workspaceRootForPath]
@@ -759,7 +760,7 @@ export function FileExplorer({
             label:
               workspaceRoot.provider === "ssh"
                 ? "Copiar Caminho Remoto"
-                : "Revelar no Explorer do Windows",
+                : platformLabels().revealInFileManager,
             icon: workspaceRoot.provider === "ssh" ? "copyPath" : "revealExplorer",
             enabled: connected,
             run: connected ? () => revealInOs(node) : undefined,
@@ -812,7 +813,7 @@ export function FileExplorer({
           label:
             owner?.provider === "ssh"
               ? "Copiar Caminho Remoto"
-              : "Revelar no Explorer do Windows",
+              : platformLabels().revealInFileManager,
           icon: owner?.provider === "ssh" ? "copyPath" : "revealExplorer",
           run: () => revealInOs(node),
         },
@@ -998,7 +999,7 @@ export function FileExplorer({
       { id: "root-sep-os", label: "", separator: true },
       {
         id: "root-reveal",
-        label: targetOwner?.provider === "ssh" ? "Copiar Caminho Remoto" : "Revelar no Explorer do Windows",
+        label: targetOwner?.provider === "ssh" ? "Copiar Caminho Remoto" : platformLabels().revealInFileManager,
         icon: targetOwner?.provider === "ssh" ? "copyPath" : "revealExplorer",
         enabled: revealEnabled,
         run: revealEnabled ? () => revealInOs(rootNode) : undefined,
@@ -1280,7 +1281,7 @@ export function FileExplorer({
           <div className="explorer-empty">
             Nenhuma pasta aberta.
             <br />
-            Use o menu Arquivo (ou Ctrl+K Ctrl+O) para abrir uma pasta.
+            {formatShortcutsInText("Use o menu Arquivo (ou Ctrl+K Ctrl+O) para abrir uma pasta.")}
           </div>
         ) : onlyChanged ? (
           changedPaths.length === 0 ? (
@@ -1417,9 +1418,9 @@ export function FileExplorer({
       {deleteTarget && (
         <ConfirmDialog
           title="Excluir"
-          message={`Tem certeza que deseja excluir '${deleteTarget.name}'? O item será movido para a Lixeira.`}
+          message={`Tem certeza que deseja excluir '${deleteTarget.name}'? O item será movido para a ${platformLabels().trash}.`}
           buttons={[
-            { label: "Mover para a Lixeira", value: true, variant: "danger", default: true },
+            { label: platformLabels().moveToTrash, value: true, variant: "danger", default: true },
             { label: "Cancelar", value: false, variant: "secondary" },
           ]}
           onChoice={(confirmed) => {

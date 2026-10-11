@@ -32,22 +32,19 @@ import "./styles/views.css";
 import "./styles/view-pane.css";
 import "./theme/acrylic.css";
 import { applyAcrylicFlyouts } from "./theme/acrylic";
+import { getPlatform } from "./platform/os";
 import { installNativeDragGuard } from "./workbench/workbenchDrag";
 
 // macOS runs a native, opaque window (a transparent frameless window never
 // materializes there — the app would show only a Dock icon and menu bar). Tag the
 // root before first paint so the CSS paints a solid base under the translucent
 // surfaces instead of leaving them over a void. Windows keeps its Mica backdrop.
-const platform =
-  (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData
-    ?.platform ?? navigator.platform;
-if (/mac/i.test(platform ?? "")) {
-  document.documentElement.classList.add("platform-macos");
-} else if (/linux/i.test(platform ?? "")) {
-  // Linux runs frameless + transparent like Windows, but with no Mica: the CSS
-  // paints a solid, rounded window surface itself (see `html.platform-linux`).
-  document.documentElement.classList.add("platform-linux");
-}
+// The OS comes from the Rust side once (`window.__FLUENT_PLATFORM__`, see
+// `src/platform/os.ts`) — never `navigator.platform`. `html.platform-*` also
+// selects the per-OS font stacks (`styles/tokens.css`).
+// Linux runs frameless + transparent like Windows, but with no Mica: the CSS
+// paints a solid, rounded window surface itself (see `html.platform-linux`).
+document.documentElement.classList.add(`platform-${getPlatform().os}`);
 
 // Flyouts acrílicos só onde o WebView desenha o backdrop-filter (senão opacos).
 applyAcrylicFlyouts();

@@ -10,6 +10,7 @@
  */
 import * as monaco from "monaco-editor";
 import type { FileCoverage } from "../api";
+import { getPlatform } from "../platform/os";
 
 /** Ids das decorations de cobertura por URI de modelo (para substituí-las). */
 const decorationIds = new Map<string, string[]>();
@@ -18,9 +19,14 @@ let lastCoverage: readonly FileCoverage[] = [];
 /** Listener de criação de modelo (registrado uma vez, sob demanda). */
 let createListener: monaco.IDisposable | null = null;
 
-/** Normaliza para comparação (barras + minúsculas p/ Windows). */
+/**
+ * Normaliza para comparação: barras sempre; minúsculas só onde o sistema de
+ * arquivos não diferencia (Windows, macOS) — no Linux `A.cs` e `a.cs` são dois
+ * arquivos.
+ */
 function norm(path: string): string {
-  return path.replace(/\\/g, "/").toLowerCase();
+  const p = path.replace(/\\/g, "/");
+  return /^[a-zA-Z]:\//.test(p) || getPlatform().capabilities.pathsCaseInsensitive ? p.toLowerCase() : p;
 }
 
 /** Casa por igualdade normalizada; fallback de sufixo numa fronteira de segmento

@@ -13,6 +13,7 @@ import { createPortal } from "react-dom";
 import { Codicon } from "../../icons/codicons/Codicon";
 import type { IconAction } from "../../icons/codicons/codicon-map";
 import { cx } from "./cx";
+import { formatKeybinding } from "../../platform/keybinding";
 import {
   firstActionable,
   isActionable,
@@ -406,7 +407,10 @@ function MenuSurface({
               </span>
               <span className="ui-menu-label">{item.label}</span>
               {item.badge && <span className="ui-menu-badge">{item.badge}</span>}
-              {item.shortcut && <span className="ui-menu-shortcut">{item.shortcut}</span>}
+              {item.shortcut && (
+                // Aceleradores do app ("Ctrl+S") viram o rótulo do SO (⌘S no macOS).
+                <span className="ui-menu-shortcut">{formatKeybinding(item.shortcut) ?? item.shortcut}</span>
+              )}
               {hasSub && (
                 <span className="ui-menu-chevron" aria-hidden="true">
                   <Codicon name="chevronRight" />

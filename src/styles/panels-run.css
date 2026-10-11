@@ -26,7 +26,7 @@
 
 .run-name { font-size: var(--font-base); color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.run-cmd { font-size: var(--font-caption-xs); color: var(--text-disabled); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: "Cascadia Code", "Consolas", monospace; }
+.run-cmd { font-size: var(--font-caption-xs); color: var(--text-disabled); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
 
 .run-remove { opacity: 0; }
 

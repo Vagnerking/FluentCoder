@@ -95,8 +95,12 @@
   --line-height-subtitle: 22px;
   --font-title: 24px;
   --line-height-title: 32px;
+  /* Font stacks — Windows-first defaults, redefined per OS below (the same
+     stacks live in src/platform/fonts.ts for JS consumers: xterm, canvas). */
+  --font-ui: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI",
+    system-ui, sans-serif;
   --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, ui-monospace,
-    "SF Mono", Menlo, monospace;
+    monospace;
 
   /* ---- Control metrics ---- */
   --control-h-sm: 24px;
@@ -187,4 +191,19 @@
 
   font-synthesis: none;
   --duration-tree: 110ms;
+}
+
+/* Per-OS font stacks (`html.platform-*` is set before first paint from the
+   Rust-injected platform info). Linux ships no Segoe/Cascadia: without this
+   the UI fell back to Noto Sans and the mono to the wide DejaVu Sans Mono. */
+html.platform-linux {
+  --font-ui: system-ui, Cantarell, "Noto Sans", Ubuntu, "DejaVu Sans", sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", "Ubuntu Mono",
+    "Noto Sans Mono", "DejaVu Sans Mono", monospace;
+}
+
+html.platform-macos {
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+    system-ui, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, Menlo, Monaco, "Cascadia Code", monospace;
 }

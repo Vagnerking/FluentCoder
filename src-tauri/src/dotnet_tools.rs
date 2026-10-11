@@ -9,7 +9,7 @@
 /// Builds a `dotnet` Command with the shared hardening: English CLI output (so
 /// any text we surface is stable) and no console-window flash on Windows.
 fn dotnet_command() -> std::process::Command {
-    let mut cmd = std::process::Command::new(if cfg!(windows) { "dotnet.exe" } else { "dotnet" });
+    let mut cmd = std::process::Command::new(crate::platform::current().exe_name("dotnet"));
     cmd.env("DOTNET_CLI_UI_LANGUAGE", "en");
     #[cfg(windows)]
     {

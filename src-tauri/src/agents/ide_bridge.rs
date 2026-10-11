@@ -966,9 +966,7 @@ pub fn default_lock_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|d| !d.is_empty()) {
         return Some(PathBuf::from(dir).join("ide"));
     }
-    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-        .or_else(|| std::env::var_os("HOME"))?;
-    Some(PathBuf::from(home).join(".claude").join("ide"))
+    Some(crate::platform::home_dir()?.join(".claude").join("ide"))
 }
 
 fn text_result(text: &str) -> Value {

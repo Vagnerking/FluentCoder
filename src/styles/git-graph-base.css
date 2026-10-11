@@ -151,7 +151,7 @@
 
 .git-graph-meta code {
   color: var(--text-secondary);
-  font-family: "Cascadia Code", "Consolas", monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-caption-xs);
 }
 
@@ -186,7 +186,7 @@
   border-radius: var(--radius-pill);
   color: #7fd7ff;
   background: rgba(96, 205, 255, 0.075);
-  font-family: "Cascadia Code", "Consolas", monospace;
+  font-family: var(--font-mono);
   font-size: var(--font-caption-xs);
 }
 
