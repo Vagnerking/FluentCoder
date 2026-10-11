@@ -42,7 +42,9 @@ import {
   loadExtensions,
   restartHost,
   saveSources,
+  isTrusted,
   setExtensionEnabled,
+  setUnverifiedAllowed,
   uninstallExtension,
   updateAll,
   updateExtension,
@@ -196,6 +198,60 @@ function InstallConfirmDialog({ pending, onConfirm, onCancel }: { pending: Pendi
   );
 }
 
+// --------------------------------------------------- liberação "Não avaliada"
+
+/**
+ * Confirmação para rodar uma versão cujo código NÃO foi analisado (bundle com
+ * indireção). Decisão do usuário, por versão: o portão continua bloqueando
+ * qualquer outra versão e nunca libera Incompatível.
+ */
+function TrustConfirmDialog({ info, report, onConfirm, onCancel }: { info: InstalledInfo; report: CompatibilityReport | undefined; onConfirm: () => void; onCancel: () => void }) {
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const titleId = useId();
+  const descId = useId();
+  useModalFocus(surfaceRef, { onEscape: onCancel, initialFocus: cancelRef });
+  const why = (report?.reasons ?? []).filter((r) => r.code.startsWith("code-") || r.severity !== "info").slice(0, 4);
+  return createPortal(
+    <div className="confirm-overlay" onMouseDown={onCancel}>
+      <div className="confirm-dialog ext-confirm" role="alertdialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={descId} tabIndex={-1} ref={surfaceRef} onMouseDown={(e) => e.stopPropagation()}>
+        <h2 id={titleId} className="confirm-title">
+          Executar {info.displayName} sem avaliação?
+        </h2>
+        <div id={descId} className="ext-confirm-body">
+          <p className="ext-confirm-publisher">
+            Publicado por <strong>{info.publisher}</strong> · versão {info.version} · {info.location === "vscode" ? "do VS Code (somente leitura)" : "pasta do app"}
+          </p>
+          {why.length > 0 && (
+            <ul className="ext-reasons ext-reasons-compact">
+              {why.map((r, i) => (
+                <li key={i} className={`ext-reason ext-reason-${r.severity}`}>
+                  <Codicon name={r.severity === "blocker" ? "error" : r.severity === "limit" ? "warning" : "info"} />
+                  <span>{r.message}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="ext-confirm-note">
+            O Fluent Coder não conseguiu analisar o código desta versão, então não sabe se as APIs que ela usa existem aqui. Ela pode falhar ou se comportar de forma
+            inesperada, e roda com as permissões do app, sem sandbox.
+          </p>
+          <p className="ext-confirm-note">A liberação vale só para a versão {info.version}: ao atualizar, a extensão volta a ser analisada. Você pode revogá-la a qualquer momento.</p>
+        </div>
+        <div className="confirm-actions">
+          <Button ref={cancelRef} variant="secondary" onClick={onCancel}>
+            Cancelar
+          </Button>
+          <Button variant="danger" onClick={onConfirm}>
+            Executar mesmo assim
+          </Button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 // ----------------------------------------------------------------- fontes
 
 function SourcesDialog({ sources, onClose }: { sources: CatalogSource[]; onClose: () => void }) {
@@ -323,6 +379,7 @@ interface ViewModel {
   st: ExtensionsState;
   updatesById: Map<string, UpdateInfo>;
   requestInstall: (r: InstallRequest, displayName: string, publisher: string) => void;
+  requestTrust: (info: InstalledInfo) => void;
   openDetails: (t: DetailsTarget) => void;
 }
 
@@ -331,6 +388,7 @@ function installedStatus(info: InstalledInfo, report: CompatibilityReport | unde
   if (update) parts.push(`${update.current} → ${update.latest}`);
   if (!info.enabled) parts.push("Desabilitada");
   else if (info.builtin || (report && RUNNABLE.has(report.verdict))) parts.push("Habilitada");
+  else if (report?.verdict === "unknown" && isTrusted(info)) parts.push("Liberada sem avaliação");
   else if (report) parts.push("Não roda neste host");
   if (info.shadowedVersion) parts.push(`também no VS Code (${info.shadowedVersion})`);
   return parts.join(" · ");
@@ -340,7 +398,11 @@ function installedActions(info: InstalledInfo, report: CompatibilityReport | und
   const acts: CardAction[] = [];
   const update = vm.updatesById.get(info.id);
   if (update) acts.push({ label: `Atualizar para ${update.latest}`, primary: true, onClick: () => void updateExtension(update) });
-  const runnable = info.builtin || (report ? RUNNABLE.has(report.verdict) : false);
+  const unverified = !info.builtin && report?.verdict === "unknown";
+  const trusted = unverified && isTrusted(info);
+  const runnable = info.builtin || (report ? RUNNABLE.has(report.verdict) : false) || trusted;
+  if (unverified && !trusted) acts.push({ label: "Executar sem avaliação…", icon: "run", onClick: () => vm.requestTrust(info) });
+  if (trusted) acts.push({ label: "Revogar a liberação sem avaliação", icon: "lock", onClick: () => void setUnverifiedAllowed(info, false) });
   if (info.enabled) acts.push({ label: "Desabilitar", icon: "circleSlash", onClick: () => void setExtensionEnabled(info.id, false) });
   else
     acts.push({
@@ -466,6 +528,7 @@ export function ExtensionsView() {
   const [recStatus, setRecStatus] = useState<Record<string, RecommendationStatus | "loading">>({});
   const [details, setDetails] = useState<DetailsTarget | null>(null);
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
+  const [trustTarget, setTrustTarget] = useState<InstalledInfo | null>(null);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const searchSeq = useRef(0);
 
@@ -567,7 +630,7 @@ export function ExtensionsView() {
     setConfirm({ request: null, vsixPath: picked, loading: false, displayName: picked.split(/[\\/]/).pop() ?? "pacote .vsix", publisher: "desconhecido (arquivo local)", verified: false, version: null, hasHash: false, report: null, recommended: false, preRelease: false });
   };
 
-  const vm: ViewModel = { st, updatesById, requestInstall, openDetails: setDetails };
+  const vm: ViewModel = { st, updatesById, requestInstall, requestTrust: setTrustTarget, openDetails: setDetails };
 
   const q = query.trim().toLowerCase();
   const installed = st.installed
@@ -742,6 +805,18 @@ export function ExtensionsView() {
       )}
       {confirm && <InstallConfirmDialog pending={confirm} onConfirm={confirmInstall} onCancel={() => setConfirm(null)} />}
       {sourcesOpen && <SourcesDialog sources={st.sources} onClose={() => setSourcesOpen(false)} />}
+      {trustTarget && (
+        <TrustConfirmDialog
+          info={trustTarget}
+          report={st.reports[trustTarget.id]}
+          onCancel={() => setTrustTarget(null)}
+          onConfirm={() => {
+            const t = trustTarget;
+            setTrustTarget(null);
+            void setUnverifiedAllowed(t, true);
+          }}
+        />
+      )}
     </div>
   );
 }

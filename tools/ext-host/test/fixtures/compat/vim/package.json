@@ -1,0 +1,14 @@
+{
+  "name": "vim",
+  "publisher": "vscodevim",
+  "displayName": "Vim",
+  "version": "1.32.1",
+  "engines": { "vscode": "^1.74.0" },
+  "main": "./out/extension",
+  "activationEvents": ["*"],
+  "contributes": {
+    "commands": [{ "command": "toggleVim", "title": "Vim: Toggle Vim Mode" }],
+    "keybindings": [{ "key": "Escape", "command": "extension.vim_escape", "when": "editorTextFocus && vim.active" }],
+    "configuration": { "title": "Vim", "properties": { "vim.leader": { "type": "string", "default": "\\" } } }
+  }
+}

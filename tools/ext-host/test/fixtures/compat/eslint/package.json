@@ -1,0 +1,13 @@
+{
+  "name": "vscode-eslint",
+  "publisher": "dbaeumer",
+  "displayName": "ESLint",
+  "version": "3.0.16",
+  "engines": { "vscode": "^1.82.0" },
+  "main": "./client/out/extension",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [{ "command": "eslint.executeAutofix", "title": "Fix all auto-fixable Problems", "category": "ESLint" }],
+    "configuration": { "type": "object", "title": "ESLint", "properties": { "eslint.enable": { "type": "boolean", "default": true } } }
+  }
+}

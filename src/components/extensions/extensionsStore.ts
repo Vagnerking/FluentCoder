@@ -234,6 +234,27 @@ export function uninstallExtension(id: string): Promise<boolean> {
   });
 }
 
+/** A liberação explícita gravada vale para ESTA versão e ESTE shim? */
+export function isTrusted(info: Pick<InstalledInfo, "version" | "trust">): boolean {
+  return !!info.trust && info.trust.version === info.version && info.trust.hostVersion === CAPABILITIES.hostVersion;
+}
+
+/**
+ * Libera (ou revoga) a execução de uma versão "Não avaliada" — só depois da
+ * confirmação na view. O host só aceita junto com o portão `unknown` da mesma
+ * versão e do mesmo shim; atualizar a extensão descarta a liberação.
+ */
+export function setUnverifiedAllowed(info: InstalledInfo, allow: boolean): Promise<boolean> {
+  return run(info.id, allow ? "Liberando…" : "Revogando…", async () => {
+    await extensionsApi.setTrust(info.id, allow ? { version: info.version, hostVersion: CAPABILITIES.hostVersion } : null);
+    if (allow && !info.enabled) await extensionsApi.setEnabled(info.id, true);
+    if (!allow) markRestart(info.id);
+    return allow
+      ? `${info.displayName} ${info.version} liberada para rodar sem avaliação (só esta versão).`
+      : `Liberação de ${info.displayName} revogada: ela volta a ficar bloqueada.`;
+  });
+}
+
 export function setExtensionEnabled(id: string, enabled: boolean): Promise<boolean> {
   return run(id, enabled ? "Habilitando…" : "Desabilitando…", async () => {
     await extensionsApi.setEnabled(id, enabled);

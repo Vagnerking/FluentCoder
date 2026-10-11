@@ -80,8 +80,16 @@ function readIndex(dir) {
 }
 
 /** O veredito gravado vale para ESTA versão da extensão e ESTE shim? */
-function gateAllows(gate, version) {
-  return !!(gate && RUNNABLE_VERDICTS.has(gate.verdict) && gate.version === version && gate.hostVersion === VSCODE_VERSION);
+function gateAllows(gate, version, trust) {
+  if (!gate || gate.version !== version || gate.hostVersion !== VSCODE_VERSION) return false;
+  if (RUNNABLE_VERDICTS.has(gate.verdict)) return true;
+  // "Não avaliada" + liberação EXPLÍCITA do usuário para esta versão e este
+  // shim (confirmada na view Extensões). Incompatível nunca é liberável.
+  return gate.verdict === 'unknown' && trustAllows(trust, version);
+}
+
+function trustAllows(trust, version) {
+  return !!(trust && typeof trust === 'object' && trust.version === version && trust.hostVersion === VSCODE_VERSION);
 }
 
 function webviewViewIds(pkg) {
@@ -181,7 +189,8 @@ function describe(pkg, extPath, source, index) {
   // Embutidas rodam por padrão; as demais só depois de habilitadas no app.
   const enabled = record && typeof record.enabled === 'boolean' ? record.enabled : !!builtin;
   const gate = record && record.gate;
-  const gateOk = builtin ? true : gateAllows(gate, pkg.version);
+  const trust = record && record.trust;
+  const gateOk = builtin ? true : gateAllows(gate, pkg.version, trust);
   const supported = enabled && gateOk;
   const info = {
     id,
@@ -193,6 +202,8 @@ function describe(pkg, extPath, source, index) {
     builtin: !!builtin,
     enabled,
     supported,
+    /** Roda por liberação explícita do usuário (código "Não avaliado"). */
+    trusted: !builtin && supported && !!gate && gate.verdict === 'unknown',
     blockedReason: supported ? undefined : !enabled ? 'disabled' : gate && gate.verdict && !RUNNABLE_VERDICTS.has(gate.verdict) ? gate.verdict : 'not-evaluated',
     label: builtin ? builtin.label : pkg.displayName || pkg.name,
     viewIds: builtin ? builtin.viewIds : webviewViewIds(pkg),

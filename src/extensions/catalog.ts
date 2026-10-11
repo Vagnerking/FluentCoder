@@ -32,6 +32,13 @@ export interface GateRecord {
   evaluatedAt: number;
 }
 
+/** Liberação explícita do usuário para rodar uma versão "Não avaliada". */
+export interface TrustRecord {
+  version: string;
+  hostVersion: string;
+  grantedAt: number;
+}
+
 /** Extensão instalada (pasta do app ou VS Code), como o Rust descobre. */
 export interface InstalledInfo {
   id: string;
@@ -46,6 +53,7 @@ export interface InstalledInfo {
   builtin: boolean;
   enabled: boolean;
   gate: GateRecord | null;
+  trust: TrustRecord | null;
   source: InstallSource | null;
   verified: boolean;
   preRelease: boolean;
@@ -99,7 +107,20 @@ export interface LocalDetails {
   changelog: string | null;
   icon: string | null;
   /** Varredura estática do código Node (vscode.<api>) feita no Rust. */
-  apiScan: { file: string | null; filesWithApi: number; bindings: number; paths: [string, number][]; called: string[]; truncated: boolean; error: string | null };
+  apiScan: {
+    scannerVersion: number;
+    file: string | null;
+    filesWithApi: number;
+    bindings: number;
+    sites: number;
+    unresolved: number;
+    ignored: number;
+    typeCommand: boolean;
+    paths: [string, number][];
+    called: string[];
+    truncated: boolean;
+    error: string | null;
+  };
 }
 
 export interface InstallOutcome {
@@ -152,6 +173,8 @@ export const extensionsApi = {
   uninstall: (id: string) => invoke<void>("extensions_uninstall", { id }),
   setEnabled: (id: string, enabled: boolean) => invoke<void>("extensions_set_enabled", { id, enabled }),
   setGate: (id: string, gate: { verdict: string; version: string; hostVersion: string }) => invoke<void>("extensions_set_gate", { id, gate }),
+  setGates: (gates: { id: string; gate: { verdict: string; version: string; hostVersion: string } }[]) => invoke<void>("extensions_set_gates", { gates }),
+  setTrust: (id: string, trust: { version: string; hostVersion: string } | null) => invoke<void>("extensions_set_trust", { id, trust }),
   checkUpdates: () => invoke<UpdateInfo[]>("extensions_check_updates"),
 };
 

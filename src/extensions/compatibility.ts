@@ -47,6 +47,16 @@ export interface ApiScan {
   filesWithApi?: number;
   truncated?: boolean;
   error?: string | null;
+  /** Versão do algoritmo da varredura (`SCANNER_VERSION`; ausente = antiga). */
+  scannerVersion?: number;
+  /** `require("vscode")` / `from "vscode"` encontrados no código. */
+  sites?: number;
+  /** Sítios que não foram ligados a nenhuma variável (bundle com indireção). */
+  unresolved?: number;
+  /** Acessos descartados por não estarem no universo da API (ruído de minificação, strings). */
+  ignored?: number;
+  /** `commands.registerCommand("type", …)`: intercepta a digitação do editor. */
+  typeCommand?: boolean;
 }
 
 export interface ClassifyInput {
@@ -326,6 +336,17 @@ export function classify(input: ClassifyInput, caps: Capabilities): Compatibilit
   if (!hasMain && !hasBrowser && supportedContrib === 0 && !unsupportedContrib.length) {
     add("blocker", "nothing", "Sem código e sem contribuições que o Fluent Coder use.");
   }
+  // Keymap puro (ex.: jupyter-keymap): sem código e só atalhos para comandos que
+  // a própria extensão não contribui — comandos do VS Code ou de outras
+  // extensões, que o app não tem. Não faz nada aqui.
+  if (!hasMain && !hasBrowser && Array.isArray(contributes.keybindings) && contributes.keybindings.length) {
+    const own = new Set((Array.isArray(contributes.commands) ? contributes.commands : []).map((c) => (isObj(c) ? c.command : null)).filter(Boolean));
+    const meaningful = Object.keys(contributes).filter((k) => !["keybindings", "configuration", "configurationDefaults", "menus", "commands"].includes(k) && caps.contributionPoints[k]?.state !== "ignored");
+    const targets = contributes.keybindings.map((k) => (isObj(k) && typeof k.command === "string" ? k.command.replace(/^-/, "") : "")).filter(Boolean);
+    if (!meaningful.length && targets.length && targets.every((c) => !own.has(c))) {
+      add("blocker", "keymap-only", `Só define atalhos para comandos de outras extensões ou do próprio VS Code (${listNames([...new Set(targets)], 3)}), que não existem neste app.`);
+    }
+  }
 
   // eventos de ativação
   if (hasMain) {
@@ -368,10 +389,29 @@ export function classify(input: ClassifyInput, caps: Capabilities): Compatibilit
     const scan = input.apiScan;
     if (!scan) add("info", "code-not-analyzed", "Código ainda não analisado: instale para verificar as APIs usadas.");
     else if (scan.error) add("info", "code-error", `Não foi possível analisar o código: ${scan.error}.`);
-    else if (scan.bindings === 0) add("info", "code-opaque", "Não encontramos `require(\"vscode\")` no código (bundle não analisável): não dá para afirmar a compatibilidade.");
+    else if (scan.bindings === 0 && !scan.sites) add("info", "code-opaque", "Não encontramos `require(\"vscode\")` no código (bundle não analisável): não dá para afirmar a compatibilidade.");
     else {
-      codeAnalyzed = !scan.truncated;
+      // NUNCA positivo por omissão: achar o `require("vscode")` sem conseguir
+      // seguir o uso (webpack/esbuild com indireção, namespace guardado num
+      // objeto) é código NÃO analisado — o portão bloqueia.
+      const unresolved = scan.unresolved ?? 0;
+      // Opaco: nenhum caminho, ou nenhuma CHAMADA a função de namespace
+      // (`window.x(…)`, `commands.y(…)`) — toda extensão com código chama alguma;
+      // sem nenhuma, o uso real ficou escondido (ex.: namespace injetado num
+      // contêiner de DI, como o vscode-icons; `this.M = vscode` do Monokai).
+      const calledMembers = scan.called ? scan.called.filter((k) => k.includes(".")) : null;
+      const opaque = scan.paths.length === 0 || (calledMembers !== null && calledMembers.length === 0);
+      codeAnalyzed = !scan.truncated && unresolved === 0 && !opaque;
       if (scan.truncated) add("info", "code-truncated", "Análise do código incompleta (pacote grande demais).");
+      if (unresolved > 0)
+        add("info", "code-unresolved", `${unresolved === 1 ? "Um uso" : `${unresolved} usos`} de \`require("vscode")\` não puderam ser rastreados no código (bundle com indireção): não dá para afirmar a compatibilidade.`);
+      if (opaque)
+        add("info", "code-opaque", "O código carrega a API `vscode`, mas não encontramos nenhum uso rastreável dela (bundle com indireção ou minificado): não dá para afirmar a compatibilidade.");
+      if (scan.typeCommand) {
+        // Vim & cia.: interceptar a digitação É a função; Claude Code só o faz por 1 s.
+        const main = !hasWebviewViews(contributes) && !(isObj(contributes.customEditors) || Array.isArray(contributes.customEditors));
+        add(main ? "blocker" : "limit", "type-command", "Sobrescreve o comando `type` (a digitação do editor): o editor do app não entrega as teclas digitadas às extensões.");
+      }
       classifyApis(scan, caps, add, supportedContrib > 0);
     }
   }

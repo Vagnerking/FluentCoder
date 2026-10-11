@@ -1,0 +1,14 @@
+{
+  "name": "theme-monokai-pro-vscode",
+  "publisher": "monokai",
+  "displayName": "Monokai Pro",
+  "version": "2.0.10",
+  "engines": { "vscode": "^1.66.0" },
+  "main": "./js/main.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [{ "command": "monokai.enterLicense", "title": "Monokai Pro: enter license" }],
+    "themes": [{ "label": "Monokai Pro", "uiTheme": "vs-dark", "path": "./themes/Monokai Pro.json" }],
+    "iconThemes": [{ "id": "Monokai Pro Icons", "label": "Monokai Pro Icons", "path": "./icons/Monokai Pro Icons.json" }]
+  }
+}

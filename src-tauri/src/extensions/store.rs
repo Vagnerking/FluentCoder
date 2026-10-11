@@ -49,6 +49,19 @@ pub struct Gate {
 
 pub const VERDICTS: [&str; 4] = ["compatible", "partial", "incompatible", "unknown"];
 
+/// Liberação EXPLÍCITA do usuário para rodar uma versão "Não avaliada"
+/// (código que a varredura não conseguiu seguir). Vale só para a MESMA versão
+/// da extensão e a MESMA API do shim; atualizar a extensão a descarta. Nunca
+/// libera Incompatível (o host confere: só com `gate.verdict == "unknown"`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Trust {
+    pub version: String,
+    pub host_version: String,
+    #[serde(default)]
+    pub granted_at: u64,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum InstallSource {
@@ -85,6 +98,8 @@ pub struct ManagedEntry {
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate: Option<Gate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust: Option<Trust>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -94,6 +109,8 @@ pub struct VscodeOverride {
     pub enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate: Option<Gate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust: Option<Trust>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -298,15 +315,46 @@ pub fn set_enabled(dir: &Path, id: &str, enabled: bool) -> Result<(), String> {
 }
 
 pub fn set_gate(dir: &Path, id: &str, gate: Gate) -> Result<(), String> {
-    if !VERDICTS.contains(&gate.verdict.as_str()) {
-        return Err(format!("veredito inválido: {}", gate.verdict));
+    set_gates(dir, vec![(id.to_string(), gate)])
+}
+
+/// Vários vereditos numa ÚNICA escrita do índice (a view avalia em lote).
+/// Só grava o que mudou; nada mudou → não escreve.
+pub fn set_gates(dir: &Path, gates: Vec<(String, Gate)>) -> Result<(), String> {
+    for (_, g) in &gates {
+        if !VERDICTS.contains(&g.verdict.as_str()) {
+            return Err(format!("veredito inválido: {}", g.verdict));
+        }
     }
     let _guard = INDEX_LOCK.lock().map_err(|e| e.to_string())?;
     let mut index = read_index(dir);
-    if let Some(e) = index.extensions.get_mut(id) {
-        e.gate = Some(gate);
+    let mut changed = false;
+    let same = |a: &Option<Gate>, b: &Gate| a.as_ref().map(|a| a.verdict == b.verdict && a.version == b.version && a.host_version == b.host_version).unwrap_or(false);
+    for (id, gate) in gates {
+        let slot = match index.extensions.get_mut(&id) {
+            Some(e) => &mut e.gate,
+            None => &mut index.vscode.entry(id).or_default().gate,
+        };
+        if !same(slot, &gate) {
+            *slot = Some(gate);
+            changed = true;
+        }
+    }
+    if changed {
+        write_index(dir, &index)
     } else {
-        index.vscode.entry(id.to_string()).or_default().gate = Some(gate);
+        Ok(())
+    }
+}
+
+/// Liga/desliga a liberação explícita de uma versão "Não avaliada".
+pub fn set_trust(dir: &Path, id: &str, trust: Option<Trust>) -> Result<(), String> {
+    let _guard = INDEX_LOCK.lock().map_err(|e| e.to_string())?;
+    let mut index = read_index(dir);
+    if let Some(e) = index.extensions.get_mut(id) {
+        e.trust = trust;
+    } else {
+        index.vscode.entry(id.to_string()).or_default().trust = trust;
     }
     write_index(dir, &index)
 }
@@ -330,6 +378,8 @@ pub struct InstalledInfo {
     pub builtin: bool,
     pub enabled: bool,
     pub gate: Option<Gate>,
+    /// Liberação explícita de uma versão "Não avaliada" (ver `Trust`).
+    pub trust: Option<Trust>,
     pub source: Option<InstallSource>,
     pub verified: bool,
     pub pre_release: bool,
@@ -434,6 +484,7 @@ pub fn discover(dir: &Path, vscode_dir: Option<&Path>) -> Vec<InstalledInfo> {
                 builtin: is_builtin(id),
                 enabled: entry.enabled,
                 gate: entry.gate.clone(),
+                trust: entry.trust.clone(),
                 source: Some(entry.source.clone()),
                 verified: entry.verified,
                 pre_release: entry.pre_release,
@@ -466,6 +517,7 @@ pub fn discover(dir: &Path, vscode_dir: Option<&Path>) -> Vec<InstalledInfo> {
                     builtin: is_builtin(&f.id),
                     enabled: ov.enabled.unwrap_or(is_builtin(&f.id)),
                     gate: ov.gate,
+                    trust: ov.trust,
                     source: None,
                     verified: false,
                     pre_release: false,
@@ -522,177 +574,9 @@ pub fn copy_tree(src: &Path, dest: &Path, limits: vsix::Limits) -> Result<u64, S
 
 // ------------------------------------------------------------ análise do bundle
 
-/// Caminhos `vscode.a.b` referenciados pelo código Node da extensão
-/// (varredura estática). Mesma ideia de `tools/ext-host/discovery/static-scan.js`,
-/// estendida para: vários arquivos (extensões sem bundle, `node_modules`),
-/// apelidos de namespace (`const window = vscode.window`) e propriedades que a
-/// própria extensão grava no namespace (`window.x = …`, que não são API).
-#[derive(Serialize, Clone, Debug, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct ApiScan {
-    /// Arquivo `main` (relativo à extensão); None = sem `main`.
-    pub file: Option<String>,
-    /// Arquivos analisados que fazem `require("vscode")`.
-    pub files_with_api: usize,
-    /// Identificadores ligados a `require("vscode")`.
-    pub bindings: usize,
-    pub paths: Vec<(String, u32)>,
-    /// Caminhos vistos sendo CHAMADOS (`x.y(`): ausente + chamado = erro certo.
-    pub called: Vec<String>,
-    /// A varredura parou no teto de bytes (resultado incompleto).
-    pub truncated: bool,
-    /// Não foi possível ler/analisar (motivo).
-    pub error: Option<String>,
-}
-
-const MAX_SCAN_BYTES: u64 = 64 << 20;
-const MAX_SCAN_FILE: u64 = 16 << 20;
-
-#[derive(Default)]
-struct ScanAcc {
-    bindings: usize,
-    files: usize,
-    paths: BTreeMap<String, u32>,
-    writes: std::collections::BTreeSet<String>,
-    called: std::collections::BTreeSet<String>,
-}
-
-fn scan_into(src: &str, acc: &mut ScanAcc) {
-    let bind = regex::Regex::new(r#"([A-Za-z_$][\w$]*)\s*=\s*(?:[A-Za-z_$][\w$]*\()?require\(\s*["']vscode["']\s*\)"#).unwrap();
-    let mut names: Vec<String> = bind.captures_iter(src).map(|c| c[1].to_string()).collect();
-    names.sort();
-    names.dedup();
-    if names.is_empty() {
-        return;
-    }
-    acc.files += 1;
-    acc.bindings += names.len();
-    // Apelidos de namespace: `X = vscode.window` (sem acesso encadeado depois).
-    let mut aliases: Vec<(String, String)> = Vec::new();
-    for n in &names {
-        let re = regex::Regex::new(&format!(r"([A-Za-z_$][\w$]*)\s*=\s*{}\.([a-z][\w$]*)\s*[;,)\n]", regex::escape(n))).unwrap();
-        for c in re.captures_iter(src) {
-            aliases.push((c[1].to_string(), c[2].to_string()));
-        }
-    }
-    let lookups = names.iter().map(|n| (n.clone(), None)).chain(aliases.iter().map(|(a, ns)| (a.clone(), Some(ns.clone()))));
-    for (n, ns) in lookups {
-        let re = regex::Regex::new(&format!(
-            r"(?:^|[^\w$.]){}\.([A-Za-z_$][\w$]*)(?:\.([A-Za-z_$][\w$]*))?(\s*=)?",
-            regex::escape(&n)
-        ))
-        .unwrap();
-        for c in re.captures_iter(src) {
-            let (first, second) = match &ns {
-                Some(ns) => (ns.as_str(), Some(&c[1])),
-                None => (&c[1], c.get(2).map(|m| m.as_str())),
-            };
-            let key = match second {
-                Some(s) if first.starts_with(|ch: char| ch.is_ascii_lowercase()) => format!("{first}.{s}"),
-                _ => first.to_string(),
-            };
-            // Escrita direta no membro (`window.minhaProp = …`): é da extensão, não da API.
-            // `=` seguido de `=`/`>` é comparação/arrow, não atribuição.
-            let assigned = c.get(3).map(|m| !matches!(src.as_bytes().get(m.end()), Some(b'=') | Some(b'>'))).unwrap_or(false);
-            let is_write = assigned && (ns.is_some() || c.get(2).is_some());
-            if is_write {
-                acc.writes.insert(key);
-            } else {
-                // Próximo caractere útil depois do caminho é `(`? → chamada.
-                let end = c.get(2).or(c.get(1)).map(|m| m.end()).unwrap_or(0);
-                if src[end..].trim_start().starts_with('(') {
-                    acc.called.insert(key.clone());
-                }
-                *acc.paths.entry(key).or_insert(0) += 1;
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-pub fn scan_source(src: &str) -> (usize, Vec<(String, u32)>) {
-    let mut acc = ScanAcc::default();
-    scan_into(src, &mut acc);
-    let writes = acc.writes;
-    (acc.bindings, acc.paths.into_iter().filter(|(k, _)| !writes.contains(k)).collect())
-}
-
-fn resolve_entry(ext_dir: &Path, raw: &str) -> Option<PathBuf> {
-    let rel = vsix::safe_relative(raw.trim_start_matches("./")).ok()?;
-    let mut file = ext_dir.join(&rel);
-    if !file.is_file() {
-        file = ext_dir.join(format!("{}.js", rel.display()));
-    }
-    let (f, root) = (std::fs::canonicalize(&file).ok()?, std::fs::canonicalize(ext_dir).ok()?);
-    f.starts_with(&root).then_some(f)
-}
-
-/// Pastas puladas na varredura (sem código da extensão que fale com `vscode`).
-const SKIP_DIRS: [&str; 6] = ["@types", "typescript", ".git", "webview", "webview-ui", "media"];
-
-pub fn scan_extension(ext_dir: &Path, pkg: &Value) -> ApiScan {
-    let Some(main) = pkg.get("main").and_then(Value::as_str) else {
-        return ApiScan::default();
-    };
-    let Some(main_file) = resolve_entry(ext_dir, main) else {
-        return ApiScan { error: Some("arquivo `main` não encontrado dentro da extensão".into()), ..Default::default() };
-    };
-    let shown = std::fs::canonicalize(ext_dir).ok().and_then(|r| main_file.strip_prefix(r).ok().map(|p| p.to_string_lossy().into_owned()));
-    // O bundle do navegador (`browser`) não roda neste host: fora da análise.
-    let browser = pkg.get("browser").and_then(Value::as_str).and_then(|b| resolve_entry(ext_dir, b));
-    let mut acc = ScanAcc::default();
-    let mut budget = MAX_SCAN_BYTES;
-    let mut truncated = false;
-    let mut queue: Vec<PathBuf> = vec![main_file.clone()];
-    // Demais .js/.cjs (extensões sem bundle repartem o código em vários arquivos).
-    let mut stack = vec![ext_dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&d) else { continue };
-        for e in rd.flatten() {
-            let Ok(ft) = e.file_type() else { continue };
-            let name = e.file_name().to_string_lossy().into_owned();
-            if ft.is_symlink() {
-                continue;
-            }
-            if ft.is_dir() {
-                if !SKIP_DIRS.contains(&name.as_str()) {
-                    stack.push(e.path());
-                }
-            } else if ft.is_file() && (name.ends_with(".js") || name.ends_with(".cjs")) && !name.ends_with(".min.js") {
-                queue.push(e.path());
-            }
-        }
-    }
-    let mut seen = std::collections::BTreeSet::new();
-    for f in queue {
-        let canon = std::fs::canonicalize(&f).unwrap_or(f.clone());
-        if !seen.insert(canon.clone()) || Some(&canon) == browser.as_ref() {
-            continue;
-        }
-        let Ok(m) = std::fs::metadata(&canon) else { continue };
-        if m.len() > MAX_SCAN_FILE && canon != main_file {
-            continue;
-        }
-        if m.len() > budget {
-            truncated = true;
-            break;
-        }
-        budget -= m.len();
-        if let Ok(bytes) = std::fs::read(&canon) {
-            scan_into(&String::from_utf8_lossy(&bytes), &mut acc);
-        }
-    }
-    let writes = acc.writes;
-    ApiScan {
-        file: shown,
-        files_with_api: acc.files,
-        bindings: acc.bindings,
-        called: acc.called.into_iter().filter(|k| !writes.contains(k)).collect(),
-        paths: acc.paths.into_iter().filter(|(k, _)| !writes.contains(k)).collect(),
-        truncated,
-        error: None,
-    }
-}
+/// A varredura mora em `scan.rs` (espelho do api-scan.js); reexportada aqui
+/// para os chamadores antigos (`store::scan_extension`, `store::ApiScan`).
+pub use super::scan::{scan_extension, ApiScan};
 
 #[cfg(test)]
 mod tests {
@@ -714,6 +598,7 @@ mod tests {
             installed_at: 1,
             enabled: true,
             gate: None,
+            trust: None,
         }
     }
 
@@ -795,6 +680,33 @@ mod tests {
     }
 
     #[test]
+    fn gates_in_batch_and_trust_per_version() {
+        let dir = tmpdir("trust");
+        let s1 = stage(&dir, "1.0.0");
+        commit_install(&dir, &s1, entry("acme.demo", "1.0.0")).unwrap();
+        let g = |v: &str| Gate { verdict: v.into(), version: "1.0.0".into(), host_version: "1.108.2".into(), evaluated_at: 1 };
+        // lote: uma escrita para a gerenciada + um override do VS Code
+        set_gates(&dir, vec![("acme.demo".into(), g("unknown")), ("acme.vs".into(), g("partial"))]).unwrap();
+        let idx = read_index(&dir);
+        assert_eq!(idx.extensions["acme.demo"].gate.as_ref().unwrap().verdict, "unknown");
+        assert_eq!(idx.vscode["acme.vs"].gate.as_ref().unwrap().verdict, "partial");
+        // nada mudou → não reescreve (mtime igual)
+        let before = std::fs::metadata(dir.join(INDEX_FILE)).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        set_gates(&dir, vec![("acme.demo".into(), g("unknown"))]).unwrap();
+        assert_eq!(std::fs::metadata(dir.join(INDEX_FILE)).unwrap().modified().unwrap(), before);
+        assert!(set_gates(&dir, vec![("acme.demo".into(), g("talvez"))]).is_err());
+        // liberação explícita: gravada, aparece na descoberta e some ao atualizar
+        set_trust(&dir, "acme.demo", Some(Trust { version: "1.0.0".into(), host_version: "1.108.2".into(), granted_at: 1 })).unwrap();
+        assert_eq!(discover(&dir, None)[0].trust.as_ref().unwrap().version, "1.0.0");
+        let s2 = stage(&dir, "1.1.0");
+        commit_install(&dir, &s2, entry("acme.demo", "1.1.0")).unwrap();
+        assert!(discover(&dir, None)[0].trust.is_none(), "versão nova = sem liberação");
+        set_trust(&dir, "acme.demo", None).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn copy_tree_skips_symlinks() {
         let src = tmpdir("copysrc");
         std::fs::write(src.join("package.json"), "{}").unwrap();
@@ -812,22 +724,24 @@ mod tests {
 
     #[test]
     fn scans_vscode_api_paths() {
-        let (b, paths) = scan_source(r#"var o=Object.create;const vs=__toESM(require("vscode"));vs.window.createWebviewPanel();vs.window.showInformationMessage('x');vs.Uri.file('a');x.vs.window.nope();"#);
-        assert_eq!(b, 1);
-        let m: BTreeMap<_, _> = paths.into_iter().collect();
+        use super::super::scan::scan_sources;
+        let src = br#"var o=Object.create;const vs=__toESM(require("vscode"));vs.window.createWebviewPanel();vs.window.showInformationMessage('x');vs.Uri.file('a');x.vs.window.nope();"#;
+        let s = scan_sources([("a.js", &src[..])], None, false);
+        assert_eq!(s.bindings, 1);
+        let m: BTreeMap<_, _> = s.paths.into_iter().collect();
         assert_eq!(m.get("window.createWebviewPanel"), Some(&1));
         assert_eq!(m.get("Uri"), Some(&1));
         assert!(!m.contains_key("window.nope"));
         // apelido de namespace + propriedade gravada pela própria extensão
-        let (_, paths) = scan_source("var vscode = require('vscode');\nvar window = vscode.window;\nwindow.outputChannel = window.createOutputChannel('x');\nwindow.outputChannel.appendLine('a');\nvscode.window.statusBarItem = 1;");
-        let m: BTreeMap<_, _> = paths.into_iter().collect();
+        let src = b"var vscode = require('vscode');\nvar window = vscode.window;\nwindow.outputChannel = window.createOutputChannel('x');\nwindow.outputChannel.appendLine('a');\nvscode.window.statusBarItem = 1;";
+        let s = scan_sources([("b.js", &src[..])], None, false);
+        let m: BTreeMap<_, _> = s.paths.into_iter().collect();
         assert_eq!(m.get("window.createOutputChannel"), Some(&1));
         assert!(!m.contains_key("window.outputChannel"));
         assert!(!m.contains_key("window.statusBarItem"));
-        let mut acc = ScanAcc::default();
-        scan_into("const v = require('vscode'); v.window.showX ('a'); if (v.window.flag) {}", &mut acc);
-        assert!(acc.called.contains("window.showX"));
-        assert!(!acc.called.contains("window.flag"));
+        let s = scan_sources([("c.js", &b"const v = require('vscode'); v.window.showErrorMessage ('a'); if (v.window.activeTextEditor) {}"[..])], None, false);
+        assert!(s.called.contains(&"window.showErrorMessage".to_string()));
+        assert!(!s.called.contains(&"window.activeTextEditor".to_string()));
     }
 
     #[test]

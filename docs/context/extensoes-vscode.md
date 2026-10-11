@@ -192,8 +192,13 @@ no lado virtual de um diff)/`decorationTypeDisposed`,
 20. **Instalar não executa nada** da extensão (sem scripts, sem `npm`, sem
     `activate`). Ela só roda no host depois de **habilitada** e classificada
     como **Compatível** ou **Parcial** para a MESMA versão e o MESMO shim
-    (portão gravado no índice; o host confere). Incompatível / Não avaliada
-    nunca rodam. `loadExtension` por caminho só é aceito sem app (headless).
+    (portão gravado no índice; o host confere). Incompatível nunca roda. **Não
+    avaliada** (código que a varredura não conseguiu seguir) só roda com a
+    **liberação explícita** do usuário — diálogo de confirmação "Executar sem
+    avaliação…" na view, gravada como `trust = {version, hostVersion}` no
+    índice; vale só para aquela versão e aquele shim (atualizar descarta) e o
+    host só a aceita junto com um portão `unknown` da mesma versão.
+    `loadExtension` por caminho só é aceito sem app (headless).
 21. **Confirmação antes de instalar** qualquer extensão não recomendada ou
     classificada como Incompatível / Não avaliada (antes de instalar o código
     ainda não foi analisado, então na prática toda instalação pede
@@ -615,7 +620,9 @@ dir, targetPlatform, source: {kind: "registry", registry, namespace, name} |
 preRelease, installedAt, enabled, gate }`; `vscode` = mapa id → `{ enabled?,
 gate? }` (overrides das extensões do VS Code, que seguem somente leitura).
 `gate = { verdict: compatible|partial|incompatible|unknown, version,
-hostVersion, evaluatedAt }`. O host ignora entrada com `dir` inseguro ou cujo
+hostVersion, evaluatedAt }`; `trust = { version, hostVersion, grantedAt }`
+(opcional, nas duas origens) = liberação explícita de uma versão "Não
+avaliada" (regra 20). O host ignora entrada com `dir` inseguro ou cujo
 `package.json` não bata com o id.
 
 - **Descoberta** (`tools/ext-host/src/installed.js` no host,
@@ -681,18 +688,50 @@ Análise estática do manifesto (`main`/`browser`, `engines.vscode` como faixa
 SemVer do VS Code, `targetPlatform`, `enabledApiProposals`,
 `activationEvents`, `contributes`, `extensionDependencies`,
 `extensionPack`, `capabilities`, `extensionKind`) + varredura do código Node
-instalado (`vscode.<api>` referenciados — chamados × só lidos —, apelidos de
-namespace, vários arquivos; `store::scan_extension`, espelhado em
-`tools/ext-host/discovery/api-scan.js`) contra `src/extensions/
-capabilities.json`, **gerado** do próprio shim por
-`node tools/ext-host/discovery/capabilities.js` (o teste
+instalado contra `src/extensions/capabilities.json`, **gerado** do próprio
+shim por `node tools/ext-host/discovery/capabilities.js` (o teste
 `capabilities.test.js` falha se o JSON ficar desatualizado — mudou o shim,
-regenere). Regras: sem código analisado → **Não avaliada** (nunca positivo
-por omissão; vale para todo resultado da loja antes de instalar); API ausente
-chamada, engine fora da faixa, outra plataforma, só web, dependência não
-instalada, só contribuições sem suporte ou só stubs como função principal →
-Incompatível; propostas, tree views, stubs, APIs parciais, eventos de
-ativação não disparados → Parcial.
+regenere).
+
+**Varredura** (`src-tauri/src/extensions/scan.rs`, espelho EXATO de
+`tools/ext-host/discovery/api-scan.js`; os dois passam pela mesma saída
+dourada em `tools/ext-host/test/fixtures/api-scan/expected.json`):
+- ligações ao namespace: `x = require("vscode")` (com `__importStar(…)`,
+  `__toESM(…)`), desestruturação (`{ window, Uri: U } = require(…)`),
+  `import … from "vscode"`, **módulos do webpack** (`1398(e){e.exports=
+  require("vscode")}`, `1398:e=>{…}`, array `/* 2 */ ((module) => {…})` →
+  `i=r(1398)`, `s(n(1398))`, `{window:e}=r(1398)`, `r(1398).window.x`),
+  `require("vscode").a.b` e apelidos (`w = vscode.window`);
+- **universo da API** (`src/extensions/vscode-api-surface.json`, gerado do
+  `vscode.d.ts` + `vscode.proposed.*.d.ts` do `@codingame/monaco-vscode-api`
+  por `node tools/ext-host/discovery/api-surface.js`): só conta como API o que
+  está nele — identificadores minificados (`_`, `__esModule`, `glsl`) e ids de
+  comando em strings (`"vscode.diff"`; o caminho também não pode vir colado a
+  aspa/crase) ficam em `ignored`. É seguro porque o `.d.ts` é de uma versão >=
+  `VSCODE_VERSION` (teste) e quem passa no `engines.vscode` só depende de API
+  até essa versão;
+- `sites` (cada `require("vscode")`/`from "vscode"`), `unresolved` (sítios
+  sem ligação rastreável), `typeCommand` (`registerCommand("type")`) e
+  `scannerVersion` (subir quando o algoritmo mudar).
+
+Regras: sem código analisado → **Não avaliada** (nunca positivo por omissão;
+vale para todo resultado da loja antes de instalar). Conta como NÃO
+analisado: varredura com erro/truncada, `unresolved > 0`, ou **opaca** —
+achou o `require("vscode")` mas nenhum caminho, ou nenhuma CHAMADA a função de
+namespace (namespace injetado em DI, `this.M = vscode`). API ausente chamada,
+engine fora da faixa, outra plataforma, só web, dependência não instalada, só
+contribuições sem suporte, só stubs como função principal, keymap puro (só
+atalhos para comandos que a extensão não contribui) ou sobrescrever o comando
+`type` sem outra UI (Vim) → Incompatível; propostas, tree views, stubs, APIs
+parciais, eventos de ativação não disparados → Parcial.
+
+**Matriz regenerável** (só leitura, nada é executado):
+`node --experimental-strip-types tools/ext-host/scripts/compat-matrix.mjs
+<pasta> [--json saída.json] [--compare antes.json]` — `<pasta>` no formato da
+pré-avaliação (`<id>/meta.json` + `<id>/ext/`) ou uma pasta de extensões
+instaladas (`~/.vscode/extensions`). Regressão com fixtures minimizados das
+populares (GitLens, ms-python, ESLint, Vim, Git Graph, Monokai Pro, Material
+Icon Theme, ErrorLens, jupyter-keymap): `src/extensions/compatRegression.test.ts`.
 
 ## Aceite
 

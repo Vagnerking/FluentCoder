@@ -1,0 +1,21 @@
+{
+  "name": "gitlens",
+  "publisher": "eamodio",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "17.6.2",
+  "engines": { "vscode": "^1.92.0" },
+  "main": "./dist/gitlens.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [{ "command": "gitlens.showCommitsView", "title": "%commands.showCommitsView%", "category": "GitLens" }],
+    "views": {
+      "gitlens": [
+        { "id": "gitlens.views.commits", "name": "%views.commits.name%" },
+        { "type": "webview", "id": "gitlens.views.home", "name": "%views.home.name%" }
+      ]
+    },
+    "viewsContainers": { "activitybar": [{ "id": "gitlens", "title": "%viewsContainers.gitlens%", "icon": "images/icon.svg" }] },
+    "configuration": [{ "title": "%configuration.title%", "properties": { "gitlens.codeLens.enabled": { "type": "boolean", "default": true, "markdownDescription": "%config.codeLens.enabled%" } } }]
+  }
+}

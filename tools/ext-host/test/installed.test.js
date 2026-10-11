@@ -82,6 +82,34 @@ test('portão: sem veredito, incompatível, versão/host diferente ou desabilita
   assert.equal(by['acme.a'].commands, undefined);
 });
 
+test('portão: "Não avaliada" só roda com liberação explícita da MESMA versão e do MESMO shim', () => {
+  const { managed, vscode } = setup();
+  for (const n of ['u1', 'u2', 'u3', 'u4', 'u5']) makeExt(vscode, `acme.${n}-1.0.0`, { publisher: 'acme', name: n, version: '1.0.0' });
+  const trust = (version, hostVersion = VSCODE_VERSION) => ({ version, hostVersion, grantedAt: 1 });
+  fs.writeFileSync(
+    path.join(managed, 'extensions.json'),
+    JSON.stringify({
+      version: 1,
+      extensions: {},
+      vscode: {
+        'acme.u1': { enabled: true, gate: gate('unknown', '1.0.0') },
+        'acme.u2': { enabled: true, gate: gate('unknown', '1.0.0'), trust: trust('1.0.0') },
+        'acme.u3': { enabled: true, gate: gate('unknown', '1.0.0'), trust: trust('0.9.0') },
+        'acme.u4': { enabled: true, gate: gate('incompatible', '1.0.0'), trust: trust('1.0.0') },
+        'acme.u5': { enabled: true, gate: gate('unknown', '1.0.0'), trust: trust('1.0.0', '1.0.0') },
+      },
+    }),
+  );
+  const by = Object.fromEntries(listInstalled({ managed, vscodeDirs: [vscode] }).map((e) => [e.id, e]));
+  assert.equal(by['acme.u1'].supported, false, 'Não avaliada sem liberação não roda');
+  assert.equal(by['acme.u1'].blockedReason, 'unknown');
+  assert.equal(by['acme.u2'].supported, true, 'liberação explícita da mesma versão');
+  assert.equal(by['acme.u2'].trusted, true);
+  assert.equal(by['acme.u3'].supported, false, 'liberação de outra versão não vale');
+  assert.equal(by['acme.u4'].supported, false, 'Incompatível nunca é liberável');
+  assert.equal(by['acme.u5'].supported, false, 'liberação de outro shim não vale');
+});
+
 test('índice com pasta insegura ou id divergente é ignorado', () => {
   const { managed } = setup();
   makeExt(managed, 'acme.x-1.0.0', { publisher: 'acme', name: 'outra', version: '1.0.0' });

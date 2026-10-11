@@ -1,0 +1,14 @@
+{
+  "name": "errorlens",
+  "publisher": "usernamehw",
+  "displayName": "Error Lens",
+  "version": "3.28.0",
+  "engines": { "vscode": "^1.107.0" },
+  "main": "./dist/extension.js",
+  "browser": "./dist/extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [{ "command": "errorLens.toggle", "title": "Toggle (Enable/Disable) Everything", "category": "Error Lens" }],
+    "configuration": { "title": "Error Lens", "properties": { "errorLens.enabled": { "type": "boolean", "default": true } } }
+  }
+}

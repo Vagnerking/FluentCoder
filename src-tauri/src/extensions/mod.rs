@@ -11,6 +11,7 @@
 //! Contratos e regras de segurança: docs/context/extensoes-vscode.md.
 
 pub mod openvsx;
+pub mod scan;
 pub mod semver;
 pub mod store;
 pub mod vsix;
@@ -167,6 +168,7 @@ pub async fn install_from_registry(
             installed_at: store::now_ms(),
             enabled: true,
             gate: None,
+            trust: None,
         };
         progress("commit", size, Some(size));
         let entry = store::commit_install(dir, &extracted, managed)?;
@@ -213,6 +215,7 @@ pub fn install_from_file(dir: &Path, file: &Path) -> Result<InstallOutcome, Stri
             installed_at: store::now_ms(),
             enabled: true,
             gate: None,
+            trust: None,
         };
         let entry = store::commit_install(dir, &out, entry)?;
         Ok(InstallOutcome { entry, sha256: bytes_hash.clone(), size: meta.len(), hash_verified: false })
@@ -255,6 +258,7 @@ pub fn import_from_vscode(dir: &Path, vscode_dir: &Path, id: &str) -> Result<Ins
             installed_at: store::now_ms(),
             enabled: true,
             gate: None,
+            trust: None,
         };
         let entry = store::commit_install(dir, &out, entry)?;
         Ok(InstallOutcome { entry, sha256: String::new(), size, hash_verified: false })
@@ -460,6 +464,44 @@ pub fn extensions_set_gate(app: AppHandle, id: String, gate: GateInput) -> Resul
         &managed_dir(&app)?,
         &normalize_id(&id)?,
         Gate { verdict: gate.verdict, version: gate.version, host_version: gate.host_version, evaluated_at: store::now_ms() },
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GateBatchItem {
+    pub id: String,
+    pub gate: GateInput,
+}
+
+/// Vereditos em lote: uma única escrita do índice (avaliação em segundo plano da view).
+#[tauri::command]
+pub async fn extensions_set_gates(app: AppHandle, gates: Vec<GateBatchItem>) -> Result<(), String> {
+    let dir = managed_dir(&app)?;
+    let now = store::now_ms();
+    let mut list = Vec::with_capacity(gates.len());
+    for g in gates.into_iter().take(1000) {
+        list.push((normalize_id(&g.id)?, Gate { verdict: g.gate.verdict, version: g.gate.version, host_version: g.gate.host_version, evaluated_at: now }));
+    }
+    tokio::task::spawn_blocking(move || store::set_gates(&dir, list)).await.map_err(|e| e.to_string())?
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrustInput {
+    pub version: String,
+    pub host_version: String,
+}
+
+/// Liberação explícita (confirmada pelo usuário na view) para rodar ESTA
+/// versão "Não avaliada"; `None` revoga. O host só a aceita junto com um
+/// portão `unknown` da mesma versão e da mesma API do shim.
+#[tauri::command]
+pub fn extensions_set_trust(app: AppHandle, id: String, trust: Option<TrustInput>) -> Result<(), String> {
+    store::set_trust(
+        &managed_dir(&app)?,
+        &normalize_id(&id)?,
+        trust.map(|t| store::Trust { version: t.version, host_version: t.host_version, granted_at: store::now_ms() }),
     )
 }
 

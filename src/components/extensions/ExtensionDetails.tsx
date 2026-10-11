@@ -97,7 +97,7 @@ function CompatibilityPanel({ report, loading }: { report: CompatibilityReport |
       {report.verdict === "unknown" && (
         <p className="ext-callout">
           <Codicon name="info" /> &ldquo;Não avaliada&rdquo; não é um selo positivo: faltam dados para afirmar que a extensão funciona aqui. Ela só roda no host depois de instalada e
-          analisada como Compatível ou Parcial.
+          analisada como Compatível ou Parcial — ou se você liberar explicitamente esta versão (&ldquo;Executar sem avaliação…&rdquo;).
         </p>
       )}
       {report.reasons.length === 0 ? (
