@@ -21,10 +21,15 @@
 
 .git-fluent-board {
   display: grid;
+  /* Linhas no topo, sobra em branco embaixo (como o VS Code). Sem isso o
+     grid de altura fixa esticava as linhas: 2 worktrees ocupavam 220 px. */
+  align-content: start;
+  grid-template-rows: auto;
   gap: 0;
-  flex: 0 1 auto;
-  height: var(--git-view-height, 220px);
-  min-height: 0;
+  /* Tamanho preferido, mas encolhe com a pilha (não invade o vizinho). */
+  flex: 0 1 var(--git-view-height, 220px);
+  height: auto;
+  min-height: 72px;
   margin: -1px 0 3px;
   padding: 0;
   overflow: auto;
@@ -35,6 +40,50 @@
   font-family: var(--font-ui);
   contain: content;
   animation: git-panel-section-in 110ms var(--ease-standard, ease-out);
+}
+
+.git-fluent-board :is(.git-fluent-list, .git-ref-list, .git-remote-list, .git-worktree-list) {
+  align-content: start;
+}
+
+/* Faixa de views do Git Fluent no topo do corpo (saiu do título da seção). */
+.git-fluent-toolbar.git-fluent-toolbar-body {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  justify-content: flex-start;
+  gap: 2px;
+  min-height: 28px;
+  padding: 2px 6px 2px 8px;
+  background: var(--sidebar-bg, var(--bg-sidebar, transparent));
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.git-fluent-toolbar-body .git-fluent-tablist {
+  flex: 0 1 auto;
+  justify-content: flex-start;
+  min-width: 0;
+  /* Estreito: rola na horizontal (todas as abas alcançáveis), sem barra. */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.git-fluent-toolbar-body .git-fluent-tablist::-webkit-scrollbar { display: none; }
+
+@container (max-width: 250px) {
+  .git-fluent-active-label { display: none; }
+}
+
+.git-fluent-active-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: 4px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--font-caption);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .git-fluent-toolbar {

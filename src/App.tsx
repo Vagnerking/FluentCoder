@@ -260,6 +260,8 @@ import { agentRunOptions, buildAgentPrompt, createLocalId } from "./agents/store
 import { useIdeBridge } from "./agents/ideBridge";
 import { ClaudeDiffReview } from "./components/ClaudeDiffReview";
 import { getGitRefreshScheduler, onGitAutoFetched } from "./git/gitRefresh";
+import { showGitToast } from "./git/gitToasts";
+import { GitToasts } from "./components/git/GitToasts";
 import {
   requestGitRefresh,
   useActiveGitRepository,
@@ -1323,7 +1325,7 @@ export default function App() {
       try {
         await fn(activeGitTarget.rootPath, activeGitTarget.connId);
       } catch (err) {
-        alert(`Git: ${err}`);
+        showGitToast("error", "A operação Git falhou", err);
       } finally {
         setGitBusy(false);
         // Notifica todos os assinantes do repo (status bar, SCM, grafo).
@@ -2589,7 +2591,7 @@ export default function App() {
         await refreshAfterCheckout(branchPickerGitTarget);
       } catch (err) {
         console.error(err);
-        alert(`Não foi possível trocar de branch:\n${err}`);
+        showGitToast("error", "Não foi possível trocar de branch", err);
       }
     },
     [branchPickerGitTarget, refreshAfterCheckout]
@@ -2605,7 +2607,7 @@ export default function App() {
       await refreshAfterCheckout(branchPickerGitTarget);
     } catch (err) {
       console.error(err);
-      alert(`Não foi possível criar a branch:\n${err}`);
+      showGitToast("error", "Não foi possível criar a branch", err);
     }
   }, [branchPickerGitTarget, refreshAfterCheckout]);
 
@@ -3371,7 +3373,7 @@ export default function App() {
         );
       } catch (err) {
         console.error(err);
-        alert(`Não foi possível abrir a revisão Git:\n${err}`);
+        showGitToast("error", "Não foi possível abrir a revisão Git", err);
       }
     },
     [gitTargetForPath, rootPath]
@@ -3439,7 +3441,7 @@ export default function App() {
         );
       } catch (err) {
         console.error(err);
-        alert(`Não foi possível abrir o diff Git:\n${err}`);
+        showGitToast("error", "Não foi possível abrir o diff Git", err);
       }
     },
     [gitTargetForPath, rootPath]
@@ -3513,7 +3515,7 @@ export default function App() {
         setLayout((l) => upsertInGroup(l, l.activeGroup, diffTab));
       } catch (err) {
         console.error(err);
-        alert(`Não foi possível abrir as alterações Git:\n${err}`);
+        showGitToast("error", "Não foi possível abrir as alterações Git", err);
       }
     },
     [gitTargetForPath, rootPath]
@@ -6827,6 +6829,7 @@ export default function App() {
         }}
       />
 
+      <GitToasts />
       <StatusBar
         language={
           activeFile ? languageForFile(activeFile.name, activeFile.path) : ""

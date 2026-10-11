@@ -33,69 +33,82 @@
 
 .git-group-conflict .codicon { color: var(--color-git-conflict-strong); }
 
-/* Stash entries. */
-.git-staged-preview-bar {
+/* Grupos de recursos (Conflitos / Preparadas / Alterações) dentro da view:
+   linha de árvore nível 2 — rótulo sem caixa alta, contagem simples e ações
+   só no hover/foco. Substitui o cabeçalho de seção repetido ("ALTERAÇÕES" ›
+   "ALTERAÇÕES") e o cartão "Index preparado", que duplicava as ações. */
+.git-resource-group-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 5px;
-  min-height: 30px;
-  margin: 2px 6px 3px;
-  padding: 4px 5px 4px 7px;
-  border-left: 2px solid rgba(115, 201, 145, 0.72);
+  gap: 4px;
+  min-height: 22px;
+  margin: 0 4px;
+  padding-right: 6px;
   border-radius: var(--radius-control);
-  color: var(--text-secondary);
-  background: rgba(115, 201, 145, 0.045);
 }
 
-.git-staged-preview-bar > div {
-  display: grid;
-  gap: 1px;
+.git-resource-group-row:hover { background: var(--fill-subtle-hover); }
+
+.git-resource-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   min-width: 0;
+  height: 22px;
+  padding: 0 4px 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-caption);
+  font-weight: 600;
+  text-align: left;
 }
 
-.git-staged-preview-bar span,
-.git-staged-preview-bar small {
+.git-resource-group-toggle:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.git-resource-group-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.git-staged-preview-bar span {
-  color: var(--text);
-  font-size: var(--font-caption-sm);
-  font-weight: 700;
-}
-
-.git-staged-preview-bar small {
-  color: var(--text-muted);
-  font-size: var(--font-caption-xs);
-}
-
-.git-staged-preview-bar button {
+.git-resource-group-actions {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 4px;
-  height: 22px;
-  padding: 0 7px;
-  border: 1px solid rgba(210, 228, 242, 0.075);
-  border-radius: var(--radius-control);
+  gap: 2px;
+  visibility: hidden;
+}
+
+.git-resource-group-row:is(:hover, :focus-within) .git-resource-group-actions { visibility: visible; }
+
+.git-resource-group-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--acrylic-control-hover);
   color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.025);
   font-size: var(--font-caption-xs);
-  font-weight: 650;
-  cursor: pointer;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  text-align: center;
 }
 
-.git-staged-preview-bar button:hover:not(:disabled) {
-  border-color: rgba(115, 201, 145, 0.22);
-  color: var(--text);
-  background: rgba(115, 201, 145, 0.085);
+.git-resource-group-row.is-danger .git-resource-group-toggle,
+.git-resource-group-row.is-danger .git-resource-group-count {
+  color: var(--color-git-conflict-strong);
 }
 
-.git-staged-preview-bar button:disabled {
-  opacity: 0.42;
-  cursor: default;
+@media (hover: none) {
+  .git-resource-group-actions { visibility: visible; }
 }
+
+/* Container para as container queries do grafo (meta/chips somem < 430 px). */
+.git-group-graph { container-type: inline-size; }

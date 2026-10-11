@@ -88,6 +88,7 @@ import {
   useGitRefresh,
 } from "../git/useGitStatuses";
 import { selectGitRepository } from "../git/activeRepository";
+import { showGitToast } from "../git/gitToasts";
 import {
   GIT_SCAN_DEPTH_MAX,
   getGitAvatarMode,
@@ -275,6 +276,16 @@ function writeStringPreference(key: string, value: string) {
   } catch {
     // Local storage is only a view preference; ignore quota/privacy failures.
   }
+}
+
+/** Textarea de commit cresce de 1 a 6 linhas (sem `field-sizing` no WebKitGTK). */
+function autoGrowCommitMessage(node: HTMLTextAreaElement | null) {
+  if (!node) return;
+  node.style.height = "auto";
+  const lineHeight = 18;
+  const max = lineHeight * 6 + 10;
+  node.style.height = `${Math.min(max, node.scrollHeight + 2)}px`;
+  node.style.overflowY = node.scrollHeight + 2 > max ? "auto" : "hidden";
 }
 
 function readGitPanelViewOrder(): GitPanelViewId[] {
@@ -568,6 +579,44 @@ function GitSectionHeader({
         {actions}
         {typeof count === "number" && <span className="git-count">{count}</span>}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Linha de grupo de recursos (Conflitos / Preparadas / Alterações) DENTRO da
+ * view: chevron + rótulo (sem caixa alta) + contagem + ações no hover/foco.
+ * Antes o grupo usava o mesmo `GitSectionHeader` da view e aparecia como
+ * "ALTERAÇÕES 5" › "ALTERAÇÕES 3", sem hierarquia. Local de propósito: migra
+ * para o `TreeGroupRow` compartilhado quando ele existir.
+ */
+function GitResourceGroupRow({
+  label,
+  expanded,
+  onToggle,
+  count,
+  actions,
+  title,
+  danger = false,
+}: {
+  label: string;
+  expanded: boolean;
+  onToggle: () => void;
+  count: number;
+  actions?: ReactNode;
+  title?: string;
+  danger?: boolean;
+}) {
+  return (
+    <div className={`git-resource-group-row${danger ? " is-danger" : ""}`} title={title}>
+      <button type="button" className="git-resource-group-toggle" aria-expanded={expanded} onClick={onToggle}>
+        <Codicon name={expanded ? "chevronDown" : "chevronRight"} size={12} />
+        <span className="git-resource-group-label">{label}</span>
+      </button>
+      {actions && <div className="git-resource-group-actions">{actions}</div>}
+      <span className="git-resource-group-count" aria-label={`${count} arquivo${count === 1 ? "" : "s"}`}>
+        {count}
+      </span>
     </div>
   );
 }
@@ -1130,7 +1179,7 @@ function GitRepositoryPanel({
       await fn();
       await refresh();
     } catch (err) {
-      setError(String(err));
+      showGitToast("error", "A operação Git falhou", err);
     } finally {
       setBusy(false);
       // Commit/checkout/pull/stash: avisa todos (status bar, decorações, grafo).
@@ -2681,13 +2730,24 @@ function GitRepositoryPanel({
       onRefreshRepository={loadGitFluentRepositorySnapshot}
     />
   );
+  // Cabeçalho do Git Fluent: só título + "…" (antes 6 abas-ícone + ações +
+  // menu espremiam o título para "G…"). As abas vão para o topo do corpo.
   const gitFluentHeaderActions = (
+    <IconButton
+      icon="filterFiles"
+      size="sm"
+      label="Mais ações do Git Fluent"
+      onClick={(event) => openFileMenu(event, gitFluentViewMenu())}
+    />
+  );
+  const gitFluentBodyToolbar = (
     <GitFluentToolbar
       activeTab={gitFluentPaneActiveTab}
       counts={gitFluentTabCounts}
       density={gitFluentToolbarDensity}
       tabs={GIT_FLUENT_PANE_TABS}
       viewActions={gitFluentPaneViewActions}
+      placement="body"
       onSelectTab={selectGitFluentTab}
       onOpenMenu={(event) => openFileMenu(event, gitFluentViewMenu())}
     />
@@ -2798,25 +2858,38 @@ function GitRepositoryPanel({
     };
   }
 
+  function commitStaged() {
+    if (!message.trim() || staged.length === 0 || busy) return;
+    void act(async () => {
+      await gitCommit(repoRootPath, message, connId);
+      setMessage("");
+    });
+  }
+
   function renderCommitBox() {
+    const branchName = status?.branch || "branch atual";
+    const shortcutHint = `Ctrl+Enter faz commit em "${branchName}"`;
     return (
       <div className="git-commit-box git-commit-box-inline">
         <div className="git-message-wrap">
           <textarea
             className="git-message"
-            placeholder={`Mensagem (Ctrl+Enter para fazer commit em "${status?.branch || "branch"}")`}
+            // Placeholder curto: o atalho e a branch vão para o tooltip/aria
+            // (antes "Mensagem (Ctrl+Enter para fazer commit em …)" truncava).
+            placeholder="Mensagem de commit"
+            aria-label="Mensagem de commit"
+            title={shortcutHint}
             value={message}
-            onChange={(e) => setMessage(e.target.value)}
+            onChange={(e) => {
+              setMessage(e.target.value);
+              autoGrowCommitMessage(e.currentTarget);
+            }}
+            ref={autoGrowCommitMessage}
             rows={1}
             onKeyDown={(event) => {
               if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
                 event.preventDefault();
-                if (message.trim() && staged.length > 0 && !busy) {
-                  void act(async () => {
-                    await gitCommit(repoRootPath, message, connId);
-                    setMessage("");
-                  });
-                }
+                commitStaged();
               }
             }}
           />
@@ -2835,17 +2908,12 @@ function GitRepositoryPanel({
             disabled={busy || !message.trim() || staged.length === 0}
             title={
               staged.length === 0
-                ? "Prepare (stage) arquivos antes de commitar"
-                : "Commit dos arquivos preparados"
+                ? "Prepare (stage) arquivos antes de fazer commit"
+                : `Fazer commit dos arquivos preparados em "${branchName}" (Ctrl+Enter)`
             }
-            onClick={() =>
-              act(async () => {
-                await gitCommit(repoRootPath, message, connId);
-                setMessage("");
-              })
-            }
+            onClick={commitStaged}
           >
-            <Codicon name="success" /> Confirmação
+            <Codicon name="success" /> Fazer commit
             {staged.length ? ` (${staged.length})` : ""}
           </button>
         </div>
@@ -2900,30 +2968,6 @@ function GitRepositoryPanel({
     }
     return (
       <>
-        <div className="git-staged-preview-bar">
-          <div>
-            <span>Index preparado</span>
-            <small>{stagedSummaryText || `${staged.length} arquivo${staged.length === 1 ? "" : "s"}`}</small>
-          </div>
-          <button
-            type="button"
-            disabled={busy || staged.length === 0}
-            onClick={openFirstStagedChange}
-            title="Abrir diff staged do primeiro arquivo"
-          >
-            <Codicon name="openChanges" size={12} />
-            Preview
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => act(() => gitUnstageAll(repoRootPath, connId))}
-            title="Remover todos os arquivos do stage"
-          >
-            <Codicon name="remove" size={12} />
-            Unstage
-          </button>
-        </div>
         {staged.map((f) => (
           <GitFileRow
             key={`s-${f.path}`}
@@ -2998,14 +3042,16 @@ function GitRepositoryPanel({
     return (
       <section
         key="changes"
-        className={`git-view-section git-source-views${draggingPanelView === "changes" ? " is-dragging" : ""}${
+        className={`git-view-section git-source-views${showSourceControlRoot ? " is-expanded" : ""}${draggingPanelView === "changes" ? " is-dragging" : ""}${
           fillAvailable ? " is-fill-available" : ""
         }`}
         ref={panelViewRef("changes")}
       >
         <GitSectionHeader
-          title="Alterações"
-          icon="openChanges"
+          // A view ganha o nome do repositório (pasta única) — os grupos abaixo
+          // são "Preparadas"/"Alterações"; nada de "ALTERAÇÕES" › "ALTERAÇÕES".
+          title={embedded ? "Controle do código-fonte" : rootName || fileName(repoRootPath)}
+          icon={embedded ? "sourceControl" : "gitRepo"}
           expanded={showSourceControlRoot}
           onToggle={() => togglePanelView("changes", showSourceControlRoot, setShowSourceControlRoot)}
           count={sourceControlCount}
@@ -3016,10 +3062,9 @@ function GitRepositoryPanel({
             {renderCommitBox()}
 
             {conflicts.length > 0 && (
-              <section className="git-source-subsection">
-                <GitSectionHeader
-                  title="Conflitos"
-                  icon="warning"
+              <section className="git-source-subsection" aria-label="Conflitos de merge">
+                <GitResourceGroupRow
+                  label="Conflitos de merge"
                   expanded={showConflicts}
                   onToggle={() => setShowConflicts((value) => !value)}
                   count={conflicts.length}
@@ -3029,29 +3074,30 @@ function GitRepositoryPanel({
               </section>
             )}
 
-            <section className="git-source-subsection">
-              <GitSectionHeader
-                title="Alterações"
-                icon="openChanges"
-                expanded={showChanges}
-                onToggle={() => setShowChanges((value) => !value)}
-                count={changes.length || undefined}
-                actions={renderChangesActions()}
-              />
-              {showChanges && <div className="git-source-subsection-body">{renderChangeRows()}</div>}
-            </section>
-
             {staged.length > 0 && (
-              <section className="git-source-subsection">
-                <GitSectionHeader
-                  title="Preparadas"
-                  icon="success"
+              <section className="git-source-subsection" aria-label="Alterações preparadas">
+                <GitResourceGroupRow
+                  label="Preparadas"
+                  title={stagedSummaryText || undefined}
                   expanded={showStaged}
                   onToggle={() => setShowStaged((value) => !value)}
                   count={staged.length}
                   actions={renderStagedActions()}
                 />
                 {showStaged && <div className="git-source-subsection-body">{renderStagedRows()}</div>}
+              </section>
+            )}
+
+            {(changes.length > 0 || staged.length === 0) && (
+              <section className="git-source-subsection" aria-label="Alterações">
+                <GitResourceGroupRow
+                  label="Alterações"
+                  expanded={showChanges}
+                  onToggle={() => setShowChanges((value) => !value)}
+                  count={changes.length}
+                  actions={renderChangesActions()}
+                />
+                {showChanges && <div className="git-source-subsection-body">{renderChangeRows()}</div>}
               </section>
             )}
           </div>
@@ -3065,7 +3111,7 @@ function GitRepositoryPanel({
     return (
       <section
         key="graph"
-        className={`git-view-section git-group git-group-graph${draggingPanelView === "graph" ? " is-dragging" : ""}${
+        className={`git-view-section git-group git-group-graph${showGitGraphView ? " is-expanded" : ""}${draggingPanelView === "graph" ? " is-dragging" : ""}${
           fillAvailable ? " is-fill-available" : ""
         }`}
         ref={panelViewRef("graph")}
@@ -3106,7 +3152,7 @@ function GitRepositoryPanel({
     return (
       <section
         key="gitFluent"
-        className={`git-view-section git-group git-group-fluent${draggingPanelView === "gitFluent" ? " is-dragging" : ""}${
+        className={`git-view-section git-group git-group-fluent${showGitFluentOverview ? " is-expanded" : ""}${draggingPanelView === "gitFluent" ? " is-dragging" : ""}${
           fillAvailable ? " is-fill-available" : ""
         }`}
         ref={panelViewRef("gitFluent")}
@@ -3121,6 +3167,7 @@ function GitRepositoryPanel({
         />
         {showGitFluentOverview && (
           <div className="git-fluent-board" style={panelBodyStyle("gitFluent")}>
+            {gitFluentBodyToolbar}
             {gitFluentPaneActiveTab === "compare" && (
               <GitFluentCompareView
                 status={status}

@@ -145,7 +145,23 @@
   min-height: 0;
   margin-top: 0;
   border-top: 1px solid rgba(210, 228, 242, 0.055);
+  /* Quando as views não cabem, cada uma encolhe e rola o próprio corpo — o
+     corpo de "Alterações" não pode mais ser desenhado por cima do Grafo. */
+  overflow: hidden;
 }
+
+.git-view-section > .git-section-header { flex: none; }
+
+/* Recolhida = só o cabeçalho: ações aparecem só no hover/foco. */
+.git-view-section:not(.is-expanded) > .git-section-header .git-section-actions > :not(.git-count) {
+  display: none;
+}
+
+.git-view-section:not(.is-expanded) > .git-section-header:is(:hover, :focus-within) .git-section-actions > :not(.git-count) {
+  display: inline-flex;
+}
+
+.git-panel-embedded .git-view-section { overflow: visible; }
 
 .git-view-section:first-child {
   border-top: 0;
@@ -171,10 +187,10 @@
 }
 
 .git-view-pane-body {
-  flex: 0 1 auto;
-  height: var(--git-view-height, 240px);
+  flex: 0 1 var(--git-view-height, 240px);
+  height: auto;
   min-width: 0;
-  min-height: 0;
+  min-height: 72px;
   padding: 0 0 8px;
   overflow: auto;
   scrollbar-gutter: stable;
@@ -195,9 +211,11 @@
 }
 
 .git-source-view-body {
-  flex: 0 0 auto;
-  height: var(--git-view-height, 178px);
-  min-height: 0;
+  /* Antes `flex: 0 0 auto; height: 178px`: a section encolhia mas o corpo
+     não, e transbordava sobre o cabeçalho do Grafo. */
+  flex: 0 1 var(--git-view-height, 178px);
+  height: auto;
+  min-height: 72px;
   overflow: auto;
   padding: 0 0 12px;
   scrollbar-gutter: stable;
@@ -209,18 +227,29 @@
   gap: 5px;
 }
 
+/* Campo de 1 a 6 linhas (altura via JS: autoGrowCommitMessage). O botão do
+   assistente fica no canto inferior direito, numa faixa reservada pelo
+   padding — não cobre o texto nem o placeholder. */
 .git-commit-box-inline .git-message {
-  min-height: 26px;
-  height: 26px;
+  display: block;
+  min-height: 28px;
+  max-height: 118px;
+  line-height: 18px;
   resize: none;
-  padding-block: 4px;
+  overflow-y: hidden;
+  padding: 4px 32px 4px 8px;
+}
+
+.git-commit-box-inline .git-message::placeholder {
+  color: var(--text-muted);
 }
 
 .git-commit-box-inline .git-message-assist-btn {
-  top: 3px;
-  right: 5px;
-  width: 20px;
-  height: 20px;
+  top: auto;
+  bottom: 3px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
 }
 
 .git-source-subsection {
@@ -242,12 +271,15 @@
   flex: none;
   overflow: visible;
   height: auto;
+  min-height: 0;
   padding-bottom: 8px;
 }
 
 .git-panel-embedded .git-view-pane-body,
 .git-panel-embedded .git-fluent-board {
+  flex: none;
   height: auto;
+  min-height: 0;
   overflow: visible;
 }
 

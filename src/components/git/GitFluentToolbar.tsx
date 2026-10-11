@@ -17,6 +17,12 @@ interface GitFluentToolbarProps {
   onSelectTab: (tab: GitFluentTab) => void;
   onOpenMenu: (event: MouseEvent<HTMLButtonElement>) => void;
   viewActions?: ReactNode;
+  /**
+   * `header` (legado): abas + ações + "…" no título da seção.
+   * `body`: faixa compacta no topo do corpo — abas-ícone + nome da view ativa
+   * + ações da view; o "…" fica no cabeçalho da seção.
+   */
+  placement?: "header" | "body";
 }
 
 function formatTabCount(count: number): string {
@@ -31,6 +37,7 @@ export function GitFluentToolbar({
   onSelectTab,
   onOpenMenu,
   viewActions,
+  placement = "header",
 }: GitFluentToolbarProps) {
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const toolbarTabs = tabs ?? GIT_FLUENT_PRIMARY_TABS;
@@ -65,7 +72,10 @@ export function GitFluentToolbar({
   }
 
   return (
-    <div className={`git-fluent-toolbar git-fluent-toolbar-${density}`} aria-label="Git Fluent">
+    <div
+      className={`git-fluent-toolbar git-fluent-toolbar-${density}${placement === "body" ? " git-fluent-toolbar-body" : ""}`}
+      aria-label="Git Fluent"
+    >
       <div className="git-fluent-tablist" role="tablist" aria-label="Views do Git Fluent">
         {toolbarTabs.map((tab, index) => {
           const active = activeTab === tab.id;
@@ -104,6 +114,11 @@ export function GitFluentToolbar({
           );
         })}
       </div>
+      {placement === "body" && (
+        <span className="git-fluent-active-label" aria-hidden="true">
+          {toolbarTabs[activeIndex]?.label}
+        </span>
+      )}
       {viewActions && (
         <>
           <span className="git-fluent-divider git-fluent-view-divider" aria-hidden="true" />
@@ -112,15 +127,19 @@ export function GitFluentToolbar({
           </div>
         </>
       )}
-      <span className="git-fluent-divider git-fluent-command-divider" aria-hidden="true" />
-      <div className="git-fluent-toolbar-actions" aria-label="Ações do Git Fluent">
-        <IconButton
-          icon="filterFiles"
-          size="sm"
-          label="Mais ações do Git Fluent"
-          onClick={onOpenMenu}
-        />
-      </div>
+      {placement === "header" && (
+        <>
+          <span className="git-fluent-divider git-fluent-command-divider" aria-hidden="true" />
+          <div className="git-fluent-toolbar-actions" aria-label="Ações do Git Fluent">
+            <IconButton
+              icon="filterFiles"
+              size="sm"
+              label="Mais ações do Git Fluent"
+              onClick={onOpenMenu}
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }

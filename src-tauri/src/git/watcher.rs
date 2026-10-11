@@ -147,6 +147,7 @@ impl GitWatchHub {
 
     /// Substitui o conjunto de repos observados (toplevels locais). Repos que
     /// saíram têm o watcher descartado (libera os watches do inotify).
+    #[cfg(test)]
     pub(crate) fn set_roots(&self, roots: &[String]) -> Vec<WatchInfo> {
         set_roots_impl(&self.inner, &self.tx, roots)
     }

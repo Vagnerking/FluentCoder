@@ -140,7 +140,12 @@ export function WorkspaceBranchStatus({
         {
           key: "missing",
           label: "Sem Git",
-          roots: filteredBranches.filter((root) => !isActiveRoot(root) && !root.isRepo),
+          roots: filteredBranches.filter((root) => !isActiveRoot(root) && !root.isRepo && !root.disconnected),
+        },
+        {
+          key: "disconnected",
+          label: "SSH desconectado",
+          roots: filteredBranches.filter((root) => !isActiveRoot(root) && !root.isRepo && root.disconnected),
         },
       ].filter((section) => section.roots.length > 0),
     [filteredBranches, activeRootName, activeRootPath]
