@@ -10,6 +10,7 @@ import { GitStatusItem } from "./GitStatusItem";
 import { languageLabel } from "../language";
 import { openExternal } from "../platform/commands";
 import type { GitRevisionDiffTarget } from "../api";
+import { peekGitAvatar } from "../git/avatars";
 import {
   WorkspaceBranchStatus,
   type WorkspaceBranchStatusContext,
@@ -655,10 +656,10 @@ export function StatusBar({
               role="menu"
             >
               <div className="status-blame-menu-head">
-                {currentLineBlame.hunk.avatarUrl ? (
+                {(currentLineBlame.hunk.avatarUrl || peekGitAvatar(currentLineBlame.hunk.authorEmail)) ? (
                   <img
                     className="status-blame-menu-avatar"
-                    src={currentLineBlame.hunk.avatarUrl}
+                    src={currentLineBlame.hunk.avatarUrl || peekGitAvatar(currentLineBlame.hunk.authorEmail) || undefined}
                     alt=""
                     aria-hidden="true"
                   />

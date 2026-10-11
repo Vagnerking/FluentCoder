@@ -1,4 +1,5 @@
 import { IconButton } from "../ui/IconButton";
+import { GitAvatar } from "./GitAvatar";
 import {
   memo,
   useCallback,
@@ -270,13 +271,8 @@ const GitFluentTimelineRow = memo(function GitFluentTimelineRow({
       <span className="git-fluent-timeline-rail" aria-hidden="true">
         <span className={`git-fluent-timeline-dot${latest ? " latest" : ""}`} />
       </span>
-      <span className="git-fluent-avatar" aria-hidden="true">
-        {commit.avatarUrl ? (
-          <img src={commit.avatarUrl} alt="" />
-        ) : (
-          (commit.author || "?").slice(0, 1).toUpperCase()
-        )}
-      </span>
+      <GitAvatar className="git-fluent-avatar" name={commit.author} email={commit.authorEmail} />
+
       <span className="git-fluent-commit-main">
         <span className="git-fluent-commit-subject">{commit.subject}</span>
         <span className="git-fluent-commit-meta">

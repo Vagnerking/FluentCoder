@@ -1,4 +1,5 @@
 import type { MouseEvent } from "react";
+import { GitAvatar } from "./GitAvatar";
 import type { GitFluentContributor, GitFluentTagRef } from "../../git/gitFluent";
 import { Codicon } from "../../icons/codicons/Codicon";
 
@@ -12,13 +13,6 @@ interface GitFluentContributorsViewProps {
   contributors: GitFluentContributor[];
   onSelectContributor: (contributor: GitFluentContributor) => void;
   onOpenContributorMenu: (event: MouseEvent, contributor: GitFluentContributor) => void;
-}
-
-function initialsForName(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
 }
 
 export function GitFluentTagsView({
@@ -91,13 +85,8 @@ export function GitFluentContributorsView({
               onClick={() => onSelectContributor(contributor)}
               onContextMenu={(event) => onOpenContributorMenu(event, contributor)}
             >
-              <span className="git-ref-avatar" aria-hidden="true">
-                {contributor.latestCommit.avatarUrl ? (
-                  <img src={contributor.latestCommit.avatarUrl} alt="" />
-                ) : (
-                  initialsForName(contributor.name)
-                )}
-              </span>
+              <GitAvatar className="git-ref-avatar" name={contributor.name} email={contributor.email} />
+
               <div className="git-ref-main">
                 <span className="git-ref-name">{contributor.name}</span>
                 <span className="git-ref-meta">

@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::collections::HashMap;
 
+pub(crate) mod avatar;
 pub(crate) mod discovery;
 pub(crate) mod history;
 pub(crate) mod status;
@@ -1274,23 +1275,12 @@ pub(crate) fn normalize_git_email(raw: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn avatar_url_for_email(email: &str) -> String {
-    if email.is_empty() {
-        return String::new();
-    }
-    // GitHub noreply emails can be resolved directly to a GitHub avatar.
-    if let Some(local) = email.strip_suffix("@users.noreply.github.com") {
-        let username = local
-            .split_once('+')
-            .map(|(_, username)| username)
-            .unwrap_or(local);
-        if !username.is_empty() {
-            return format!("https://github.com/{}.png?size=64", username);
-        }
-    }
-    // Generic best-effort provider for normal commit emails. If it cannot find
-    // a real profile image, Monaco simply keeps the initials fallback nearby.
-    format!("https://unavatar.io/{}", email)
+/// Never returns an external URL any more: author e-mails used to be sent in
+/// clear to `unavatar.io` on every render. The `avatarUrl` field stays empty
+/// on the wire (initials by default); the frontend resolves real avatars via
+/// `git_avatar` (privacy setting + disk cache, see `git/avatar.rs`).
+fn avatar_url_for_email(_email: &str) -> String {
+    String::new()
 }
 
 /// Converts a Unix timestamp to a human-readable relative string.

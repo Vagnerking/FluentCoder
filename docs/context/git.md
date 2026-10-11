@@ -89,3 +89,16 @@ espelhos `ssh_git_*` de `ssh.rs`, em `src/git/*`, `GitPanel.tsx` e
   React: `useActiveGitRepository()`; fora do React:
   `getActiveGitRepository()`/`subscribeActiveGitRepository()` (ex.: cwd de
   terminal novo).
+
+## Avatares (privacidade)
+
+- Proibido mandar e-mail de autor para terceiros. `avatarUrl` no wire é
+  sempre vazio; avatares vêm de `git_avatar(email, mode)` →
+  `data:` URL ou `null` (iniciais), com cache em `app_data_dir/avatars`
+  (7 dias positivo, 1 dia negativo, ≤ 256 KiB, 4 downloads simultâneos).
+- Setting `git.avatars` (menu "…" do Git Fluent → Avatares dos autores):
+  `github` (padrão: só `@users.noreply.github.com`), `gravatar` (opt-in,
+  envia só o SHA-256 do e-mail) e `off` (nenhuma requisição).
+- UI: `<GitAvatar>` (iniciais na hora, imagem quando chegar) ou
+  `peekGitAvatar(email)` onde não dá para esperar (hover/status bar). Nunca
+  coloque `<img src="https://…">` de avatar no DOM.

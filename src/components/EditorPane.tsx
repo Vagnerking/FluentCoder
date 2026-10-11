@@ -44,6 +44,7 @@ import { palette } from "../theme/palette";
 import { openExternal } from "../platform/commands";
 import { fontStacks, formatShortcutsInText } from "../platform";
 import { LARGE_FILE_EDITOR_OPTIONS, largeFileLanguage } from "../editor/fileOpenPolicy";
+import { peekGitAvatar } from "../git/avatars";
 
 // Console-only debug logging. (It used to mirror to a hardcoded path on another
 // machine and fire an IPC file write — with an ever-growing buffer — on EVERY
@@ -552,7 +553,7 @@ function fallbackAvatarDataUri(author: string): string {
 }
 
 function blameAvatarSrc(hunk: BlameHunk): string {
-  return hunk.avatarUrl || fallbackAvatarDataUri(hunk.author);
+  return hunk.avatarUrl || peekGitAvatar(hunk.authorEmail) || fallbackAvatarDataUri(hunk.author);
 }
 
 function blameDisplayName(hunk: BlameHunk): string {

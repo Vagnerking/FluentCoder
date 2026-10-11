@@ -87,7 +87,13 @@ import {
   useGitRefresh,
 } from "../git/useGitStatuses";
 import { selectGitRepository } from "../git/activeRepository";
-import { GIT_SCAN_DEPTH_MAX, getGitScanDepth, setGitScanDepth } from "../git/gitSettings";
+import {
+  GIT_SCAN_DEPTH_MAX,
+  getGitAvatarMode,
+  getGitScanDepth,
+  setGitAvatarMode,
+  setGitScanDepth,
+} from "../git/gitSettings";
 import {
   GIT_FLUENT_PRIMARY_TABS,
   GIT_FLUENT_TABS,
@@ -2448,6 +2454,24 @@ function GitRepositoryPanel({
       label: "Opções da view",
       icon: "settings",
       submenu: gitFluentViewOptionsMenu(),
+    },
+    {
+      id: "git-avatars",
+      label: "Avatares dos autores",
+      icon: "account",
+      submenu: (
+        [
+          ["github", "Só GitHub noreply (padrão)", "Nenhum e-mail sai da máquina; o resto usa iniciais."],
+          ["gravatar", "GitHub noreply + Gravatar", "Envia ao Gravatar só o SHA-256 do e-mail."],
+          ["off", "Desligado (só iniciais)", "Nenhuma requisição externa."],
+        ] as const
+      ).map(([mode, label, title]) => ({
+        id: `git-avatars-${mode}`,
+        label,
+        title,
+        icon: getGitAvatarMode() === mode ? "success" : "account",
+        run: () => setGitAvatarMode(mode),
+      })),
     },
     menuSeparator("sep-git-fluent-data"),
     {
