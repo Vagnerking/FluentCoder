@@ -41,7 +41,6 @@ import type {
 } from "../types";
 import { EDITOR_OPTIONS } from "./editorOptions.ts";
 import { attachEditorSettings, useEditorSettingsOptions } from "../settings/editorRuntime";
-import { palette } from "../theme/palette";
 import { defineActiveMonacoTheme, useMonacoThemeId } from "../theme/useMonacoTheme";
 import { getActiveColorTheme } from "../theme/activeTheme";
 import { openExternal } from "../platform/commands";
