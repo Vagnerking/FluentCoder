@@ -3,13 +3,9 @@
 
 .run-header { gap: 4px; }
 
-.run-root-section { border-top: 1px solid rgba(210,228,242,0.06); }
+.run-root-body { padding-bottom: var(--space-sm); }
 
-.run-root-section:first-child { border-top: none; }
-
-.run-root-header { padding-top: 8px; }
-
-.run-root-actions { display: flex; justify-content: flex-end; padding: 0 8px 4px; }
+.run-group { margin-top: var(--space-xxs); }
 
 .run-unavailable-root { margin: 4px 8px; padding: 6px 8px; border-radius: var(--radius-control); color: var(--text-muted); background: rgba(226,192,141,0.08); border: 1px solid rgba(226,192,141,0.14); font-size: var(--font-caption-sm); }
 
@@ -19,7 +15,6 @@
 
 .run-draft-actions .git-commit-btn { flex: 1; }
 
-.run-lists { flex: 1; overflow-y: auto; padding-bottom: 12px; }
 
 .run-row { display: flex; align-items: center; gap: 8px; margin: 1px 6px; padding: 4px 6px; border-radius: var(--radius-control); cursor: default; }
 

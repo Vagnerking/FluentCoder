@@ -1,4 +1,4 @@
-import { Button, SearchBox } from "./ui";
+import { Button, SearchBox, SectionHeader, ViewPaneContainer, type ViewPaneDescriptor } from "./ui";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { packageIntelAudit, packageIntelOutdated, packageIntelScan } from "../api";
 import {
@@ -67,6 +67,8 @@ export function PackagesPanel({ rootPath, workspaceRoots = [] }: PackagesPanelPr
   const unavailableSshRoots = workspaceRoots.filter(
     (root) => root.provider === "ssh" && (!root.connId || root.status !== "connected")
   );
+  // "Reanalisar" vive no cabeçalho do pane: um contador por root dispara o reload.
+  const [reloadKeys, setReloadKeys] = useState<Record<string, number>>({});
 
   if (targets.length === 0) {
     return (
@@ -88,43 +90,54 @@ export function PackagesPanel({ rootPath, workspaceRoots = [] }: PackagesPanelPr
     );
   }
 
+  const panes: ViewPaneDescriptor[] = targets.map((target) => ({
+    id: `root:${target.id}`,
+    title: target.name,
+    badge: target.provider === "ssh" ? "SSH" : "LOCAL",
+    badgeLabel: target.provider === "ssh" ? "Pasta SSH" : "Pasta local",
+    minBodySize: 96,
+    actions: [
+      {
+        id: "rescan",
+        icon: "refresh",
+        label: "Reanalisar pacotes",
+        run: () => setReloadKeys((cur) => ({ ...cur, [target.id]: (cur[target.id] ?? 0) + 1 })),
+      },
+    ],
+    children: <PackageRootSection target={target} reloadKey={reloadKeys[target.id] ?? 0} />,
+  }));
+  if (unavailableSshRoots.length > 0) {
+    panes.push({
+      id: "ssh-unavailable",
+      title: "SSH indisponível para pacotes",
+      badge: unavailableSshRoots.length,
+      badgeLabel: `${unavailableSshRoots.length} pastas SSH indisponíveis`,
+      minBodySize: 36,
+      defaultWeight: 0.35,
+      children: unavailableSshRoots.map((root) => (
+        <div key={root.id} className="packages-unavailable-root">
+          {root.name} · conecte a root SSH para analisar manifests
+        </div>
+      )),
+    });
+  }
+
   return (
     <div className="packages-panel">
       <div className="explorer-header packages-header">
         <span className="explorer-title">PACOTES</span>
       </div>
-      <div className="packages-body">
-        {targets.map((target) => (
-          <PackageRootSection
-            key={target.id}
-            target={target}
-            showRootHeader={targets.length > 1 || workspaceRoots.length > 0}
-          />
-        ))}
-        {unavailableSshRoots.length > 0 && (
-          <div className="git-group">
-            <div className="git-group-header">
-              <span>SSH indisponível para pacotes</span>
-              <span className="git-count">{unavailableSshRoots.length}</span>
-            </div>
-            {unavailableSshRoots.map((root) => (
-              <div key={root.id} className="packages-unavailable-root">
-                {root.name} · conecte a root SSH para analisar manifests
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      <ViewPaneContainer id="packages" panes={panes} ariaLabel="Pastas analisadas" />
     </div>
   );
 }
 
 function PackageRootSection({
   target,
-  showRootHeader,
+  reloadKey,
 }: {
   target: PackageWorkspaceRoot;
-  showRootHeader: boolean;
+  reloadKey: number;
 }) {
   const [summary, setSummary] = useState<PackageWorkspaceSummary | null>(null);
   const [loading, setLoading] = useState(false);
@@ -150,7 +163,7 @@ function PackageRootSection({
 
   useEffect(() => {
     void reload();
-  }, [reload]);
+  }, [reload, reloadKey]);
 
   const filteredProjects = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -215,18 +228,7 @@ function PackageRootSection({
   }
 
   return (
-    <section className="packages-root-section">
-      {showRootHeader && (
-        <div className="git-group-header packages-root-header">
-          <span>{target.name}</span>
-          <span className="git-count">{target.provider === "ssh" ? "SSH" : "LOCAL"}</span>
-        </div>
-      )}
-      <div className="packages-root-actions">
-        <button className="git-icon-btn" title="Reanalisar pacotes" onClick={() => void reload()}>
-          ⟳
-        </button>
-      </div>
+    <div className="packages-root-section">
 
       <div className="packages-summary">
         <div>
@@ -257,11 +259,8 @@ function PackageRootSection({
 
       {summary && summary.projects.length > 0 && (
         <div className="packages-root-body">
-          <div className="git-group">
-            <div className="git-group-header">
-              <span>Gerenciadores detectados</span>
-              <span className="git-count">{Object.keys(summary.managerCounts).length}</span>
-            </div>
+          <div className="packages-group">
+            <SectionHeader level={2} title="Gerenciadores detectados" badge={Object.keys(summary.managerCounts).length} />
             <div className="packages-manager-chips">
               {Object.entries(summary.managerCounts).map(([manager, count]) => (
                 <span key={manager} className="packages-chip">
@@ -271,11 +270,8 @@ function PackageRootSection({
             </div>
           </div>
 
-          <div className="git-group">
-            <div className="git-group-header">
-              <span>Projetos</span>
-              <span className="git-count">{filteredProjects.length}</span>
-            </div>
+          <div className="packages-group">
+            <SectionHeader level={2} title="Projetos" badge={filteredProjects.length} />
             {filteredProjects.length === 0 ? (
               <div className="panel-empty">Nenhum projeto bate com o filtro.</div>
             ) : (
@@ -310,7 +306,7 @@ function PackageRootSection({
           </div>
         </div>
       )}
-    </section>
+    </div>
   );
 }
 

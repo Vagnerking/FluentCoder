@@ -219,10 +219,10 @@
 }
 
 .backlinks-body {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
-  padding-bottom: 8px;
 }
 
 .backlinks-current {
@@ -238,28 +238,10 @@
 }
 
 .backlinks-section {
-  margin-top: 4px;
+  padding: var(--space-xxs) 0 var(--space-sm);
 }
 
-.backlinks-section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 12px;
-  font-size: var(--font-caption-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-}
 
-.backlinks-count {
-  font-variant-numeric: tabular-nums;
-  background: var(--fill-subtle);
-  border-radius: var(--radius-surface);
-  padding: 0 7px;
-  font-size: var(--font-caption-xs);
-  line-height: 16px;
-}
 
 .backlinks-none {
   padding: 2px 12px 6px;

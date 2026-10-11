@@ -29,7 +29,7 @@ import {
   applyCoverageDecorations,
   clearCoverageDecorations,
 } from "../testing/coverageDecorations";
-import { Checkbox, IconButton, Select } from "./ui";
+import { Checkbox, IconButton, SectionHeader, Select, ViewPaneContainer, type ViewPaneDescriptor } from "./ui";
 
 /** Loads the workspace's `.csproj` paths once per root (shared by the .NET sections). */
 function useCsprojs(rootPath: string, connId?: string): string[] {
@@ -118,6 +118,16 @@ export function RunPanel({ rootPath, workspaceRoots = [], onRun, pendingTest }: 
   const unavailableSshRoots = workspaceRoots.filter(
     (root) => root.provider === "ssh" && root.status !== "connected"
   );
+  // Formulário "nova configuração" aberto por root (a ação vive no cabeçalho do pane).
+  const [draftFor, setDraftFor] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleDraft = useCallback((id: string, open?: boolean) => {
+    setDraftFor((cur) => {
+      const next = new Set(cur);
+      if (open ?? !next.has(id)) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
 
   if (targets.length === 0) {
     return (
@@ -139,35 +149,53 @@ export function RunPanel({ rootPath, workspaceRoots = [], onRun, pendingTest }: 
     );
   }
 
+  const panes: ViewPaneDescriptor[] = targets.map((target) => ({
+    id: `root:${target.id}`,
+    title: target.name,
+    badge: target.provider === "ssh" ? "SSH" : "LOCAL",
+    badgeLabel: target.provider === "ssh" ? "Pasta SSH" : "Pasta local",
+    minBodySize: 72,
+    actions: [
+      {
+        id: "new-config",
+        icon: "add",
+        label: draftFor.has(target.id) ? "Fechar nova configuração" : "Nova configuração",
+        pressed: draftFor.has(target.id),
+        run: () => toggleDraft(target.id),
+      },
+    ],
+    children: (
+      <RunRootSection
+        target={target}
+        draftOpen={draftFor.has(target.id)}
+        onDraftClosed={() => toggleDraft(target.id, false)}
+        onRun={onRun}
+        pendingTest={pendingTestForRoot(pendingTest ?? null, target)}
+      />
+    ),
+  }));
+  if (unavailableSshRoots.length > 0) {
+    panes.push({
+      id: "ssh-unavailable",
+      title: "SSH indisponível",
+      badge: unavailableSshRoots.length,
+      badgeLabel: `${unavailableSshRoots.length} pastas SSH indisponíveis`,
+      minBodySize: 36,
+      defaultWeight: 0.35,
+      children: unavailableSshRoots.map((root) => (
+        <div key={root.id} className="run-unavailable-root">
+          {root.name} · {root.status === "connecting" ? "conectando" : "desconectado"}
+        </div>
+      )),
+    });
+  }
+
   return (
     <div className="run-panel">
       <div className="explorer-header run-header">
         <span className="explorer-title">EXECUTAR E DEPURAR</span>
       </div>
-      <div className="run-lists">
-        {targets.map((target) => (
-          <RunRootSection
-            key={target.id}
-            target={target}
-            showRootHeader={targets.length > 1 || workspaceRoots.length > 0}
-            onRun={onRun}
-            pendingTest={pendingTestForRoot(pendingTest ?? null, target)}
-          />
-        ))}
-        {unavailableSshRoots.length > 0 && (
-          <div className="git-group">
-            <div className="git-group-header">
-              <span>SSH indisponível</span>
-              <span className="git-count">{unavailableSshRoots.length}</span>
-            </div>
-            {unavailableSshRoots.map((root) => (
-              <div key={root.id} className="run-unavailable-root">
-                {root.name} · {root.status === "connecting" ? "conectando" : "desconectado"}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      <ViewPaneContainer id="run" panes={panes} ariaLabel="Pastas de execução" />
     </div>
   );
 }
@@ -190,18 +218,25 @@ function pendingTestForRoot(
 
 function RunRootSection({
   target,
-  showRootHeader,
+  draftOpen,
+  onDraftClosed,
   onRun,
   pendingTest,
 }: {
   target: RunWorkspaceRoot;
-  showRootHeader: boolean;
+  draftOpen: boolean;
+  onDraftClosed: () => void;
   onRun: (command: string, cwd: string, connId?: string) => void;
   pendingTest: PendingTest | null;
 }) {
   const [configs, setConfigs] = useState<RunConfig[]>([]);
   const [suggestions, setSuggestions] = useState<RunConfig[]>([]);
-  const [draft, setDraft] = useState<RunConfig | null>(null);
+  const [draft, setDraftState] = useState<RunConfig | null>(null);
+  useEffect(() => setDraftState(draftOpen ? { ...EMPTY_DRAFT } : null), [draftOpen]);
+  const setDraft = (next: RunConfig | null) => {
+    setDraftState(next);
+    if (!next) onDraftClosed();
+  };
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
@@ -252,22 +287,7 @@ function RunRootSection({
   }
 
   return (
-    <section className="run-root-section">
-      {showRootHeader && (
-        <div className="git-group-header run-root-header">
-          <span>{target.name}</span>
-          <span className="git-count">{target.provider === "ssh" ? "SSH" : "LOCAL"}</span>
-        </div>
-      )}
-      <div className="run-root-actions">
-        <IconButton
-          icon="add"
-          size="sm"
-          label={draft ? "Fechar nova configuração" : "Nova configuração"}
-          aria-expanded={Boolean(draft)}
-          onClick={() => setDraft(draft ? null : { ...EMPTY_DRAFT })}
-        />
-      </div>
+    <div className="run-root-section">
 
       {error && <div className="git-error">{error}</div>}
 
@@ -309,16 +329,13 @@ function RunRootSection({
         </div>
       )}
 
-      <div className="run-lists">
+      <div className="run-root-body">
         {!target.connId && <DebugSection rootPath={target.path} />}
         {!target.connId && <TestsSection rootPath={target.path} pendingTest={pendingTest} />}
         {!target.connId && <ProjectActionsSection rootPath={target.path} />}
 
-        <div className="git-group">
-          <div className="git-group-header">
-            <span>Configurações</span>
-            <span className="git-count">{configs.length}</span>
-          </div>
+        <div className="run-group">
+          <SectionHeader level={2} title="Configurações" badge={configs.length} />
           {configs.length === 0 ? (
             <div className="panel-empty">Nenhuma configuração salva.</div>
           ) : (
@@ -348,11 +365,8 @@ function RunRootSection({
         </div>
 
         {suggestions.length > 0 && (
-          <div className="git-group">
-            <div className="git-group-header">
-              <span>Detectadas no projeto</span>
-              <span className="git-count">{suggestions.length}</span>
-            </div>
+          <div className="run-group">
+            <SectionHeader level={2} title="Detectadas no projeto" badge={suggestions.length} />
             {suggestions.map((s, i) => (
               <div key={`sug-${i}`} className="run-row" title={s.command}>
                 <IconButton
@@ -377,7 +391,7 @@ function RunRootSection({
           </div>
         )}
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -438,17 +452,20 @@ function DebugSection({ rootPath }: { rootPath: string }) {
   };
 
   return (
-    <div className="git-group debug-section">
-      <div className="git-group-header">
-        <span>Depurar (.NET)</span>
-        <span className={`debug-status debug-status-${state.status}`}>
-          {state.status === "idle" && "pronto"}
-          {state.status === "starting" && "iniciando…"}
-          {state.status === "running" && "executando"}
-          {state.status === "stopped" && "pausado"}
-          {state.status === "error" && "erro"}
-        </span>
-      </div>
+    <div className="run-group debug-section">
+      <SectionHeader
+        level={2}
+        title="Depurar (.NET)"
+        meta={
+          <span className={`debug-status debug-status-${state.status}`}>
+            {state.status === "idle" && "pronto"}
+            {state.status === "starting" && "iniciando…"}
+            {state.status === "running" && "executando"}
+            {state.status === "stopped" && "pausado"}
+            {state.status === "error" && "erro"}
+          </span>
+        }
+      />
 
       {!active && (
         <div className="debug-launcher">
@@ -863,11 +880,8 @@ function TestsSection({
     });
 
   return (
-    <div className="git-group debug-section">
-      <div className="git-group-header">
-        <span>Testes (.NET)</span>
-        {tests && <span className="git-count">{tests.length}</span>}
-      </div>
+    <div className="run-group debug-section">
+      <SectionHeader level={2} title="Testes (.NET)" badge={tests ? tests.length : undefined} />
       <div className="debug-launcher">
         <Select
           ariaLabel="Projeto de testes"
@@ -1036,10 +1050,8 @@ function ProjectActionsSection({ rootPath }: { rootPath: string }) {
   };
 
   return (
-    <div className="git-group debug-section">
-      <div className="git-group-header">
-        <span>Ações do projeto (.NET)</span>
-      </div>
+    <div className="run-group debug-section">
+      <SectionHeader level={2} title="Ações do projeto (.NET)" />
       <div className="debug-launcher">
         <Select
           ariaLabel="Alvo das ações"

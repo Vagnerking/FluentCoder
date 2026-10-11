@@ -107,3 +107,44 @@ VS Code) e o layout responsivo das regiões. Código em `src/workbench/`.
 - Status bar: os itens que as container queries escondem vão para o botão
   **"Mais"** (`statusOverflow.ts`; limites espelhados do CSS e travados por
   teste).
+
+## View panes e cabeçalhos de seção
+
+- Primitivo único em `src/components/ui/ViewPane/` (CSS em
+  `src/styles/view-pane.css`), modelo `ViewPaneContainer`/`ViewPane` do VS
+  Code. Regras puras (testadas) em `viewPaneLayout.ts`.
+- `ViewPaneContainer id panes=[…]`: pilha vertical; o pai precisa ser uma
+  coluna flex (a pilha ocupa a altura que sobra). Cada descriptor tem `id`
+  estável, `title`, `badge`, `actions`, `minBodySize`, `defaultWeight`,
+  `defaultExpanded` e `children` (o corpo).
+  - Recolhido = só o cabeçalho (24 px). Os expandidos dividem a altura pelos
+    pesos, respeitando os mínimos; um expandido sozinho ocupa tudo; a ordem
+    não muda (recolhidos depois do último expandido vão para o rodapé).
+  - Sash **entre** dois expandidos: arrastar ajusta só o par; teclado ↑/↓
+    (Shift = 64 px); Enter/duplo clique restauram a divisão padrão.
+  - Persistência: `localStorage["ui.viewPanes.<id>"]` (`version: 1`,
+    `expanded` + `weights` em proporções, nunca px).
+  - Corpo: `overflow:auto`, `container-type:inline-size` (container queries
+    das features valem dentro do pane) e `align-content:start`.
+- `SectionHeader` (o único estilo de cabeçalho): **nível 1** = cabeçalho de
+  pane (caixa alta, chevron, badge, ações só no hover/foco e só expandido);
+  **nível 2** = grupo dentro do pane (sem caixa alta, contagem em badge).
+  Não criar `*-group-header`/`*-section-head` novos.
+- `ActionBar`: ações com overflow automático para "…" (mede a largura;
+  sempre sobra ao menos o "…"). `fitActions` é a regra pura.
+- Teclado nos cabeçalhos: Enter/Espaço alternam; ↑/↓/Home/End movem entre
+  os cabeçalhos do container.
+- Migrados: Executar e Depurar (`run`), Pacotes (`packages`), Backlinks
+  (`backlinks`). O título da view (`explorer-header`) continua acima da pilha.
+
+### Migrar o Controle do Código-Fonte (frente Git)
+
+1. Trocar a pilha ad hoc (`git-view-section` + `--git-view-height` +
+   `fillAvailablePanelView` + `renderPanelResizeHandle`) por
+   `<ViewPaneContainer id="scm" panes={[alterações, grafo, gitFluent]} />`;
+   a ordem arrastável atual pode reordenar o array `panes`.
+2. `GitSectionHeader` → descriptor (`title`, `badge`, `actions`); a toolbar
+   do Git Fluent vira `actions` (as excedentes caem no "…" sozinhas) ou sai
+   do título para o corpo.
+3. Grupos internos (Preparadas/Alterações/Conflitos, Local/Remotos…) →
+   `<SectionHeader level={2} … />` (recolhível com `expanded`/`onToggle`).

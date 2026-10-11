@@ -1,4 +1,5 @@
 import { IconButton } from "./ui/IconButton";
+import { ViewPaneContainer } from "./ui/ViewPane";
 import { useEffect, useState } from "react";
 import {
   getCachedIndex,
@@ -31,7 +32,7 @@ const RELATION_LABEL: Record<Mention["relation"], string> = {
   import: "import",
 };
 
-function MentionSection({
+function MentionList({
   title,
   mentions,
   onOpenFile,
@@ -42,10 +43,6 @@ function MentionSection({
 }) {
   return (
     <div className="backlinks-section">
-      <div className="backlinks-section-head">
-        <span>{title}</span>
-        <span className="backlinks-count">{mentions.length}</span>
-      </div>
       {mentions.length === 0 ? (
         <div className="backlinks-none">Nenhum</div>
       ) : (
@@ -151,15 +148,39 @@ export function BacklinksPanel({
             <FileIcon path={activePath} className="backlinks-icon" />
             <span className="backlinks-name">{baseName(activePath)}</span>
           </div>
-          <MentionSection
-            title="Vinculados a este arquivo"
-            mentions={mentions?.backlinks ?? []}
-            onOpenFile={onOpenFile}
-          />
-          <MentionSection
-            title="Links deste arquivo"
-            mentions={mentions?.outgoing ?? []}
-            onOpenFile={onOpenFile}
+          <ViewPaneContainer
+            id="backlinks"
+            ariaLabel="Conexões do arquivo"
+            panes={[
+              {
+                id: "backlinks",
+                title: "Vinculados a este arquivo",
+                badge: mentions?.backlinks.length ?? 0,
+                badgeLabel: `${mentions?.backlinks.length ?? 0} arquivos`,
+                minBodySize: 40,
+                children: (
+                  <MentionList
+                    title="Vinculados a este arquivo"
+                    mentions={mentions?.backlinks ?? []}
+                    onOpenFile={onOpenFile}
+                  />
+                ),
+              },
+              {
+                id: "outgoing",
+                title: "Links deste arquivo",
+                badge: mentions?.outgoing.length ?? 0,
+                badgeLabel: `${mentions?.outgoing.length ?? 0} links`,
+                minBodySize: 40,
+                children: (
+                  <MentionList
+                    title="Links deste arquivo"
+                    mentions={mentions?.outgoing ?? []}
+                    onOpenFile={onOpenFile}
+                  />
+                ),
+              },
+            ]}
           />
         </div>
       )}
