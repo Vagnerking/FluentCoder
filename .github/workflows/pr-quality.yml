@@ -44,6 +44,18 @@ jobs:
       - run: npm run test:unit
       - run: npm run build
 
+  shell-arguments:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Argumentos no PowerShell 7 e Windows PowerShell
+        run: node --experimental-strip-types --test src/settings/vscodeShell.test.ts
+
   rust:
     strategy:
       fail-fast: false

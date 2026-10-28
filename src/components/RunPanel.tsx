@@ -18,7 +18,7 @@ import {
 } from "../api";
 import type { RunConfig } from "../types";
 import { loadVscodeRunEntries, type VscodeRunEntries } from "../settings/vscodeFiles";
-import { taskCommandLine } from "../settings/vscodeCompat";
+import { launchCommandLine, taskCommandLine } from "../settings/vscodeCompat";
 import { getPlatform } from "../platform/os";
 import {
   debugSession,
@@ -417,12 +417,6 @@ function VscodeSection({ rootPath, onRun }: { rootPath: string; onRun: (command:
   }, [rootPath]);
   if (!entries || (!entries.hasTasks && !entries.hasLaunch)) return null;
   const windows = getPlatform().os === "windows";
-  const launchLine = (cmd: string, cwd: string, pre: string | null) => {
-    const task = pre ? entries.tasks.find((t) => t.label === pre) : undefined;
-    const preLine = task ? taskCommandLine(task, entries.tasks, windows) : null;
-    const main = cwd ? `cd '${cwd}' ${windows ? ";" : "&&"} ${cmd}` : cmd;
-    return preLine ? `${preLine} ${windows ? ";" : "&&"} ${main}` : main;
-  };
   return (
     <div className="run-group">
       <SectionHeader level={2} title="Do VS Code (.vscode)" badge={entries.tasks.length + entries.launches.length} />
@@ -456,7 +450,10 @@ function VscodeSection({ rootPath, onRun }: { rootPath: string; onRun: (command:
             label={l.command ? `Executar sem depurar: ${l.name}` : `Configuração sem equivalente: ${l.name}`}
             className="run-play"
             disabled={!l.command}
-            onClick={() => l.command && onRun(launchLine(l.command, l.cwd, l.preLaunchTask))}
+            onClick={() => {
+              const line = launchCommandLine(l, entries.tasks, windows);
+              if (line) onRun(line);
+            }}
           />
           <div className="run-info">
             <span className="run-name">

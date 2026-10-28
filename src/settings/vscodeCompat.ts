@@ -88,11 +88,21 @@ export function substituteVariables(value: string, ctx: VariableContext): string
   });
 }
 
-/** Aspas para o shell quando o argumento tem espaço/metacaractere. */
-export function shellQuote(arg: string, windows = false): string {
-  if (arg === "") return windows ? '""' : "''";
-  if (/^[\w@%+=:,./\\-]+$/.test(arg)) return arg;
-  return windows ? `"${arg.replace(/"/g, '\\"')}"` : `'${arg.replace(/'/g, "'\\''")}'`;
+/** Argumento literal no shell padrão do backend: PowerShell no Windows, POSIX nos demais. */
+export function shellQuote(arg: string, windows = false, force = false): string {
+  // PowerShell expande $() em aspas duplas e aceita também aspas tipográficas
+  // como delimitadores. Sempre citar evita ainda @args (splatting) e arrays.
+  if (windows) return `'${arg.replace(/['\u2018-\u201b]/g, "$&$&")}'`;
+  if (!force && arg !== "" && /^[\w@%+=:,./-]+$/.test(arg)) return arg;
+  return `'${arg.replace(/'/g, "'\\''")}'`;
+}
+
+function withWorkingDirectory(command: string, cwd: string, windows: boolean): string {
+  if (!cwd) return command;
+  // -LiteralPath impede que colchetes no nome virem padrões de wildcard.
+  return windows
+    ? `Set-Location -LiteralPath ${shellQuote(cwd, true)}; ${command}`
+    : `cd -- ${shellQuote(cwd)} && ${command}`;
 }
 
 // ----------------------------------------------------------------- tasks.json
@@ -148,7 +158,10 @@ export function parseTasks(text: string | null | undefined, ctx: VariableContext
       const cmd = argText(t.command) ?? argText(top.command);
       const args = (Array.isArray(t.args) ? t.args : Array.isArray(top.args) ? top.args : []).map(argText).filter((a): a is string => a !== null);
       if (cmd) {
-        const parts = [sub(cmd), ...args.map((a) => shellQuote(sub(a), windows))];
+        // `shell.command` é código intencional; `process.command` é um único
+        // executável. No PowerShell, invocar um nome citado exige o operador &.
+        const executable = type === "process" ? `${windows ? "& " : ""}${shellQuote(sub(cmd), windows, true)}` : sub(cmd);
+        const parts = [executable, ...args.map((a) => shellQuote(sub(a), windows))];
         command = parts.join(" ");
       } else if (dependsOn.length) {
         unsupported = undefined; // tarefa composta: roda as dependências
@@ -183,7 +196,7 @@ export function taskCommandLine(task: VscodeTask, all: readonly VscodeTask[], wi
     const line = d ? taskCommandLine(d, all, windows, seen) : null;
     if (line) parts.push(line);
   }
-  if (task.command) parts.push(task.cwd ? `cd ${shellQuote(task.cwd, windows)} ${windows ? ";" : "&&"} ${task.command}` : task.command);
+  if (task.command) parts.push(withWorkingDirectory(task.command, task.cwd, windows));
   if (!parts.length) return null;
   return parts.join(windows ? "; " : " && ");
 }
@@ -205,6 +218,15 @@ export interface VscodeLaunch {
   cwd: string;
   preLaunchTask: string | null;
   unsupported?: string;
+}
+
+/** Composição usada pela view: cwd e preLaunchTask seguem os mesmos contratos das tarefas. */
+export function launchCommandLine(launch: VscodeLaunch, tasks: readonly VscodeTask[], windows = false): string | null {
+  if (!launch.command) return null;
+  const task = launch.preLaunchTask ? tasks.find((t) => t.label === launch.preLaunchTask) : undefined;
+  const pre = task ? taskCommandLine(task, tasks, windows) : null;
+  const main = withWorkingDirectory(launch.command, launch.cwd, windows);
+  return pre ? `${pre}${windows ? "; " : " && "}${main}` : main;
 }
 
 const RUNNERS: Record<string, string> = {
