@@ -21,7 +21,7 @@ Snapshot: head `8926d91274707404ecf4374e853ea0679c66c6dd`, base
   estejam ausentes ou verdes. O workflow versionado existente publica releases
   após push na main; não continha testes de PR.
 
-## Inventário dos alertas (triagem ainda pendente)
+## Inventário dos alertas (snapshot inicial; triagem local registrada abaixo)
 
 | IDs CodeQL | Arquivo | Categoria e investigação necessária |
 |---|---|---|
@@ -56,7 +56,9 @@ esta entrega trata da prevenção, ferramentas e gates de qualidade solicitados.
 - [x] Registrar CodeGraph/Serena no Codex e exercitar ferramentas locais.
 - [x] Criar contrato persistente em AGENTS/CLAUDE e gate de revisabilidade com testes.
 - [x] Preparar workflow de validação de PR; execução remota depende de publicação.
-- [ ] Triar os 13 alertas com evidências e corrigir os defeitos confirmados.
+- [x] Triar os 13 alertas por evidência estática e preservar decisões individualmente.
+- [ ] Encerrar a remediação de argumentos de tarefas Windows (#3), incluindo binder nativo e batch.
+- [ ] Concluir a avaliação de segurança dos dois alertas Azure (#13/#14); classificação incorreta já identificada.
 - [ ] Dividir/reorganizar o #111 em incrementos revisáveis e preencher sua descrição.
 - [ ] Publicar e observar o workflow; configurar checks obrigatórios no ruleset adequado.
 - [x] Esclarecimento “RTK ou RKT”: RTK 1.0.1 já instalado, identificado e exercitado; uso explícito registrado nos contratos.
@@ -104,3 +106,24 @@ já presente no ambiente. `rtk git status` e `rtk test npm run test:pr-check`
 executados com sucesso. AGENTS/CLAUDE orientam uso para saídas rotineiras e
 consulta aos logs originais em diagnóstico/revisão de segurança. Sem novos
 hooks globais ou alterações de runtime/CI.
+
+## Continuação: argumentos de tarefas
+
+A triagem local separou dez alertas sem vulnerabilidade demonstrada no caminho
+reportado, dois que exigem avaliação adicional de fronteira/impacto (Azure), e
+um defeito confirmado de reinterpretação de dados como expressões PowerShell
+(#3). Nenhum alerta ou thread foi encerrado no GitHub. O resultado detalhado
+e as evidências ficam na coleção gerenciada do Codex Security deste projeto.
+
+O candidato foi isolado na branch `fix/vscode-task-arguments`, worktree
+`FluentCoder-task-arguments`. **Não está pronto para integração**: o escape
+literal fecha a interpretação de subexpressões no parser PowerShell, mas a
+revisão encontrou reinterpretação adicional pelo binder nativo (`--%`) e
+lacunas para `.cmd`/`.bat`. Há regressão executável que falha enquanto essa
+fronteira não for resolvida. Não confundir os testes de funções PowerShell
+aprovados com validação da execução de processos nativos.
+
+Prioridade seguinte: definir/executar a passagem de argumentos como dados até
+o processo final (distinguir `process` de código `shell` intencional) e validar
+PowerShell 7, Windows PowerShell 5.1 e scripts batch no Windows. A preparação
+de qualidade permanece separada desse candidato, sem alterações de runtime.
