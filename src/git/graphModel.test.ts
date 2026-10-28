@@ -92,6 +92,72 @@ test("provedor de hospedagem a partir do remoto", () => {
   );
 });
 
+test("Azure: raízes e subdomínios preservam a formatação dos links", () => {
+  const expected = {
+    provider: "azure",
+    label: "Azure DevOps",
+    webBase: "https://dev.azure.com/Org/Project/_git/Repo",
+  };
+  for (const url of [
+    "https://dev.azure.com/Org/Project/_git/Repo.git",
+    "https://git:fixture-token@DEV.AZURE.COM:443/Org/Project/_git/Repo.git?x=1#fragment",
+    "https://visualstudio.com/Org/Project/_git/Repo.git",
+    "https://team.dev.azure.com/Org/Project/_git/Repo.git",
+    "git@ssh.dev.azure.com:v3/Org/Project/Repo.git",
+    "ssh://git@SSH.DEV.AZURE.COM:22/v3/Org/Project/Repo.git",
+    "git@vs-ssh.visualstudio.com:v3/Org/Project/Repo.git",
+    "ssh://git@team.visualstudio.com:22/v3/Org/Project/Repo.git",
+    "git@deep.team.visualstudio.com:v3/Org/Project/Repo.git",
+    "  git@ssh.dev.azure.com:v3/Org/Project/Repo.git/  ",
+  ]) {
+    const remote = hostingFromRemote(url);
+    assert.deepEqual(remote, expected, url);
+    assert.equal(commitWebUrl(remote!, "abc123"), `${expected.webBase}/commit/abc123`, url);
+    assert.equal(pullRequestWebUrl(remote!, 7), `${expected.webBase}/pullrequest/7`, url);
+  }
+});
+
+test("Azure: hosts impostores continuam genéricos em HTTPS, SSH e SCP", () => {
+  for (const host of [
+    "notdev.azure.com",
+    "notvisualstudio.com",
+    "org.notdev.azure.com",
+    "org.notvisualstudio.com",
+    "dev.azure.com.evil.example",
+    "visualstudio.com.evil.example",
+  ]) {
+    for (const url of [
+      `https://${host}/Org/Project/Repo.git`,
+      `ssh://git@${host}:22/Org/Project/Repo.git`,
+      `git@${host}:Org/Project/Repo.git`,
+    ]) {
+      const remote = hostingFromRemote(url);
+      const webBase = `https://${host}/Org/Project/Repo`;
+      assert.deepEqual(remote, { provider: "generic", label: "navegador", webBase }, url);
+      assert.equal(commitWebUrl(remote!, "abc123"), `${webBase}/commit/abc123`, url);
+      assert.equal(pullRequestWebUrl(remote!, 7), `${webBase}/pull/7`, url);
+    }
+  }
+  for (const url of [
+    "https://dev.azure.com@evil.example/Org/Project/Repo.git",
+    "https://visualstudio.com@evil.example/Org/Project/Repo.git",
+    "https://evil.example/Org/Project/Repo.git?host=dev.azure.com#visualstudio.com",
+  ]) {
+    assert.deepEqual(hostingFromRemote(url), {
+      provider: "generic", label: "navegador", webBase: "https://evil.example/Org/Project/Repo",
+    }, url);
+  }
+});
+
+test("um upstream genérico não é descartado ao corrigir o reconhecimento Azure", () => {
+  assert.deepEqual(pickHostingRemote([
+    { name: "upstream", url: "git@notdev.azure.com:Org/Project/Repo.git" },
+    { name: "origin", url: "git@ssh.dev.azure.com:v3/Org/Project/Repo.git" },
+  ], "upstream/main"), {
+    provider: "generic", label: "navegador", webBase: "https://notdev.azure.com/Org/Project/Repo",
+  });
+});
+
 test("mensagem: corpo sem trailers e markdown leve", () => {
   const msg = [
     "fix(editor): hover acima da linha",

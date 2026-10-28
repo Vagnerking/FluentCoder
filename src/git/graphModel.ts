@@ -163,7 +163,10 @@ export function hostingFromRemote(url: string | null | undefined): HostingRemote
   if (lower === "github.com" || lower.startsWith("github.")) provider = "github";
   else if (lower.includes("gitlab")) provider = "gitlab";
   else if (lower.includes("bitbucket")) provider = "bitbucket";
-  else if (lower.endsWith("dev.azure.com") || lower.endsWith("visualstudio.com")) provider = "azure";
+  else if (
+    lower === "dev.azure.com" || lower.endsWith(".dev.azure.com") ||
+    lower === "visualstudio.com" || lower.endsWith(".visualstudio.com")
+  ) provider = "azure";
   if (provider === "azure") {
     // ssh.dev.azure.com:v3/org/proj/repo → dev.azure.com/org/proj/_git/repo
     const parts = path.replace(/^v3\//, "").split("/");
