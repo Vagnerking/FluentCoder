@@ -72,7 +72,7 @@ remover placeholders e `Closes #` vazio. Sem `--event`, o script só confere o
 escopo. Ele não é analisador de segurança nem substitui revisão.
 
 O workflow `PR Quality` valida metadados, audit npm, unidades/build do frontend e
-testes/Clippy Rust Linux/Windows. Compilação e execução Rust têm etapas distintas;
+testes/Clippy Rust Linux/macOS/Windows. Compilação e execução Rust têm etapas distintas;
 a execução tem limite de dez minutos e saída dos testes para diagnóstico.
 Timeout é falha, não aprovação. Registrar o último teste/erro antes de alterar
 o candidato; não reiniciar jobs apenas porque uma observação expirou.

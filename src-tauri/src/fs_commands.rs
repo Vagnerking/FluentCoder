@@ -600,7 +600,6 @@ mod tests {
     };
     use std::fs;
     use std::path::Path;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn exclude_matcher_hides_build_dirs_by_name() {
@@ -683,40 +682,42 @@ mod tests {
         assert!(!m.is_match("docs/generated"));
     }
 
-    fn workspace() -> std::path::PathBuf {
-        let id = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
+    fn workspace() -> tempfile::TempDir {
+        // Clock precision does not guarantee unique names in parallel tests.
+        // Own the directory so failures also clean up only this fixture.
+        tempfile::Builder::new()
+            .prefix("fluent-coder-explorer-")
+            .tempdir()
             .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("fluent-coder-explorer-{id}"));
-        fs::create_dir(&root).unwrap();
-        root
     }
 
     #[test]
     fn creates_file_without_overwriting() {
-        let root = workspace();
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
         let root_text = root.to_string_lossy().to_string();
         let created = create_file(root_text.clone(), root_text.clone(), "novo.txt".into()).unwrap();
         assert_eq!(created.name, "novo.txt");
         assert!(!created.is_dir);
         assert!(create_file(root_text.clone(), root_text, "novo.txt".into()).is_err());
-        fs::remove_dir_all(root).unwrap();
+        workspace_dir.close().unwrap();
     }
 
     #[test]
     fn creates_single_folder_and_rejects_paths() {
-        let root = workspace();
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
         let root_text = root.to_string_lossy().to_string();
         let created = create_folder(root_text.clone(), root_text.clone(), "src".into()).unwrap();
         assert!(created.is_dir);
         assert!(create_folder(root_text.clone(), root_text, "../fora".into()).is_err());
-        fs::remove_dir_all(root).unwrap();
+        workspace_dir.close().unwrap();
     }
 
     #[test]
     fn rejects_windows_reserved_or_invalid_names() {
-        let root = workspace();
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
         let root_text = root.to_string_lossy().to_string();
         for name in ["CON", "aux.txt", "nome.", "nome ", "a/b"] {
             assert!(
@@ -724,12 +725,13 @@ mod tests {
                 "{name} deveria ser rejeitado"
             );
         }
-        fs::remove_dir_all(root).unwrap();
+        workspace_dir.close().unwrap();
     }
 
     #[test]
     fn renames_file_and_rejects_collision() {
-        let root = workspace();
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
         let root_text = root.to_string_lossy().to_string();
         let a = create_file(root_text.clone(), root_text.clone(), "a.txt".into()).unwrap();
         create_file(root_text.clone(), root_text.clone(), "b.txt".into()).unwrap();
@@ -741,13 +743,14 @@ mod tests {
 
         // Renaming onto an existing name must be rejected (no overwrite).
         assert!(rename_path(root_text.clone(), renamed.path, "b.txt".into()).is_err());
-        fs::remove_dir_all(root).unwrap();
+        workspace_dir.close().unwrap();
     }
 
     #[cfg(windows)]
     #[test]
     fn serializes_renamed_paths_without_windows_extended_prefix() {
-        let root = workspace();
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
         let root_text = root.to_string_lossy().to_string();
         let file = create_file(root_text.clone(), root_text.clone(), "before.txt".into()).unwrap();
 
@@ -758,12 +761,13 @@ mod tests {
             "o frontend não deve receber caminho estendido: {}",
             renamed.path
         );
-        fs::remove_dir_all(root).unwrap();
+        workspace_dir.close().unwrap();
     }
 
     #[test]
     fn copies_file_with_collision_suffix() {
-        let root = workspace();
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
         let root_text = root.to_string_lossy().to_string();
         let f = create_file(root_text.clone(), root_text.clone(), "doc.txt".into()).unwrap();
         fs::write(&f.path, "hello").unwrap();
@@ -774,12 +778,13 @@ mod tests {
         assert!(copied.name.contains("Cópia"));
         assert_eq!(fs::read_to_string(&copied.path).unwrap(), "hello");
         assert!(Path::new(&f.path).exists(), "origem deve permanecer");
-        fs::remove_dir_all(root).unwrap();
+        workspace_dir.close().unwrap();
     }
 
     #[test]
     fn copies_folder_recursively() {
-        let root = workspace();
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
         let root_text = root.to_string_lossy().to_string();
         let dir = create_folder(root_text.clone(), root_text.clone(), "pasta".into()).unwrap();
         create_file(root_text.clone(), dir.path.clone(), "inner.txt".into()).unwrap();
@@ -789,12 +794,13 @@ mod tests {
         assert!(copied.is_dir);
         assert!(Path::new(&copied.path).join("inner.txt").exists());
         assert!(Path::new(&dir.path).exists(), "origem deve permanecer");
-        fs::remove_dir_all(root).unwrap();
+        workspace_dir.close().unwrap();
     }
 
     #[test]
     fn moves_file_and_folder() {
-        let root = workspace();
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
         let root_text = root.to_string_lossy().to_string();
         let dest = create_folder(root_text.clone(), root_text.clone(), "out".into()).unwrap();
 
@@ -813,15 +819,17 @@ mod tests {
         assert!(moved_dir.is_dir);
         assert!(!Path::new(&folder.path).exists());
         assert!(Path::new(&moved_dir.path).join("k.txt").exists());
-        fs::remove_dir_all(root).unwrap();
+        workspace_dir.close().unwrap();
     }
 
     #[test]
     fn rejects_operations_outside_workspace() {
-        let root = workspace();
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
         let root_text = root.to_string_lossy().to_string();
         // A sibling temp dir, definitely outside `root`.
-        let outside = workspace();
+        let outside_dir = workspace();
+        let outside = outside_dir.path();
         let outside_file = create_file(
             outside.to_string_lossy().to_string(),
             outside.to_string_lossy().to_string(),
@@ -842,7 +850,7 @@ mod tests {
             .is_err(),
             "copiar origem fora do workspace deve falhar"
         );
-        fs::remove_dir_all(root).unwrap();
-        fs::remove_dir_all(outside).unwrap();
+        workspace_dir.close().unwrap();
+        outside_dir.close().unwrap();
     }
 }
