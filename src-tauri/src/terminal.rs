@@ -210,12 +210,17 @@ pub fn term_create(
     // the session open afterwards (so the program's output stays visible). When
     // None, it's a plain interactive PowerShell — the original behavior.
     command: Option<String>,
+    plan: Option<crate::task_execution::TaskExecutionPlan>,
     // Terminal pedido por uma extensão VS Code (shell/args/env próprios).
     spawn: Option<TermSpawnOptions>,
     state: State<'_, TerminalState>,
     ide_bridge: State<'_, crate::agents::ide_bridge::IdeBridgeState>,
     app: AppHandle,
 ) -> Result<Option<u32>, String> {
+    if let Some(plan) = &plan {
+        plan.validate()?;
+        if command.is_some() { return Err("Tarefa não pode conter plano e comando avulso ao mesmo tempo.".into()); }
+    }
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -232,10 +237,49 @@ pub fn term_create(
         .app_data_dir()
         .ok()
         .map(|d| crate::shell_integration::scripts_dir(&d));
-    let mut cmd = match &spawn {
-        Some(opts) => extension_command(opts, si_dir.as_deref())?,
-        None => shell_command(command.as_deref()),
+    let runner_request = if let Some(plan) = plan {
+        let command_shell = crate::task_execution::RunnerShell::from(crate::platform::default_shell());
+        let mut interactive_shell = command_shell.clone();
+        if let Some(opts) = &spawn {
+            if let Some(path) = opts.shell_path.as_deref().filter(|p| !p.trim().is_empty()) {
+                interactive_shell.program = which::which(path)
+                    .map_err(|e| format!("Shell do terminal não encontrado ({path}): {e}"))?.to_string_lossy().into_owned();
+                interactive_shell.args = opts.shell_args.clone().unwrap_or_default();
+            }
+        }
+        Some(serde_json::to_string(&crate::task_execution::RunnerRequest { plan, command_shell, interactive_shell })
+            .map_err(|e| e.to_string())?)
+    } else { None };
+    let mut cmd = if runner_request.is_some() {
+        let mut cmd = crate::task_execution::runner_command(
+            &std::env::current_exe().map_err(|e| e.to_string())?,
+            runner_request.as_deref().unwrap_or_default(),
+        );
+        if spawn.as_ref().is_some_and(|opts| opts.strict_env.unwrap_or(false)) { cmd.env_clear(); }
+        if let Some(env) = spawn.as_ref().and_then(|opts| opts.env.as_ref()) {
+            for (key, value) in env {
+                if key.is_empty() || key.contains(['=', '\0']) || value.contains('\0') {
+                    return Err("Variável de ambiente inválida no terminal de tarefa.".into());
+                }
+                cmd.env(key, value);
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            cmd.env("TERM", "xterm-256color");
+            cmd.env("COLORTERM", "truecolor");
+        }
+        cmd
+    } else {
+        match &spawn {
+            Some(opts) => extension_command(opts, si_dir.as_deref())?,
+            None => shell_command(command.as_deref()),
+        }
     };
+    if let Some(request) = runner_request {
+        cmd.env(crate::task_execution::RUNNER_ENV, request);
+        cmd.env(crate::task_execution::RUNNER_EXE_ENV, std::env::current_exe().map_err(|e| e.to_string())?);
+    }
     cmd.cwd(&cwd);
     // Igual ao terminal do VS Code: o `claude` iniciado aqui conecta sozinho na
     // ponte IDE (src/agents/ide_bridge.rs). Só com a ponte no ar. Num terminal

@@ -44,6 +44,18 @@ jobs:
       - run: npm run test:unit
       - run: npm run build
 
+  shell-arguments:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Argumentos no PowerShell 7 e Windows PowerShell
+        run: node --experimental-strip-types --test src/settings/vscodeShell.test.ts
+
   rust:
     strategy:
       fail-fast: false
@@ -67,3 +79,34 @@ jobs:
           workspaces: src-tauri
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D clippy::correctness -D clippy::await_holding_lock
+      - uses: actions/setup-node@v4
+        if: runner.os == 'Windows'
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+        if: runner.os == 'Windows'
+      - run: npm run build
+        if: runner.os == 'Windows'
+      - name: Build do app real (release GUI no Windows)
+        if: runner.os == 'Windows'
+        run: cargo build --manifest-path src-tauri/Cargo.toml --locked --release --bin fluent-coder
+      - name: Build do app real (Linux)
+        if: runner.os == 'Linux'
+        run: cargo build --manifest-path src-tauri/Cargo.toml --locked --bin fluent-coder
+      - name: Aceite do runner no ConPTY de release
+        if: runner.os == 'Windows'
+        env:
+          FLUENT_TEST_APP_BINARY: ${{ github.workspace }}/src-tauri/target/release/fluent-coder.exe
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib task_execution::tests::runner_in_real_pty -- --ignored --nocapture
+      - name: Aceite do runner no PTY Linux
+        if: runner.os == 'Linux'
+        env:
+          FLUENT_TEST_APP_BINARY: ${{ github.workspace }}/src-tauri/target/debug/fluent-coder
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib task_execution::tests::runner_in_real_pty -- --ignored --nocapture
+      - name: Aceite do runner com Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        env:
+          FLUENT_TEST_APP_BINARY: ${{ github.workspace }}/src-tauri/target/release/fluent-coder.exe
+          FLUENT_TEST_RUNNER_SHELL: powershell.exe
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib task_execution::tests::runner_in_real_pty -- --ignored --nocapture

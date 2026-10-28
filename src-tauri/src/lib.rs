@@ -21,6 +21,7 @@ mod shell_integration;
 mod snap;
 mod ssh;
 mod terminal;
+mod task_execution;
 mod testrunner;
 mod text_io;
 mod walk;
@@ -31,6 +32,9 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Some(code) = task_execution::run_if_requested() {
+        std::process::exit(code);
+    }
     // `fluent-coder --mcp <root>` runs the knowledge MCP server (stdio) instead of
     // the GUI, so Claude Code / other MCP clients can query the project's brain.
     let args: Vec<String> = std::env::args().collect();

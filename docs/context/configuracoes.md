@@ -174,6 +174,38 @@ janela volta ao foco (editado fora).
 | `keybindings.json` (usuário) | `<app_config>/User/keybindings.json`, formato do VS Code: `{ key, command, when?, args? }`; `-comando` remove um atalho padrão; acordes (`ctrl+k ctrl+s`). Ids do VS Code comuns são traduzidos (`workbench.action.files.save` → `menu.file.save`…, tabela em `keybindings.ts`); `editor.action.*` roda no editor focado e ids de extensões vão ao host. `when` suporta `!`, `&&`, `\|\|`, `==`, `!=`, `=~ /re/`, `<`/`>`, `in`/`not in` e as chaves `editorTextFocus`, `editorFocus`, `textInputFocus`, `inputFocus`, `terminalFocus`, `resourceLangId`, `resourceExtname`, `resourceFilename`, `resourcePath`, `sideBarVisible`, `workspaceFolderCount` e `config.*`. Ctrl e ⌘ são equivalentes (CtrlCmd), como nos menus. |
 | `settings.json` do VS Code do usuário | Nunca lido nem escrito (regra das extensões hospedadas). |
 
+### Execução estruturada de tarefas e launch
+
+- `command` nos modelos de tarefas/launch é somente uma prévia de apresentação.
+  Os dois pontos de entrada (view e Paleta/Ctrl+Shift+B) produzem um
+  `TaskExecutionPlan` com executável, `args[]` e `cwd` separados até o Rust.
+- `process` e programas de launch são executados por `std::process::Command`,
+  sem PowerShell/`-Command` intermediário. Isso evita que `--%`, `$()` ou
+  metacaracteres dos argumentos adquiram significado no binder PowerShell.
+- `shell.command` continua sendo código intencional do interpretador. Seu
+  `args[]` é transportado separadamente e citado na fronteira do shell; essa
+  superfície preserva semântica de shell, não promete a semântica de argv de
+  um processo nativo após comandos, funções ou scripts reinterpretarem dados.
+  Para argv nativo literal, usar `process`/launch.
+- Dependências são resolvidas antes do spawn, em ordem, com erro explícito para
+  referências ausentes/ciclos. Cada cwd relativo é resolvido contra a raiz do
+  plano, sem herdar o diretório da etapa anterior. Falha interrompe dependentes
+  também no Windows (corrige a concatenação anterior com `;`).
+- Um modo interno do app executa o plano no mesmo PTY e depois inicia o perfil
+  interativo configurado. O payload não usa stdin, preservando entrada de
+  programas interativos. O ambiente interno é removido antes dos filhos.
+- O perfil configurado não pode fazer o plano ser ignorado: seleciona o prompt
+  interativo após a execução. Comandos `shell` usam o interpretador padrão da
+  plataforma. Os terminais de extensões mantêm seu contrato próprio.
+- Planos estruturados são locais nesta etapa. SSH não deve ignorá-los nem
+  convertê-los para uma string: deve informar que esse modo não é suportado.
+- `.cmd`/`.bat` têm regras próprias. O backend usa a implementação nativa do
+  Rust e não faz fallback para uma linha shell quando um argumento é recusado.
+  O aceite inclui controle batch e caso adversarial no Windows.
+- Antes de integrar: executar o teste explícito do runner em PTY com o app
+  real, usando o binário **release GUI no Windows**, além dos testes de argv.
+  Compilar/unidades no Linux não prova herança de stdin/stdout no ConPTY.
+
 ### Atalhos: convivência com o handler do App
 
 O handler de teclado do `App.tsx` continua tratando os atalhos embutidos

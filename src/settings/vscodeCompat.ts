@@ -11,6 +11,7 @@
  * Mapeamento completo em docs/context/configuracoes.md.
  */
 import { parseJsoncObject } from "./jsonc.ts";
+import type { RunStep } from "./taskExecution.ts";
 
 // ------------------------------------------------------------ extensions.json
 
@@ -88,11 +89,21 @@ export function substituteVariables(value: string, ctx: VariableContext): string
   });
 }
 
-/** Aspas para o shell quando o argumento tem espaço/metacaractere. */
-export function shellQuote(arg: string, windows = false): string {
-  if (arg === "") return windows ? '""' : "''";
-  if (/^[\w@%+=:,./\\-]+$/.test(arg)) return arg;
-  return windows ? `"${arg.replace(/"/g, '\\"')}"` : `'${arg.replace(/'/g, "'\\''")}'`;
+/** Argumento literal no shell padrão do backend: PowerShell no Windows, POSIX nos demais. */
+export function shellQuote(arg: string, windows = false, force = false): string {
+  // PowerShell expande $() em aspas duplas e aceita também aspas tipográficas
+  // como delimitadores. Sempre citar evita ainda @args (splatting) e arrays.
+  if (windows) return `'${arg.replace(/['\u2018-\u201b]/g, "$&$&")}'`;
+  if (!force && arg !== "" && /^[\w@%+=:,./-]+$/.test(arg)) return arg;
+  return `'${arg.replace(/'/g, "'\\''")}'`;
+}
+
+function withWorkingDirectory(command: string, cwd: string, windows: boolean): string {
+  if (!cwd) return command;
+  // -LiteralPath impede que colchetes no nome virem padrões de wildcard.
+  return windows
+    ? `Set-Location -LiteralPath ${shellQuote(cwd, true)}; ${command}`
+    : `cd -- ${shellQuote(cwd)} && ${command}`;
 }
 
 // ----------------------------------------------------------------- tasks.json
@@ -101,6 +112,8 @@ export interface VscodeTask {
   label: string;
   /** Linha de comando pronta para o terminal (null = não suportada). */
   command: string | null;
+  /** Payload executável; command serve somente para apresentação. */
+  execution?: RunStep;
   /** Diretório (variáveis resolvidas); vazio = raiz. */
   cwd: string;
   group: "build" | "test" | null;
@@ -142,19 +155,28 @@ export function parseTasks(text: string | null | undefined, ctx: VariableContext
     const isDefault = isObj(groupRaw) && groupRaw.isDefault === true;
     const dependsOn = typeof t.dependsOn === "string" ? [t.dependsOn] : Array.isArray(t.dependsOn) ? t.dependsOn.filter((d): d is string => typeof d === "string") : [];
     let command: string | null = null;
+    let execution: RunStep | undefined;
     let unsupported: string | undefined;
     const windows = os === "windows";
     if (type === "shell" || type === "process") {
       const cmd = argText(t.command) ?? argText(top.command);
       const args = (Array.isArray(t.args) ? t.args : Array.isArray(top.args) ? top.args : []).map(argText).filter((a): a is string => a !== null);
       if (cmd) {
-        const parts = [sub(cmd), ...args.map((a) => shellQuote(sub(a), windows))];
+        const values = args.map(sub);
+        execution = type === "process"
+          ? { kind: "process", executable: sub(cmd), args: values, cwd }
+          : { kind: "shell", source: sub(cmd), args: values, cwd };
+        // `shell.command` é código intencional; `process.command` é um único
+        // executável. No PowerShell, invocar um nome citado exige o operador &.
+        const executable = type === "process" ? `${windows ? "& " : ""}${shellQuote(sub(cmd), windows, true)}` : sub(cmd);
+        const parts = [executable, ...args.map((a) => shellQuote(sub(a), windows))];
         command = parts.join(" ");
       } else if (dependsOn.length) {
         unsupported = undefined; // tarefa composta: roda as dependências
       } else unsupported = "sem comando";
     } else if (type === "npm" && typeof t.script === "string") {
       command = `npm run ${shellQuote(t.script, windows)}`;
+      execution = { kind: "process", executable: "npm", args: ["run", sub(t.script)], cwd };
     } else {
       unsupported = `tipo "${type}" não suportado (só shell, process e npm)`;
     }
@@ -163,6 +185,7 @@ export function parseTasks(text: string | null | undefined, ctx: VariableContext
     out.push({
       label,
       command,
+      execution,
       cwd: npmDir || cwd,
       group: groupKind === "build" || groupKind === "test" ? groupKind : null,
       isDefault,
@@ -183,7 +206,7 @@ export function taskCommandLine(task: VscodeTask, all: readonly VscodeTask[], wi
     const line = d ? taskCommandLine(d, all, windows, seen) : null;
     if (line) parts.push(line);
   }
-  if (task.command) parts.push(task.cwd ? `cd ${shellQuote(task.cwd, windows)} ${windows ? ";" : "&&"} ${task.command}` : task.command);
+  if (task.command) parts.push(withWorkingDirectory(task.command, task.cwd, windows));
   if (!parts.length) return null;
   return parts.join(windows ? "; " : " && ");
 }
@@ -202,9 +225,20 @@ export interface VscodeLaunch {
   request: string;
   /** Comando para "Executar sem depurar" (null = não mapeado). */
   command: string | null;
+  /** Programa e argumentos preservados como dados até o backend. */
+  execution?: RunStep;
   cwd: string;
   preLaunchTask: string | null;
   unsupported?: string;
+}
+
+/** Composição usada pela view: cwd e preLaunchTask seguem os mesmos contratos das tarefas. */
+export function launchCommandLine(launch: VscodeLaunch, tasks: readonly VscodeTask[], windows = false): string | null {
+  if (!launch.command) return null;
+  const task = launch.preLaunchTask ? tasks.find((t) => t.label === launch.preLaunchTask) : undefined;
+  const pre = task ? taskCommandLine(task, tasks, windows) : null;
+  const main = withWorkingDirectory(launch.command, launch.cwd, windows);
+  return pre ? `${pre}${windows ? "; " : " && "}${main}` : main;
 }
 
 const RUNNERS: Record<string, string> = {
@@ -231,16 +265,17 @@ export function parseLaunch(text: string | null | undefined, ctx: VariableContex
     const preLaunchTask = typeof c.preLaunchTask === "string" ? c.preLaunchTask : null;
     const runner = RUNNERS[type];
     const program = typeof c.program === "string" ? sub(c.program) : null;
-    const args = Array.isArray(c.args) ? c.args.filter((a): a is string => typeof a === "string").map((a) => shellQuote(sub(a), windows)) : [];
+    const values = Array.isArray(c.args) ? c.args.filter((a): a is string => typeof a === "string").map(sub) : [];
+    const args = values.map((a) => shellQuote(a, windows));
     if (request !== "launch") return { name, type, request, command: null, cwd, preLaunchTask, unsupported: "attach: use a seção de depuração .NET" };
     if (!runner) return { name, type, request, command: null, cwd, preLaunchTask, unsupported: `tipo "${type}" sem equivalente no app` };
     if (!program) {
       // `dotnet` (C# Dev Kit) aponta para o projeto: `dotnet run`.
       if (type === "dotnet" && typeof c.projectPath === "string") {
-        return { name, type, request, command: `dotnet run --project ${shellQuote(sub(c.projectPath), windows)}`, cwd, preLaunchTask };
+        return { name, type, request, command: `dotnet run --project ${shellQuote(sub(c.projectPath), windows)}`, execution: { kind: "process", executable: "dotnet", args: ["run", "--project", sub(c.projectPath)], cwd }, cwd, preLaunchTask };
       }
       return { name, type, request, command: null, cwd, preLaunchTask, unsupported: "sem program" };
     }
-    return { name, type, request, command: [runner, shellQuote(program, windows), ...args].join(" "), cwd, preLaunchTask };
+    return { name, type, request, command: [runner, shellQuote(program, windows), ...args].join(" "), execution: { kind: "process", executable: runner, args: [program, ...values], cwd }, cwd, preLaunchTask };
   });
 }

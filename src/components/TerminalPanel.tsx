@@ -1,3 +1,4 @@
+import type { TerminalCommand } from "../settings/taskExecution";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { TerminalView } from "./TerminalView";
 import { Codicon } from "../icons/codicons/Codicon";
@@ -15,7 +16,7 @@ interface TerminalsViewProps {
   onReveal: () => void;
   cwd: string | null;
   /** Command line a "Run" requested, or null for a plain interactive shell. */
-  runCommand?: string | null;
+  runCommand?: TerminalCommand | null;
   /** Working directory for the requested run command. */
   runCwd?: string | null;
   /** SSH connection for the requested run command, when it belongs to an SSH root. */
@@ -45,7 +46,7 @@ interface TermInstance {
   title: string;
   cwd: string;
   connId?: string;
-  command: string | null;
+  command: TerminalCommand | null;
   /** Terminal criado por uma extensão VS Code (shell/env próprios). */
   spawn?: TermSpawnOptions;
   /** Processo saiu (o terminal fica aberto mostrando a saída, como no VS Code). */
@@ -96,7 +97,7 @@ export function TerminalsView({
     (opts?: {
       cwd?: string | null;
       connId?: string | null;
-      command?: string | null;
+      command?: TerminalCommand | null;
       title?: string;
     }) => {
       // "+"/primeiro terminal: abre no repositório ativo (multi-repo).
