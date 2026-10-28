@@ -36,3 +36,7 @@ milestones/
 
 # Artefatos locais da CLI de Playwright usada em inspeções pontuais
 .playwright-cli/
+
+# Índices, logs e configurações locais de análise de código
+.codegraph/
+.serena/

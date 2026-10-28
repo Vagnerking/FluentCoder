@@ -15,3 +15,12 @@ Instruções para o Claude Code neste repositório. A documentação de contexto
 - Ao mexer no host de extensões VS Code (`tools/ext-host/`, `src/extensions/`, `src-tauri/src/ext_host.rs`), siga: [Extensões VS Code hospedadas](docs/context/extensoes-vscode.md)
 - Ao mexer no language service C# (`.cs`) ou validar a milestone #5, dê aceite contra o Roslyn real (não só unit tests) com o probe headless: `node tools/razor-lsp-probe/probe-csharp-m5.mjs` (espere 9/9). Fluxo completo na skill `.claude/skills/csharp-lsp-acceptance/`. **O E2E (`tests/e2e/`) só roda no Windows** — `tauri-driver` não suporta macOS.
 - Implemente mudanças em uma Git worktree separada e só integre na `main` depois das validações.
+
+## Qualidade e aprendizado contínuo
+
+- Antes de implementar ou abrir PR, siga [Qualidade de PRs e segurança](docs/context/pr-quality.md). Registre o contrato afetado, os chamadores e a validação necessária.
+- Cada PR deve ter um objetivo e até 100 arquivos alterados, incluindo lockfiles e fixtures. Divida trabalhos maiores em PRs dependentes com base explícita; não esconda arquivos dos revisores.
+- Use CodeGraph para impacto/dependências e Serena para símbolos/referências quando disponíveis. Ative o caminho da worktree atual, atualize o índice e confirme resultados no código; ausência de arestas não prova ausência de impacto.
+- Em Rust/Tauri, use as skills instaladas `rust-skills`, `tauri-ipc`, `tauri-security` e `tauri-framework-security` conforme o escopo. Preserve a edição/MSRV, os perfis Cargo e os contratos locais. Skills não autorizam upgrades ou novas dependências por si só.
+- Antes de declarar pronto: executar os checks aplicáveis, revisar o diff completo e triar alertas com evidências. Nunca confundir teste não executado, alerta suprimido ou revisão pulada com aprovação.
+- Para cada defeito confirmado, registrar causa, regra preventiva e teste de regressão pertinente. Separar alertas de produção de fixtures deliberadamente adversariais.
