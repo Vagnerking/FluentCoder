@@ -1,4 +1,5 @@
 mod agents;
+mod child_process;
 mod dap;
 mod dotnet_tools;
 mod file_index;
@@ -7,6 +8,7 @@ mod git;
 mod graph;
 mod lsp;
 mod mcp;
+mod platform;
 mod razor;
 mod runner;
 mod search;
@@ -35,8 +37,11 @@ pub fn run() {
         return;
     }
 
+    platform::login_env::apply_login_shell_path();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(platform::init_plugin())
         .setup(|app| {
             // Explicitly stamp every window with a crisp, high-resolution icon so
             // the Windows taskbar / Alt-Tab show the app logo (a frameless,
@@ -93,6 +98,11 @@ pub fn run() {
             fs_commands::copy_path,
             fs_commands::move_path,
             fs_commands::reveal_in_explorer,
+            platform::commands::platform_info,
+            platform::commands::platform_reveal_path,
+            platform::commands::platform_open_external,
+            platform::commands::platform_open_path,
+            platform::commands::platform_default_shell,
             search::search_in_dir,
             search::cancel_search,
             search::build_search_index,

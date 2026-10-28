@@ -146,7 +146,12 @@ fn normalise_to_lf(content: String) -> String {
 ///
 /// `content` is expected to be LF-normalised (as produced by [`decode`]); we
 /// apply the requested EOL, then encode and prepend a BOM if requested.
-pub fn encode_for_save(content: &str, encoding: &str, eol: Eol, bom: bool) -> Result<Vec<u8>, String> {
+pub fn encode_for_save(
+    content: &str,
+    encoding: &str,
+    eol: Eol,
+    bom: bool,
+) -> Result<Vec<u8>, String> {
     let enc = Encoding::for_label(encoding.as_bytes())
         .ok_or_else(|| format!("Encoding desconhecido: {encoding}"))?;
 

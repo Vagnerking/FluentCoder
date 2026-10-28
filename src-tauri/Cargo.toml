@@ -80,6 +80,9 @@ which = "6"
 russh = { version = "0.61", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "2.3.0"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # Win11 Snap Layouts on our frameless title bar (our own implementation in
 # src/snap.rs). Same `windows` version tao already builds, so it's reused.
 [target.'cfg(windows)'.dependencies]
@@ -121,3 +124,6 @@ incremental = true
 # continua em opt-level baixo). Só o nosso crate recompila no ciclo de dev.
 [profile.dev.package."*"]
 opt-level = 2
+
+[dev-dependencies]
+tempfile = "3"
