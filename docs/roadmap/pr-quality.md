@@ -59,7 +59,7 @@ esta entrega trata da prevenção, ferramentas e gates de qualidade solicitados.
 - [ ] Triar os 13 alertas com evidências e corrigir os defeitos confirmados.
 - [ ] Dividir/reorganizar o #111 em incrementos revisáveis e preencher sua descrição.
 - [ ] Publicar e observar o workflow; configurar checks obrigatórios no ruleset adequado.
-- [ ] Identificar qual ferramenta o usuário chama de SKT antes de instalar/configurar.
+- [x] Esclarecimento “RTK ou RKT”: RTK 1.0.1 já instalado, identificado e exercitado; uso explícito registrado nos contratos.
 - [ ] Medir os cinco próximos PRs e registrar o primeiro balanço.
 
 Não reescrever nem dividir a branch publicada automaticamente: a reorganização
@@ -96,3 +96,11 @@ aceites interativos e uma auditoria completa não foram executados nesta
 preparação. Não há alteração de código de runtime nesta entrega. Os alertas
 CodeQL e a dívida de dependências continuam pendentes; esta preparação não
 certifica o #111 para merge.
+
+## Complemento: RTK
+
+Após o esclarecimento do usuário, adotado RTK (Rust Token Killer), versão 1.0.1,
+já presente no ambiente. `rtk git status` e `rtk test npm run test:pr-check`
+executados com sucesso. AGENTS/CLAUDE orientam uso para saídas rotineiras e
+consulta aos logs originais em diagnóstico/revisão de segurança. Sem novos
+hooks globais ou alterações de runtime/CI.

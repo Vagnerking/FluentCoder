@@ -92,9 +92,20 @@ serena project health-check /caminho/da/worktree
 ```
 
 `project create` é necessário apenas na primeira configuração da worktree.
-Os índices e logs ficam ignorados pelo Git. A sigla **SKT** não identificou uma
-ferramenta de forma inequívoca; não instalar pacote com nome presumido. Registrar
-origem, versão, finalidade e teste de funcionamento quando ela for identificada.
+Os índices e logs ficam ignorados pelo Git. Após o usuário esclarecer “RTK ou RKT”, foi identificado o **RTK (Rust Token
+Killer)** já instalado em `~/.local/bin/rtk`, versão 1.0.1. Sua função é resumir
+saídas de comandos para reduzir ruído no contexto; não é analisador de segurança
+nem grafo de dependências. Origem/documentação:
+[rtk-ai/rtk](https://github.com/rtk-ai/rtk) e
+[instalação oficial](https://www.rtk-ai.app/docs/getting-started/installation/).
+
+Usar explicitamente em comandos rotineiros, por exemplo `rtk git status` e
+`rtk test npm run test:pr-check`; ambos foram exercitados nesta worktree.
+O segundo executou os quatro testes do gate com código de saída zero. Para
+falhas, alertas ou revisão de segurança, consultar o comando original e os logs
+completos. Não usar saída resumida como evidência de ausência de problemas nem
+ocultar diffs da revisão. O CI mantém comandos originais e não depende do RTK.
+Não foi necessário reinstalar o binário ou ativar hooks globais para este uso.
 
 ## Antes de abrir ou atualizar PR
 
