@@ -12,6 +12,9 @@ URLs externas aceitam apenas http, https e mailto; erro deve chegar ao chamador.
 Chamadas que esperam processos usam `spawn_blocking` para preservar o event loop.
 Os planos de Explorer, Finder e FileManager1 possuem testes independentes do SO.
 Isso não substitui o aceite nativo dos aplicativos e gerenciadores de arquivos.
+Adaptadores puros validam caminhos pelas regras do SO modelado: o adaptador
+Linux aceita um XDG absoluto com `/`, inclusive quando o teste roda no Windows.
+Não usar regras de drive/root do host para decidir se um caminho POSIX é absoluto.
 
 `workspaceRoot`, quando informado, restringe o caminho canonicalizado ao root
 canonicalizado, inclusive ao resolver symlinks. O parâmetro é controlado pelo
