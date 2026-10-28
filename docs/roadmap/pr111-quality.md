@@ -29,9 +29,42 @@ de publicar correções ou declarar conclusão.
   e versões corrigidas ainda precisam ser estabelecidos por dependência.
 - Preparação de qualidade: branch `chore/pr-quality-guardrails`, worktree
   `FluentCoder-pr-quality`; skills, regras, check de PR e workflow preparados.
-- Candidato de argumentos: branch `fix/vscode-task-arguments`, worktree
-  `FluentCoder-task-arguments`, commit WIP `f2de524`. A regressão do binder
-  nativo ainda falha: **não publicar esse candidato como correção concluída**.
+- Candidato inicial de argumentos: commit WIP `f2de524`, cuja regressão do
+  binder nativo falhava. Foi substituído pelo plano estruturado descrito no
+  registro abaixo; o candidato atual continua em rascunho até os aceites.
+
+## Progresso verificado em 28/10/2026
+
+- Meta registrada e ativa. Skills de Rust/Tauri/segurança instaladas e regras
+  preventivas compartilhadas entre ferramentas em `AGENTS.md`/`CLAUDE.md`.
+- [PR #112: verificações de qualidade](https://github.com/Vagnerking/FluentCoder/pull/112),
+  rascunho com dez arquivos, base `feat/git-fluent-workspace-polish`, head
+  `582d7c3e3f59c38c46f16dc3b500daea52f45902`. O workflow
+  [40765021812](https://github.com/Vagnerking/FluentCoder/actions/runs/40765021812)
+  passou em escopo/metadados e frontend; Rust Linux/Windows ainda em execução
+  neste snapshot.
+- [PR #113: execução estruturada de tarefas](https://github.com/Vagnerking/FluentCoder/pull/113),
+  rascunho com 16 arquivos, base `ci/pr111-quality-gates`, head
+  `3bb80a5251240edca021f9d4817a915a3cd85a1c`. `process` e launch mantêm
+  executável/argv separados até o backend; `shell` mantém código intencional.
+  O workflow [40766284779](https://github.com/Vagnerking/FluentCoder/actions/runs/40766284779)
+  passou em escopo/metadados, frontend e argumentos no PowerShell 7/Windows
+  PowerShell. Os jobs Rust e aceites do aplicativo real seguem pendentes.
+- Validação local do candidato: 1098 testes frontend aprovados; 408 testes
+  Rust aprovados e 13 ignorados no conjunto padrão. O aceite explícito do
+  app Linux em PTY passou separadamente, incluindo argv, stdin da tarefa,
+  Ctrl+C e retorno ao perfil. Build frontend/app e os gates de Clippy passaram.
+  Typecheck isolado Windows passou; isso não comprova execução GUI/ConPTY.
+- Houve investigação e revisão independentes da fronteira de execução. O
+  candidato trata o problema apontado de stdio no executável GUI Windows;
+  a confirmação no app release ainda depende do CI. Continuam necessários
+  aceite de `.cmd`/`.bat`, teardown durante tarefa e fluxo real pela UI.
+- O primeiro check de shell Windows detectou caminhos curtos (`RUNNER~1`)
+  versus longos. O teste compara agora identidade de diretório (`dev`/`ino`)
+  e continua verificando os argumentos completos; passou no novo head.
+- O #111 e a `main` permanecem inalterados. Os 13 alertas, dependências e a
+  divisão do restante do diff continuam no escopo; estes dois rascunhos não
+  representam aceite do PR original. Reconsultar os checks no SHA final.
 
 ## Ordem de execução e critérios de aceite
 
