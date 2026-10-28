@@ -4,6 +4,9 @@ Criada em 28/10/2026 a pedido do usuário, a partir do
 [PR #111](https://github.com/Vagnerking/FluentCoder/pull/111).
 Contrato de execução: [Qualidade de PRs e segurança](../context/pr-quality.md).
 
+Meta ativa para concluir a correção do PR:
+[Corrigir e preparar o PR #111 para integração](pr111-quality.md).
+
 ## Linha de base observada
 
 Snapshot: head `8926d91274707404ecf4374e853ea0679c66c6dd`, base
