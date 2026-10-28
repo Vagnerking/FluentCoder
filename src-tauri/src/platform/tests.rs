@@ -1,6 +1,14 @@
 use super::*;
 use std::cell::RefCell;
 
+#[test]
+fn non_file_unicode_input_is_rejected_without_panicking() {
+    for value in ["🚀🚀", "éééé", "file:/🚀", "https://example.com/ação"] {
+        assert_eq!(file_uri_to_path(value, Os::Linux), None, "{value}");
+        assert_eq!(file_uri_to_path(value, Os::Windows), None, "{value}");
+    }
+}
+
 /// Runner fake: registra o argv e responde conforme o roteiro.
 struct FakeRunner {
     calls: RefCell<Vec<Invocation>>,
@@ -12,10 +20,18 @@ struct FakeRunner {
 
 impl FakeRunner {
     fn new(missing: &[&'static str], failing: &[&'static str]) -> Self {
-        FakeRunner { calls: RefCell::new(vec![]), missing: missing.to_vec(), failing: failing.to_vec() }
+        FakeRunner {
+            calls: RefCell::new(vec![]),
+            missing: missing.to_vec(),
+            failing: failing.to_vec(),
+        }
     }
     fn programs(&self) -> Vec<String> {
-        self.calls.borrow().iter().map(|c| c.program.clone()).collect()
+        self.calls
+            .borrow()
+            .iter()
+            .map(|c| c.program.clone())
+            .collect()
     }
 }
 
@@ -51,13 +67,31 @@ fn current_matches_compile_target() {
 #[test]
 fn windows_reveal_uses_explorer_select() {
     let plan = for_os(Os::Windows).reveal_plan(Path::new(r"\\?\C:\work\a b.txt"));
-    assert_eq!(plan, vec![Invocation { program: "explorer".into(), args: vec!["/select,".into(), r"C:\work\a b.txt".into()], wait: false }]);
+    assert_eq!(
+        plan,
+        vec![Invocation {
+            program: "explorer".into(),
+            args: vec!["/select,".into(), r"C:\work\a b.txt".into()],
+            wait: false
+        }]
+    );
+}
+
+#[test]
+fn windows_reveal_preserves_unc_share_paths() {
+    for path in [r"\\?\UNC\server\share\a b.txt", r"\\server\share\a b.txt"] {
+        let plan = for_os(Os::Windows).reveal_plan(Path::new(path));
+        assert_eq!(plan[0].args, vec!["/select,", r"\\server\share\a b.txt"]);
+    }
 }
 
 #[test]
 fn macos_reveal_uses_open_r() {
     let plan = for_os(Os::Macos).reveal_plan(Path::new("/Users/u/a b.txt"));
-    assert_eq!(plan, vec![Invocation::wait("open", &["-R", "/Users/u/a b.txt"])]);
+    assert_eq!(
+        plan,
+        vec![Invocation::wait("open", &["-R", "/Users/u/a b.txt"])]
+    );
 }
 
 #[test]
@@ -66,8 +100,14 @@ fn linux_reveal_tries_dbus_then_parent_folder() {
     let progs: Vec<_> = plan.iter().map(|i| i.program.as_str()).collect();
     assert_eq!(progs, vec!["gdbus", "dbus-send", "xdg-open"]);
     let uri = "file:///home/u/pasta%2C%20com%20%27aspas%27/a%C3%A7%C3%A3o.rs";
-    assert!(plan[0].args.contains(&format!("['{uri}']")), "{:?}", plan[0].args);
-    assert!(plan[0].args.contains(&"org.freedesktop.FileManager1.ShowItems".to_string()));
+    assert!(
+        plan[0].args.contains(&format!("['{uri}']")),
+        "{:?}",
+        plan[0].args
+    );
+    assert!(plan[0]
+        .args
+        .contains(&"org.freedesktop.FileManager1.ShowItems".to_string()));
     assert!(plan[1].args.contains(&format!("array:string:{uri}")));
     assert_eq!(plan[2].args, vec!["/home/u/pasta, com 'aspas'".to_string()]);
     assert!(plan[0].wait && plan[1].wait && !plan[2].wait);
@@ -92,8 +132,17 @@ fn plan_falls_back_when_dbus_is_unavailable() {
 #[test]
 fn open_plans_use_system_handlers() {
     let url = "https://example.com/a?b=1";
-    assert_eq!(for_os(Os::Windows).open_plan(url), vec![Invocation::spawn("rundll32", &["url.dll,FileProtocolHandler", url])]);
-    assert_eq!(for_os(Os::Macos).open_plan(url), vec![Invocation::spawn("open", &[url])]);
+    assert_eq!(
+        for_os(Os::Windows).open_plan(url),
+        vec![Invocation::spawn(
+            "rundll32",
+            &["url.dll,FileProtocolHandler", url]
+        )]
+    );
+    assert_eq!(
+        for_os(Os::Macos).open_plan(url),
+        vec![Invocation::spawn("open", &[url])]
+    );
     let linux = for_os(Os::Linux).open_plan(url);
     assert_eq!(linux[0], Invocation::spawn("xdg-open", &[url]));
     assert_eq!(linux[1], Invocation::spawn("gio", &["open", url]));
@@ -114,22 +163,76 @@ fn external_url_allowlist() {
 fn default_shell_per_os() {
     let pwsh = |n: &str| (n == "pwsh.exe").then(|| PathBuf::from(r"C:\pwsh.exe"));
     let win = for_os(Os::Windows);
-    assert_eq!(win.default_shell(&ShellEnv { shell_var: None, which: &pwsh }).program, "pwsh.exe");
-    assert_eq!(win.default_shell(&ShellEnv { shell_var: None, which: &no_which }).program, "powershell.exe");
-    let mac = for_os(Os::Macos).default_shell(&ShellEnv { shell_var: None, which: &no_which });
-    assert_eq!((mac.program.as_str(), mac.args.as_slice()), ("/bin/zsh", &["-l".to_string()][..]));
+    assert_eq!(
+        win.default_shell(&ShellEnv {
+            shell_var: None,
+            which: &pwsh
+        })
+        .program,
+        "pwsh.exe"
+    );
+    assert_eq!(
+        win.default_shell(&ShellEnv {
+            shell_var: None,
+            which: &no_which
+        })
+        .program,
+        "powershell.exe"
+    );
+    let mac = for_os(Os::Macos).default_shell(&ShellEnv {
+        shell_var: None,
+        which: &no_which,
+    });
+    assert_eq!(
+        (mac.program.as_str(), mac.args.as_slice()),
+        ("/bin/zsh", &["-l".to_string()][..])
+    );
     let bash = |n: &str| (n == "bash").then(|| PathBuf::from("/usr/bin/bash"));
     let lin = for_os(Os::Linux);
-    assert_eq!(lin.default_shell(&ShellEnv { shell_var: Some("/usr/bin/fish".into()), which: &bash }).program, "/usr/bin/fish");
-    assert_eq!(lin.default_shell(&ShellEnv { shell_var: None, which: &bash }).program, "/usr/bin/bash");
-    assert_eq!(lin.default_shell(&ShellEnv { shell_var: None, which: &no_which }).program, "/bin/sh");
-    assert_eq!(lin.default_shell(&ShellEnv { shell_var: None, which: &no_which }).kind, ShellKind::Posix);
+    assert_eq!(
+        lin.default_shell(&ShellEnv {
+            shell_var: Some("/usr/bin/fish".into()),
+            which: &bash
+        })
+        .program,
+        "/usr/bin/fish"
+    );
+    assert_eq!(
+        lin.default_shell(&ShellEnv {
+            shell_var: None,
+            which: &bash
+        })
+        .program,
+        "/usr/bin/bash"
+    );
+    assert_eq!(
+        lin.default_shell(&ShellEnv {
+            shell_var: None,
+            which: &no_which
+        })
+        .program,
+        "/bin/sh"
+    );
+    assert_eq!(
+        lin.default_shell(&ShellEnv {
+            shell_var: None,
+            which: &no_which
+        })
+        .kind,
+        ShellKind::Posix
+    );
 }
 
 #[test]
 fn shell_line_and_exe_names() {
-    assert_eq!(for_os(Os::Windows).shell_line("dir"), Invocation::spawn("cmd.exe", &["/C", "dir"]));
-    assert_eq!(for_os(Os::Linux).shell_line("ls"), Invocation::spawn("/bin/sh", &["-c", "ls"]));
+    assert_eq!(
+        for_os(Os::Windows).shell_line("dir"),
+        Invocation::spawn("cmd.exe", &["/C", "dir"])
+    );
+    assert_eq!(
+        for_os(Os::Linux).shell_line("ls"),
+        Invocation::spawn("/bin/sh", &["-c", "ls"])
+    );
     assert_eq!(for_os(Os::Windows).exe_name("dotnet"), "dotnet.exe");
     assert_eq!(for_os(Os::Windows).exe_name("node.EXE"), "node.EXE");
     assert_eq!(for_os(Os::Macos).exe_name("dotnet"), "dotnet");
@@ -137,19 +240,46 @@ fn shell_line_and_exe_names() {
 
 #[test]
 fn data_and_home_dirs() {
-    let env = |vars: &'static [(&'static str, &'static str)]| move |k: &str| vars.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string());
-    let w = env(&[("USERPROFILE", r"C:\Users\u"), ("APPDATA", r"C:\Users\u\AppData\Roaming")]);
-    assert_eq!(for_os(Os::Windows).home_dir(&w), Some(PathBuf::from(r"C:\Users\u")));
-    assert_eq!(for_os(Os::Windows).user_data_dir(&w), Some(PathBuf::from(r"C:\Users\u\AppData\Roaming")));
+    let env = |vars: &'static [(&'static str, &'static str)]| {
+        move |k: &str| {
+            vars.iter()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| v.to_string())
+        }
+    };
+    let w = env(&[
+        ("USERPROFILE", r"C:\Users\u"),
+        ("APPDATA", r"C:\Users\u\AppData\Roaming"),
+    ]);
+    assert_eq!(
+        for_os(Os::Windows).home_dir(&w),
+        Some(PathBuf::from(r"C:\Users\u"))
+    );
+    assert_eq!(
+        for_os(Os::Windows).user_data_dir(&w),
+        Some(PathBuf::from(r"C:\Users\u\AppData\Roaming"))
+    );
     let m = env(&[("HOME", "/Users/u")]);
-    assert_eq!(for_os(Os::Macos).user_data_dir(&m), Some(PathBuf::from("/Users/u/Library/Application Support")));
+    assert_eq!(
+        for_os(Os::Macos).user_data_dir(&m),
+        Some(PathBuf::from("/Users/u/Library/Application Support"))
+    );
     let l = env(&[("HOME", "/home/u")]);
-    assert_eq!(for_os(Os::Linux).user_data_dir(&l), Some(PathBuf::from("/home/u/.local/share")));
+    assert_eq!(
+        for_os(Os::Linux).user_data_dir(&l),
+        Some(PathBuf::from("/home/u/.local/share"))
+    );
     let x = env(&[("HOME", "/home/u"), ("XDG_DATA_HOME", "/data")]);
-    assert_eq!(for_os(Os::Linux).user_data_dir(&x), Some(PathBuf::from("/data")));
+    assert_eq!(
+        for_os(Os::Linux).user_data_dir(&x),
+        Some(PathBuf::from("/data"))
+    );
     // XDG relativo é inválido pela spec → cai para o padrão.
     let rel = env(&[("HOME", "/home/u"), ("XDG_DATA_HOME", "rel")]);
-    assert_eq!(for_os(Os::Linux).user_data_dir(&rel), Some(PathBuf::from("/home/u/.local/share")));
+    assert_eq!(
+        for_os(Os::Linux).user_data_dir(&rel),
+        Some(PathBuf::from("/home/u/.local/share"))
+    );
 }
 
 #[test]
@@ -173,18 +303,36 @@ fn dotnet_rids_cover_every_supported_target() {
 
 #[test]
 fn file_uri_to_path_unix_keeps_absolute_paths() {
-    assert_eq!(file_uri_to_path("file:///home/u/a.code-workspace", Os::Linux), Some(PathBuf::from("/home/u/a.code-workspace")));
-    assert_eq!(file_uri_to_path("file:///Users/u/My%20Work/%C3%A1.code-workspace", Os::Macos), Some(PathBuf::from("/Users/u/My Work/á.code-workspace")));
-    assert_eq!(file_uri_to_path("file://localhost/tmp/x", Os::Linux), Some(PathBuf::from("/tmp/x")));
+    assert_eq!(
+        file_uri_to_path("file:///home/u/a.code-workspace", Os::Linux),
+        Some(PathBuf::from("/home/u/a.code-workspace"))
+    );
+    assert_eq!(
+        file_uri_to_path("file:///Users/u/My%20Work/%C3%A1.code-workspace", Os::Macos),
+        Some(PathBuf::from("/Users/u/My Work/á.code-workspace"))
+    );
+    assert_eq!(
+        file_uri_to_path("file://localhost/tmp/x", Os::Linux),
+        Some(PathBuf::from("/tmp/x"))
+    );
     assert_eq!(file_uri_to_path("file://server/share/x", Os::Linux), None);
     assert_eq!(file_uri_to_path("https://x/y", Os::Linux), None);
 }
 
 #[test]
 fn file_uri_to_path_windows_drives_and_unc() {
-    assert_eq!(file_uri_to_path("file:///C:/work/a.code-workspace", Os::Windows), Some(PathBuf::from(r"C:\work\a.code-workspace")));
-    assert_eq!(file_uri_to_path("file:///c%3A/work/My%20App/x", Os::Windows), Some(PathBuf::from(r"C:\work\My App\x")));
-    assert_eq!(file_uri_to_path("FILE://srv/share/x", Os::Windows), Some(PathBuf::from(r"\\srv\share\x")));
+    assert_eq!(
+        file_uri_to_path("file:///C:/work/a.code-workspace", Os::Windows),
+        Some(PathBuf::from(r"C:\work\a.code-workspace"))
+    );
+    assert_eq!(
+        file_uri_to_path("file:///c%3A/work/My%20App/x", Os::Windows),
+        Some(PathBuf::from(r"C:\work\My App\x"))
+    );
+    assert_eq!(
+        file_uri_to_path("FILE://srv/share/x", Os::Windows),
+        Some(PathBuf::from(r"\\srv\share\x"))
+    );
 }
 
 #[test]
@@ -195,7 +343,10 @@ fn file_uri_round_trip() {
     assert_eq!(file_uri_to_path(&uri, Os::Linux).as_deref(), Some(p));
     let w = path_to_file_uri(Path::new(r"C:\a b\x"), Os::Windows);
     assert_eq!(w, "file:///C:/a%20b/x");
-    assert_eq!(path_to_file_uri(Path::new(r"\\srv\share\x"), Os::Windows), "file://srv/share/x");
+    assert_eq!(
+        path_to_file_uri(Path::new(r"\\srv\share\x"), Os::Windows),
+        "file://srv/share/x"
+    );
 }
 
 #[test]
@@ -220,12 +371,18 @@ fn init_script_exposes_platform_snapshot() {
 #[test]
 fn linux_plan_executes_with_real_processes() {
     use std::os::unix::fs::PermissionsExt;
-    let dir = std::env::temp_dir().join(format!("fluent-platform-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    let dir = fixture.path();
     let log = dir.join("log");
     let stub = |name: &str, code: i32| {
         let p = dir.join(name);
-        std::fs::write(&p, format!("#!/bin/sh\necho {name} \"$@\" >> '{}'\nexit {code}\n", log.display())).unwrap();
+        std::fs::write(
+            &p,
+            format!(
+                "#!/bin/sh\nroot=${{0%/*}}\necho {name} \"$@\" >> \"$root/log\"\nexit {code}\n"
+            ),
+        )
+        .unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
         p.to_string_lossy().to_string()
     };
@@ -238,7 +395,10 @@ fn linux_plan_executes_with_real_processes() {
     execute_plan(&plan, &SystemRunner).unwrap();
     // O spawn do xdg-open é assíncrono: espera o log.
     for _ in 0..100 {
-        if std::fs::read_to_string(&log).map(|s| s.contains("xdg-open")).unwrap_or(false) {
+        if std::fs::read_to_string(&log)
+            .map(|s| s.contains("xdg-open"))
+            .unwrap_or(false)
+        {
             break;
         }
         std::thread::sleep(Duration::from_millis(10));
@@ -246,5 +406,4 @@ fn linux_plan_executes_with_real_processes() {
     let text = std::fs::read_to_string(&log).unwrap();
     assert!(text.contains("gdbus call --session"), "{text}");
     assert!(text.contains("xdg-open /tmp/pasta"), "{text}");
-    std::fs::remove_dir_all(&dir).unwrap();
 }

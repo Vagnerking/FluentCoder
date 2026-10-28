@@ -18,7 +18,11 @@ pub fn path_from_env_block(out: &[u8]) -> Option<String> {
     let after = text.split_once(MARK)?.1;
     after
         .split('\n')
-        .find_map(|kv| kv.trim_end_matches('\r').strip_prefix("PATH=").map(str::to_string))
+        .find_map(|kv| {
+            kv.trim_end_matches('\r')
+                .strip_prefix("PATH=")
+                .map(str::to_string)
+        })
         .filter(|p| !p.is_empty())
 }
 
@@ -41,34 +45,88 @@ pub fn launched_from_gui(term: Option<&str>) -> bool {
 /// Executa o login shell e devolve o PATH dele (Unix). `None` em erro/timeout.
 #[cfg(unix)]
 fn login_shell_path(shell: &str, timeout: Duration) -> Option<String> {
+    let mut command = std::process::Command::new(shell);
+    command.args(["-ilc", &format!("printf '%s' '{MARK}'; env")]);
+    path_from_shell_command(command, timeout)
+}
+
+#[cfg(unix)]
+fn path_from_shell_command(
+    mut command: std::process::Command,
+    timeout: Duration,
+) -> Option<String> {
     use std::io::Read;
-    let mut child = std::process::Command::new(shell)
-        .args(["-ilc", &format!("printf '%s' '{MARK}'; env")])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
-    let mut stdout = child.stdout.take()?;
-    let reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout.read_to_end(&mut buf);
-        buf
-    });
-    let started = std::time::Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if started.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
+    use std::os::fd::AsRawFd;
+
+    struct ReapChild(std::process::Child);
+    impl Drop for ReapChild {
+        fn drop(&mut self) {
+            if !matches!(self.0.try_wait(), Ok(Some(_))) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
             }
-            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
-            Err(_) => return None,
         }
     }
-    path_from_env_block(&reader.join().ok()?)
+
+    let mut child = ReapChild(
+        command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .ok()?,
+    );
+    let mut stdout = child.0.stdout.take()?;
+    let fd = stdout.as_raw_fd();
+    // SAFETY: stdout owns this live pipe descriptor throughout the calls;
+    // F_GETFL takes no pointer and does not transfer ownership.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags == -1 {
+        return None;
+    }
+    // SAFETY: same live descriptor; F_SETFL expects an integer flags argument.
+    // Preserve existing flags and make only our read end nonblocking.
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
+        return None;
+    }
+    // A profile can leave stdout open in a background child even after the
+    // shell exits. Poll pipe and child under the same deadline, with no reader
+    // thread that can block on EOF after the timeout.
+    const MAX_OUTPUT: usize = 8 * 1024 * 1024;
+    let mut output = Vec::new();
+    let mut buf = [0; 16 * 1024];
+    let mut eof = false;
+    let mut exited = false;
+    let started = std::time::Instant::now();
+    loop {
+        if started.elapsed() >= timeout {
+            return None;
+        }
+        let mut idle = eof;
+        if !eof {
+            match stdout.read(&mut buf) {
+                Ok(0) => eof = true,
+                Ok(n) => {
+                    if output.len() + n > MAX_OUTPUT {
+                        return None;
+                    }
+                    output.extend_from_slice(&buf[..n]);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => idle = true,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => return None,
+            }
+        }
+        if !exited {
+            exited = child.0.try_wait().ok()?.is_some();
+        }
+        if eof && exited {
+            return path_from_env_block(&output);
+        }
+        if idle {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 }
 
 /// No boot (antes de qualquer thread do Tauri): se o app veio da GUI no
@@ -76,7 +134,9 @@ fn login_shell_path(shell: &str, timeout: Duration) -> Option<String> {
 pub fn apply_login_shell_path() {
     #[cfg(unix)]
     {
-        if std::env::var_os("FLUENT_SKIP_LOGIN_ENV").is_some() || !launched_from_gui(std::env::var("TERM").ok().as_deref()) {
+        if std::env::var_os("FLUENT_SKIP_LOGIN_ENV").is_some()
+            || !launched_from_gui(std::env::var("TERM").ok().as_deref())
+        {
             return;
         }
         let shell = super::default_shell().program;
@@ -92,10 +152,79 @@ pub fn apply_login_shell_path() {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn fixture_command(script: &str, root: &std::path::Path) -> std::process::Command {
+        // Execute an existing shell with a controlled script and positional
+        // argument. Writing and immediately executing a temporary script can
+        // fail with ETXTBSY when another test forks during the write.
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args(["-c", script, "fixture"]).arg(root);
+        command
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stdout_inherited_by_a_background_job_cannot_bypass_timeout() {
+        let root = tempfile::tempdir().unwrap();
+        let command = fixture_command(
+            r#"root=$1
+(sleep 3; printf done > "$root/done") &
+printf '__FLUENT_ENV_BEGIN__PATH=/fixture/bin\n'
+"#,
+            root.path(),
+        );
+        let started = std::time::Instant::now();
+        let result = path_from_shell_command(command, Duration::from_secs(1));
+        let elapsed = started.elapsed();
+
+        // The fixture's background child has a finite lifetime; wait for its
+        // completion before assertions or removing the temporary directory.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !root.path().join("done").exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(root.path().join("done").exists());
+        assert!(result.is_none(), "incomplete output must time out");
+        assert!(
+            elapsed < Duration::from_millis(2500),
+            "probe took {elapsed:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shell_that_never_exits_is_stopped_at_the_deadline() {
+        let root = tempfile::tempdir().unwrap();
+        let command = fixture_command("while :; do :; done", root.path());
+        let started = std::time::Instant::now();
+        assert_eq!(
+            path_from_shell_command(command, Duration::from_millis(100)),
+            None
+        );
+        assert!(started.elapsed() < Duration::from_millis(750));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn excessive_profile_output_is_rejected_instead_of_used_partially() {
+        let root = tempfile::tempdir().unwrap();
+        let command = fixture_command(
+            "printf '__FLUENT_ENV_BEGIN__PATH=/fixture/bin\\n'; head -c 16777216 /dev/zero",
+            root.path(),
+        );
+        assert_eq!(
+            path_from_shell_command(command, Duration::from_secs(5)),
+            None
+        );
+    }
+
     #[test]
     fn parses_path_after_noise_from_rc_files() {
         let out = b"Bem-vindo!\nPATH=/falso\n__FLUENT_ENV_BEGIN__HOME=/home/u\nPATH=/home/u/.cargo/bin:/usr/bin\nSHELL=/bin/zsh\n";
-        assert_eq!(path_from_env_block(out).as_deref(), Some("/home/u/.cargo/bin:/usr/bin"));
+        assert_eq!(
+            path_from_env_block(out).as_deref(),
+            Some("/home/u/.cargo/bin:/usr/bin")
+        );
         assert_eq!(path_from_env_block(b"sem marcador PATH=/x"), None);
         assert_eq!(path_from_env_block(b"__FLUENT_ENV_BEGIN__PATH=\n"), None);
     }

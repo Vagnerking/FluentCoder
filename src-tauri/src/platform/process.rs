@@ -16,7 +16,7 @@ pub fn windows_kill_tree_args(pid: u32) -> Vec<String> {
 }
 
 /// Mata a árvore do processo `pid`. `grace`: quanto esperar o encerramento
-/// gracioso (Unix) antes do SIGKILL. Nunca bloqueia além de `grace` + ~50 ms.
+/// gracioso (Unix) antes do SIGKILL. No Windows espera o processo taskkill.
 /// Não colhe o filho: quem tem o handle (`Child`) precisa dar `wait`.
 #[allow(dead_code)] // API síncrona para quem não tem o handle do filho
 pub fn kill_process_tree(pid: u32, grace: Duration) {
@@ -84,7 +84,9 @@ fn signal_tree(pid: u32, signals: &[libc::c_int]) {
 /// Vivo e ainda não zumbi (um zumbi "existe" para `kill(pid, 0)`).
 #[cfg(unix)]
 fn alive_not_zombie(pid: u32) -> bool {
-    let Ok(p) = i32::try_from(pid) else { return false };
+    let Ok(p) = i32::try_from(pid) else {
+        return false;
+    };
     // SAFETY: sinal 0 só testa existência.
     if unsafe { libc::kill(p, 0) } != 0 {
         return false;
@@ -92,7 +94,10 @@ fn alive_not_zombie(pid: u32) -> bool {
     match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         // Campo 3 é o estado; o nome (campo 2) pode ter espaços, então pega
         // o que vem depois do último ')'.
-        Ok(stat) => stat.rsplit_once(')').map(|(_, rest)| !rest.trim_start().starts_with('Z')).unwrap_or(true),
+        Ok(stat) => stat
+            .rsplit_once(')')
+            .map(|(_, rest)| !rest.trim_start().starts_with('Z'))
+            .unwrap_or(true),
         Err(_) => true, // sem /proc (macOS): assume vivo até o prazo
     }
 }
@@ -120,18 +125,36 @@ mod tests {
         let mut out = child.stdout.take().unwrap();
         let mut buf = [0u8; 32];
         let n = std::io::Read::read(&mut out, &mut buf).unwrap();
-        let grandchild: i32 = std::str::from_utf8(&buf[..n]).unwrap().trim().parse().unwrap();
+        let grandchild: i32 = std::str::from_utf8(&buf[..n])
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
         kill_process_tree(child.id(), Duration::from_millis(500));
         let status = child.wait().unwrap();
         assert!(!status.success());
         // O neto também morreu (pode ficar zumbi do sh só até o reaper do init).
         std::thread::sleep(Duration::from_millis(100));
+        // SAFETY: signal zero checks this known positive descendant PID;
+        // it sends no signal and takes no pointers.
         let alive = unsafe { libc::kill(grandchild, 0) } == 0;
-        let zombie_or_gone = !alive
-            || std::fs::read_to_string(format!("/proc/{grandchild}/stat"))
-                .map(|s| s.split_whitespace().nth(2) == Some("Z"))
-                .unwrap_or(true);
-        assert!(zombie_or_gone, "neto {grandchild} sobreviveu ao kill da árvore");
+        let zombie_or_gone = if !alive {
+            true
+        } else {
+            // ps works on Linux and macOS. Missing /proc on macOS must not
+            // silently turn an unverified live descendant into a passing test.
+            let output = std::process::Command::new("ps")
+                .args(["-p", &grandchild.to_string(), "-o", "stat="])
+                .output()
+                .expect("ps available for descendant verification");
+            let state = String::from_utf8_lossy(&output.stdout);
+            state.trim_start().starts_with('Z')
+                || (!output.status.success() && state.trim().is_empty() && output.stderr.is_empty())
+        };
+        assert!(
+            zombie_or_gone,
+            "neto {grandchild} sobreviveu ao kill da árvore"
+        );
     }
 
     #[cfg(unix)]

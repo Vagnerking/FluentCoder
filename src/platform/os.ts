@@ -15,7 +15,7 @@ export interface PlatformCapabilities {
   /** Snap Layouts do Windows 11. */
   snapLayouts: boolean;
   mica: boolean;
-  /** Windows e macOS (APFS) não diferenciam maiúsculas em caminhos. */
+  /** Convenção padrão do SO; não determina identidade de arquivos por volume. */
   pathsCaseInsensitive: boolean;
   /** Menu nativo do app (macOS). */
   nativeMenu: boolean;

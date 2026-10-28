@@ -182,8 +182,14 @@ pub fn info() -> PlatformInfo {
         os: p.os(),
         arch: std::env::consts::ARCH,
         family: std::env::consts::FAMILY,
-        desktop: if p.os() == Os::Linux { env("XDG_CURRENT_DESKTOP") } else { None },
-        wayland: p.os() == Os::Linux && (env("WAYLAND_DISPLAY").is_some() || env("XDG_SESSION_TYPE").as_deref() == Some("wayland")),
+        desktop: if p.os() == Os::Linux {
+            env("XDG_CURRENT_DESKTOP")
+        } else {
+            None
+        },
+        wayland: p.os() == Os::Linux
+            && (env("WAYLAND_DISPLAY").is_some()
+                || env("XDG_SESSION_TYPE").as_deref() == Some("wayland")),
         capabilities: p.capabilities(),
     }
 }
@@ -297,7 +303,8 @@ pub fn open_external_url(url: &str) -> Result<(), String> {
     if !is_safe_external_url(url) {
         return Err(format!("URL externa recusada: {url}"));
     }
-    execute_plan(&current().open_plan(url.trim()), &SystemRunner).map_err(|e| format!("Falha ao abrir {url}: {e}"))
+    execute_plan(&current().open_plan(url.trim()), &SystemRunner)
+        .map_err(|e| format!("Falha ao abrir {url}: {e}"))
 }
 
 /// Abre um caminho local existente no app padrão do sistema.
@@ -318,7 +325,11 @@ pub fn move_to_trash(path: &Path) -> Result<(), String> {
 /// Shell padrão resolvido com o ambiente real.
 pub fn default_shell() -> ShellSpec {
     let which = |name: &str| which::which(name).ok();
-    let var = if current().os() == Os::Windows { "COMSPEC" } else { "SHELL" };
+    let var = if current().os() == Os::Windows {
+        "COMSPEC"
+    } else {
+        "SHELL"
+    };
     current().default_shell(&ShellEnv {
         shell_var: std::env::var(var).ok().filter(|s| !s.trim().is_empty()),
         which: &which,
@@ -397,7 +408,9 @@ pub fn path_to_file_uri(path: &Path, os: Os) -> String {
     };
     let mut out = prefix;
     for b in rest.bytes() {
-        let keep = b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b'/') || (os == Os::Windows && b == b':');
+        let keep = b.is_ascii_alphanumeric()
+            || matches!(b, b'-' | b'.' | b'_' | b'~' | b'/')
+            || (os == Os::Windows && b == b':');
         if keep {
             out.push(b as char);
         } else {
@@ -415,7 +428,9 @@ pub fn path_to_file_uri(path: &Path, os: Os) -> String {
 ///
 /// `None` se não for `file:` ou se tiver host remoto no Unix.
 pub fn file_uri_to_path(uri: &str, os: Os) -> Option<PathBuf> {
-    let scheme_ok = uri.len() >= 7 && uri[..7].eq_ignore_ascii_case("file://");
+    let scheme_ok = uri
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("file://"));
     if !scheme_ok {
         return None;
     }
@@ -432,7 +447,11 @@ pub fn file_uri_to_path(uri: &str, os: Os) -> Option<PathBuf> {
     match os {
         Os::Windows => {
             if has_host {
-                return Some(PathBuf::from(format!(r"\\{}{}", authority, path.replace('/', "\\"))));
+                return Some(PathBuf::from(format!(
+                    r"\\{}{}",
+                    authority,
+                    path.replace('/', "\\")
+                )));
             }
             let p = path.strip_prefix('/').unwrap_or(&path);
             let bytes = p.as_bytes();

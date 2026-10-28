@@ -1,21 +1,14 @@
-import { getPlatform } from "./platform/os.ts";
-
 const WINDOWS_ABSOLUTE_PATH = /^[a-zA-Z]:[\\/]/;
 
 /**
  * Whether two paths must be compared ignoring case: Windows drive paths
- * always; POSIX paths only where the default filesystem is case-insensitive
- * (macOS/APFS — `platform.capabilities.pathsCaseInsensitive`). On Linux a
- * POSIX path keeps its exact case.
+ * always; POSIX paths only when the caller has established the filesystem's
+ * case behavior. An operating-system default does not identify a volume:
+ * macOS also supports case-sensitive APFS volumes.
  */
 function caseInsensitivePair(a: string, b: string, caseInsensitivePosix: boolean): boolean {
   if (WINDOWS_ABSOLUTE_PATH.test(a) && WINDOWS_ABSOLUTE_PATH.test(b)) return true;
   return caseInsensitivePosix && a.startsWith("/") && b.startsWith("/");
-}
-
-function posixCaseInsensitive(): boolean {
-  const p = getPlatform();
-  return p.os === "macos" && p.capabilities.pathsCaseInsensitive;
 }
 
 function normalizeSeparators(path: string): string {
@@ -30,7 +23,7 @@ function normalizeSeparators(path: string): string {
  * normalized so `\` and `/` don't read as distinct. Without this, the editor
  * would open the same file as two tabs (issue #7).
  */
-export function samePath(a: string, b: string, caseInsensitivePosix = posixCaseInsensitive()): boolean {
+export function samePath(a: string, b: string, caseInsensitivePosix = false): boolean {
   const fa = normalizeSeparators(a);
   const fb = normalizeSeparators(b);
   if (caseInsensitivePair(a, b, caseInsensitivePosix)) {
@@ -53,7 +46,7 @@ function trimTrailingSeparators(path: string): string {
 export function pathForWorkspaceDisplay(
   filePath: string,
   rootPath: string | null,
-  caseInsensitivePosix = posixCaseInsensitive()
+  caseInsensitivePosix = false
 ): string {
   if (!rootPath) return filePath;
 

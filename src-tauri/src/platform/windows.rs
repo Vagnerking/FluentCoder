@@ -24,7 +24,11 @@ impl Platform for WindowsPlatform {
     /// funciona, então o passo é `spawn` (não usa o status).
     fn reveal_plan(&self, path: &Path) -> Vec<Invocation> {
         let raw = path.to_string_lossy();
-        let p = raw.strip_prefix(r"\\?\").unwrap_or(&raw).to_string();
+        let p = if let Some(unc) = raw.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{unc}")
+        } else {
+            raw.strip_prefix(r"\\?\").unwrap_or(&raw).to_string()
+        };
         vec![Invocation {
             program: "explorer".into(),
             args: vec!["/select,".into(), p],
@@ -33,12 +37,19 @@ impl Platform for WindowsPlatform {
     }
 
     fn open_plan(&self, target: &str) -> Vec<Invocation> {
-        vec![Invocation::spawn("rundll32", &["url.dll,FileProtocolHandler", target])]
+        vec![Invocation::spawn(
+            "rundll32",
+            &["url.dll,FileProtocolHandler", target],
+        )]
     }
 
     /// `pwsh.exe` (PowerShell 7) quando instalado, senão `powershell.exe`.
     fn default_shell(&self, env: &ShellEnv) -> ShellSpec {
-        let program = if (env.which)("pwsh.exe").is_some() { "pwsh.exe" } else { "powershell.exe" };
+        let program = if (env.which)("pwsh.exe").is_some() {
+            "pwsh.exe"
+        } else {
+            "powershell.exe"
+        };
         ShellSpec {
             program: program.into(),
             args: vec![],
@@ -59,7 +70,10 @@ impl Platform for WindowsPlatform {
     }
 
     fn user_data_dir(&self, env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
-        env("APPDATA").map(PathBuf::from).or_else(|| self.home_dir(env).map(|h| h.join("AppData").join("Roaming")))
+        env("APPDATA").map(PathBuf::from).or_else(|| {
+            self.home_dir(env)
+                .map(|h| h.join("AppData").join("Roaming"))
+        })
     }
 
     fn home_dir(&self, env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {

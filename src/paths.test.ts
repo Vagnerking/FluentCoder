@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { pathForWorkspaceDisplay, samePath } from "./paths.ts";
+import { setPlatformForTests } from "./platform/os.ts";
 
 test("shows a Windows project file relative to the workspace despite drive casing", () => {
   assert.equal(
@@ -73,9 +74,22 @@ test("samePath stays case-sensitive for POSIX paths", () => {
   );
 });
 
-test("samePath ignores case for POSIX paths only where the FS is case-insensitive (macOS)", () => {
+test("samePath ignores POSIX case only with explicit filesystem information", () => {
   assert.equal(samePath("/Users/u/Titulo.cs", "/users/u/titulo.cs", true), true);
   assert.equal(samePath("/home/u/Titulo.cs", "/home/u/titulo.cs", false), false);
   assert.equal(pathForWorkspaceDisplay("/Users/U/Proj/src/a.ts", "/Users/u/proj", true), "src/a.ts");
   assert.equal(pathForWorkspaceDisplay("/home/U/proj/a.ts", "/home/u/proj", false), "/home/U/proj/a.ts");
+});
+
+test("macOS defaults do not merge distinct files on a case-sensitive volume", () => {
+  setPlatformForTests("macos");
+  try {
+    assert.equal(samePath("/Volumes/Work/Title.cs", "/Volumes/Work/title.cs"), false);
+    assert.equal(
+      pathForWorkspaceDisplay("/Volumes/Work/project/file.ts", "/Volumes/Work/Project"),
+      "/Volumes/Work/project/file.ts"
+    );
+  } finally {
+    setPlatformForTests(null);
+  }
 });
