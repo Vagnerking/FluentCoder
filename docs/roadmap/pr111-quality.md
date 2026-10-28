@@ -33,7 +33,36 @@ de publicar correções ou declarar conclusão.
   binder nativo falhava. Foi substituído pelo plano estruturado descrito no
   registro abaixo; o candidato atual continua em rascunho até os aceites.
 
-## Progresso verificado em 28/10/2026
+## Estado mais recente em 28/10/2026
+
+- #112 atualizado em `3f416ce487bd069f4c109a864c549124cca10ad4` para
+  diagnosticar a falha Windows `STATUS_ENTRYPOINT_NOT_FOUND`, que aconteceu
+  antes dos testes. Novo run
+  [40767926784](https://github.com/Vagnerking/FluentCoder/actions/runs/40767926784):
+  Linux/frontend/metadados passaram; Windows em execução neste snapshot.
+- #113 atualizado em `91a3f824fce4ea462a8d737058f5f6c5019d6400` com teste
+  de fechamento da árvore nativa e mais casos `.cmd`/`.bat`. O fechamento pelo
+  caminho real de sessão passou localmente no Linux; batch/Windows pendentes.
+  A suíte padrão continua com 408 aprovados, agora 14 ignorados; os dois
+  aceites explícitos de PTY foram executados separadamente no Linux. Novo
+  run [40767982197](https://github.com/Vagnerking/FluentCoder/actions/runs/40767982197):
+  frontend/metadados/argumentos PowerShell passaram; Rust em execução.
+- [PR #114: correções npm](https://github.com/Vagnerking/FluentCoder/pull/114),
+  rascunho com três arquivos, base `ci/pr111-quality-gates`, head
+  `d3a8ffbab657ada6c6d54f2a18f373bc9bd50694`. Audit local passou de 52 entradas
+  para zero com atualizações compatíveis; adiciona audit ao CI. Instalação
+  limpa, 1086 testes frontend, quatro testes do gate e build passaram.
+  Sanitizador e renderer Markdown reais do Codingame passaram no WebKitGTK
+  antes/depois, preservando formatação/links e rejeitando os casos maliciosos.
+  Revisão independente não encontrou defeitos concretos; aguardar CI remoto.
+- O primeiro inventário Cargo encontrou 20 advisories, além de avisos de
+  manutenção/unsoundness/yanked. Alcance e remediação ainda pendentes; nenhum
+  arquivo Cargo foi alterado no incremento npm. Npm limpo não equivale a
+  segurança integral aprovada.
+- Evidências e fixtures foram salvas nas coleções gerenciadas das worktrees.
+  O #111 e a `main` continuam preservados; meta ativa, sem aceite antecipado.
+
+## Snapshot anterior de 28/10/2026
 
 - Meta registrada e ativa. Skills de Rust/Tauri/segurança instaladas e regras
   preventivas compartilhadas entre ferramentas em `AGENTS.md`/`CLAUDE.md`.
