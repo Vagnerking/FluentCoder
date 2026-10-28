@@ -504,6 +504,60 @@ pub async fn roslyn_launch_command(
 mod pin_tests {
     use super::*;
 
+    #[tokio::test]
+    #[ignore = "downloads the pinned Roslyn package and launches its --help in an isolated directory"]
+    async fn real_pinned_roslyn_zip_extracts_and_starts() {
+        let rid = roslyn_rid().unwrap();
+        let bytes = download_bytes(&roslyn_download_url(rid)).await.unwrap();
+        verify_pinned_sha256(&bytes, roslyn_sha256(rid), rid).unwrap();
+        println!("Roslyn {rid}: {} bytes, SHA-256 {}", bytes.len(), sha256_hex(&bytes));
+        let root = tempfile::tempdir().unwrap();
+        let dest = root.path().to_path_buf();
+        tokio::task::spawn_blocking(move || extract_zip(&bytes, &dest)).await.unwrap().unwrap();
+        let exe = find_executable(root.path()).expect("Roslyn executable in extracted package");
+        ensure_executable(&exe).unwrap();
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            tokio::process::Command::new(&exe)
+                .arg("--help")
+                .current_dir(root.path())
+                .env("DOTNET_CLI_HOME", root.path())
+                .kill_on_drop(true)
+                .output(),
+        ).await.expect("Roslyn --help timed out").unwrap();
+        assert!(output.status.success(), "Roslyn --help: {output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("--stdio"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manual_zip_keeps_link_targets_as_data_and_ignores_privileged_modes() {
+        use crate::extensions::vsix::tests::{build_zip, set_archive_unix_mode};
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = root.path().join("outside");
+        std::fs::write(&outside, b"unchanged").unwrap();
+        std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let mut bytes = build_zip(&[
+            ("link", b"../outside", Some(0o120777)),
+            ("nested/tool", b"payload", Some(0o755)),
+            ("../escape", b"must not escape", None),
+        ]);
+        set_archive_unix_mode(&mut bytes, "nested/tool", 0o107755);
+        let dest = root.path().join("out");
+
+        extract_zip(&bytes, &dest).unwrap();
+
+        assert!(std::fs::symlink_metadata(dest.join("link")).unwrap().file_type().is_file());
+        assert_eq!(std::fs::read(dest.join("link")).unwrap(), b"../outside");
+        assert_eq!(std::fs::read(dest.join("nested/tool")).unwrap(), b"payload");
+        assert_eq!(std::fs::metadata(dest.join("nested/tool")).unwrap().permissions().mode() & 0o7000, 0);
+        assert_eq!(std::fs::read(&outside).unwrap(), b"unchanged");
+        assert_eq!(std::fs::metadata(&outside).unwrap().permissions().mode() & 0o7777, 0o600);
+        assert!(!root.path().join("escape").exists());
+    }
+
     #[test]
     fn every_supported_target_has_a_pinned_roslyn_hash() {
         for (os, arch) in [

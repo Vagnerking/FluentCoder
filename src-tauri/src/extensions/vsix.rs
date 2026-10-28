@@ -167,7 +167,7 @@ fn extract_inner<R: Read + Seek>(reader: R, dest: &Path, limits: Limits) -> Resu
     let mut plan: Vec<(usize, PathBuf, bool)> = Vec::new();
     for i in 0..archive.len() {
         let f = archive.by_index_raw(i).map_err(|e| e.to_string())?;
-        let raw = f.name().to_string();
+        let raw = f.name().map_err(|e| format!("nome inválido no pacote: {e}"))?.into_owned();
         if is_symlink_mode(f.unix_mode()) {
             return Err(format!("o pacote contém um link simbólico: {raw}"));
         }
@@ -274,6 +274,24 @@ pub(crate) mod tests {
         buf.into_inner()
     }
 
+    // ZipWriter masks privileged bits, so inject raw central-directory metadata
+    // to exercise the reader with an archive an external publisher could send.
+    pub(crate) fn set_archive_unix_mode(bytes: &mut [u8], name: &str, mode: u32) {
+        for i in 0..bytes.len().saturating_sub(46) {
+            if bytes[i..i + 4] != [0x50, 0x4b, 0x01, 0x02] {
+                continue;
+            }
+            let len = u16::from_le_bytes([bytes[i + 28], bytes[i + 29]]) as usize;
+            if bytes.get(i + 46..i + 46 + len) != Some(name.as_bytes()) {
+                continue;
+            }
+            bytes[i + 5] = 3; // "version made by": Unix
+            bytes[i + 38..i + 42].copy_from_slice(&(mode << 16).to_le_bytes());
+            return;
+        }
+        panic!("central-directory entry missing: {name}");
+    }
+
     pub(crate) fn fixture_vsix(publisher: &str, name: &str, version: &str, platform: Option<&str>) -> Vec<u8> {
         let pkg = format!(
             r#"{{"name":"{name}","publisher":"{publisher}","version":"{version}","engines":{{"vscode":"^1.80.0"}},"main":"./out/ext.js","contributes":{{"commands":[{{"command":"{name}.hello","title":"Hello"}}]}}}}"#
@@ -317,6 +335,33 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn preserves_utf8_and_legacy_cp437_entry_names() {
+        let mut bytes = build_zip(&[
+            ("extension/package.json", b"{}", None),
+            ("extension/mídia/你好.txt", b"utf8", None),
+            ("extension/cafX.txt", b"cp437", None),
+        ]);
+        // ASCII writer entry has no UTF-8 flag. Replace its equal-length local
+        // and central names with a genuine CP437 byte for é.
+        let name = b"extension/cafX.txt";
+        let mut replaced = 0;
+        for i in 0..=bytes.len() - name.len() {
+            if &bytes[i..i + name.len()] == name {
+                bytes[i + 13] = 0x82;
+                replaced += 1;
+            }
+        }
+        assert_eq!(replaced, 2);
+        let root = tempfile::tempdir().unwrap();
+        let dest = root.path().join("out");
+
+        extract_payload(Cursor::new(bytes), &dest, Limits::default()).unwrap();
+
+        assert_eq!(std::fs::read(dest.join("mídia/你好.txt")).unwrap(), b"utf8");
+        assert_eq!(std::fs::read(dest.join("café.txt")).unwrap(), b"cp437");
+    }
+
+    #[test]
     fn rejects_zip_slip() {
         for bad in ["extension/../../evil.txt", "../evil.txt", "/abs/evil", "extension/a\\..\\b", "C:/x", "extension//x"] {
             let z = build_zip(&[("extension/package.json", b"{}", None), (bad, b"x", None)]);
@@ -337,6 +382,25 @@ pub(crate) mod tests {
         let err = extract_payload(Cursor::new(z), &root.join("out"), Limits::default()).unwrap_err();
         assert!(err.contains("link simbólico"), "{err}");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn strips_privileged_archive_bits_but_keeps_executable_payload() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut bytes = build_zip(&[
+            ("extension/package.json", b"{}", None),
+            ("extension/tool", b"#!/bin/sh\n", Some(0o755)),
+        ]);
+        set_archive_unix_mode(&mut bytes, "extension/tool", 0o107755);
+        let root = tempfile::tempdir().unwrap();
+        let dest = root.path().join("out");
+
+        extract_payload(Cursor::new(bytes), &dest, Limits::default()).unwrap();
+
+        assert_eq!(std::fs::metadata(dest.join("tool")).unwrap().permissions().mode() & 0o7777, 0o755);
+        assert_eq!(std::fs::read(dest.join("tool")).unwrap(), b"#!/bin/sh\n");
     }
 
     #[test]
