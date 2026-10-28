@@ -65,5 +65,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          cache-on-failure: true
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib
+      - name: Diagnóstico de carregamento nativo no Windows
+        if: failure() && runner.os == 'Windows'
+        shell: pwsh
+        run: ./.github/scripts/windows-loader-diagnostics.ps1
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D clippy::correctness -D clippy::await_holding_lock
