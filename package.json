@@ -15,7 +15,9 @@
     "ext-host:flows": "node tools/ext-host/scripts/flows-check.js",
     "ext-host:orphan-check": "node tools/ext-host/scripts/orphan-check.js",
     "ext-host:capabilities": "node tools/ext-host/discovery/capabilities.js",
-    "ext-host:catalog-check": "node --experimental-strip-types tools/ext-host/scripts/catalog-check.mts"
+    "ext-host:catalog-check": "node --experimental-strip-types tools/ext-host/scripts/catalog-check.mts",
+    "pr:check": "node scripts/pr-check.mjs",
+    "test:pr-check": "node --test scripts/pr-check.test.mjs"
   },
   "dependencies": {
     "@codingame/monaco-vscode-api": "^25.1.2",
