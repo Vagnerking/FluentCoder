@@ -50,6 +50,7 @@ jobs:
       matrix:
         os: [ubuntu-22.04, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -66,7 +67,11 @@ jobs:
         with:
           workspaces: src-tauri
           cache-on-failure: true
-      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib
+      - name: Compilar testes Rust (sem executar)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib --no-run
+      - name: Executar testes Rust
+        timeout-minutes: 10
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib -- --nocapture
       - name: Diagnóstico de carregamento nativo no Windows
         if: failure() && runner.os == 'Windows'
         shell: pwsh

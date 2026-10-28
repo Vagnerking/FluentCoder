@@ -103,8 +103,10 @@ impl Platform for LinuxPlatform {
 
     fn user_data_dir(&self, env: &dyn Fn(&str) -> Option<String>) -> Option<PathBuf> {
         env("XDG_DATA_HOME")
+            // This adapter models Linux even when tested on another host.
+            // Path::is_absolute would apply Windows drive/root rules there.
+            .filter(|p| p.starts_with('/'))
             .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
             .or_else(|| self.home_dir(env).map(|h| h.join(".local").join("share")))
     }
 

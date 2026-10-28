@@ -153,6 +153,35 @@ fn data_and_home_dirs() {
 }
 
 #[test]
+fn linux_xdg_paths_use_posix_rules_on_every_host() {
+    let linux = for_os(Os::Linux);
+    for path in ["/", "/data", "/dados com espaços/ação", "//shared/data"] {
+        let env = |name: &str| match name {
+            "HOME" => Some("/home/u".into()),
+            "XDG_DATA_HOME" => Some(path.to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            linux.user_data_dir(&env),
+            Some(PathBuf::from(path)),
+            "{path}"
+        );
+    }
+    for path in ["", "relative", "~/data", r"C:\data", "C:/data", r"\data"] {
+        let env = |name: &str| match name {
+            "HOME" => Some("/home/u".into()),
+            "XDG_DATA_HOME" => Some(path.to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            linux.user_data_dir(&env),
+            Some(PathBuf::from("/home/u/.local/share")),
+            "{path}"
+        );
+    }
+}
+
+#[test]
 fn capabilities_per_os() {
     assert!(!for_os(Os::Macos).capabilities().custom_caption_buttons);
     assert!(for_os(Os::Windows).capabilities().snap_layouts);
