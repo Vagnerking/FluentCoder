@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, statSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { shellQuote, parseTasks, parseLaunch, taskCommandLine, launchCommandLine } from "./vscodeCompat.ts";
@@ -81,8 +81,13 @@ for (const shell of shells) {
     assert.equal(result.status, 0, result.stderr);
     const actual = JSON.parse(result.stdout);
     assert.equal(actual.ran, 0);
-    // Windows may expand an 8.3 TEMP prefix (RUNNER~1) in $PWD.Path.
-    assert.equal(realpathSync(actual.got[0]), realpathSync(cwd));
+    // Windows may expand an 8.3 TEMP prefix in $PWD.Path, while Node's
+    // realpathSync preserves that alias. Compare filesystem identity instead.
+    const expectedDir = statSync(cwd, { bigint: true });
+    const actualDir = statSync(actual.got[0], { bigint: true });
+    assert.notEqual(expectedDir.ino, 0n, "the filesystem must provide a directory identity");
+    assert.equal(actualDir.isDirectory(), true);
+    assert.deepEqual([actualDir.dev, actualDir.ino], [expectedDir.dev, expectedDir.ino]);
     assert.deepEqual(actual.got.slice(1), ["it's.js", "after"]);
     assert.equal(launchCommandLine({ ...launch, command: null }, tasks, true), null);
   });
