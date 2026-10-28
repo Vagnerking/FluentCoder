@@ -149,6 +149,20 @@ test("Azure: hosts impostores continuam genéricos em HTTPS, SSH e SCP", () => {
   }
 });
 
+test("Azure legado: preserva a organização no host e a coleção no caminho", () => {
+  for (const [url, webBase] of [
+    ["https://fabrikam.visualstudio.com/Project/_git/Repo.git", "https://fabrikam.visualstudio.com/Project/_git/Repo"],
+    ["https://fabrikam.visualstudio.com/DefaultCollection/Project/_git/Repo.git", "https://fabrikam.visualstudio.com/DefaultCollection/Project/_git/Repo"],
+    ["https://user:fixture-token@FABRIKAM.visualstudio.com:443/DefaultCollection/My%20Project/_git/Repo%20Name.git?x=1#fragment", "https://fabrikam.visualstudio.com/DefaultCollection/My%20Project/_git/Repo%20Name"],
+    ["ssh://user@fabrikam.visualstudio.com:22/Project/_git/Repo.git", "https://fabrikam.visualstudio.com/Project/_git/Repo"],
+  ]) {
+    const remote = hostingFromRemote(url)!;
+    assert.deepEqual(remote, { provider: "azure", label: "Azure DevOps", webBase }, url);
+    assert.equal(commitWebUrl(remote, "abc123"), `${webBase}/commit/abc123`, url);
+    assert.equal(pullRequestWebUrl(remote, 7), `${webBase}/pullrequest/7`, url);
+  }
+});
+
 test("um upstream genérico não é descartado ao corrigir o reconhecimento Azure", () => {
   assert.deepEqual(pickHostingRemote([
     { name: "upstream", url: "git@notdev.azure.com:Org/Project/Repo.git" },

@@ -168,6 +168,12 @@ export function hostingFromRemote(url: string | null | undefined): HostingRemote
     lower === "visualstudio.com" || lower.endsWith(".visualstudio.com")
   ) provider = "azure";
   if (provider === "azure") {
+    // Legacy HTTPS keeps the organization in the hostname, optionally with
+    // DefaultCollection in the path. This URL form remains supported; moving
+    // only its path to dev.azure.com would discard the organization.
+    if (lower.endsWith(".visualstudio.com") && path.split("/").includes("_git")) {
+      return { provider, label: PROVIDER_LABEL.azure, webBase: `https://${host}/${path}` };
+    }
     // ssh.dev.azure.com:v3/org/proj/repo → dev.azure.com/org/proj/_git/repo
     const parts = path.replace(/^v3\//, "").split("/");
     if (parts.length >= 3 && !parts.includes("_git")) {
