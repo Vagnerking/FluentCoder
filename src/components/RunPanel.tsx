@@ -1,3 +1,4 @@
+import type { TerminalCommand } from "../settings/taskExecution";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Input } from "./ui/Input";
 import {
@@ -18,7 +19,8 @@ import {
 } from "../api";
 import type { RunConfig } from "../types";
 import { loadVscodeRunEntries, type VscodeRunEntries } from "../settings/vscodeFiles";
-import { launchCommandLine, taskCommandLine } from "../settings/vscodeCompat";
+import { taskExecutionPlan, launchExecutionPlan } from "../settings/taskExecution";
+import { taskCommandLine } from "../settings/vscodeCompat";
 import { getPlatform } from "../platform/os";
 import {
   debugSession,
@@ -78,7 +80,7 @@ interface RunPanelProps {
   /** Roots in a Fluent workspace. SSH roots are runnable when connected. */
   workspaceRoots?: RunWorkspaceRoot[];
   /** Asks the app to run `command` in the integrated terminal. */
-  onRun: (command: string, cwd: string, connId?: string) => void;
+  onRun: (command: TerminalCommand, cwd: string, connId?: string) => void;
   /** Latest test-run request from a CodeLens (App-level listener), or null. */
   pendingTest?: PendingTest | null;
 }
@@ -229,7 +231,7 @@ function RunRootSection({
   target: RunWorkspaceRoot;
   draftOpen: boolean;
   onDraftClosed: () => void;
-  onRun: (command: string, cwd: string, connId?: string) => void;
+  onRun: (command: TerminalCommand, cwd: string, connId?: string) => void;
   pendingTest: PendingTest | null;
 }) {
   const [configs, setConfigs] = useState<RunConfig[]>([]);
@@ -406,7 +408,7 @@ function RunRootSection({
  * node/coreclr/python com `program` rodam "sem depurar" (o `preLaunchTask`
  * roda antes). O que não tem equivalente aparece desabilitado com o motivo.
  */
-function VscodeSection({ rootPath, onRun }: { rootPath: string; onRun: (command: string) => void }) {
+function VscodeSection({ rootPath, onRun }: { rootPath: string; onRun: (command: TerminalCommand) => void }) {
   const [entries, setEntries] = useState<VscodeRunEntries | null>(null);
   useEffect(() => {
     let alive = true;
@@ -430,7 +432,10 @@ function VscodeSection({ rootPath, onRun }: { rootPath: string; onRun: (command:
               label={line ? `Executar tarefa: ${t.label}` : `Tarefa não suportada: ${t.label}`}
               className="run-play"
               disabled={!line}
-              onClick={() => line && onRun(line)}
+              onClick={() => {
+                try { onRun(taskExecutionPlan(t, entries.tasks, rootPath)); }
+                catch (err) { alert(String(err)); }
+              }}
             />
             <div className="run-info">
               <span className="run-name">
@@ -451,8 +456,8 @@ function VscodeSection({ rootPath, onRun }: { rootPath: string; onRun: (command:
             className="run-play"
             disabled={!l.command}
             onClick={() => {
-              const line = launchCommandLine(l, entries.tasks, windows);
-              if (line) onRun(line);
+              try { onRun(launchExecutionPlan(l, entries.tasks, rootPath)); }
+              catch (err) { alert(String(err)); }
             }}
           />
           <div className="run-info">

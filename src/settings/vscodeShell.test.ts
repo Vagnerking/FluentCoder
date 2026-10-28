@@ -66,16 +66,8 @@ for (const shell of shells) {
     assert.equal(parseTasks('{"tasks":[{"type":"shell","command":"echo a; echo b"}]}', { workspaceFolder: "C:\\repo" }, "windows")[0].command, "echo a; echo b");
   });
 
-  // Bloqueia a integração do candidato: citar strings resolve o parser, mas
-  // o binder nativo ainda reconhece --% pelo valor e reinterpreta os demais.
-  test(`PowerShell real (${shell}): binder nativo preserva --% e argumentos seguintes`, { skip: available.status !== 0 }, () => {
-    const values = ["--%", "a b", "%FLUENT_QUOTE_MARKER%"];
-    const task = parseTasks(JSON.stringify({ tasks: [{ type: "process", command: process.execPath, args: ["-e", "process.stdout.write(JSON.stringify(process.argv.slice(1)))", "--", ...values] }] }), { workspaceFolder: "." }, "windows")[0];
-    const script = `$env:FLUENT_QUOTE_MARKER = 'expanded'; ${task.command}`;
-    const result = spawnSync(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { encoding: "utf8", timeout: 20_000 });
-    assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(JSON.parse(result.stdout), values);
-  });
+  // A regressão --% com programa nativo migrou para task_execution.rs:
+  // process.command não atravessa mais o binder PowerShell em produção.
 
   test(`PowerShell real (${shell}): cwd literal em tarefas, launch e preLaunchTask`, { skip: available.status !== 0 }, (t) => {
     const root = mkdtempSync(join(tmpdir(), "fluent-shell-"));

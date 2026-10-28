@@ -11,6 +11,7 @@
  * Mapeamento completo em docs/context/configuracoes.md.
  */
 import { parseJsoncObject } from "./jsonc.ts";
+import type { RunStep } from "./taskExecution.ts";
 
 // ------------------------------------------------------------ extensions.json
 
@@ -111,6 +112,8 @@ export interface VscodeTask {
   label: string;
   /** Linha de comando pronta para o terminal (null = não suportada). */
   command: string | null;
+  /** Payload executável; command serve somente para apresentação. */
+  execution?: RunStep;
   /** Diretório (variáveis resolvidas); vazio = raiz. */
   cwd: string;
   group: "build" | "test" | null;
@@ -152,12 +155,17 @@ export function parseTasks(text: string | null | undefined, ctx: VariableContext
     const isDefault = isObj(groupRaw) && groupRaw.isDefault === true;
     const dependsOn = typeof t.dependsOn === "string" ? [t.dependsOn] : Array.isArray(t.dependsOn) ? t.dependsOn.filter((d): d is string => typeof d === "string") : [];
     let command: string | null = null;
+    let execution: RunStep | undefined;
     let unsupported: string | undefined;
     const windows = os === "windows";
     if (type === "shell" || type === "process") {
       const cmd = argText(t.command) ?? argText(top.command);
       const args = (Array.isArray(t.args) ? t.args : Array.isArray(top.args) ? top.args : []).map(argText).filter((a): a is string => a !== null);
       if (cmd) {
+        const values = args.map(sub);
+        execution = type === "process"
+          ? { kind: "process", executable: sub(cmd), args: values, cwd }
+          : { kind: "shell", source: sub(cmd), args: values, cwd };
         // `shell.command` é código intencional; `process.command` é um único
         // executável. No PowerShell, invocar um nome citado exige o operador &.
         const executable = type === "process" ? `${windows ? "& " : ""}${shellQuote(sub(cmd), windows, true)}` : sub(cmd);
@@ -168,6 +176,7 @@ export function parseTasks(text: string | null | undefined, ctx: VariableContext
       } else unsupported = "sem comando";
     } else if (type === "npm" && typeof t.script === "string") {
       command = `npm run ${shellQuote(t.script, windows)}`;
+      execution = { kind: "process", executable: "npm", args: ["run", sub(t.script)], cwd };
     } else {
       unsupported = `tipo "${type}" não suportado (só shell, process e npm)`;
     }
@@ -176,6 +185,7 @@ export function parseTasks(text: string | null | undefined, ctx: VariableContext
     out.push({
       label,
       command,
+      execution,
       cwd: npmDir || cwd,
       group: groupKind === "build" || groupKind === "test" ? groupKind : null,
       isDefault,
@@ -215,6 +225,8 @@ export interface VscodeLaunch {
   request: string;
   /** Comando para "Executar sem depurar" (null = não mapeado). */
   command: string | null;
+  /** Programa e argumentos preservados como dados até o backend. */
+  execution?: RunStep;
   cwd: string;
   preLaunchTask: string | null;
   unsupported?: string;
@@ -253,16 +265,17 @@ export function parseLaunch(text: string | null | undefined, ctx: VariableContex
     const preLaunchTask = typeof c.preLaunchTask === "string" ? c.preLaunchTask : null;
     const runner = RUNNERS[type];
     const program = typeof c.program === "string" ? sub(c.program) : null;
-    const args = Array.isArray(c.args) ? c.args.filter((a): a is string => typeof a === "string").map((a) => shellQuote(sub(a), windows)) : [];
+    const values = Array.isArray(c.args) ? c.args.filter((a): a is string => typeof a === "string").map(sub) : [];
+    const args = values.map((a) => shellQuote(a, windows));
     if (request !== "launch") return { name, type, request, command: null, cwd, preLaunchTask, unsupported: "attach: use a seção de depuração .NET" };
     if (!runner) return { name, type, request, command: null, cwd, preLaunchTask, unsupported: `tipo "${type}" sem equivalente no app` };
     if (!program) {
       // `dotnet` (C# Dev Kit) aponta para o projeto: `dotnet run`.
       if (type === "dotnet" && typeof c.projectPath === "string") {
-        return { name, type, request, command: `dotnet run --project ${shellQuote(sub(c.projectPath), windows)}`, cwd, preLaunchTask };
+        return { name, type, request, command: `dotnet run --project ${shellQuote(sub(c.projectPath), windows)}`, execution: { kind: "process", executable: "dotnet", args: ["run", "--project", sub(c.projectPath)], cwd }, cwd, preLaunchTask };
       }
       return { name, type, request, command: null, cwd, preLaunchTask, unsupported: "sem program" };
     }
-    return { name, type, request, command: [runner, shellQuote(program, windows), ...args].join(" "), cwd, preLaunchTask };
+    return { name, type, request, command: [runner, shellQuote(program, windows), ...args].join(" "), execution: { kind: "process", executable: runner, args: [program, ...values], cwd }, cwd, preLaunchTask };
   });
 }

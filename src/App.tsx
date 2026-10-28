@@ -1,3 +1,4 @@
+import { taskExecutionPlan, type TerminalCommand } from "./settings/taskExecution";
 import { gateLocalTextOpen } from "./editor/openFileGate";
 import {
   useCallback,
@@ -300,9 +301,8 @@ import { useSetting, useSyncedSetting } from "./settings/react";
 import { prepareSave, useActiveIndentation } from "./settings/editorRuntime";
 import { useAutoSave } from "./settings/useAutoSave";
 import { isKeyClaimed, runCommand as runAppCommand, setAppCommands, setWhenContextProvider } from "./settings/keybindingRuntime";
-import { defaultBuildTask, taskCommandLine, type VscodeTask } from "./settings/vscodeCompat";
+import { defaultBuildTask, type VscodeTask } from "./settings/vscodeCompat";
 import { loadVscodeRunEntries } from "./settings/vscodeFiles";
-import { getPlatform } from "./platform/os";
 import { useWorkspaceSettingsSync } from "./settings/useWorkspaceSettingsSync";
 
 /** Abas nativas do Fluent Chat na sidebar secundária. */
@@ -1050,7 +1050,7 @@ export default function App() {
   const closingPaths = useRef<Set<string>>(new Set());
 
   // Current "Run": command line + a nonce that bumps on each ▶ to respawn the PTY.
-  const [runCommand, setRunCommand] = useState<string | null>(null);
+  const [runCommand, setRunCommand] = useState<TerminalCommand | null>(null);
   const [runCwd, setRunCwd] = useState<string | null>(null);
   const [runConnId, setRunConnId] = useState<string | null>(null);
   const [runNonce, setRunNonce] = useState(0);
@@ -5217,7 +5217,7 @@ export default function App() {
   }, [handleSave, handleSaveAs, handleOpenFileDialog, handleCloseTab, handleNewTextFile]);
 
   /** Run a configuration: open the terminal panel and (re)spawn a PTY for it. */
-  function handleRun(command: string, cwd?: string, connId?: string) {
+  function handleRun(command: TerminalCommand, cwd?: string, connId?: string) {
     setRunCommand(command);
     setRunCwd(cwd ?? rootPath);
     setRunConnId(connId ?? null);
@@ -6117,11 +6117,9 @@ export default function App() {
       return;
     }
     const { tasks } = await loadVscodeRunEntries(root, lastRealFile);
-    const windows = getPlatform().os === "windows";
     const run = (t: VscodeTask) => {
-      const line = taskCommandLine(t, tasks, windows);
-      if (line) handleRun(line, root);
-      else alert(`A tarefa "${t.label}" não pode ser executada: ${t.unsupported ?? "sem comando"}.`);
+      try { handleRun(taskExecutionPlan(t, tasks, root), root); }
+      catch (err) { alert(String(err)); }
     };
     if (pick === "build") {
       const build = defaultBuildTask(tasks);
