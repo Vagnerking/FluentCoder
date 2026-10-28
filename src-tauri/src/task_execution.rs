@@ -319,12 +319,12 @@ pub(crate) fn run_if_requested() -> Option<i32> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::sync::OnceLock;
 
     // A real native executable, not a PowerShell function standing in for one.
-    fn capture_binary() -> &'static Path {
+    pub(crate) fn capture_binary() -> &'static Path {
         static CAPTURE: OnceLock<(tempfile::TempDir, PathBuf)> = OnceLock::new();
         &CAPTURE.get_or_init(|| {
             let dir = tempfile::tempdir().unwrap();
@@ -341,7 +341,13 @@ mod tests {
                         std::io::stdin().read_line(&mut line).unwrap();
                         std::fs::write(format!("{}.stdin", std::env::args().nth(1).unwrap()), line).unwrap();
                     }
-                    if values.iter().any(|arg| arg == "__fixture_wait") {
+                    if values.iter().any(|arg| arg == "__fixture_tree") {
+                        let child_output = format!("{}.child", std::env::args().nth(1).unwrap());
+                        let _child = std::process::Command::new(std::env::current_exe().unwrap())
+                            .args([child_output.as_str(), "__fixture_wait"]).spawn().unwrap();
+                    }
+                    if values.iter().any(|arg| arg == "__fixture_wait" || arg == "__fixture_tree") {
+                        std::fs::write(format!("{}.pid", std::env::args().nth(1).unwrap()), std::process::id().to_string()).unwrap();
                         loop { std::thread::sleep(std::time::Duration::from_millis(50)); }
                     }
                     if values.iter().any(|arg| arg == "__fixture_exit_7") { std::process::exit(7); }
@@ -490,6 +496,83 @@ mod tests {
         // fall back to passing the data to PowerShell or to a raw cmd string.
         let _ = step_command(&step, dir.path(), &shell()).unwrap().output();
         assert!(!marker.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn batch_forwarding_preserves_arguments_or_rejects_before_execution() {
+        // The same forwarding shape used by ordinary command shims: a fixed
+        // native executable followed by %*. A successful spawn must not
+        // silently expand, split, or discard the supplied arguments.
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("batch-argv.txt");
+        let marker = dir.path().join("injected.txt");
+        let cases = vec![
+            (vec!["normal".into(), "with space".into(), "".into()], false),
+            (vec!["--%".into(), "a b".into(), "%PATH%".into()], true),
+            (
+                vec![
+                    "@args".into(),
+                    "$()".into(),
+                    "a’b".into(),
+                    "C:\\trailing\\".into(),
+                ],
+                true,
+            ),
+            (vec![format!("ok&echo INJECTED>{}", marker.display())], true),
+            (
+                vec![format!("x\"&echo INJECTED>{}&rem ", marker.display())],
+                true,
+            ),
+            (vec!["a\"b".into(), "line\r\nnext".into()], true),
+        ];
+        for extension in ["cmd", "bat"] {
+            let batch = dir.path().join(format!("forward.{extension}"));
+            std::fs::write(
+                &batch,
+                "@echo off\r\n\"%FLUENT_TEST_CAPTURE_EXE%\" \"%FLUENT_TEST_CAPTURE_OUT%\" %*\r\n",
+            )
+            .unwrap();
+            for (values, may_reject) in &cases {
+                let _ = std::fs::remove_file(&output);
+                let step = RunStep::Process {
+                    executable: batch.to_string_lossy().into_owned(),
+                    args: values.clone(),
+                    cwd: String::new(),
+                };
+                let result = step_command(&step, dir.path(), &shell())
+                    .unwrap()
+                    .env("FLUENT_TEST_CAPTURE_EXE", capture_binary())
+                    .env("FLUENT_TEST_CAPTURE_OUT", &output)
+                    .output();
+                match result {
+                    Ok(result) => {
+                        assert!(
+                            result.status.success(),
+                            "batch {extension}, args {values:?}: {result:?}"
+                        );
+                        assert_eq!(
+                            std::fs::read_to_string(&output).unwrap(),
+                            format!("{values:?}\n{:?}", dir.path().canonicalize().unwrap()),
+                            "batch {extension} must preserve argv when it accepts an argument"
+                        );
+                    }
+                    Err(error) => {
+                        assert!(*may_reject, "legitimate batch control failed: {error}");
+                        assert_eq!(
+                            error.kind(),
+                            std::io::ErrorKind::InvalidInput,
+                            "only an explicit unrepresentable-argument rejection is accepted"
+                        );
+                        assert!(
+                            !output.exists(),
+                            "rejected arguments must not execute the shim"
+                        );
+                    }
+                }
+                assert!(!marker.exists(), "batch {extension} executed argument data");
+            }
+        }
     }
 
     #[test]
