@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { shellQuote, parseTasks, parseLaunch, taskCommandLine, launchCommandLine } from "./vscodeCompat.ts";
@@ -79,7 +79,11 @@ for (const shell of shells) {
     const launch = parseLaunch(JSON.stringify({ configurations: [{ type: "node", program: "it's.js", cwd, preLaunchTask: "pre", args: ["after"] }] }), context, "windows")[0];
     const result = run(shell, `function node { $script:got = @($PWD.Path) + @($args) }; ${launchCommandLine(launch, tasks, true)}`);
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(JSON.parse(result.stdout), { ran: 0, got: [cwd, "it's.js", "after"] });
+    const actual = JSON.parse(result.stdout);
+    assert.equal(actual.ran, 0);
+    // Windows may expand an 8.3 TEMP prefix (RUNNER~1) in $PWD.Path.
+    assert.equal(realpathSync(actual.got[0]), realpathSync(cwd));
+    assert.deepEqual(actual.got.slice(1), ["it's.js", "after"]);
     assert.equal(launchCommandLine({ ...launch, command: null }, tasks, true), null);
   });
 }

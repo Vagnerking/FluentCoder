@@ -629,9 +629,14 @@ mod tests {
             text.contains("CAPTURE-OUTPUT"),
             "native stdout must reach the PTY: {text:?}"
         );
+        let completion = text
+            .lines()
+            .find(|line| line.contains("Tarefa finalizada com código "))
+            .expect("task completion stays visible");
+        // Unix signals and Windows STATUS_CONTROL_C_EXIT have different codes.
         assert!(
-            text.contains("Tarefa finalizada com código 1"),
-            "task completion stays visible"
+            !completion.contains("código 0."),
+            "interruption must not be reported as success"
         );
         assert_eq!(
             std::fs::read_to_string(output).unwrap(),
