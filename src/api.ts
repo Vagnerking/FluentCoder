@@ -1,3 +1,4 @@
+import type { TerminalCommand } from "./settings/taskExecution";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -1861,12 +1862,15 @@ export function termCreate(
   cwd: string,
   cols: number,
   rows: number,
-  command?: string | null,
+  command?: TerminalCommand | null,
   spawn?: TermSpawnOptions | null,
   /** Conexão SSH explícita (raiz SSH de um Fluent Workspace); tem precedência
    *  sobre a sessão remota ativa da janela. */
   connId?: string
 ): Promise<number | null> {
+  if (command && typeof command !== "string" && (connId || getActiveRemote())) {
+    return Promise.reject(new Error("Tarefas com argumentos estruturados exigem um terminal local."));
+  }
   if (connId) {
     remoteTerminals.add(id);
     return invoke<void>("ssh_term_create", {
@@ -1903,7 +1907,8 @@ export function termCreate(
     cwd,
     cols,
     rows,
-    command: command ?? null,
+    command: typeof command === "string" ? command : null,
+    plan: command && typeof command !== "string" ? command : null,
     spawn: spawn ?? null,
   });
 }

@@ -46,7 +46,7 @@ test("tasks.json: shell/process/npm, grupo build padrão, dependsOn e tipos sem 
     ctx,
   );
   assert.equal(tasks.length, 5);
-  assert.equal(tasks[1].command, "dotnet build '/w/app/App Sln.sln'");
+  assert.equal(tasks[1].command, "'dotnet' build '/w/app/App Sln.sln'");
   assert.equal(tasks[1].cwd, "/w/app/src");
   assert.equal(tasks[2].label, "npm: lint");
   assert.equal(tasks[2].cwd, "web");
@@ -54,7 +54,7 @@ test("tasks.json: shell/process/npm, grupo build padrão, dependsOn e tipos sem 
   assert.equal(tasks[3].command, null);
   assert.match(tasks[3].unsupported ?? "", /gulp/);
   assert.equal(defaultBuildTask(tasks)?.label, "build");
-  assert.equal(taskCommandLine(tasks[1], tasks), "dotnet restore && cd /w/app/src && dotnet build '/w/app/App Sln.sln'");
+  assert.equal(taskCommandLine(tasks[1], tasks), "dotnet restore && cd -- /w/app/src && 'dotnet' build '/w/app/App Sln.sln'");
   assert.equal(parseTasks('{"tasks":[{"label":"win","type":"shell","command":"make","windows":{"command":"nmake"}}]}', ctx, "windows")[0].command, "nmake");
 });
 

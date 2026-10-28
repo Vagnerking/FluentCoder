@@ -210,12 +210,17 @@ pub fn term_create(
     // the session open afterwards (so the program's output stays visible). When
     // None, it's a plain interactive PowerShell — the original behavior.
     command: Option<String>,
+    plan: Option<crate::task_execution::TaskExecutionPlan>,
     // Terminal pedido por uma extensão VS Code (shell/args/env próprios).
     spawn: Option<TermSpawnOptions>,
     state: State<'_, TerminalState>,
     ide_bridge: State<'_, crate::agents::ide_bridge::IdeBridgeState>,
     app: AppHandle,
 ) -> Result<Option<u32>, String> {
+    if let Some(plan) = &plan {
+        plan.validate()?;
+        if command.is_some() { return Err("Tarefa não pode conter plano e comando avulso ao mesmo tempo.".into()); }
+    }
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -232,10 +237,49 @@ pub fn term_create(
         .app_data_dir()
         .ok()
         .map(|d| crate::shell_integration::scripts_dir(&d));
-    let mut cmd = match &spawn {
-        Some(opts) => extension_command(opts, si_dir.as_deref())?,
-        None => shell_command(command.as_deref()),
+    let runner_request = if let Some(plan) = plan {
+        let command_shell = crate::task_execution::RunnerShell::from(crate::platform::default_shell());
+        let mut interactive_shell = command_shell.clone();
+        if let Some(opts) = &spawn {
+            if let Some(path) = opts.shell_path.as_deref().filter(|p| !p.trim().is_empty()) {
+                interactive_shell.program = which::which(path)
+                    .map_err(|e| format!("Shell do terminal não encontrado ({path}): {e}"))?.to_string_lossy().into_owned();
+                interactive_shell.args = opts.shell_args.clone().unwrap_or_default();
+            }
+        }
+        Some(serde_json::to_string(&crate::task_execution::RunnerRequest { plan, command_shell, interactive_shell })
+            .map_err(|e| e.to_string())?)
+    } else { None };
+    let mut cmd = if runner_request.is_some() {
+        let mut cmd = crate::task_execution::runner_command(
+            &std::env::current_exe().map_err(|e| e.to_string())?,
+            runner_request.as_deref().unwrap_or_default(),
+        );
+        if spawn.as_ref().is_some_and(|opts| opts.strict_env.unwrap_or(false)) { cmd.env_clear(); }
+        if let Some(env) = spawn.as_ref().and_then(|opts| opts.env.as_ref()) {
+            for (key, value) in env {
+                if key.is_empty() || key.contains(['=', '\0']) || value.contains('\0') {
+                    return Err("Variável de ambiente inválida no terminal de tarefa.".into());
+                }
+                cmd.env(key, value);
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            cmd.env("TERM", "xterm-256color");
+            cmd.env("COLORTERM", "truecolor");
+        }
+        cmd
+    } else {
+        match &spawn {
+            Some(opts) => extension_command(opts, si_dir.as_deref())?,
+            None => shell_command(command.as_deref()),
+        }
     };
+    if let Some(request) = runner_request {
+        cmd.env(crate::task_execution::RUNNER_ENV, request);
+        cmd.env(crate::task_execution::RUNNER_EXE_ENV, std::env::current_exe().map_err(|e| e.to_string())?);
+    }
     cmd.cwd(&cwd);
     // Igual ao terminal do VS Code: o `claude` iniciado aqui conecta sozinho na
     // ponte IDE (src/agents/ide_bridge.rs). Só com a ponte no ar. Num terminal
@@ -403,6 +447,113 @@ pub fn term_close(id: String, state: State<'_, TerminalState>) -> Result<(), Str
         let _ = close_session(session);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod task_runner_tests {
+    use super::*;
+    use crate::task_execution::{runner_command, RunStep, RunnerRequest, TaskExecutionPlan};
+    use std::path::Path;
+    use std::time::{Duration, Instant};
+
+    fn is_running(pid: u32) -> bool {
+        #[cfg(unix)]
+        {
+            if Path::new("/proc/self/stat").exists() {
+                return std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                    .map(|stat| !stat.rsplit_once(')').unwrap().1.trim_start().starts_with('Z'))
+                    .unwrap_or(false);
+            }
+            // SAFETY: signal zero checks existence without delivering a signal.
+            unsafe { libc::kill(pid as i32, 0) == 0 }
+        }
+        #[cfg(windows)]
+        {
+            let output = std::process::Command::new("tasklist.exe")
+                .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+                .output()
+                .expect("tasklist must be available to verify teardown");
+            assert!(output.status.success(), "tasklist failed: {output:?}");
+            let pid_column = format!("\"{pid}\"");
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .any(|line| line.split(',').nth(1) == Some(pid_column.as_str()))
+        }
+    }
+
+    #[test]
+    #[ignore = "requires FLUENT_TEST_APP_BINARY pointing to the built app (release on Windows)"]
+    fn closing_a_task_runner_pty_kills_its_native_task_tree() {
+        let binary = std::env::var_os("FLUENT_TEST_APP_BINARY")
+            .expect("build the application and set FLUENT_TEST_APP_BINARY");
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("task");
+        let profile_output = dir.path().join("must-not-start");
+        let capture = crate::task_execution::tests::capture_binary();
+        let request = RunnerRequest {
+            plan: TaskExecutionPlan {
+                base_cwd: dir.path().to_string_lossy().into_owned(),
+                steps: vec![RunStep::Process {
+                    executable: capture.to_string_lossy().into_owned(),
+                    args: vec![output.to_string_lossy().into_owned(), "__fixture_tree".into()],
+                    cwd: String::new(),
+                }],
+                stop_on_failure: true,
+            },
+            command_shell: crate::platform::default_shell().into(),
+            interactive_shell: crate::task_execution::RunnerShell {
+                program: capture.to_string_lossy().into_owned(),
+                args: vec![profile_output.to_string_lossy().into_owned()],
+                powershell: false,
+            },
+        };
+        let pair = native_pty_system()
+            .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        let mut command = runner_command(Path::new(&binary), &serde_json::to_string(&request).unwrap());
+        command.cwd(dir.path());
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        drop(pair.slave);
+        let root_pid = child.process_id().expect("PTY child pid");
+        let killer = child.clone_killer();
+        let writer = pair.master.take_writer().unwrap();
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let (drained, drain_done) = std::sync::mpsc::channel();
+        let drain = std::thread::spawn(move || {
+            let mut buf = [0; 1024];
+            while matches!(reader.read(&mut buf), Ok(n) if n > 0) {}
+            let _ = drained.send(());
+        });
+        let mut read_pid = |suffix: &str| {
+            let path = format!("{}{suffix}", output.display());
+            let deadline = Instant::now() + Duration::from_secs(15);
+            loop {
+                if let Some(pid) = std::fs::read_to_string(&path).ok().and_then(|s| s.parse::<u32>().ok()) {
+                    break pid;
+                }
+                if Instant::now() >= deadline {
+                    crate::platform::process::force_kill_tree(root_pid);
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("native task did not create {path}");
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        let task_pid = read_pid(".pid");
+        let descendant_pid = read_pid(".child.pid");
+        assert!(is_running(task_pid) && is_running(descendant_pid));
+        let session = PtySession { writer, master: pair.master, child: Some(child), killer };
+        close_session(session).expect("reaper").join().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while [root_pid, task_pid, descendant_pid].into_iter().any(is_running) {
+            assert!(Instant::now() < deadline, "terminal close left a live task process");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!profile_output.exists(), "closing must not restore the interactive profile");
+        drain_done.recv_timeout(Duration::from_secs(5)).expect("closing must release PTY output handles");
+        drain.join().unwrap();
+    }
 }
 
 #[cfg(all(test, unix))]

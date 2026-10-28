@@ -1,3 +1,4 @@
+import type { TerminalCommand } from "../settings/taskExecution";
 import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { fontStacks } from "../platform/fonts";
@@ -18,7 +19,7 @@ interface TerminalViewProps {
   /** SSH connection id when this terminal belongs to a remote workspace root. */
   connId?: string;
   /** When set, the PTY runs this command line on start (used by "Run"). */
-  command?: string | null;
+  command?: TerminalCommand | null;
   /** Shell/env of a terminal requested by a hosted VS Code extension. */
   spawn?: TermSpawnOptions | null;
   /**
