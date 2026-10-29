@@ -28,6 +28,9 @@ pub enum Eol {
 pub struct DecodedFile {
     /// File contents, normalised to LF line endings.
     pub content: String,
+    /// Present only when a local descriptor-backed read supplies its identity.
+    #[serde(default, rename = "localIdentity", skip_serializing_if = "Option::is_none")]
+    pub local_identity: Option<String>,
     /// Encoding label (e.g. "UTF-8", "UTF-16LE", "windows-1252").
     pub encoding: String,
     /// Whether the original file began with a byte-order mark.
@@ -76,6 +79,7 @@ pub fn decode(bytes: &[u8]) -> DecodedFile {
         let content = text.into_owned();
         let eol = detect_eol(&content);
         return DecodedFile {
+            local_identity: None,
             content: normalise_to_lf(content),
             encoding: enc.name().to_string(),
             bom: true,
@@ -88,6 +92,7 @@ pub fn decode(bytes: &[u8]) -> DecodedFile {
         let content = String::from_utf8_lossy(bytes).into_owned();
         let eol = detect_eol(&content);
         return DecodedFile {
+            local_identity: None,
             content: normalise_to_lf(content),
             encoding: "UTF-8".to_string(),
             bom: false,
@@ -103,6 +108,7 @@ pub fn decode(bytes: &[u8]) -> DecodedFile {
     let content = text.into_owned();
     let eol = detect_eol(&content);
     DecodedFile {
+        local_identity: None,
         content: normalise_to_lf(content),
         encoding: enc.name().to_string(),
         bom: false,
@@ -125,6 +131,7 @@ pub fn decode_with(bytes: &[u8], encoding: &str) -> Result<DecodedFile, String> 
     let content = text.into_owned();
     let eol = detect_eol(&content);
     Ok(DecodedFile {
+        local_identity: None,
         content: normalise_to_lf(content),
         encoding: enc.name().to_string(),
         bom,
@@ -277,6 +284,7 @@ mod tests {
     fn utf16_applies_crlf_in_code_units() {
         // CRLF must be two UTF-16 code units, not raw bytes spliced in.
         let d = DecodedFile {
+            local_identity: None,
             content: "a\nb".to_string(),
             encoding: "UTF-16LE".to_string(),
             bom: false,

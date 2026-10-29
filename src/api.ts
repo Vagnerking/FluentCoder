@@ -1,4 +1,5 @@
 import type { TerminalCommand } from "./settings/taskExecution";
+import type { FileIdentityMatch } from "./editor/existingFile";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -168,6 +169,8 @@ export type { Eol };
 
 /** A decoded text file plus the metadata needed to round-trip it on save. */
 export interface DecodedFile {
+  /** Identity from the descriptor used for a local text read, when available. */
+  localIdentity?: string;
   /** Contents, normalised to LF line endings. */
   content: string;
   /** Encoding label (e.g. "UTF-8", "UTF-16LE", "windows-1252"). */
@@ -206,7 +209,11 @@ export function probeFile(path: string): Promise<FileProbe> {
 
 /** Local filesystem identity only; callers must keep SSH paths on their provider. */
 export function findSameLocalFile(path: string, candidates: string[]): Promise<number | null> {
-  return invoke<number | null>("find_same_file", { path, candidates });
+  return resolveLocalFileIdentity(path, candidates).then((match) => match.index);
+}
+
+export function resolveLocalFileIdentity(path: string, candidates: string[]): Promise<FileIdentityMatch> {
+  return invoke<FileIdentityMatch>("find_same_file", { path, candidates });
 }
 
 /** Reads a text file from a specific SSH connection, independent of window state. */

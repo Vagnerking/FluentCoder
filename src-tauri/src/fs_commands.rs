@@ -333,41 +333,117 @@ pub(crate) const MAX_TEXT_BYTES: u64 = 512 * 1024 * 1024;
 /// How many leading bytes the binary sniff inspects.
 const SNIFF_BYTES: usize = 8 * 1024;
 
-pub(crate) fn read_file_blocking(path: &str, allow_large: bool) -> Result<crate::text_io::DecodedFile, String> {
-    let meta = fs::metadata(path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
-    let size = meta.len();
+fn check_text_size(size: u64, allow_large: bool) -> Result<(), String> {
     if size > MAX_TEXT_BYTES {
-        return Err(format!("Arquivo grande demais para abrir como texto ({} MB).", size / 1_048_576));
+        return Err(format!(
+            "Arquivo grande demais para abrir como texto ({} MB).",
+            size / 1_048_576
+        ));
     }
     if size > HUGE_FILE_BYTES && !allow_large {
         return Err(format!("FILE_TOO_LARGE:{size}"));
     }
-    let bytes = fs::read(path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
-    Ok(crate::text_io::decode(&bytes))
+    Ok(())
+}
+
+#[cfg(unix)]
+fn unix_file_identity(meta: &fs::Metadata) -> String {
+    use std::os::unix::fs::MetadataExt;
+    format!("unix:{}:{}", meta.dev(), meta.ino())
+}
+
+#[cfg(unix)]
+fn read_open_file(
+    file: fs::File,
+    path: &str,
+    allow_large: bool,
+) -> Result<crate::text_io::DecodedFile, String> {
+    use std::io::Read;
+    let meta = file
+        .metadata()
+        .map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+    if !meta.is_file() {
+        return Err("O item não é um arquivo regular.".into());
+    }
+    check_text_size(meta.len(), allow_large)?;
+    let limit = if allow_large {
+        MAX_TEXT_BYTES
+    } else {
+        HUGE_FILE_BYTES
+    };
+    let mut bytes = Vec::new();
+    file.take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+    check_text_size(bytes.len() as u64, allow_large)?;
+    let mut decoded = crate::text_io::decode(&bytes);
+    decoded.local_identity = Some(unix_file_identity(&meta));
+    Ok(decoded)
+}
+
+pub(crate) fn read_file_blocking(
+    path: &str,
+    allow_large: bool,
+) -> Result<crate::text_io::DecodedFile, String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // A FIFO swapped into the path must not block the regular-file check.
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(path)
+            .map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+        read_open_file(file, path, allow_large)
+    }
+    #[cfg(not(unix))]
+    {
+        let meta = fs::metadata(path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+        check_text_size(meta.len(), allow_large)?;
+        let bytes = fs::read(path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+        Ok(crate::text_io::decode(&bytes))
+    }
 }
 
 /// Locate an already-open local file without assuming case behavior from its OS.
-fn find_same_file_blocking(path: &str, candidates: &[String]) -> Result<Option<usize>, String> {
+#[derive(Serialize, Debug)]
+pub struct FileIdentityMatch {
+    pub identity: Option<String>,
+    pub index: Option<usize>,
+}
+
+fn find_same_file_blocking(path: &str, candidates: &[String]) -> Result<FileIdentityMatch, String> {
     let target =
         fs::metadata(path).map_err(|e| format!("Não foi possível identificar o arquivo: {e}"))?;
     if !target.is_file() {
-        return Ok(None);
+        return Ok(FileIdentityMatch {
+            identity: None,
+            index: None,
+        });
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        Ok(candidates.iter().position(|candidate| {
+        let index = candidates.iter().position(|candidate| {
             fs::metadata(candidate).is_ok_and(|meta| {
                 meta.is_file() && meta.dev() == target.dev() && meta.ino() == target.ino()
             })
-        }))
+        });
+        Ok(FileIdentityMatch {
+            identity: Some(unix_file_identity(&target)),
+            index,
+        })
     }
     #[cfg(not(unix))]
     {
         let target = fs::canonicalize(path).map_err(|e| e.to_string())?;
-        Ok(candidates.iter().position(|candidate| {
+        let index = candidates.iter().position(|candidate| {
             fs::canonicalize(candidate).is_ok_and(|candidate| candidate == target)
-        }))
+        });
+        Ok(FileIdentityMatch {
+            identity: Some(format!("path:{}", target.to_string_lossy())),
+            index,
+        })
     }
 }
 
@@ -375,7 +451,7 @@ fn find_same_file_blocking(path: &str, candidates: &[String]) -> Result<Option<u
 pub async fn find_same_file(
     path: String,
     candidates: Vec<String>,
-) -> Result<Option<usize>, String> {
+) -> Result<FileIdentityMatch, String> {
     off_main(move || find_same_file_blocking(&path, &candidates)).await
 }
 
@@ -747,6 +823,43 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn decoded_identity_follows_the_open_descriptor_when_the_path_is_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file.txt");
+        fs::write(&path, "original").unwrap();
+        let file = fs::File::open(&path).unwrap();
+        let identity = super::unix_file_identity(&file.metadata().unwrap());
+        fs::rename(&path, dir.path().join("original.txt")).unwrap();
+        fs::write(&path, "replacement").unwrap();
+        let original = super::read_open_file(file, path.to_str().unwrap(), false).unwrap();
+        let replacement = super::read_file_blocking(path.to_str().unwrap(), false).unwrap();
+        assert_eq!(original.content, "original");
+        assert_eq!(original.local_identity.as_deref(), Some(identity.as_str()));
+        assert_eq!(replacement.content, "replacement");
+        assert_ne!(replacement.local_identity, original.local_identity);
+        dir.close().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reading_a_fifo_is_rejected_without_waiting_for_a_writer() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pipe");
+        let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: name owns a valid NUL-terminated path for this private fixture.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            tx.send(super::read_file_blocking(path.to_str().unwrap(), false)).unwrap();
+        });
+        assert!(rx.recv_timeout(std::time::Duration::from_secs(2)).expect("FIFO read must not block").is_err());
+        worker.join().unwrap();
+        dir.close().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn file_identity_recognizes_aliases_without_merging_distinct_files() {
         let dir = tempfile::tempdir().unwrap();
         let first = dir.path().join("MixedName.txt");
@@ -756,26 +869,51 @@ mod tests {
         fs::hard_link(&first, &alias).unwrap();
         fs::write(&other, "other").unwrap();
         let candidates = vec![first.to_string_lossy().into_owned()];
+        let first_id = super::find_same_file_blocking(first.to_str().unwrap(), &[])
+            .unwrap()
+            .identity;
+        assert!(first_id.is_some());
         assert_eq!(
-            super::find_same_file_blocking(alias.to_str().unwrap(), &candidates).unwrap(),
+            super::find_same_file_blocking(alias.to_str().unwrap(), &[])
+                .unwrap()
+                .identity,
+            first_id
+        );
+        assert_ne!(
+            super::find_same_file_blocking(other.to_str().unwrap(), &[])
+                .unwrap()
+                .identity,
+            first_id
+        );
+
+        assert_eq!(
+            super::find_same_file_blocking(alias.to_str().unwrap(), &candidates)
+                .unwrap()
+                .index,
             Some(0)
         );
         assert_eq!(
-            super::find_same_file_blocking(other.to_str().unwrap(), &candidates).unwrap(),
+            super::find_same_file_blocking(other.to_str().unwrap(), &candidates)
+                .unwrap()
+                .index,
             None
         );
         let lower = dir.path().join("mixedname.txt");
         if lower.exists() {
             // Case-insensitive volume: the differently cased path is an alias.
             assert_eq!(
-                super::find_same_file_blocking(lower.to_str().unwrap(), &candidates).unwrap(),
+                super::find_same_file_blocking(lower.to_str().unwrap(), &candidates)
+                    .unwrap()
+                    .index,
                 Some(0)
             );
         } else {
             // Case-sensitive volume: both names can back independent buffers.
             fs::write(&lower, "distinct").unwrap();
             assert_eq!(
-                super::find_same_file_blocking(lower.to_str().unwrap(), &candidates).unwrap(),
+                super::find_same_file_blocking(lower.to_str().unwrap(), &candidates)
+                    .unwrap()
+                    .index,
                 None
             );
             assert_eq!(fs::read(&first).unwrap(), b"first");

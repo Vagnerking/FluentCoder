@@ -1,7 +1,8 @@
 import { taskExecutionPlan, type TerminalCommand } from "./settings/taskExecution";
 import { gateLocalTextOpen } from "./editor/openFileGate";
-import { findExistingFile } from "./editor/existingFile";
-import { findSameLocalFile } from "./api";
+import { commitFileOpen, findExistingFile, resolveFileOpen } from "./editor/existingFile";
+import type { PendingEditorReveal } from "./editor/pendingReveal";
+import { findSameLocalFile, resolveLocalFileIdentity } from "./api";
 import {
   useCallback,
   useEffect,
@@ -295,7 +296,7 @@ import {
 } from "./workspace/workspaceFile";
 import { useWorkbenchDrag } from "./workbench/useWorkbenchDrag";
 import { diffSideLabel, diffTabName } from "./editor/openRouting";
-import { openTabInList, setTabPinned, tabsKeptAfterClose } from "./components/editor/tabLogic";
+import { setTabPinned, tabsKeptAfterClose } from "./components/editor/tabLogic";
 import type { BreadcrumbRoot } from "./editor/breadcrumbs";
 import { settings } from "./settings/instance";
 import { parseJsoncObject } from "./settings/jsonc";
@@ -1668,9 +1669,7 @@ export default function App() {
     ((line: number, selection?: MatchSelection) => void) | null
   >(null);
   // A line (+ optional selection) to reveal once a freshly-opened file mounts.
-  const pendingReveal = useRef<
-    { line: number; selection?: MatchSelection } | null
-  >(null);
+  const pendingReveal = useRef<PendingEditorReveal | null>(null);
   // Imperative bridge to the active Monaco editor; consumed by the Edit/Selection
   // menus (ISSUE-52). Null when no file is open.
   const editorActionsRef = useRef<EditorActionsApi | null>(null);
@@ -3211,7 +3210,8 @@ export default function App() {
       // tab's stored path so focus/active matching stays consistent.
       const local = !workspaceRemote && !getActiveRemote();
       const candidates = local ? openFiles.filter((file) => !file.workspaceRemote) : openFiles;
-      const found = await findExistingFile(candidates, node.path, local ? findSameLocalFile : undefined);
+      const target = await resolveFileOpen(candidates, node.path, local ? resolveLocalFileIdentity : undefined);
+      const found = target.file;
       const already = found && getActiveGroup(layoutRef.current)?.files.find((file) => file.path === found.path);
       if (already) {
         node = { ...node, path: already.path };
@@ -3265,6 +3265,7 @@ export default function App() {
               : null;
           await openInDetached(active.label, {
             path: node.path,
+            localIdentity: local ? decoded?.localIdentity ?? target.identity : undefined,
             name: node.name,
             content: decoded?.content ?? "",
             workspaceRemote,
@@ -3274,7 +3275,7 @@ export default function App() {
             bom: decoded?.bom,
             eol: decoded?.eol,
             ...gateFields,
-          });
+          }, { mode, permanent: opts?.preview === false });
           return true;
         }
       } catch (err) {
@@ -3291,39 +3292,31 @@ export default function App() {
               ? await readSshTextFile(workspaceRemote.connId, node.path)
               : await readFile(node.path, { allowLarge: gate.allowLarge })
             : null;
-        // Dedupe INSIDE the functional update: the `already` check above reads a
-        // snapshot, so two quick opens of the same file both pass it and would
-        // each append a tab. Re-checking `prev` here makes "one tab per file"
-        // race-safe (no duplicate tabs).
-        let duplicate = false;
-        setOpenFiles((prev) => {
-          if (prev.some((f) => samePath(f.path, node.path))) {
-            duplicate = true;
-            return prev;
-          }
-          // Preview substitui no lugar a aba de preview limpa (tabLogic).
-          return openTabInList(prev, {
-            path: node.path,
-            name: node.name,
-            content: decoded?.content ?? "",
-            workspaceRemote,
-            dirty: false,
-            mode: resolvedMode,
-            encoding: decoded?.encoding,
-            bom: decoded?.bom,
-            eol: decoded?.eol,
-            openedFrom: opts?.origin,
-            preview: opts?.preview && !opts?.pinned && settings.get<boolean>("workbench.editor.enablePreview") !== false ? true : undefined,
-            pinned: opts?.pinned || undefined,
-            ...gateFields,
-          });
-        });
-        setActivePath(node.path);
-        // The editor isn't mounted with this content yet; defer the reveal.
-        if (line != null && resolvedMode === "text") {
-          if (duplicate) revealRef.current?.(line, selection);
-          else pendingReveal.current = { line, selection };
-        }
+        // Commit identity, buffer and focus together against the latest layout.
+        // Two completed reads may share neither their path spelling nor snapshot.
+        if (line != null && resolvedMode === "text") pendingReveal.current = {
+          path: node.path, localIdentity: local ? decoded?.localIdentity ?? target.identity : undefined,
+          observedPaths: target.observedPaths, line, selection,
+        };
+        const file: OpenFile = {
+          path: node.path,
+          localIdentity: local ? decoded?.localIdentity ?? target.identity : undefined,
+          name: node.name,
+          content: decoded?.content ?? "",
+          workspaceRemote,
+          dirty: false,
+          mode: resolvedMode,
+          encoding: decoded?.encoding,
+          bom: decoded?.bom,
+          eol: decoded?.eol,
+          openedFrom: opts?.origin,
+          preview: opts?.preview && !opts?.pinned && settings.get<boolean>("workbench.editor.enablePreview") !== false ? true : undefined,
+          pinned: opts?.pinned || undefined,
+          ...gateFields,
+        };
+        setLayout((current) => commitFileOpen(current, file, {
+          mode, permanent: opts?.preview === false, observedPaths: target.observedPaths,
+        }));
         return true;
       } catch (err) {
         console.error(err);

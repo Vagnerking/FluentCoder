@@ -13,7 +13,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { Effect, getCurrentWindow } from "@tauri-apps/api/window";
 import { emitTo } from "@tauri-apps/api/event";
-import type { OpenFile } from "../types";
+import type { OpenFile, OpenMode } from "../types";
 
 export interface DetachedRemote {
   connId: string;
@@ -181,6 +181,8 @@ export function getActiveEditor(): Promise<ActiveEditor | null> {
 }
 
 /** Routes a file into a detached editor group (adds it as a tab there). */
-export function openInDetached(label: string, file: OpenFile): Promise<void> {
-  return emitTo(label, "open-in-detached", { file });
+export function openInDetached(
+  label: string, file: OpenFile, options?: { mode?: OpenMode; permanent?: boolean },
+): Promise<void> {
+  return emitTo(label, "open-in-detached", { file, options });
 }

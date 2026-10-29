@@ -202,6 +202,18 @@ fisicamente distintos separados. Caminhos SSH não devem ser consultados no
 filesystem local. `samePath` continua sendo uma comparação lexical, não uma
 prova de identidade em disco.
 
+Na conclusão de aberturas concorrentes, registrar buffer e foco numa única
+atualização da grade, comparando também a identidade transitória das leituras
+que se sobrepuseram. Uma resposta negativa recente para uma aba já conhecida
+prevalece sobre um identificador antigo. No Unix, a leitura inicial entrega a
+identidade do mesmo descriptor usado para obter os bytes. Essas identidades
+ficam fora da sessão persistida. A janela destacada aplica a mesma regra ao
+receber um pedido de abertura, preservando seu buffer sujo.
+
+Pedidos de salto de linha aguardam o arquivo e o modelo Monaco de destino;
+consumir o pedido uma única vez, no mount ou na troca efetiva do modelo. Usar
+o modelo existente preserva o lifecycle e o registro dos language services.
+
 ## Temas, gramáticas e snippets de extensões
 
 - O tema do editor segue o tema de cor ATIVO (`src/theme/registry.ts`); nunca

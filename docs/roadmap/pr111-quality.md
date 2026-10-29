@@ -280,3 +280,24 @@ comparação de identidade e os controles locais; não representam aceite de UI
 em macOS nem dos fluxos Windows ainda pendentes. Aberturas concorrentes por
 aliases e os demais consumidores de caminhos ainda exigem revisão/aceite antes
 de declarar a remediação completa.
+
+
+### Aberturas concorrentes e preservação do buffer
+
+A conclusão da leitura atualiza a grade e o foco atomicamente, usando a
+identidade local das leituras simultâneas. Preserva conteúdo sujo, posição da
+aba e o caminho já armazenado. A mesma regra é aplicada a open-in-detached;
+o caminho anterior substituía o conteúdo existente pelo payload vindo do disco.
+Uma resposta negativa recente impede que um ID antigo de uma aba conhecida
+seja usado como prova de igualdade. IDs locais não entram na sessão salva.
+
+No Unix, bytes e identidade vêm do mesmo descriptor: a troca do nome no
+filesystem não associa os bytes de outro arquivo à identidade consultada antes.
+A leitura continua respeitando os limites de tamanho e recusa FIFO sem bloquear.
+Os saltos de linha pendentes aguardam o modelo correto, inclusive quando uma
+abertura concorrente reaproveita um editor que já estava montado.
+
+Validação local direcionada: 49 testes frontend aprovados; suíte Rust com 425
+aprovados, 0 falhas e 15 ignorados. Nenhum ignorado representa aceite concluído.
+Build, tipos e Clippy são checados localmente. Continuam pendentes os aceites
+reais macOS e Windows e a conclusão da revisão integral. Não foi criado CI.

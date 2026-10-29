@@ -124,6 +124,8 @@ export type GitAnnotationMode = "off" | "blame" | "heatmap";
 
 export interface OpenFile {
   path: string;
+  /** Transient local filesystem identity for racing opens; never persist in sessions. */
+  localIdentity?: string;
   name: string;
   content: string;
   /**

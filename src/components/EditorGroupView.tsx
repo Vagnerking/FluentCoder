@@ -1,3 +1,4 @@
+import type { PendingEditorReveal } from "../editor/pendingReveal";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   BlameHunk,
@@ -72,10 +73,7 @@ export interface EditorGroupViewProps {
   revealRef?: React.MutableRefObject<
     ((line: number, selection?: MatchSelection) => void) | null
   >;
-  pendingReveal?: React.MutableRefObject<{
-    line: number;
-    selection?: MatchSelection;
-  } | null>;
+  pendingReveal?: React.MutableRefObject<PendingEditorReveal | null>;
   actionsRef?: React.MutableRefObject<EditorActionsApi | null>;
   // Drop a dragged tab onto this group (move into it, or split off an edge).
   onTabDrop: (edge: Edge, fromGroupId: string, path: string) => void;

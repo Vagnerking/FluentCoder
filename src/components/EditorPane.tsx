@@ -1,5 +1,6 @@
 import Editor, { BeforeMount, DiffEditor, OnMount } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
+import { consumePendingReveal, type PendingEditorReveal } from "../editor/pendingReveal";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { whenMonacoReady } from "../monaco-loader";
 import type {
@@ -72,10 +73,7 @@ interface EditorPaneProps {
     ((line: number, selection?: MatchSelection) => void) | null
   >;
   /** A line (+ optional selection) to reveal as soon as the editor mounts. */
-  pendingReveal?: React.MutableRefObject<{
-    line: number;
-    selection?: MatchSelection;
-  } | null>;
+  pendingReveal?: React.MutableRefObject<PendingEditorReveal | null>;
   /**
    * Imperative bridge the App holds to drive the editor (run actions, trigger
    * commands, focus). The Edit/Selection menus from ISSUE-52 depend on it.
@@ -1001,6 +999,18 @@ export function EditorPane({
     ((line: number, selection?: MatchSelection) => void) | null
   >(null);
   const internalApi = useRef<EditorActionsApi | null>(null);
+  const revealFileRef = useRef(file);
+  revealFileRef.current = file;
+  const pendingRevealRef = useRef(pendingReveal);
+  pendingRevealRef.current = pendingReveal;
+  const consumeQueuedReveal = () => {
+    const pending = pendingRevealRef.current;
+    const reveal = internalReveal.current;
+    if (pending && reveal) consumePendingReveal(pending, revealFileRef.current,
+      editorRef.current?.getModel()?.uri.toString() ?? null, reveal);
+  };
+  // A racing open can reuse an already-mounted editor, without another onMount.
+  useEffect(() => { consumeQueuedReveal(); });
   const packageRootPath = file?.workspaceRemote?.rootPath ?? rootPath;
   const packageConnId = file?.workspaceRemote?.connId;
   const gitRootPath = file?.workspaceRemote?.rootPath ?? rootPath;
@@ -2035,10 +2045,8 @@ export function EditorPane({
     internalApi.current = api;
     if (actionsRef) actionsRef.current = api;
 
-    if (pendingReveal?.current != null) {
-      reveal(pendingReveal.current.line, pendingReveal.current.selection);
-      pendingReveal.current = null;
-    }
+    consumeQueuedReveal();
+    editorInstance.onDidChangeModel(consumeQueuedReveal);
 
     // Reload blame when the model is replaced (file switch handled by useEffect,
     // but this also catches reloads triggered by model events).

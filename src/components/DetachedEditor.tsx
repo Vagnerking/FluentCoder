@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
+import { createLayout, type EditorGroup } from "../editorGroups";
+import { commitFileOpen, resolveFileOpen } from "../editor/existingFile";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen, emitTo } from "@tauri-apps/api/event";
 import { EditorPane } from "./EditorPane";
@@ -7,7 +9,7 @@ import { MediaPreview } from "./MediaPreview";
 import { TabBar } from "./TabBar";
 import { Codicon } from "../icons/codicons/Codicon";
 import { Tooltip } from "./Tooltip";
-import { pickSavePath, writeFile, writeSshTextFile } from "../api";
+import { pickSavePath, resolveLocalFileIdentity, writeFile, writeSshTextFile } from "../api";
 import { useSnapLayout } from "../snap/useSnapLayout";
 import { reorderFiles } from "../tabOrder";
 import { setActiveRemote } from "../remote/host";
@@ -25,7 +27,7 @@ import {
   type DetachedRemote,
 } from "../detach/editorWindow";
 import { dropTargetAt } from "../detach/dropTarget";
-import type { OpenFile } from "../types";
+import type { OpenFile, OpenMode } from "../types";
 
 const UNTITLED_PREFIX = "untitled:";
 
@@ -42,8 +44,14 @@ function fileName(path: string): string {
  */
 export function DetachedEditor({ token }: { token: string }) {
   const win = getCurrentWindow();
-  const [files, setFiles] = useState<OpenFile[]>([]);
-  const [activePath, setActivePath] = useState<string | null>(null);
+  const [group, setGroup] = useState<EditorGroup>({ id: "detached", files: [], activePath: null });
+  const { files, activePath } = group;
+  const setFiles = useCallback((action: SetStateAction<OpenFile[]>) => {
+    setGroup((current) => ({ ...current, files: typeof action === "function" ? action(current.files) : action }));
+  }, []);
+  const setActivePath = useCallback((action: SetStateAction<string | null>) => {
+    setGroup((current) => ({ ...current, activePath: typeof action === "function" ? action(current.activePath) : action }));
+  }, []);
   const [remote, setRemote] = useState<DetachedRemote | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [missing, setMissing] = useState(false);
@@ -127,9 +135,21 @@ export function DetachedEditor({ token }: { token: string }) {
       });
       setActivePath(f.path);
     };
-    const a = listen<{ file: OpenFile }>("open-in-detached", (e) =>
-      insertAt(e.payload.file, null, false)
-    );
+    const a = listen<{ file: OpenFile; options?: { mode?: OpenMode; permanent?: boolean } }>("open-in-detached", async (e) => {
+      const file = e.payload.file;
+      const local = !remoteRef.current && !file.workspaceRemote;
+      const candidates = local ? filesRef.current.filter((candidate) => !candidate.workspaceRemote) : filesRef.current;
+      const target = await resolveFileOpen(candidates, file.path, local ? resolveLocalFileIdentity : undefined);
+      const incoming = {
+        ...file,
+        path: target.file?.path ?? file.path,
+        localIdentity: local ? target.identity : undefined,
+        mode: file.mode ?? "text" as const,
+      };
+      setGroup((current) => commitFileOpen(createLayout(current), incoming, {
+        ...e.payload.options, observedPaths: target.observedPaths,
+      }).groups[current.id]);
+    });
     const b = listen<{ file: OpenFile; x?: number; y?: number }>(
       "adopt-tab",
       (e) => {
