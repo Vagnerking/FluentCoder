@@ -144,6 +144,7 @@ pub fn run() {
             fs_commands::read_dir,
             fs_commands::read_file,
             fs_commands::probe_file,
+            fs_commands::find_same_file,
             fs_commands::read_file_with_encoding,
             fs_commands::read_file_base64,
             ext_host::ext_host_start,

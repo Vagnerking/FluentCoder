@@ -191,6 +191,17 @@ O Roslyn usado pelo app aceita `textDocument/diagnostic`, mas pode omitir
   comparar URIs com drive canônico, pois `file:///C:/...` e `file:///c:/...`
   representam o mesmo arquivo.
 
+## Identidade dos arquivos locais
+
+Ao procurar uma aba já aberta ou restaurar a sessão, não inferir a identidade
+física de um arquivo POSIX pelo sistema operacional. Volumes macOS podem
+ignorar ou distinguir maiúsculas. Consultar o filesystem pelo comando assíncrono
+`find_same_file`; no Unix, comparar device/inode. Reutilizar o caminho e o
+buffer da aba encontrada, preservando edições não salvas. Manter arquivos
+fisicamente distintos separados. Caminhos SSH não devem ser consultados no
+filesystem local. `samePath` continua sendo uma comparação lexical, não uma
+prova de identidade em disco.
+
 ## Temas, gramáticas e snippets de extensões
 
 - O tema do editor segue o tema de cor ATIVO (`src/theme/registry.ts`); nunca

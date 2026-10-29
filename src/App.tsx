@@ -1,5 +1,7 @@
 import { taskExecutionPlan, type TerminalCommand } from "./settings/taskExecution";
 import { gateLocalTextOpen } from "./editor/openFileGate";
+import { findExistingFile } from "./editor/existingFile";
+import { findSameLocalFile } from "./api";
 import {
   useCallback,
   useEffect,
@@ -1526,6 +1528,15 @@ export default function App() {
     [activeWorkspace, workspaceSshConnections]
   );
 
+  const findOpenBuffer = async (path: string) => {
+    const local = !workspaceRemoteForPath(path) && !getActiveRemote();
+    const files = Object.values(layoutRef.current.groups).flatMap((group) => group.files);
+    const found = await findExistingFile(local ? files.filter((file) => !file.workspaceRemote) : files,
+      path, local ? findSameLocalFile : undefined);
+    return found && Object.values(layoutRef.current.groups).flatMap((group) => group.files)
+      .find((file) => file.path === found.path && file.workspaceRemote?.connId === found.workspaceRemote?.connId);
+  };
+
   const activeContextTarget = useMemo(() => {
     const candidatePath =
       activePath && !isVirtualTab(activePath) ? activePath : lastRealFile;
@@ -1769,9 +1780,7 @@ export default function App() {
       bufferChanged: (path, content) =>
         setLayout((l) => patchFileEverywhere(l, path, { content, dirty: true, preview: undefined })),
       saveFile: async (path, content) => {
-        const file = Object.values(layoutRef.current.groups)
-          .flatMap((g) => g.files)
-          .find((f) => samePath(f.path, path));
+        const file = await findOpenBuffer(path);
         if (!file) return false;
         await saveFile({ ...file, content });
         return true;
@@ -1797,18 +1806,18 @@ export default function App() {
           : undefined
       ),
     saveFile: async (path) => {
-      const file = Object.values(layoutRef.current.groups)
-        .flatMap((g) => g.files)
-        .find((f) => samePath(f.path, path));
+      const file = await findOpenBuffer(path);
       if (!file) throw new Error(`Documento não está aberto: ${path}`);
       await saveFile(file);
     },
-    fileWritten: (path, content) => {
-      const open = Object.values(layoutRef.current.groups)
-        .flatMap((g) => g.files)
-        .find((f) => samePath(f.path, path));
+    fileWritten: async (path, content) => {
+      const open = await findOpenBuffer(path);
       if (open) {
-        setLayout((l) => patchFileEverywhere(l, open.path, { content, dirty: false }));
+        setLayout((l) => {
+          const current = Object.values(l.groups).flatMap((group) => group.files).find((file) => file.path === open.path);
+          if (!current || current.content !== open.content || current.dirty !== open.dirty) return l;
+          return patchFileEverywhere(l, open.path, { content, dirty: false });
+        });
       }
       invalidateGraph();
       invalidateIndex();
@@ -2936,8 +2945,19 @@ export default function App() {
       // different drive-letter casing) so the restore never re-creates them and
       // the healed session below is deduplicated (issue #7).
       const restored: OpenTab[] = [];
+      const savedFolders = Array.isArray(s.workspace?.data?.folders) ? s.workspace.data.folders : [];
+      const isLocalRestorePath = (path: string) => !getActiveRemote() && !savedFolders.some((folder) => {
+        if (!folder?.remote || typeof folder.path !== "string") return false;
+        const root = folder.path.replace(/\/+$/, "");
+        return path === root || path.startsWith(`${root}/`);
+      });
+      const findRestoredFile = (path: string) => {
+        const local = isLocalRestorePath(path);
+        return findExistingFile(restored.filter((tab) => isLocalRestorePath(tab.path) === local),
+          path, local ? findSameLocalFile : undefined);
+      };
       for (const tab of s.openTabs) {
-        if (restored.some((t) => samePath(t.path, tab.path))) continue;
+        if (await findRestoredFile(tab.path)) continue;
         const node: FileNode = {
           name: baseName(tab.path),
           path: tab.path,
@@ -2956,10 +2976,9 @@ export default function App() {
       // Focus the tab that was active, if it survived the restore. Match the
       // active path against the restored tab (case-insensitively on Windows) so
       // we focus the path actually stored, not a differently-cased saved one.
-      const activeTab =
-        s.activePath != null
-          ? restored.find((t) => samePath(t.path, s.activePath!))
-          : undefined;
+      const activeTab = s.activePath != null
+        ? await findRestoredFile(s.activePath)
+        : undefined;
       const activeRestored =
         activeTab?.path ??
         (restored.length > 0 ? restored[restored.length - 1].path : null);
@@ -3190,8 +3209,12 @@ export default function App() {
       // different drive-letter casing (explorer vs picker vs LSP URI), which
       // would otherwise open it as a second tab (issue #7). Reuse the existing
       // tab's stored path so focus/active matching stays consistent.
-      const already = openFiles.find((f) => samePath(f.path, node.path));
+      const local = !workspaceRemote && !getActiveRemote();
+      const candidates = local ? openFiles.filter((file) => !file.workspaceRemote) : openFiles;
+      const found = await findExistingFile(candidates, node.path, local ? findSameLocalFile : undefined);
+      const already = found && getActiveGroup(layoutRef.current)?.files.find((file) => file.path === found.path);
       if (already) {
+        node = { ...node, path: already.path };
         // Re-opening with a different mode (e.g. via "Open With…") switches the
         // existing tab's view rather than duplicating it.
         if (mode && already.mode !== mode) {
@@ -6970,9 +6993,7 @@ export default function App() {
           setLayout((l) => patchFileEverywhere(l, path, { content, dirty: true }))
         }
         saveFile={async (path) => {
-          const file = Object.values(layoutRef.current.groups)
-            .flatMap((g) => g.files)
-            .find((f) => samePath(f.path, path));
+          const file = await findOpenBuffer(path);
           if (!file) return false;
           await saveFile(file);
           return true;

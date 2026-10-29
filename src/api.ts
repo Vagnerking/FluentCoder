@@ -204,6 +204,11 @@ export function probeFile(path: string): Promise<FileProbe> {
   return invoke<FileProbe>("probe_file", { path });
 }
 
+/** Local filesystem identity only; callers must keep SSH paths on their provider. */
+export function findSameLocalFile(path: string, candidates: string[]): Promise<number | null> {
+  return invoke<number | null>("find_same_file", { path, candidates });
+}
+
 /** Reads a text file from a specific SSH connection, independent of window state. */
 export async function readSshTextFile(connId: string, path: string): Promise<DecodedFile> {
   const content = await invoke<string>("ssh_read_file", { connId, path });

@@ -346,6 +346,39 @@ pub(crate) fn read_file_blocking(path: &str, allow_large: bool) -> Result<crate:
     Ok(crate::text_io::decode(&bytes))
 }
 
+/// Locate an already-open local file without assuming case behavior from its OS.
+fn find_same_file_blocking(path: &str, candidates: &[String]) -> Result<Option<usize>, String> {
+    let target =
+        fs::metadata(path).map_err(|e| format!("Não foi possível identificar o arquivo: {e}"))?;
+    if !target.is_file() {
+        return Ok(None);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(candidates.iter().position(|candidate| {
+            fs::metadata(candidate).is_ok_and(|meta| {
+                meta.is_file() && meta.dev() == target.dev() && meta.ino() == target.ino()
+            })
+        }))
+    }
+    #[cfg(not(unix))]
+    {
+        let target = fs::canonicalize(path).map_err(|e| e.to_string())?;
+        Ok(candidates.iter().position(|candidate| {
+            fs::canonicalize(candidate).is_ok_and(|candidate| candidate == target)
+        }))
+    }
+}
+
+#[tauri::command]
+pub async fn find_same_file(
+    path: String,
+    candidates: Vec<String>,
+) -> Result<Option<usize>, String> {
+    off_main(move || find_same_file_blocking(&path, &candidates)).await
+}
+
 /// What the editor needs to decide HOW to open a file before reading it.
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -711,6 +744,44 @@ mod tests {
     };
     use std::fs;
     use std::path::Path;
+
+    #[cfg(unix)]
+    #[test]
+    fn file_identity_recognizes_aliases_without_merging_distinct_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("MixedName.txt");
+        let alias = dir.path().join("hard-link.txt");
+        let other = dir.path().join("other.txt");
+        fs::write(&first, "first").unwrap();
+        fs::hard_link(&first, &alias).unwrap();
+        fs::write(&other, "other").unwrap();
+        let candidates = vec![first.to_string_lossy().into_owned()];
+        assert_eq!(
+            super::find_same_file_blocking(alias.to_str().unwrap(), &candidates).unwrap(),
+            Some(0)
+        );
+        assert_eq!(
+            super::find_same_file_blocking(other.to_str().unwrap(), &candidates).unwrap(),
+            None
+        );
+        let lower = dir.path().join("mixedname.txt");
+        if lower.exists() {
+            // Case-insensitive volume: the differently cased path is an alias.
+            assert_eq!(
+                super::find_same_file_blocking(lower.to_str().unwrap(), &candidates).unwrap(),
+                Some(0)
+            );
+        } else {
+            // Case-sensitive volume: both names can back independent buffers.
+            fs::write(&lower, "distinct").unwrap();
+            assert_eq!(
+                super::find_same_file_blocking(lower.to_str().unwrap(), &candidates).unwrap(),
+                None
+            );
+            assert_eq!(fs::read(&first).unwrap(), b"first");
+        }
+        dir.close().unwrap();
+    }
 
     #[test]
     fn exclude_matcher_hides_build_dirs_by_name() {

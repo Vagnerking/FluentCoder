@@ -16,7 +16,10 @@ function normalizeSeparators(path: string): string {
 }
 
 /**
- * True when two paths point at the same file. Windows paths are compared
+ * Lexical comparison for paths whose spelling/context is already established.
+ * Use filesystem identity (editor/existingFile) when opening a local alias;
+ * this function does not determine a volume or directory's case behavior.
+ * Windows paths are compared
  * case-insensitively because different code paths (the native folder picker,
  * LSP file URIs, the explorer tree) normalize the drive letter and casing
  * differently — `C:\…` and `c:\…` are the same file on Windows. Separators are

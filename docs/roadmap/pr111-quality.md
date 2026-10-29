@@ -261,3 +261,22 @@ específicos das alterações. Qualquer dependência de ambiente Windows deve
 ser registrada como pendente quando não houver execução disponível.
 As referências anteriores ao gate automático de tamanho e aos jobs PR Quality
 são histórico; não são requisitos autorizados para continuar este trabalho.
+
+
+### Identidade em disco na abertura e restauração de abas
+
+A revisão local do range 8926d91..41fae5a identificou que substituir a
+convenção macOS por comparação POSIX sempre sensível a case deixava aliases
+locais sem associação à aba existente. A abertura, restauração e busca de
+buffers para salvamento passam a consultar identidade física em vez de inferir
+o comportamento do volume pelo SO. O caminho armazenado e o buffer sujo são
+preservados. A consulta local não recebe os caminhos de raízes SSH.
+
+Validação local direcionada: 15 testes TypeScript aprovados; teste Rust com
+hard link, arquivo distinto e controle conforme o case do filesystem aprovado;
+build frontend e checagem de tipos aprovados; Clippy aprovado com os avisos
+preexistentes. Não foi criado ou disparado CI. Os testes Linux demonstram a
+comparação de identidade e os controles locais; não representam aceite de UI
+em macOS nem dos fluxos Windows ainda pendentes. Aberturas concorrentes por
+aliases e os demais consumidores de caminhos ainda exigem revisão/aceite antes
+de declarar a remediação completa.
