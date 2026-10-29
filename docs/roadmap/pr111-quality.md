@@ -248,3 +248,16 @@ revisabilidade do PR grande nem autoriza suprimir essa falha.
   O novo teste verifica consultas de cursor partidas entre leituras e texto
   que não deve causar resposta. CodeGraph e Serena foram consultados na cópia
   de validação; confirmar referências e contratos no código continua obrigatório.
+
+
+## Correção de escopo solicitada pelo autor — 29/10/2026
+
+O autor solicitou ferramentas e skills para análise e testes de qualidade,
+não a criação de CI de qualidade. Remover o workflow PR Quality adicionado
+nesta remediação. Preservar o workflow release.yml que já existia.
+Não criar novos workflows nem disparar/reexecutar jobs para acompanhar esta
+meta. Usar análise com skills e ferramentas disponíveis e testes locais
+específicos das alterações. Qualquer dependência de ambiente Windows deve
+ser registrada como pendente quando não houver execução disponível.
+As referências anteriores ao gate automático de tamanho e aos jobs PR Quality
+são histórico; não são requisitos autorizados para continuar este trabalho.
