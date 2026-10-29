@@ -223,3 +223,28 @@ Validação Linux do conjunto: cargo test --locked --lib, 421 aprovados,
 0 falhas e 15 ignorados; ignorados permanecem pendências quando obrigatórios.
 O gate do diff total permanece ativo: consolidar não elimina o problema de
 revisabilidade do PR grande nem autoriza suprimir essa falha.
+
+
+### Correção das falhas Windows após a consolidação
+
+- Descoberta Git: o nome curto 8.3 do workspace e o nome longo retornado pelo
+  Git eram comparados como strings distintas. Resolver caminhos existentes
+  antes de comparar no Windows, preservando case e tratando prefixos UNC.
+  A fixture de status compara identidade canônica; discovery continua exigindo
+  associação correta das pastas do workspace ao repositório.
+- Fixture de shell: construir o caminho esperado com Path::join, mantendo
+  todas as verificações de argumentos, ambiente e separação dos dotfiles.
+- ACP sem interface: portable-pty ativa PSEUDOCONSOLE_INHERIT_CURSOR. A ausência
+  de resposta ao pedido de cursor é um mecanismo documentado de travamento;
+  responder à consulta no leitor headless e fechar o master na liberação.
+  Referência: https://learn.microsoft.com/en-us/windows/console/createpseudoconsole
+  A confirmação no Windows continua obrigatória; não inferir aceite de um teste Linux.
+- Compartilhar a resposta de protocolo com os aceites ConPTY de tarefas;
+  o comando, o stdin, Ctrl+C, retorno ao perfil e encerramento da árvore
+  continuam sendo executados e verificados com processos reais.
+- Fixture ACP: diretório exclusivo, limpeza e aborto do worker no erro;
+  limite por etapa com diagnóstico, sem skip nem sucesso em timeout.
+- Testes Linux do candidato: 422 aprovados, nenhuma falha, 15 ignorados.
+  O novo teste verifica consultas de cursor partidas entre leituras e texto
+  que não deve causar resposta. CodeGraph e Serena foram consultados na cópia
+  de validação; confirmar referências e contratos no código continua obrigatório.

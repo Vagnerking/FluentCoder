@@ -244,7 +244,10 @@ u UU N... 100644 100644 100644 100644 aaaa bbbb cccc conf lito.md\0\
         let status = crate::git::git_status_blocking(repo.root()).unwrap();
         assert!(status.is_repo);
         assert_eq!(status.branch, "feat/x");
-        assert_eq!(status.root.replace('\\', "/"), repo.root().replace('\\', "/"));
+        assert_eq!(
+            std::fs::canonicalize(&status.root).unwrap(),
+            std::fs::canonicalize(repo.root()).unwrap(),
+        );
         assert_eq!(status.conflicted, 1);
         let find = |p: &str| status.files.iter().find(|f| f.path == p);
         assert!(find("base.txt").unwrap().conflicted);

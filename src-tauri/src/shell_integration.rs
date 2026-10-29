@@ -151,13 +151,17 @@ mod tests {
     fn injection_args_never_touch_user_dotfiles() {
         let dir = Path::new("/data/si");
         let bash = injection(ShellKind::Bash, dir, None);
-        assert_eq!(bash.args, vec!["--init-file", "/data/si/fluent-bash.sh", "-i"]);
+        assert_eq!(bash.args, vec![
+            "--init-file".to_string(),
+            dir.join("fluent-bash.sh").to_string_lossy().to_string(),
+            "-i".to_string(),
+        ]);
         assert!(bash.env.iter().any(|(k, v)| k == "FLUENT_SHELL_LOGIN" && v == "1"));
         let zsh = injection(ShellKind::Zsh, dir, Some("/home/u/.config/zsh"));
-        assert!(zsh.env.iter().any(|(k, v)| k == "ZDOTDIR" && v == "/data/si/zsh"));
+        assert!(zsh.env.iter().any(|(k, v)| k == "ZDOTDIR" && v == &dir.join("zsh").to_string_lossy()));
         assert!(zsh.env.iter().any(|(k, v)| k == "FLUENT_USER_ZDOTDIR" && v == "/home/u/.config/zsh"));
         let fish = injection(ShellKind::Fish, dir, None);
-        assert_eq!(fish.args[2], "source '/data/si/fluent-fish.fish'");
+        assert_eq!(fish.args[2], format!("source '{}'", dir.join("fluent-fish.fish").display()));
     }
 
     /// Roda o bash real num PTY com o nosso script (HOME temporário, sem a

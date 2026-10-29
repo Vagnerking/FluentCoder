@@ -656,13 +656,23 @@ pub(crate) mod tests {
         command.cwd(dir.path());
         let mut child = pair.slave.spawn_command(command).unwrap();
         drop(pair.slave);
-        let mut writer = pair.master.take_writer().unwrap();
+        let mut writer = crate::platform::pty::SharedWriter::new(pair.master.take_writer().unwrap());
+        #[cfg(windows)]
+        let mut reply_writer = writer.clone();
         let mut reader = pair.master.try_clone_reader().unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         let read_thread = std::thread::spawn(move || {
-            let mut text = String::new();
-            let _ = reader.read_to_string(&mut text);
-            let _ = tx.send(text);
+            let mut output = Vec::new();
+            let mut buf = [0; 4096];
+            #[cfg(windows)]
+            let mut cursor = crate::platform::pty::CursorQueryResponder::default();
+            while let Ok(n) = reader.read(&mut buf) {
+                if n == 0 { break; }
+                #[cfg(windows)]
+                cursor.feed(&buf[..n], &mut reply_writer).unwrap();
+                output.extend_from_slice(&buf[..n]);
+            }
+            let _ = tx.send(String::from_utf8_lossy(&output).into_owned());
         });
         let wait_file = |path: &Path| {
             let deadline = Instant::now() + Duration::from_secs(15);

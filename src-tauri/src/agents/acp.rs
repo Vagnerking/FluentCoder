@@ -1284,6 +1284,24 @@ mod tests {
         done: oneshot::Receiver<Result<(), String>>,
     }
 
+    impl Turn {
+        async fn finish(&mut self, phase: &str) {
+            tokio::time::timeout(Duration::from_secs(30), &mut self.done)
+                .await
+                .unwrap_or_else(|_| panic!("ACP fixture timed out during {phase}: {:?}", self.events.lock().unwrap()))
+                .expect("worker must return a turn result")
+                .unwrap();
+        }
+    }
+
+    struct AbortWorkerOnDrop(tokio::task::AbortHandle);
+
+    impl Drop for AbortWorkerOnDrop {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+
     fn send_job(
         jobs: &mpsc::UnboundedSender<PromptJob>,
         conversation: &str,
@@ -1347,17 +1365,18 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn fake_agent_end_to_end() {
         let Some(desc) = fixture() else { return };
-        let root = std::env::temp_dir().join(format!("fluent-acp-e2e-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
+        let fixture_dir = tempfile::tempdir().unwrap();
+        let root = fixture_dir.path().to_path_buf();
         let (jobs_tx, jobs_rx) = mpsc::unbounded_channel();
         let worker = tokio::spawn(run_worker(desc, root.clone(), jobs_rx));
+        let _worker_guard = AbortWorkerOnDrop(worker.abort_handle());
         let cancel = Arc::new(Notify::new());
         let broker = Arc::new(ApprovalBroker::default());
 
         // 1) Turno simples: sessão nova recebe o contexto completo, com
         //    streaming de raciocínio, ferramenta e texto.
-        let turn = send_job(&jobs_tx, "c1", "olá", AgentMode::Auto, None, &cancel, &broker, None);
-        turn.done.await.unwrap().unwrap();
+        let mut turn = send_job(&jobs_tx, "c1", "olá", AgentMode::Auto, None, &cancel, &broker, None);
+        turn.finish("initialization and first turn").await;
         let events = turn.events.lock().unwrap().clone();
         let session = session_of(&events).expect("session id");
         assert!(text_of(&events).contains("Recebido: CONTEXTO\nolá"), "{events:?}");
@@ -1369,15 +1388,15 @@ mod tests {
         assert!(text_of(&events).contains("mcp=fluent-knowledge"), "{events:?}");
 
         // 2) Mesma conversa: só a nova mensagem (sessão viva no processo).
-        let turn = send_job(&jobs_tx, "c1", "de novo", AgentMode::Auto, Some(session.clone()), &cancel, &broker, None);
-        turn.done.await.unwrap().unwrap();
+        let mut turn = send_job(&jobs_tx, "c1", "de novo", AgentMode::Auto, Some(session.clone()), &cancel, &broker, None);
+        turn.finish("live session reuse").await;
         let events = turn.events.lock().unwrap().clone();
         assert!(text_of(&events).contains("Recebido: de novo"));
         assert!(!text_of(&events).contains("CONTEXTO"));
 
         // 3) Pedido de permissão no modo Agente → cartão; o usuário permite.
-        let turn = send_job(&jobs_tx, "c1", "editar arquivo", AgentMode::Auto, Some(session.clone()), &cancel, &broker, Some("allow"));
-        turn.done.await.unwrap().unwrap();
+        let mut turn = send_job(&jobs_tx, "c1", "editar arquivo", AgentMode::Auto, Some(session.clone()), &cancel, &broker, Some("allow"));
+        turn.finish("user approval").await;
         let events = turn.events.lock().unwrap().clone();
         let approval = events.iter().find_map(|event| match event {
             AcpEvent::Approval { options, diffs, .. } => Some((options.clone(), diffs.clone())),
@@ -1390,8 +1409,8 @@ mod tests {
         assert!(broker.pending_ids().is_empty());
 
         // 4) Modo Perguntar: a edição é negada automaticamente, sem cartão.
-        let turn = send_job(&jobs_tx, "c1", "editar arquivo", AgentMode::Ask, Some(session.clone()), &cancel, &broker, None);
-        turn.done.await.unwrap().unwrap();
+        let mut turn = send_job(&jobs_tx, "c1", "editar arquivo", AgentMode::Ask, Some(session.clone()), &cancel, &broker, None);
+        turn.finish("read-only permission denial").await;
         let events = turn.events.lock().unwrap().clone();
         assert!(!events.iter().any(|event| matches!(event, AcpEvent::Approval { .. })));
         assert!(text_of(&events).contains("permissão: reject"), "{events:?}");
@@ -1399,7 +1418,7 @@ mod tests {
 
         // 5) Cancelamento: o pedido pendente recebe `cancelled` e o turno
         //    termina como Cancelled.
-        let turn = send_job(&jobs_tx, "c1", "editar arquivo", AgentMode::Auto, Some(session.clone()), &cancel, &broker, None);
+        let mut turn = send_job(&jobs_tx, "c1", "editar arquivo", AgentMode::Auto, Some(session.clone()), &cancel, &broker, None);
         for _ in 0..200 {
             if turn.events.lock().unwrap().iter().any(|event| matches!(event, AcpEvent::Approval { .. })) {
                 break;
@@ -1407,15 +1426,15 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         cancel.notify_one();
-        turn.done.await.unwrap().unwrap();
+        turn.finish("cancellation").await;
         let events = turn.events.lock().unwrap().clone();
         assert!(events.iter().any(|event| matches!(event, AcpEvent::ApprovalResolved { .. })));
         assert!(events.iter().any(|event| matches!(event, AcpEvent::Done { stop_reason } if stop_reason == "Cancelled")));
 
         // 6) Outra conversa retoma uma sessão salva via session/load (sem
         //    reenviar o contexto e sem vazar o replay para a UI).
-        let turn = send_job(&jobs_tx, "c2", "retomar", AgentMode::Auto, Some(session.clone()), &cancel, &broker, None);
-        turn.done.await.unwrap().unwrap();
+        let mut turn = send_job(&jobs_tx, "c2", "retomar", AgentMode::Auto, Some(session.clone()), &cancel, &broker, None);
+        turn.finish("saved session loading").await;
         let events = turn.events.lock().unwrap().clone();
         assert_eq!(session_of(&events).as_deref(), Some(session.as_str()));
         assert!(!text_of(&events).contains("HISTÓRICO"), "replay vazou: {events:?}");
@@ -1424,15 +1443,16 @@ mod tests {
         // 7) Capacidades de cliente: o agente escreve/lê pelo fs/* (escrita fora
         //    do workspace recusada) e roda um comando pelo terminal/* (PTY real,
         //    código de saída e saída capturada).
-        let turn = send_job(&jobs_tx, "c1", "testar cliente", AgentMode::Auto, Some(session.clone()), &cancel, &broker, None);
-        turn.done.await.unwrap().unwrap();
+        let mut turn = send_job(&jobs_tx, "c1", "testar cliente", AgentMode::Auto, Some(session.clone()), &cancel, &broker, None);
+        turn.finish("filesystem and real PTY client services").await;
         let events = turn.events.lock().unwrap().clone();
         let text = text_of(&events);
         assert!(text.contains(r#"cliente: fs=ok:"linha 2\n":fora=recusado"#), "{text}");
         assert!(text.contains(r#"terminal=exit:5:"do terminal ok""#), "{text}");
 
         drop(jobs_tx);
-        worker.await.unwrap().unwrap();
-        let _ = std::fs::remove_dir_all(&root);
+        tokio::time::timeout(Duration::from_secs(10), worker)
+            .await.expect("ACP worker shutdown must finish").unwrap().unwrap();
+        fixture_dir.close().unwrap();
     }
 }

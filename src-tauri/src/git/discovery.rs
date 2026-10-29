@@ -41,6 +41,22 @@ pub struct RepoInfo {
 }
 
 fn norm(p: &str) -> String {
+    // Git expands Windows 8.3 aliases while workspace folders may retain them.
+    // Resolve existing paths before comparing identity; do not lowercase paths
+    // because case-sensitive directories can exist on Windows too.
+    #[cfg(windows)]
+    let canonical = std::fs::canonicalize(p).ok();
+    #[cfg(windows)]
+    let p = canonical.as_deref().and_then(Path::to_str).unwrap_or(p);
+    #[cfg(windows)]
+    let expanded;
+    #[cfg(windows)]
+    let p = if let Some(unc) = p.strip_prefix(r"\\?\UNC\") {
+        expanded = format!(r"\\{unc}");
+        expanded.as_str()
+    } else {
+        p.strip_prefix(r"\\?\").unwrap_or(p)
+    };
     let s = p.replace('\\', "/");
     let t = s.trim_end_matches('/');
     if t.is_empty() { "/".into() } else { t.to_string() }

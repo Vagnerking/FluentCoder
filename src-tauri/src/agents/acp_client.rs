@@ -460,6 +460,12 @@ impl AcpTerminal {
         });
         let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
         let app = APP.get().cloned();
+        #[cfg(windows)]
+        let mut headless_writer = if app.is_none() {
+            Some(pair.master.take_writer().map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
         if let Some(app) = &app {
             // Aba no painel de terminais (o usuário vê e pode digitar/fechar).
             if let Ok(writer) = pair.master.take_writer() {
@@ -488,12 +494,20 @@ impl AcpTerminal {
         // Lê a saída: buffer do agente + eventos do painel.
         let reader_term = Arc::clone(&term);
         std::thread::spawn(move || {
+            #[cfg(windows)]
+            let mut cursor = crate::platform::pty::CursorQueryResponder::default();
             let mut buf = [0u8; 4096];
             let mut carry: Vec<u8> = Vec::new();
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
+                        #[cfg(windows)]
+                        if let Some(writer) = headless_writer.as_mut() {
+                            if cursor.feed(&buf[..n], writer.as_mut()).is_err() {
+                                break;
+                            }
+                        }
                         carry.extend_from_slice(&buf[..n]);
                         // Só bytes UTF-8 completos (um caractere pode vir partido).
                         let valid = match std::str::from_utf8(&carry) {
@@ -553,12 +567,16 @@ impl AcpTerminal {
     }
 
     fn kill(&self) {
-        if self.exit_status().is_some() {
-            return;
+        if self.exit_status().is_none() {
+            if let Ok(mut k) = self.killer.lock() {
+                let _ = k.kill();
+            }
         }
-        if let Ok(mut k) = self.killer.lock() {
-            let _ = k.kill();
-        }
+        // In headless mode the reader holds an Arc<Self>; closing the master
+        // breaks the read/owner cycle even if the child has already exited.
+        // The independent reader keeps draining while ConPTY shuts down.
+        let master = self.master.lock().ok().and_then(|mut master| master.take());
+        drop(master);
     }
 }
 

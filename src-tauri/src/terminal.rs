@@ -516,12 +516,20 @@ mod task_runner_tests {
         drop(pair.slave);
         let root_pid = child.process_id().expect("PTY child pid");
         let killer = child.clone_killer();
-        let writer = pair.master.take_writer().unwrap();
+        let writer = crate::platform::pty::SharedWriter::new(pair.master.take_writer().unwrap());
+        #[cfg(windows)]
+        let mut reply_writer = writer.clone();
         let mut reader = pair.master.try_clone_reader().unwrap();
         let (drained, drain_done) = std::sync::mpsc::channel();
         let drain = std::thread::spawn(move || {
             let mut buf = [0; 1024];
-            while matches!(reader.read(&mut buf), Ok(n) if n > 0) {}
+            #[cfg(windows)]
+            let mut cursor = crate::platform::pty::CursorQueryResponder::default();
+            while let Ok(n) = reader.read(&mut buf) {
+                if n == 0 { break; }
+                #[cfg(windows)]
+                cursor.feed(&buf[..n], &mut reply_writer).unwrap();
+            }
             let _ = drained.send(());
         });
         let mut read_pid = |suffix: &str| {
@@ -543,7 +551,7 @@ mod task_runner_tests {
         let task_pid = read_pid(".pid");
         let descendant_pid = read_pid(".child.pid");
         assert!(is_running(task_pid) && is_running(descendant_pid));
-        let session = PtySession { writer, master: pair.master, child: Some(child), killer };
+        let session = PtySession { writer: Box::new(writer), master: pair.master, child: Some(child), killer };
         close_session(session).expect("reaper").join().unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         while [root_pid, task_pid, descendant_pid].into_iter().any(is_running) {

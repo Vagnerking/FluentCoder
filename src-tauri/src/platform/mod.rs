@@ -20,6 +20,8 @@ pub mod linux;
 pub mod login_env;
 pub mod macos;
 pub mod process;
+#[cfg(any(windows, test))]
+pub(crate) mod pty;
 pub mod windows;
 
 use serde::Serialize;
