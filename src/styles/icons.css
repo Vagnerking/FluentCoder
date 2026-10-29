@@ -1,0 +1,78 @@
+/* ==========================================================================
+   Icon pack — Material Icon Theme (files/folders) + Codicons (UI/actions)
+   File-state colors and a couple of context placements. The icon *choice*
+   lives in the resolver/codicon-map; this file only styles size/color/state.
+   ========================================================================== */
+
+/* ---- Material file/folder icons (the <FileIcon> wrapper) ---- */
+.file-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.file-icon img {
+  display: block;
+  /* SVGs already carry their own colors from the Material theme. */
+  pointer-events: none;
+}
+
+/* Tema de ícones por fonte (ex.: Seti): glifo da @font-face do tema. */
+.file-icon-font {
+  overflow: hidden;
+  font-style: normal;
+  font-weight: normal;
+  text-align: center;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ---- Codicons: align the web-font glyphs with adjacent text ---- */
+.codicon {
+  vertical-align: middle;
+  line-height: 1;
+}
+
+button .codicon { pointer-events: none; }
+
+/* Diagnostic / status codicon colors (shared by status bar + problems). */
+.status-left .codicon-error,
+.problem-error .problem-icon .codicon { color: var(--color-status-error); }
+
+.status-left .codicon-warning,
+.problem-warning .problem-icon .codicon { color: var(--color-status-warning); }
+
+.problem-info .problem-icon .codicon { color: var(--color-status-info); }
+
+/* ---- File-state decorations (label color + badge) ----
+   Diagnostics outrank git; colors mirror VSCode's gitDecoration.*. */
+.deco-modified  { color: var(--color-git-modified); }
+
+/* modified (orange) */
+.deco-added,
+.deco-untracked { color: var(--color-git-added); }
+
+/* new / untracked (green) */
+.deco-deleted   { color: var(--color-git-deleted-strong); }
+
+/* deleted (red) */
+.deco-conflict  { color: var(--color-git-conflict); }
+
+/* merge conflict */
+.deco-error     { color: var(--color-status-error); }
+
+/* has error diagnostic */
+.deco-warning   { color: var(--color-status-warning); }
+
+/* has warning diagnostic */
+
+/* The active row keeps its accent label for GIT states; the badge still shows
+   state. Diagnostics are the exception: a selected/active file with an error or
+   warning stays red/yellow (like VSCode), so a broken file is never disguised as
+   "fine" just because it's the open tab/row. */
+.tree-row.active .tree-label[class*="deco-"]:not(.deco-error):not(.deco-warning) {
+  color: var(--text);
+}

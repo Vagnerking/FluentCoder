@@ -1,0 +1,16 @@
+{
+  "displayName": "Demo NLS",
+  "description": "Base description",
+  "command.run": "Run Demo",
+  "category": "Demo",
+  "config.title": "Demo settings",
+  "config.mode": { "message": "Mode used by **demo**", "comment": ["markdown"] },
+  "config.mode.a": "Mode A",
+  "config.mode.b": "Mode B",
+  "config.deprecated": "Deprecated",
+  "view.name": "Demo View",
+  "container.title": "Demo",
+  "walk.title": "Get started",
+  "walk.step": "First step",
+  "lang.alias": "Demo Language"
+}

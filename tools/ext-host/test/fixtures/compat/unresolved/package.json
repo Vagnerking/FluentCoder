@@ -1,0 +1,9 @@
+{
+  "name": "opaque-loader",
+  "publisher": "acme",
+  "version": "1.0.0",
+  "engines": { "vscode": "^1.80.0" },
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": { "commands": [{ "command": "acme.run", "title": "Run" }] }
+}

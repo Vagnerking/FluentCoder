@@ -1,0 +1,251 @@
+{
+ "pt-br": {
+  "name": "demo-nls",
+  "publisher": "acme",
+  "displayName": "Demo NLS",
+  "description": "Descrição em português genérico",
+  "version": "1.0.0",
+  "engines": {
+   "vscode": "^1.80.0"
+  },
+  "main": "./extension.js",
+  "contributes": {
+   "commands": [
+    {
+     "command": "demo.run",
+     "title": "Executar Demo",
+     "category": "Demo"
+    },
+    {
+     "command": "demo.missing",
+     "title": "%command.missing%"
+    }
+   ],
+   "configuration": [
+    {
+     "title": "Configurações da Demo",
+     "properties": {
+      "demo.mode": {
+       "type": "string",
+       "enum": [
+        "a",
+        "b"
+       ],
+       "enumDescriptions": [
+        "Modo A (pt)",
+        "Mode B"
+       ],
+       "markdownDescription": "Mode used by **demo**",
+       "deprecationMessage": "Deprecated"
+      }
+     }
+    }
+   ],
+   "views": {
+    "explorer": [
+     {
+      "id": "demo.view",
+      "name": "View Demo (pt)"
+     }
+    ]
+   },
+   "viewsContainers": {
+    "activitybar": [
+     {
+      "id": "demo",
+      "title": "Demo",
+      "icon": "media/icon.svg"
+     }
+    ]
+   },
+   "walkthroughs": [
+    {
+     "id": "w",
+     "title": "Get started",
+     "steps": [
+      {
+       "id": "s",
+       "title": "First step",
+       "description": "Literal sem placeholder: 100% pronto"
+      }
+     ]
+    }
+   ],
+   "languages": [
+    {
+     "id": "demo",
+     "aliases": [
+      "Demo Language",
+      "Demo"
+     ]
+    }
+   ]
+  }
+ },
+ "en": {
+  "name": "demo-nls",
+  "publisher": "acme",
+  "displayName": "Demo NLS",
+  "description": "Base description",
+  "version": "1.0.0",
+  "engines": {
+   "vscode": "^1.80.0"
+  },
+  "main": "./extension.js",
+  "contributes": {
+   "commands": [
+    {
+     "command": "demo.run",
+     "title": "Run Demo",
+     "category": "Demo"
+    },
+    {
+     "command": "demo.missing",
+     "title": "%command.missing%"
+    }
+   ],
+   "configuration": [
+    {
+     "title": "Demo settings",
+     "properties": {
+      "demo.mode": {
+       "type": "string",
+       "enum": [
+        "a",
+        "b"
+       ],
+       "enumDescriptions": [
+        "Mode A",
+        "Mode B"
+       ],
+       "markdownDescription": "Mode used by **demo**",
+       "deprecationMessage": "Deprecated"
+      }
+     }
+    }
+   ],
+   "views": {
+    "explorer": [
+     {
+      "id": "demo.view",
+      "name": "Demo View"
+     }
+    ]
+   },
+   "viewsContainers": {
+    "activitybar": [
+     {
+      "id": "demo",
+      "title": "Demo",
+      "icon": "media/icon.svg"
+     }
+    ]
+   },
+   "walkthroughs": [
+    {
+     "id": "w",
+     "title": "Get started",
+     "steps": [
+      {
+       "id": "s",
+       "title": "First step",
+       "description": "Literal sem placeholder: 100% pronto"
+      }
+     ]
+    }
+   ],
+   "languages": [
+    {
+     "id": "demo",
+     "aliases": [
+      "Demo Language",
+      "Demo"
+     ]
+    }
+   ]
+  }
+ },
+ "pt": {
+  "name": "demo-nls",
+  "publisher": "acme",
+  "displayName": "Demo NLS",
+  "description": "Descrição em português genérico",
+  "version": "1.0.0",
+  "engines": {
+   "vscode": "^1.80.0"
+  },
+  "main": "./extension.js",
+  "contributes": {
+   "commands": [
+    {
+     "command": "demo.run",
+     "title": "Executar Demo (pt)",
+     "category": "Demo"
+    },
+    {
+     "command": "demo.missing",
+     "title": "%command.missing%"
+    }
+   ],
+   "configuration": [
+    {
+     "title": "Demo settings",
+     "properties": {
+      "demo.mode": {
+       "type": "string",
+       "enum": [
+        "a",
+        "b"
+       ],
+       "enumDescriptions": [
+        "Modo A (pt)",
+        "Mode B"
+       ],
+       "markdownDescription": "Mode used by **demo**",
+       "deprecationMessage": "Deprecated"
+      }
+     }
+    }
+   ],
+   "views": {
+    "explorer": [
+     {
+      "id": "demo.view",
+      "name": "View Demo (pt)"
+     }
+    ]
+   },
+   "viewsContainers": {
+    "activitybar": [
+     {
+      "id": "demo",
+      "title": "Demo",
+      "icon": "media/icon.svg"
+     }
+    ]
+   },
+   "walkthroughs": [
+    {
+     "id": "w",
+     "title": "Get started",
+     "steps": [
+      {
+       "id": "s",
+       "title": "First step",
+       "description": "Literal sem placeholder: 100% pronto"
+      }
+     ]
+    }
+   ],
+   "languages": [
+    {
+     "id": "demo",
+     "aliases": [
+      "Demo Language",
+      "Demo"
+     ]
+    }
+   ]
+  }
+ }
+}

@@ -34,7 +34,10 @@ pub struct BridgeHandle {
 
 impl BridgeHandle {
     pub fn info(&self) -> BridgeInfo {
-        BridgeInfo { port: self.port, token: self.token.clone() }
+        BridgeInfo {
+            port: self.port,
+            token: self.token.clone(),
+        }
     }
 
     pub fn shutdown(&mut self) {
@@ -86,7 +89,11 @@ pub async fn start_bridge(process: LspProcess) -> std::io::Result<BridgeHandle> 
     });
 
     let _ = ready_rx.await;
-    Ok(BridgeHandle { port, token, shutdown: Some(shutdown_tx) })
+    Ok(BridgeHandle {
+        port,
+        token,
+        shutdown: Some(shutdown_tx),
+    })
 }
 
 #[allow(clippy::result_large_err)]
@@ -138,7 +145,12 @@ async fn proxy(
     process: LspProcess,
     shutdown: oneshot::Receiver<()>,
 ) {
-    let LspProcess { child, mut stdin, stdout: mut reader, .. } = process;
+    let LspProcess {
+        child,
+        mut stdin,
+        stdout: mut reader,
+        ..
+    } = process;
     let (mut ws_sink, mut ws_stream) = ws.split();
 
     let to_ws = async move {

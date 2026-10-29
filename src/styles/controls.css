@@ -1,0 +1,1116 @@
+/* ---- Buttons (F2-AUD-014) ---- */
+.ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  min-width: 0;
+  height: var(--control-h-md);
+  padding: 0 var(--space-md);
+  font-family: inherit;
+  font-size: var(--font-base);
+  line-height: var(--line-height-base);
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--text);
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  border-bottom-color: var(--acrylic-border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-rest);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.ui-button-sm {
+  height: var(--control-h-sm);
+  padding: 0 var(--space-sm);
+  gap: var(--space-xs);
+  font-size: var(--font-caption);
+  line-height: var(--line-height-caption);
+}
+
+.ui-button-icon {
+  flex: 0 0 auto;
+  font-size: var(--icon-md);
+}
+
+.ui-button-sm .ui-button-icon {
+  font-size: var(--icon-sm);
+}
+
+.ui-button:hover:not(:disabled) {
+  background: var(--acrylic-control-hover);
+}
+
+.ui-button:active:not(:disabled) {
+  background: var(--acrylic-control-pressed);
+  color: var(--text-secondary);
+}
+
+.ui-button:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: default;
+}
+
+/* Primary / accent — the default/confirming action (one per context). */
+.ui-button-primary {
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-color: transparent;
+}
+
+.ui-button-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.ui-button-primary:active:not(:disabled) {
+  color: var(--text-on-accent);
+  background: var(--accent-pressed);
+}
+
+/* Subtle — transparent until hovered (toolbars, inline actions). */
+.ui-button-subtle {
+  color: var(--text-secondary);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.ui-button-subtle:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--fill-subtle-hover);
+}
+
+.ui-button-subtle:active:not(:disabled) {
+  background: var(--fill-subtle-active);
+}
+
+/* Secondary — the neutral base, explicit for symmetry at call sites. */
+.ui-button-secondary {
+  background: var(--acrylic-control);
+}
+
+/* Danger — destructive actions (delete, discard). Outlined in the status color
+   so it reads as dangerous without competing with the primary fill; the label
+   (a verb) carries the meaning, never the color alone. */
+.ui-button-danger {
+  color: var(--error);
+  background: transparent;
+  border-color: color-mix(in srgb, var(--error) 45%, transparent);
+}
+
+.ui-button-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error) 14%, transparent);
+  border-color: var(--error);
+}
+
+.ui-button-danger:active:not(:disabled) {
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 8%, transparent);
+}
+
+/* Loading: busy cursor + spinner (aria-busy is set by <Button loading>). */
+.ui-button[aria-busy="true"] {
+  cursor: progress;
+}
+
+/* Icon-only button — square, no min-width, 16px codicon. */
+.ui-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.ui-icon-button-sm {
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+}
+
+.ui-icon-button-icon {
+  font-size: var(--icon-md);
+}
+
+/* Ícone de extensão (data URI) como máscara na cor do texto. */
+.ui-icon-button-img {
+  display: inline-block;
+  width: var(--icon-md);
+  height: var(--icon-md);
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+.ui-icon-button:hover:not(:disabled) {
+  background: var(--fill-subtle-hover);
+  color: var(--text);
+}
+
+.ui-icon-button:active:not(:disabled) {
+  background: var(--fill-subtle-active);
+}
+
+.ui-icon-button:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: default;
+}
+
+/* Pressed/toggle state (aria-pressed via <IconButton pressed>). */
+.ui-icon-button[aria-pressed="true"] {
+  background: var(--fill-selected);
+  color: var(--text);
+}
+
+.ui-icon-button[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--fill-selected-hover);
+}
+
+/* ---- Inputs (F2-AUD-013) — <Input> / <SearchBox> / <Textarea> ----
+   Fluent 2 text field: control fill, hairline border with a stronger bottom
+   edge; focus draws a 2px accent underline (the field's focus indicator) that
+   grows from the centre. Hover darkens the bottom edge. The `.ui-field`
+   wrapper carries the visuals (icon / clear / trailing slots); the raw
+   `.ui-input` class gives a bare <input> the same look (underline via an inset
+   shadow) for call sites that can't take the wrapper. */
+.ui-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  height: var(--control-h-md);
+  padding: 0 var(--space-xs) 0 10px;
+  color: var(--text);
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  border-bottom-color: var(--acrylic-border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-rest);
+  overflow: hidden;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+.ui-field-sm {
+  height: var(--control-h-sm);
+  padding: 0 2px 0 6px;
+  gap: var(--space-xs);
+}
+
+.ui-field-darker { background: var(--fill-recessed); }
+
+.ui-field-multiline {
+  height: auto;
+  align-items: stretch;
+  padding: 0;
+}
+
+.ui-field:hover:not(.is-disabled) {
+  border-bottom-color: var(--text-muted);
+}
+
+.ui-field:focus-within {
+  background: var(--acrylic-control-pressed);
+}
+
+/* The accent underline (scaleX from the centre). */
+.ui-field::after {
+  content: "";
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  transform: scaleX(0);
+  transition: transform var(--duration-medium) var(--ease-decelerate);
+  pointer-events: none;
+}
+
+.ui-field:focus-within::after { transform: scaleX(1); }
+
+.ui-field.is-invalid { border-bottom-color: var(--color-status-error); }
+
+.ui-field.is-invalid::after { background: var(--color-status-error); transform: scaleX(1); }
+
+.ui-field.is-disabled { opacity: var(--opacity-disabled); }
+
+.ui-field-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  font-family: inherit;
+  font-size: var(--font-base);
+  color: inherit;
+  background: transparent;
+  border: none;
+  outline: none; /* the wrapper's underline is the focus indicator */
+}
+
+.ui-field-sm .ui-field-input { font-size: var(--font-caption); }
+
+.ui-field-multiline .ui-field-input {
+  min-height: 56px;
+  padding: 6px 10px;
+  line-height: var(--line-height-base);
+  resize: vertical;
+}
+
+.ui-field-input:focus-visible { outline: none; }
+
+.ui-field-input::placeholder { color: var(--text-muted); }
+
+.ui-field-input:disabled { cursor: default; }
+
+/* WebKit's own search decorations would duplicate our clear button. */
+.ui-field-input::-webkit-search-cancel-button { display: none; }
+
+.ui-field-icon {
+  flex: 0 0 auto;
+  font-size: var(--icon-sm);
+  color: var(--text-muted);
+}
+
+.ui-field:focus-within .ui-field-icon { color: var(--text-secondary); }
+
+.ui-field-after {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  flex: 0 0 auto;
+}
+
+.ui-field-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--icon-sm);
+  cursor: pointer;
+  animation: fadeIn var(--duration-fast) var(--ease-standard);
+}
+
+.ui-field-clear:hover { background: var(--fill-subtle-hover); color: var(--text); }
+
+.ui-field-clear:active { background: var(--fill-subtle-active); }
+
+/* Compact toggles inside a field (search options). */
+.ui-field-after .ui-icon-button { width: 22px; height: 22px; }
+
+.ui-field-sm .ui-field-after .ui-icon-button { width: 20px; height: 20px; }
+
+/* Bare inputs (raw <input class="ui-input">, Quick Pick/Input, glob fields). */
+.ui-input,
+.ui-textarea {
+  width: 100%;
+  height: var(--control-h-md);
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: var(--font-base);
+  color: var(--text);
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  border-bottom-color: var(--acrylic-border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-rest);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+.ui-input-sm {
+  height: var(--control-h-sm);
+  padding: 0 6px;
+}
+
+.ui-textarea {
+  height: auto;
+  min-height: 48px;
+  padding: 6px 10px;
+  resize: vertical;
+}
+
+.ui-input::placeholder,
+.ui-textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.ui-input:hover:not(:disabled),
+.ui-textarea:hover:not(:disabled) {
+  border-bottom-color: var(--text-muted);
+}
+
+/* Focus: the 2px accent underline (border + inset shadow) replaces the
+   outline — a visible, distinct indicator (F2-AUD-003). */
+.ui-input:focus,
+.ui-textarea:focus {
+  outline: none;
+  background: var(--acrylic-control-pressed);
+  border-bottom-color: var(--accent);
+  box-shadow: inset 0 -1px 0 0 var(--accent);
+}
+
+.ui-input:disabled,
+.ui-textarea:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: default;
+}
+
+/* Invalid: pair with aria-invalid="true" + an aria-describedby message. */
+.ui-input[aria-invalid="true"],
+.ui-textarea[aria-invalid="true"],
+.ui-select[aria-invalid="true"] {
+  border-color: var(--color-status-error);
+}
+
+.ui-input[aria-invalid="true"]:focus,
+.ui-textarea[aria-invalid="true"]:focus {
+  border-bottom-color: var(--color-status-error);
+  box-shadow: inset 0 -1px 0 0 var(--color-status-error);
+}
+
+/* The error text tied to an invalid field via aria-describedby. */
+.ui-field-error {
+  display: block;
+  margin-top: var(--space-xs);
+  font-size: var(--font-caption);
+  line-height: var(--line-height-caption);
+  color: var(--color-status-error);
+}
+
+/* ---- Select (dropdown) — <Select> ----
+   The trigger looks like a field (value + chevron); the popup is a flyout
+   portalled to <body> (position: fixed) so no overflow ancestor clips it. */
+.ui-select {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  min-width: 0;
+  height: var(--control-h-md);
+  padding: 0 var(--space-sm) 0 10px;
+  font-family: inherit;
+  font-size: var(--font-base);
+  line-height: var(--line-height-base);
+  text-align: left;
+  color: var(--text);
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  border-bottom-color: var(--acrylic-border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-rest);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+.ui-select-sm {
+  height: var(--control-h-sm);
+  padding: 0 var(--space-xs) 0 var(--space-sm);
+  gap: var(--space-xs);
+  font-size: var(--font-caption);
+  line-height: var(--line-height-caption);
+}
+
+.ui-select:hover:not(:disabled) {
+  background: var(--acrylic-control-hover);
+  border-color: var(--acrylic-border-strong);
+}
+
+.ui-select:active:not(:disabled),
+.ui-select.is-open {
+  background: var(--acrylic-control-pressed);
+  border-bottom-color: var(--accent);
+}
+
+.ui-select:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: default;
+}
+
+.ui-select-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-select.is-placeholder .ui-select-value {
+  color: var(--text-muted);
+}
+
+.ui-select-chevron {
+  flex: 0 0 auto;
+  font-size: var(--icon-md);
+  color: var(--text-secondary);
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.ui-select-sm .ui-select-chevron {
+  font-size: var(--icon-sm);
+}
+
+.ui-select.is-open .ui-select-chevron {
+  transform: rotate(180deg);
+}
+
+.ui-select-popup {
+  position: fixed;
+  /* Above modal overlays (≤ 10000), below tooltips (10001). */
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-width: min(480px, calc(100vw - 16px));
+  padding: var(--space-xs);
+  overflow-y: auto;
+  font-size: var(--font-base);
+  line-height: var(--line-height-base);
+  color: var(--text);
+  background: var(--color-surface-overlay);
+  border: 1px solid var(--color-surface-overlay-border);
+  border-radius: var(--radius-surface);
+  box-shadow: var(--shadow-flyout);
+  animation: ui-flyout-in var(--duration-medium) var(--ease-decelerate);
+}
+
+.ui-select-popup.is-above {
+  animation-name: ui-flyout-in-above;
+}
+
+@keyframes ui-flyout-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes ui-flyout-in-above {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Row + 1px gap mirror OPTION_HEIGHT (28px) in Select.tsx. */
+.ui-select-option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex: 0 0 auto;
+  min-height: 27px;
+  padding: 0 var(--space-sm) 0 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ui-select-option-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Highlight (hover or aria-activedescendant) vs. selected value. */
+.ui-select-option.is-active {
+  background: var(--fill-subtle-hover);
+}
+
+.ui-select-option.is-selected {
+  background: var(--fill-selected);
+}
+
+.ui-select-option.is-selected.is-active {
+  background: var(--fill-selected-hover);
+}
+
+/* Fluent selection indicator: a short accent pill on the leading edge, so the
+   selected row isn't signalled by the fill tint alone. */
+.ui-select-option.is-selected::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 3px;
+  height: 14px;
+  border-radius: var(--radius-xs);
+  background: var(--accent);
+  transform: translateY(-50%);
+}
+
+.ui-select-option-check {
+  flex: 0 0 auto;
+  font-size: var(--icon-sm);
+  color: var(--accent);
+}
+
+.ui-select-option[aria-disabled="true"] {
+  opacity: var(--opacity-disabled);
+  cursor: default;
+}
+
+/* ---- Checkbox — <Checkbox> ----
+   The native input stays focusable/clickable but is visually hidden; the
+   16px box right after it mirrors its state through sibling selectors. */
+.ui-checkbox {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-height: var(--control-h-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ui-checkbox.is-disabled {
+  opacity: var(--opacity-disabled);
+  cursor: default;
+}
+
+.ui-checkbox-input {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.ui-checkbox-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  color: transparent;
+  background: transparent;
+  border: 1px solid var(--text-muted);
+  border-radius: var(--radius-sm);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+/* Hidden (not just transparent) while unchecked, so forced-colors mode —
+   which repaints text in CanvasText — never shows a phantom checkmark. */
+.ui-checkbox-mark {
+  font-size: var(--font-caption);
+  visibility: hidden;
+}
+
+.ui-checkbox-input:checked + .ui-checkbox-box .ui-checkbox-mark,
+.ui-checkbox-input:indeterminate + .ui-checkbox-box .ui-checkbox-mark {
+  visibility: visible;
+}
+
+.ui-checkbox:hover:not(.is-disabled) .ui-checkbox-box {
+  border-color: var(--text-secondary);
+  background: var(--fill-subtle-hover);
+}
+
+.ui-checkbox:active:not(.is-disabled) .ui-checkbox-box {
+  background: var(--fill-subtle-active);
+}
+
+.ui-checkbox-input:checked + .ui-checkbox-box,
+.ui-checkbox-input:indeterminate + .ui-checkbox-box {
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.ui-checkbox:hover:not(.is-disabled) .ui-checkbox-input:checked + .ui-checkbox-box,
+.ui-checkbox:hover:not(.is-disabled) .ui-checkbox-input:indeterminate + .ui-checkbox-box {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.ui-checkbox:active:not(.is-disabled) .ui-checkbox-input:checked + .ui-checkbox-box,
+.ui-checkbox:active:not(.is-disabled) .ui-checkbox-input:indeterminate + .ui-checkbox-box {
+  background: var(--accent-pressed);
+  border-color: var(--accent-pressed);
+}
+
+.ui-checkbox-label {
+  min-width: 0;
+}
+
+/* ---- Switch — <Switch> (role="switch") ---- */
+.ui-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-height: var(--control-h-sm);
+  padding: 0;
+  font: inherit;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.ui-switch:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: default;
+}
+
+.ui-switch-track {
+  position: relative;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 20px;
+  border: 1px solid var(--text-muted);
+  border-radius: var(--radius-surface);
+  background: transparent;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+.ui-switch-thumb {
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transform: translateY(-50%);
+  transition:
+    left var(--duration-fast) var(--ease-standard),
+    width var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+
+.ui-switch:hover:not(:disabled) .ui-switch-track {
+  border-color: var(--text-secondary);
+  background: var(--fill-subtle-hover);
+}
+
+.ui-switch:hover:not(:disabled) .ui-switch-thumb {
+  background: var(--text);
+}
+
+/* Fluent "squish" on press: the thumb widens toward its travel direction. */
+.ui-switch:active:not(:disabled) .ui-switch-thumb {
+  width: 14px;
+}
+
+.ui-switch.is-checked .ui-switch-track {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.ui-switch.is-checked:hover:not(:disabled) .ui-switch-track {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.ui-switch.is-checked .ui-switch-thumb,
+.ui-switch.is-checked:hover:not(:disabled) .ui-switch-thumb {
+  left: 23px;
+  background: var(--text-on-accent);
+}
+
+.ui-switch.is-checked:active:not(:disabled) .ui-switch-thumb {
+  left: 21px;
+}
+
+.ui-switch-label {
+  min-width: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-select-popup {
+    animation: none;
+  }
+
+}
+
+/* ---- Menu — <Menu> (role="menu") ----
+   Fluent 2 flyout: acrylic overlay surface, 8px radius, flyout shadow; 28px
+   rows with an icon column, label, shortcut and submenu chevron. Opens with a
+   short fade + 4px slide toward its anchor (collapsed by reduced motion). */
+.ui-menu {
+  position: fixed;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  max-width: min(420px, calc(100vw - 8px));
+  max-height: calc(100vh - 8px);
+  padding: var(--space-xs);
+  color: var(--text);
+  font-size: var(--font-base);
+  background:
+    linear-gradient(145deg, var(--acrylic-luminosity), transparent 50%),
+    var(--color-surface-flyout);
+  border: 1px solid var(--acrylic-border-strong);
+  border-radius: var(--radius-surface);
+  box-shadow: var(--shadow-flyout);
+  backdrop-filter: blur(30px) saturate(130%);
+  -webkit-backdrop-filter: blur(30px) saturate(130%);
+  outline: none;
+  user-select: none;
+  -webkit-user-select: none;
+  animation: menuIn var(--duration-medium) var(--ease-decelerate);
+}
+
+.ui-menu.is-up { animation-name: menuInUp; }
+
+.ui-menu-sub { animation-name: menuInSide; }
+
+@keyframes menuIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes menuInUp {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes menuInSide {
+  from { opacity: 0; transform: translateX(-4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.ui-menu-items {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.ui-menu-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-height: 28px;
+  padding: 0 var(--space-sm);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: pointer;
+  outline: none;
+  white-space: nowrap;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.ui-menu-item.is-active,
+.ui-menu-item.is-open {
+  background: var(--fill-subtle-hover);
+}
+
+.ui-menu-item:active:not(.is-disabled) {
+  background: var(--fill-subtle-active);
+}
+
+/* Keyboard focus: the active row also gets the focus stroke. */
+.ui-menu-item:focus-visible {
+  outline: 1px solid var(--stroke-focus);
+  outline-offset: -1px;
+}
+
+.ui-menu-item.is-disabled {
+  color: var(--text-disabled);
+  cursor: default;
+}
+
+.ui-menu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--icon-md);
+  flex-shrink: 0;
+  font-size: var(--icon-md);
+  color: var(--text-secondary);
+}
+
+.ui-menu-item.is-disabled .ui-menu-icon { color: inherit; }
+
+.ui-menu-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ui-menu-shortcut {
+  margin-left: var(--space-lg);
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: var(--font-caption-sm);
+}
+
+.ui-menu-badge {
+  flex-shrink: 0;
+  padding: 0 6px;
+  font-size: var(--font-caption-sm);
+  line-height: 16px;
+  color: var(--text-muted);
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-pill);
+}
+
+.ui-menu-chevron {
+  display: inline-flex;
+  margin-left: var(--space-sm);
+  flex-shrink: 0;
+  font-size: var(--font-caption);
+  color: var(--text-muted);
+}
+
+.ui-menu-item.is-accent { color: var(--accent); font-weight: 600; }
+
+.ui-menu-item.is-accent .ui-menu-icon { color: var(--accent); }
+
+.ui-menu-item.is-danger { color: var(--error); }
+
+.ui-menu-item.is-danger .ui-menu-icon { color: var(--error); }
+
+.ui-menu-separator {
+  height: 1px;
+  margin: var(--space-xs) var(--space-xxs);
+  background: var(--border-subtle);
+  flex-shrink: 0;
+}
+
+/* Optional title/status block above the items and note below them. */
+.ui-menu-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xxs);
+  padding: 6px var(--space-sm) var(--space-sm);
+  margin: 0 calc(-1 * var(--space-xs)) var(--space-xs);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--font-caption);
+  color: var(--text-secondary);
+}
+
+.ui-menu-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.ui-menu-title .codicon { color: var(--accent); font-size: var(--icon-sm); }
+
+.ui-menu-subtitle {
+  color: var(--text-muted);
+  font-size: var(--font-caption-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-menu-overline {
+  font-size: var(--font-caption-sm);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.ui-menu-error {
+  max-width: 320px;
+  font-size: var(--font-caption-sm);
+  color: var(--error);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.ui-menu-footer {
+  padding: var(--space-sm) var(--space-sm) var(--space-xxs);
+  margin: var(--space-xs) calc(-1 * var(--space-xs)) 0;
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--font-caption-sm);
+  color: var(--text-muted);
+}
+
+/* ---- Tabs — <Tabs> (role="tablist") ----
+   `underline`: Fluent TabList — transparent tabs, the selected one gets an
+   accent underline pill. `pill`: segmented control — a recessed track whose
+   selected tab is lifted (control fill + hairline). */
+.ui-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  min-width: 0;
+}
+
+.ui-tabs-vertical {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.ui-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: var(--control-h-md);
+  padding: 0 var(--space-md);
+  font-family: inherit;
+  font-size: var(--font-base);
+  white-space: nowrap;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.ui-tabs-sm .ui-tab {
+  height: var(--control-h-sm);
+  padding: 0 10px;
+  font-size: var(--font-caption);
+}
+
+.ui-tab:hover:not(:disabled) {
+  color: var(--text-secondary);
+  background: var(--fill-subtle-hover);
+}
+
+.ui-tab:active:not(:disabled) {
+  background: var(--fill-subtle-active);
+}
+
+.ui-tab.is-selected {
+  color: var(--text);
+}
+
+.ui-tab:disabled {
+  opacity: var(--opacity-disabled);
+  cursor: default;
+}
+
+.ui-tab:focus-visible {
+  outline: var(--focus-ring-width) solid var(--stroke-focus);
+  outline-offset: -1px;
+}
+
+.ui-tab-icon { font-size: var(--icon-md); }
+
+.ui-tab-badge {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-caption-sm);
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  background: var(--acrylic-control-hover);
+  border-radius: var(--radius-pill);
+}
+
+.ui-tab.is-selected .ui-tab-badge {
+  color: var(--text-on-accent);
+  background: var(--accent);
+}
+
+/* Underline variant: the indicator grows in from the centre. */
+.ui-tabs-underline .ui-tab::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 0;
+  height: 2px;
+  border-radius: var(--radius-xs);
+  background: var(--accent);
+  transform: scaleX(0);
+  opacity: 0;
+  transition:
+    transform var(--duration-medium) var(--ease-decelerate),
+    opacity var(--duration-fast) var(--ease-standard);
+}
+
+.ui-tabs-underline .ui-tab:hover:not(:disabled):not(.is-selected)::after {
+  background: var(--text-disabled);
+  transform: scaleX(0.6);
+  opacity: 1;
+}
+
+.ui-tabs-underline .ui-tab.is-selected::after {
+  transform: scaleX(1);
+  opacity: 1;
+}
+
+.ui-tabs-underline.ui-tabs-vertical .ui-tab::after {
+  left: 0;
+  right: auto;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  height: auto;
+  transform: scaleY(0);
+}
+
+.ui-tabs-underline.ui-tabs-vertical .ui-tab.is-selected::after { transform: scaleY(1); }
+
+/* Pill variant (segmented control). */
+.ui-tabs-pill {
+  padding: var(--space-xxs);
+  background: var(--fill-recessed);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+}
+
+.ui-tabs-pill .ui-tab {
+  flex: 1 1 auto;
+}
+
+.ui-tabs-pill .ui-tab.is-selected {
+  background: var(--acrylic-control-hover);
+  border-color: var(--acrylic-border);
+  box-shadow: var(--shadow-rest);
+}

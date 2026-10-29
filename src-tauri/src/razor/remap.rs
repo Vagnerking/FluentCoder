@@ -34,7 +34,10 @@ impl LspPos {
 
 /// LSP (0-based) -> source-map (1-based). `None` on overflow (malformed input).
 fn to_map(p: LspPos) -> Option<Pos> {
-    Some(Pos::new(p.line.checked_add(1)?, p.character.checked_add(1)?))
+    Some(Pos::new(
+        p.line.checked_add(1)?,
+        p.character.checked_add(1)?,
+    ))
 }
 
 /// source-map (1-based) -> LSP (0-based). `None` if a coordinate is 0 (invalid).

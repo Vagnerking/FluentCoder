@@ -1,6 +1,7 @@
 import { Codicon } from "../icons/codicons/Codicon";
 import type { IconAction } from "../icons/codicons/codicon-map";
 import logoUrl from "../assets/fluent-coder.png";
+import { formatKeybinding, formatShortcutsInText } from "../platform";
 
 export interface WelcomeScreenProps {
   /** Whether a folder is currently open (drives the contextual layout). */
@@ -9,6 +10,7 @@ export interface WelcomeScreenProps {
   folderName?: string | null;
   /** Absolute path of the open folder (filtered out of the recents list). */
   folderPath?: string | null;
+  workspaceName?: string | null;
   /** Recently-opened folder paths (most recent first). */
   recents: string[];
   onNewFile: () => void;
@@ -52,7 +54,7 @@ function ActionButton({ a }: { a: Action }) {
         <Codicon name={a.icon} size={16} />
       </span>
       <span className="welcome-action-label">{a.label}</span>
-      {a.hint && <kbd className="welcome-action-hint">{a.hint}</kbd>}
+      {a.hint && <kbd className="welcome-action-hint">{formatKeybinding(a.hint) ?? a.hint}</kbd>}
     </button>
   );
 }
@@ -76,9 +78,9 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
             <img className="welcome-home-logo" src={logoUrl} alt="" />
             <div>
               <div className="welcome-wordmark">Fluent Coder</div>
-              {props.folderName && (
-                <div className="welcome-context">{props.folderName}</div>
-              )}
+              <div className="welcome-context">
+                {props.workspaceName ?? props.folderName}
+              </div>
             </div>
           </div>
           <div className="welcome-hints">
@@ -87,7 +89,7 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
                 <span className="welcome-hint-label">{h.label}</span>
                 <span className="welcome-hint-keys">
                   {h.keys.map((k, i) => (
-                    <kbd key={i}>{k}</kbd>
+                    <kbd key={i}>{formatKeybinding(k) ?? k}</kbd>
                   ))}
                 </span>
               </div>
@@ -160,7 +162,7 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
 
         <footer className="welcome-tip">
           <Codicon name="commandPalette" size={13} />
-          Dica: pressione <kbd>Ctrl+Shift+P</kbd> para abrir a Paleta de Comandos.
+          Dica: pressione <kbd>{formatShortcutsInText("Ctrl+Shift+P")}</kbd> para abrir a Paleta de Comandos.
         </footer>
       </div>
     </div>

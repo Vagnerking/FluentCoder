@@ -36,22 +36,14 @@ pub async fn csharp_build_diagnostics(root_path: String) -> Result<Vec<BuildDiag
     } else {
         "dotnet"
     };
-    let mut cmd = tokio::process::Command::new(program);
-    cmd.args(["build", "-nologo", "-clp:NoSummary", "-v", "q"])
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args(["build", "-nologo", "-clp:NoSummary", "-v", "q"])
         .current_dir(&root_path);
-    // On Windows, don't flash a console window for the `dotnet build`.
-    // `creation_flags` is an inherent method on tokio's Command on Windows.
-    #[cfg(windows)]
-    {
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    let output = cmd
-        .output()
-        .await
-        .map_err(|e| {
-            format!("Não foi possível executar o dotnet build (o .NET SDK está instalado?): {e}")
-        })?;
+    crate::child_process::hide_tokio_console_window(&mut command);
+    let output = command.output().await.map_err(|e| {
+        format!("Não foi possível executar o dotnet build (o .NET SDK está instalado?): {e}")
+    })?;
 
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push('\n');

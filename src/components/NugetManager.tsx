@@ -8,6 +8,7 @@ import {
   type NugetSearchHit,
 } from "../api";
 import { useModalDismiss } from "./useModalDismiss";
+import { SearchBox, Select, Tabs } from "./ui";
 
 interface NugetManagerProps {
   /** The `.csproj` paths in the workspace (from the caller). */
@@ -108,43 +109,34 @@ export function NugetManager({ csprojs, onClose }: NugetManagerProps) {
         <div className="quick-pick-title">Gerenciar Pacotes NuGet</div>
 
         <div className="nuget-toolbar">
-          <select
-            className="search-input"
+          <Select
+            className="nuget-project-select"
             value={csproj}
-            onChange={(e) => setCsproj(e.target.value)}
+            onChange={setCsproj}
             disabled={busy !== ""}
-            aria-label="Projeto"
-          >
-            {csprojs.map((p) => (
-              <option key={p} value={p}>
-                {p.split(/[\/]/).pop()}
-              </option>
-            ))}
-          </select>
-          <div className="nuget-tabs" role="tablist">
-            <button
-              role="tab"
-              aria-selected={tab === "installed"}
-              className={"nuget-tab" + (tab === "installed" ? " active" : "")}
-              onClick={() => setTab("installed")}
-            >
-              Instalados{installed ? ` (${installed.length})` : ""}
-            </button>
-            <button
-              role="tab"
-              aria-selected={tab === "browse"}
-              className={"nuget-tab" + (tab === "browse" ? " active" : "")}
-              onClick={() => setTab("browse")}
-            >
-              Procurar
-            </button>
-          </div>
+            ariaLabel="Projeto"
+            options={csprojs.map((p) => ({
+              value: p,
+              label: p.split(/[\/]/).pop() ?? p,
+            }))}
+          />
+          <Tabs
+            className="nuget-tabs"
+            variant="pill"
+            size="sm"
+            ariaLabel="Pacotes NuGet"
+            value={tab}
+            onChange={setTab}
+            items={[
+              { value: "installed", label: "Instalados", badge: installed?.length },
+              { value: "browse", label: "Procurar" },
+            ]}
+          />
         </div>
 
         {tab === "browse" && (
-          <input
-            className="quick-open-input"
-            type="text"
+          <SearchBox
+            wrapperClassName="quick-open-field"
             placeholder="Buscar no nuget.org…"
             value={query}
             aria-label="Buscar pacotes no nuget.org"

@@ -18,6 +18,9 @@ pub struct OpenTab {
     /// Persisted view ("text" | "image"); `None` ⇒ let the front decide.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// Aba fixada (fica no início e sobrevive a "Fechar outras/todas").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<bool>,
 }
 
 /// What we remember between runs. New fields stay `#[serde(default)]` so older
@@ -45,6 +48,10 @@ pub struct Session {
     /// the active group. Absent ⇒ restore the flat `open_tabs` into one group.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<String>,
+    /// Unsaved/saved multi-root workspace snapshot owned by the frontend.
+    /// Stored as JSON so the TypeScript schema stays the source of truth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<serde_json::Value>,
 }
 
 /// Path to the session file: `<app_data>/session.json`.
@@ -111,5 +118,17 @@ pub fn session_set_open_files(
     session.open_tabs = tabs;
     session.active_path = active_path.filter(|p| !p.is_empty());
     session.layout = layout.filter(|l| !l.is_empty());
+    write_session(&app, &session)
+}
+
+/// Records the current workspace shell for restore on next launch. Passing
+/// `None` clears it and returns the app to the classic last-folder restore.
+#[tauri::command]
+pub fn session_set_workspace(
+    app: AppHandle,
+    workspace: Option<serde_json::Value>,
+) -> Result<(), String> {
+    let mut session = read_session(&app)?;
+    session.workspace = workspace;
     write_session(&app, &session)
 }

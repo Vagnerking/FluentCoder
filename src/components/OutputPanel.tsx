@@ -5,6 +5,8 @@ import {
   outputVersion,
   subscribeOutput,
 } from "../output/outputStore";
+import { Select } from "./ui";
+import { ViewToolbar } from "../workbench/WorkbenchViews";
 
 /**
  * The bottom panel's "Saída" tab (issue #6). Renders one output channel at a
@@ -37,23 +39,19 @@ export function OutputPanel() {
 
   return (
     <div className="output-panel">
-      <div className="output-toolbar">
-        <label className="output-channel-label" htmlFor="output-channel">
-          Canal:
-        </label>
-        <select
+      {/* Canal nas ações do cabeçalho da região (como no VS Code), liberando
+          uma linha do conteúdo. */}
+      <ViewToolbar>
+        <Select
           id="output-channel"
           className="output-channel-select"
+          size="sm"
+          ariaLabel="Canal de saída"
           value={selected}
-          onChange={(e) => setSelected(e.target.value)}
-        >
-          {channels.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </select>
-      </div>
+          onChange={setSelected}
+          options={channels.map((c) => ({ value: c, label: c }))}
+        />
+      </ViewToolbar>
       <div className="output-lines" role="log" aria-label={`Saída: ${selected}`}>
         {lines.length === 0 ? (
           <div className="panel-empty">Canal vazio.</div>

@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { SearchBox } from "./ui/Input";
 import { fuzzyMatch } from "../quickOpen/fuzzy";
+import { formatKeybinding } from "../keybindingLabel";
+import "./commandPalette.css";
 
 /**
  * One entry in the Command Palette. The registry lives in App.tsx (so commands
@@ -12,6 +15,11 @@ export interface Command {
   title: string;
   /** Optional dimmed secondary text (e.g. a category). */
   detail?: string;
+  /**
+   * Atalho conhecido (acelerador do menu do app ou keybinding contribuído por
+   * uma extensão), mostrado à direita da linha.
+   */
+  keybinding?: string;
   /** Runs the command. The palette closes right before this fires. */
   run: () => void;
 }
@@ -131,10 +139,9 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
     <div className="quick-open-backdrop" onMouseDown={onClose}>
       <div className="quick-open" onMouseDown={(e) => e.stopPropagation()}>
         <div className="quick-pick-title">Paleta de comandos</div>
-        <input
+        <SearchBox
           ref={inputRef}
-          className="quick-open-input"
-          type="text"
+          wrapperClassName="quick-open-field"
           placeholder="Digite o nome de um comando…"
           value={query}
           aria-label="Paleta de Comandos: pesquisar comandos"
@@ -167,7 +174,6 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
                 role="option"
                 aria-selected={i === selected}
                 className={"quick-open-item" + (i === selected ? " selected" : "")}
-                title={hit.command.title}
                 onMouseMove={() => setSelected(i)}
                 onClick={() => runAt(i)}
               >
@@ -177,6 +183,17 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps) {
                 {hit.command.detail && (
                   <span className="quick-open-path">{hit.command.detail}</span>
                 )}
+                {(() => {
+                  // Rótulo no formato do SO (Ctrl+P / ⌘P).
+                  const kb = formatKeybinding(hit.command.keybinding);
+                  return (
+                    kb && (
+                      <kbd className="command-palette-kbd" aria-label={`Atalho: ${kb}`}>
+                        {kb}
+                      </kbd>
+                    )
+                  );
+                })()}
               </div>
             ))
           )}

@@ -7,16 +7,18 @@
  * preview. It's selected per-tab via {@link OpenFile.mode}.
  */
 import { useEffect, useState } from "react";
-import { readFileBase64 } from "../api";
+import { readFileBase64, readSshFileBase64 } from "../api";
 
 interface ImagePreviewProps {
   /** Absolute path of the image file to display. */
   path: string;
   /** File name, shown in the caption. */
   name: string;
+  /** Optional explicit SSH connection for multi-root workspace files. */
+  connId?: string;
 }
 
-export function ImagePreview({ path, name }: ImagePreviewProps) {
+export function ImagePreview({ path, name, connId }: ImagePreviewProps) {
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -24,7 +26,8 @@ export function ImagePreview({ path, name }: ImagePreviewProps) {
     let cancelled = false;
     setSrc(null);
     setError(null);
-    readFileBase64(path)
+    const read = connId ? readSshFileBase64(connId, path) : readFileBase64(path);
+    read
       .then((url) => {
         if (!cancelled) setSrc(url);
       })
@@ -34,7 +37,7 @@ export function ImagePreview({ path, name }: ImagePreviewProps) {
     return () => {
       cancelled = true;
     };
-  }, [path]);
+  }, [connId, path]);
 
   return (
     <div className="image-preview">

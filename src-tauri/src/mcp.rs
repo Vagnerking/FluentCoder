@@ -8,7 +8,10 @@
 //! instead of starting Tauri. Transport is newline-delimited JSON-RPC 2.0 (the
 //! MCP stdio convention): one message per line, logs go to stderr.
 
-use crate::graph::{build_knowledge_index, context_bundle_from, find_file, KnowledgeIndex};
+use crate::graph::{
+    build_knowledge_index, context_bundle_from, find_file, graph_agent_digest_from_index,
+    KnowledgeIndex,
+};
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::path::Path;
@@ -210,6 +213,16 @@ fn tool_specs() -> Value {
             },
         },
         {
+            "name": "get_graph_overview",
+            "description": "Resume a topologia do grafo de contexto para agentes: estatísticas, células/pastas, hubs, isolados e, opcionalmente, a vizinhança de um arquivo semente.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Arquivo semente opcional (absoluto ou relativo)." }
+                },
+            },
+        },
+        {
             "name": "refresh_index",
             "description": "Reanalisa o workspace (use após mudanças nos arquivos).",
             "inputSchema": { "type": "object", "properties": {} },
@@ -350,6 +363,17 @@ fn call_tool(
             context_bundle_from(idx, &arg_str("path"), depth, 60_000, &|p| {
                 std::fs::read_to_string(p).unwrap_or_default()
             })
+        }
+        "get_graph_overview" => {
+            let path = arg_str("path");
+            Ok(graph_agent_digest_from_index(
+                idx,
+                if path.trim().is_empty() {
+                    None
+                } else {
+                    Some(path.as_str())
+                },
+            ))
         }
         other => Err(format!("ferramenta desconhecida: {other}")),
     }

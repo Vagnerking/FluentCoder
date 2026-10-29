@@ -21,6 +21,53 @@ const dependenciesRoot = realpathSync(
   fileURLToPath(new URL("./node_modules", import.meta.url)),
 );
 
+function vendorChunk(id: string): string | undefined {
+  const moduleId = id.replace(/\\/g, "/");
+  if (!moduleId.includes("node_modules")) return undefined;
+  if (moduleId.includes("/react/") || moduleId.includes("/react-dom/") || moduleId.includes("/scheduler/")) {
+    return "vendor-react";
+  }
+  if (moduleId.includes("/@codingame/") || moduleId.includes("/monaco-editor/")) {
+    return "vendor-monaco-vscode";
+  }
+  if (
+    moduleId.includes("/monaco-languageclient/") ||
+    moduleId.includes("/vscode-languageclient/") ||
+    moduleId.includes("/vscode-jsonrpc/") ||
+    moduleId.includes("/vscode-languageserver-protocol/") ||
+    moduleId.includes("/vscode-ws-jsonrpc/")
+  ) {
+    return "vendor-languageclient";
+  }
+  if (
+    moduleId.includes("/@shikijs/langs/") ||
+    moduleId.includes("/@shikijs/themes/")
+  ) {
+    return undefined;
+  }
+  if (
+    moduleId.includes("/shiki/") ||
+    moduleId.includes("/@shikijs/") ||
+    moduleId.includes("/vscode-html-languageservice/")
+  ) {
+    return "vendor-language-tools";
+  }
+  if (moduleId.includes("/react-markdown/") || moduleId.includes("/remark-gfm/") || moduleId.includes("/micromark")) {
+    return "vendor-markdown";
+  }
+  if (moduleId.includes("/@xterm/")) {
+    return "vendor-terminal";
+  }
+  if (moduleId.includes("/@tauri-apps/")) {
+    return "vendor-tauri";
+  }
+  // Sem chunk "vendor" genérico: o resto de node_modules fica com o Rollup.
+  // Um catch-all aqui cria ciclos vendor <-> vendor-react/monaco/markdown e,
+  // no build de produção, quebra a ordem de inicialização dos módulos
+  // ("Fst is not a function" no vendor-monaco-vscode: o app nem monta).
+  return undefined;
+}
+
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
   plugins: [react()],
@@ -71,6 +118,14 @@ export default defineConfig(async () => ({
     // icons actually shown, and cache them. Other small assets still inline.
     assetsInlineLimit: (file) =>
       file.includes("material-icon-theme/icons/") ? false : undefined,
+    rollupOptions: {
+      output: {
+        // Keep the application shell out of the huge Monaco/LSP dependency graph.
+        // This does not lazy-load the editor yet, but it gives Vite/Tauri smaller
+        // cacheable vendor chunks and makes regressions in app code easier to see.
+        manualChunks: vendorChunk,
+      },
+    },
   },
 
   // Vite options tailored for Tauri development.

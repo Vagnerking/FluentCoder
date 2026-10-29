@@ -37,6 +37,10 @@ interface QuickPickProps {
   title?: string;
   onPick: (item: QuickPickItem) => void;
   onClose: () => void;
+  /** Item destacado mudou (setas/mouse) — prévia ao vivo, como no seletor de temas do VS Code. */
+  onActiveChange?: (item: QuickPickItem) => void;
+  /** Id do item destacado ao abrir (ex.: o tema atual). */
+  initialId?: string;
 }
 
 /**
@@ -50,9 +54,11 @@ export function QuickPick({
   title,
   onPick,
   onClose,
+  onActiveChange,
+  initialId,
 }: QuickPickProps) {
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState(0);
+  const [selected, setSelected] = useState(() => Math.max(0, initialId ? items.findIndex((it) => it.id === initialId) : 0));
   const surfaceRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -82,6 +88,18 @@ export function QuickPick({
       { block: "nearest" }
     );
   }, [selected]);
+  const activeItem = filtered[selected];
+  const onActiveRef = useRef(onActiveChange);
+  onActiveRef.current = onActiveChange;
+  const firstActive = useRef(true);
+  useEffect(() => {
+    // O item inicial já é o estado atual: só avisa mudanças.
+    if (firstActive.current) {
+      firstActive.current = false;
+      return;
+    }
+    if (activeItem) onActiveRef.current?.(activeItem);
+  }, [activeItem]);
 
   function onKeyDown(e: React.KeyboardEvent) {
     if (e.key === "ArrowDown") {
@@ -122,6 +140,7 @@ export function QuickPick({
           placeholder={placeholder}
           value={query}
           aria-label={title ?? placeholder ?? "Seleção rápida"}
+          aria-activedescendant={activeItem ? `${titleId}-opt-${selected}` : undefined}
           onChange={(e) => {
             setQuery(e.target.value);
             setSelected(0);
@@ -135,6 +154,7 @@ export function QuickPick({
             filtered.map((it, i) => (
               <div
                 key={it.id}
+                id={`${titleId}-opt-${i}`}
                 role="option"
                 aria-selected={i === selected}
                 className={

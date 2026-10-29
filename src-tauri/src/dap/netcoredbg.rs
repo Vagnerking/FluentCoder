@@ -35,18 +35,22 @@ fn asset_for_platform() -> Result<(&'static str, &'static str), String> {
             "netcoredbg-osx-arm64.zip",
             "f4fa33b3ff874910cc184b4bb3b9c56d0abdf5c6521cee0b144d7c6e4a6e59ea",
         )),
-        (os, arch) => Err(format!("netcoredbg: plataforma sem build publicado: {os}/{arch}")),
+        (os, arch) => Err(format!(
+            "netcoredbg: plataforma sem build publicado: {os}/{arch}"
+        )),
     }
 }
 
 fn download_url(asset: &str) -> String {
-    format!(
-        "https://github.com/Samsung/netcoredbg/releases/download/{NETCOREDBG_VERSION}/{asset}"
-    )
+    format!("https://github.com/Samsung/netcoredbg/releases/download/{NETCOREDBG_VERSION}/{asset}")
 }
 
 fn executable_name() -> &'static str {
-    if cfg!(windows) { "netcoredbg.exe" } else { "netcoredbg" }
+    if cfg!(windows) {
+        "netcoredbg.exe"
+    } else {
+        "netcoredbg"
+    }
 }
 
 /// Recursively locate the debugger executable inside the extracted tree.
@@ -98,16 +102,28 @@ pub async fn ensure_netcoredbg(app: &AppHandle) -> Result<PathBuf, String> {
         return Ok(exe);
     }
 
-    emit_progress(app, "downloading", "Baixando o depurador .NET (netcoredbg)…");
+    emit_progress(
+        app,
+        "downloading",
+        "Baixando o depurador .NET (netcoredbg)…",
+    );
     let url = download_url(asset);
     let bytes = download_bytes(&url).await.map_err(|e| {
-        emit_progress(app, "error", &format!("Falha no download do netcoredbg: {e}"));
+        emit_progress(
+            app,
+            "error",
+            &format!("Falha no download do netcoredbg: {e}"),
+        );
         format!("download de {url}: {e}")
     })?;
 
     let got = sha256_hex(&bytes);
     if got != want_sha {
-        emit_progress(app, "error", "Verificação de integridade do netcoredbg falhou");
+        emit_progress(
+            app,
+            "error",
+            "Verificação de integridade do netcoredbg falhou",
+        );
         return Err(format!(
             "netcoredbg {asset}: SHA-256 não confere (esperado {want_sha}, obtido {got})"
         ));
@@ -170,10 +186,8 @@ mod tests {
             builder.append(&header, &data[..]).unwrap();
             builder.into_inner().unwrap().finish().unwrap();
         }
-        let dest = std::env::temp_dir().join(format!(
-            "netcoredbg-targz-test-{}",
-            std::process::id()
-        ));
+        let dest =
+            std::env::temp_dir().join(format!("netcoredbg-targz-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dest);
         extract_tar_gz(&tar_bytes, &dest).expect("extract");
         assert!(dest.join("bin/netcoredbg").exists());

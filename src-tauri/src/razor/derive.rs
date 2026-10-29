@@ -61,7 +61,10 @@ pub fn derive_command(csproj_path: &str) -> (String, Vec<String>) {
 /// multi-targeting project leaves `TargetFramework` empty until a TFM is selected,
 /// so the resolve target can't populate `ReferencePath`; re-running with `-f <tfm>`
 /// evaluates the project AS that single framework and resolves its references.
-pub fn derive_command_for_tfm(csproj_path: &str, target_framework: Option<&str>) -> (String, Vec<String>) {
+pub fn derive_command_for_tfm(
+    csproj_path: &str,
+    target_framework: Option<&str>,
+) -> (String, Vec<String>) {
     derive_command_inner(csproj_path, target_framework, true)
 }
 
@@ -69,7 +72,10 @@ pub fn derive_command_for_tfm(csproj_path: &str, target_framework: Option<&str>)
 /// the one-shot retry when the no-restore eval failed because the project was
 /// never restored on this machine (missing `project.assets.json`). O(NuGet graph),
 /// so never on the steady-state path.
-pub fn derive_command_with_restore(csproj_path: &str, target_framework: Option<&str>) -> (String, Vec<String>) {
+pub fn derive_command_with_restore(
+    csproj_path: &str,
+    target_framework: Option<&str>,
+) -> (String, Vec<String>) {
     derive_command_inner(csproj_path, target_framework, false)
 }
 
@@ -113,7 +119,11 @@ fn derive_command_inner(
 /// (`net48`, `netstandard2.0`) only win when no modern TFM exists — picking
 /// "the first entry" made `net48;net8.0` analyze as .NET Framework 4.8.
 pub fn pick_tfm(list: &str) -> Option<String> {
-    let entries: Vec<&str> = list.split(';').map(str::trim).filter(|s| !s.is_empty()).collect();
+    let entries: Vec<&str> = list
+        .split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
     let modern_version = |tfm: &str| -> Option<(u32, u32)> {
         // Modern SDK monikers: netN.M optionally with a platform suffix
         // (net8.0-windows). Classic ones (net48) have no dot; netstandard/
@@ -277,7 +287,10 @@ mod tests {
           "Items": {} }"#;
         let d = parse_derived(json).expect("should select a TFM");
         assert_eq!(d.tfm, "net9.0");
-        assert!(d.multi_target_selected, "must flag the multi-target selection");
+        assert!(
+            d.multi_target_selected,
+            "must flag the multi-target selection"
+        );
     }
 
     #[test]
@@ -287,7 +300,10 @@ mod tests {
         assert_eq!(pick_tfm("net8.0;net48").as_deref(), Some("net8.0"));
         assert_eq!(pick_tfm("net6.0;net8.0;net7.0").as_deref(), Some("net8.0"));
         // Platform suffix still parses as modern.
-        assert_eq!(pick_tfm("net48;net8.0-windows").as_deref(), Some("net8.0-windows"));
+        assert_eq!(
+            pick_tfm("net48;net8.0-windows").as_deref(),
+            Some("net8.0-windows")
+        );
         // No modern TFM → first entry.
         assert_eq!(pick_tfm("net48;netstandard2.0").as_deref(), Some("net48"));
         assert_eq!(pick_tfm(" ; "), None);
@@ -314,7 +330,8 @@ mod tests {
     #[test]
     fn no_tfm_at_all_is_none() {
         // Neither property usable → genuinely cannot derive.
-        let json = r#"{ "Properties": { "TargetFramework": "", "TargetFrameworks": "" }, "Items": {} }"#;
+        let json =
+            r#"{ "Properties": { "TargetFramework": "", "TargetFrameworks": "" }, "Items": {} }"#;
         assert_eq!(parse_derived(json), None);
         let json2 = r#"{ "Properties": { "TargetFramework": "" }, "Items": {} }"#;
         assert_eq!(parse_derived(json2), None);
@@ -353,7 +370,10 @@ mod tests {
             { "Identity": "Microsoft.WindowsDesktop.App" }
           ] } }"#;
         let d = parse_derived(json).unwrap();
-        assert_eq!(d.framework_references, vec!["Microsoft.AspNetCore.App", "Microsoft.WindowsDesktop.App"]);
+        assert_eq!(
+            d.framework_references,
+            vec!["Microsoft.AspNetCore.App", "Microsoft.WindowsDesktop.App"]
+        );
     }
 
     #[test]

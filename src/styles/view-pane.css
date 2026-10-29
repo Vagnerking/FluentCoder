@@ -1,0 +1,227 @@
+/* ---- View panes + cabeçalho de seção único (src/components/ui/ViewPane) ----
+   Nível 1 = cabeçalho de pane (caixa alta, chevron, ações no hover/foco);
+   nível 2 = grupo dentro do pane (sem caixa alta). A altura do cabeçalho de
+   pane (24 px) espelha VIEW_PANE_HEADER_SIZE em viewPaneLayout.ts. */
+
+.ui-view-pane-container {
+  display: flex;
+  flex-direction: column;
+  /* O pai é uma coluna flex (view): a pilha ocupa a altura que sobra. */
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-x: hidden;
+  /* Se nem os mínimos cabem, a pilha rola em vez de sobrepor. */
+  overflow-y: auto;
+}
+
+.ui-view-pane {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Divisor entre panes sem somar altura (o solver conta só cabeçalho + corpo). */
+.ui-view-pane + .ui-view-pane > .ui-section-header {
+  box-shadow: inset 0 1px 0 0 var(--border-subtle);
+}
+
+.ui-view-pane-body {
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  /* Container queries das features (Grafo, listas…) valem dentro do pane. */
+  container-type: inline-size;
+  align-content: start;
+}
+
+/* Sash entre dois panes expandidos: alvo de 4 px sobre a junção. */
+.ui-view-pane-sash {
+  position: absolute;
+  z-index: 3;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 4px;
+  cursor: row-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.ui-view-pane-sash::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 1px;
+  height: 2px;
+  background: transparent;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.ui-view-pane-sash:hover::after,
+.ui-view-pane-sash:focus-visible::after,
+.ui-view-pane-container.is-resizing .ui-view-pane-sash:active::after {
+  background: var(--accent);
+}
+
+.ui-view-pane-container.is-resizing {
+  cursor: row-resize;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* ---- SectionHeader ---- */
+.ui-section-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-width: 0;
+  padding: 0 var(--space-xs) 0 var(--space-xxs);
+  color: var(--text-muted);
+}
+
+.ui-section-header-l1 {
+  flex: 0 0 auto;
+  height: 24px;
+  min-height: 24px;
+  font-size: var(--font-caption-sm);
+  line-height: var(--line-height-caption-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.ui-section-header-l2 {
+  min-height: 24px;
+  padding-left: var(--space-sm);
+  font-size: var(--font-caption);
+  line-height: var(--line-height-caption);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.ui-section-header-l1:hover {
+  background: var(--fill-subtle-hover);
+}
+
+.ui-section-header-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 22px;
+  padding: 0 var(--space-xxs);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ui-section-header-toggle.is-static {
+  cursor: default;
+}
+
+.ui-section-header-toggle:focus-visible {
+  outline: 1px solid var(--stroke-focus);
+  outline-offset: -1px;
+  color: var(--text);
+}
+
+.ui-section-header-chevron {
+  flex: 0 0 auto;
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.ui-section-header.is-expanded .ui-section-header-chevron {
+  transform: rotate(90deg);
+}
+
+.ui-section-header-icon {
+  flex: 0 0 auto;
+}
+
+.ui-section-header-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-section-header-badge {
+  flex: 0 0 auto;
+  min-width: 18px;
+  padding: 0 var(--space-xs);
+  border-radius: var(--radius-pill);
+  background: var(--fill-subtle);
+  color: var(--text-secondary);
+  font-size: var(--font-caption-xs);
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-section-header-meta {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ---- ActionBar (ações com overflow "…") ---- */
+.ui-action-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  flex: 0 0 auto;
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.ui-action-bar .ui-icon-button {
+  color: var(--text-muted);
+}
+
+.ui-action-bar .ui-icon-button:hover:not(:disabled),
+.ui-action-bar .ui-icon-button:focus-visible {
+  color: var(--text);
+}
+
+/* Ações de cabeçalho só no hover/foco do pane (VS Code); um toggle ligado
+   ou um menu "…" aberto ficam visíveis. Opacidade (não display) para o Tab
+   continuar alcançando-as. */
+.ui-section-header.actions-on-hover .ui-action-bar {
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+.ui-view-pane:hover > .ui-section-header .ui-action-bar,
+.ui-section-header.actions-on-hover:hover .ui-action-bar,
+.ui-section-header.actions-on-hover:focus-within .ui-action-bar,
+.ui-section-header.actions-on-hover .ui-action-bar:has([aria-pressed="true"], [aria-expanded="true"]) {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-section-header-chevron,
+  .ui-section-header.actions-on-hover .ui-action-bar,
+  .ui-view-pane-sash::after {
+    transition: none;
+  }
+}

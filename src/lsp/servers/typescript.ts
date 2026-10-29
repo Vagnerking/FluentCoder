@@ -11,6 +11,7 @@
 import { ensureTsServer, startLspServer, sshLspStart } from "../../api";
 import { getActiveRemote } from "../../remote/host";
 import { createLanguageClient, type RunningClient } from "../client";
+import { settings } from "../../settings/instance";
 
 export const TS_SERVER_ID = "typescript";
 
@@ -25,16 +26,12 @@ const TS_REMOTE_COMMAND =
   "exec typescript-language-server --stdio; " +
   "else exec npx --yes typescript-language-server --stdio; fi";
 
-/** localStorage key for the TS version preference (project vs editor). */
-export const TS_PREFER_EDITOR_KEY = "lsp.ts.preferEditor";
+/** Setting da preferência de versão do TS (projeto vs editor). */
+export const TS_PREFER_EDITOR_KEY = "fluent.typescript.preferEditorVersion";
 
 /** Whether the user picked the editor-managed TypeScript over the project's. */
 function preferEditorVersion(): boolean {
-  try {
-    return localStorage.getItem(TS_PREFER_EDITOR_KEY) === "1";
-  } catch {
-    return false;
-  }
+  return settings.get<boolean>(TS_PREFER_EDITOR_KEY) === true;
 }
 
 /** file:// URI for a workspace root, Windows-safe (`file:///C:/...`). */

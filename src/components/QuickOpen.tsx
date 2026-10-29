@@ -1,18 +1,48 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { listProjectFiles } from "../api";
+import { SearchBox } from "./ui/Input";
+import { listProjectIndex } from "../api";
 import { useModalDismiss } from "./useModalDismiss";
 import { rankFiles } from "../quickOpen/fuzzy";
-import type { FileNode, ProjectFile } from "../types";
+import type { FileNode, OpenFile, ProjectFile } from "../types";
 import { FileIcon } from "../icon-theme/material/FileIcon";
 
 interface QuickOpenProps {
   /** Workspace root to index, or null when no folder is open. */
   rootPath: string | null;
+  /** All roots in a Fluent workspace. SSH roots are indexed when connected. */
+  workspaceRoots?: QuickOpenWorkspaceRoot[];
   /** Opens the chosen file in a tab (reuses the editor's open handler). */
   onOpenFile: (node: FileNode) => void;
   /** Closes the palette. */
   onClose: () => void;
 }
+
+interface QuickOpenWorkspaceRoot {
+  id: string;
+  name: string;
+  path: string;
+  provider: "local" | "ssh";
+  remote?: {
+    host: string;
+    user: string;
+  };
+  connId?: string;
+  status?: "connected" | "connecting" | "error";
+}
+
+interface QuickOpenTarget {
+  id: string;
+  label: string;
+  path: string;
+  provider: "local" | "ssh";
+  remote?: QuickOpenWorkspaceRoot["remote"];
+  connId?: string;
+}
+
+type QuickOpenFile = ProjectFile & {
+  rootId?: string;
+  workspaceRemote?: OpenFile["workspaceRemote"];
+};
 
 /** How many results to render at once — the fuzzy match ranks everything, but
  *  painting thousands of rows is pointless and slow. */
@@ -58,30 +88,94 @@ function highlight(label: string, positions: number[]) {
  * index comes from the Rust `list_project_files` command; ranking is done by
  * the pure matcher in `quickOpen/fuzzy`.
  */
-export function QuickOpen({ rootPath, onOpenFile, onClose }: QuickOpenProps) {
+function baseName(path: string): string {
+  const parts = path.split(/[\\/]/);
+  return parts[parts.length - 1] || path;
+}
+
+export function QuickOpen({
+  rootPath,
+  workspaceRoots = [],
+  onOpenFile,
+  onClose,
+}: QuickOpenProps) {
   const [query, setQuery] = useState("");
-  const [files, setFiles] = useState<ProjectFile[]>([]);
+  const [files, setFiles] = useState<QuickOpenFile[]>([]);
+  const [loading, setLoading] = useState(false);
+  /** Roots whose index hit the cap (`fluent.quickOpen.maxFiles`) — shown, never silent. */
+  const [truncatedRoots, setTruncatedRoots] = useState<{ label: string; cap: number }[]>([]);
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
+  const targets = useMemo<QuickOpenTarget[]>(() => {
+    const workspaceTargets = workspaceRoots
+      .filter((root) => root.provider === "local" || root.connId)
+      .map((root) => ({
+        id: root.id,
+        label: root.name || baseName(root.path),
+        path: root.path,
+        provider: root.provider,
+        remote: root.remote,
+        connId: root.connId,
+      }));
+    if (workspaceTargets.length > 0) return workspaceTargets;
+    if (!rootPath) return [];
+    return [{ id: "root", label: baseName(rootPath), path: rootPath, provider: "local" }];
+  }, [rootPath, workspaceRoots]);
+
   // Build the index once when the palette opens; focus the input.
   useEffect(() => {
     inputRef.current?.focus();
-    if (!rootPath) return;
+    if (targets.length === 0) {
+      setFiles([]);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
-    listProjectFiles(rootPath)
-      .then((list) => {
-        if (!cancelled) setFiles(list);
-      })
-      .catch((err) => {
-        console.error(err);
-        if (!cancelled) setFiles([]);
-      });
+    setLoading(true);
+    setTruncatedRoots([]);
+    void (async () => {
+      const all: QuickOpenFile[] = [];
+      const cut: { label: string; cap: number }[] = [];
+      for (const target of targets) {
+        try {
+          const index = await listProjectIndex(target.path, target.connId);
+          if (cancelled) return;
+          if (index.truncated) cut.push({ label: target.label, cap: index.cap });
+          const list = index.files;
+          const workspaceRemote =
+            target.provider === "ssh" && target.connId && target.remote
+              ? {
+                  folderId: target.id,
+                  connId: target.connId,
+                  host: target.remote.host,
+                  user: target.remote.user,
+                  rootPath: target.path,
+                }
+              : undefined;
+          const filesForRoot = list.map((file) => ({
+            ...file,
+            rootId: target.id,
+            rel: targets.length > 1 ? `${target.label}/${file.rel}` : file.rel,
+            workspaceRemote,
+          }));
+          all.push(...filesForRoot);
+        } catch (err) {
+          console.error(err);
+        }
+      }
+      if (!cancelled) {
+        setFiles(all);
+        setTruncatedRoots(cut);
+      }
+    })().finally(() => {
+      if (!cancelled) setLoading(false);
+    });
     return () => {
       cancelled = true;
     };
-  }, [rootPath]);
+  }, [targets]);
 
   const ranked = useMemo(() => rankFiles(query, files), [query, files]);
   const visible = ranked.slice(0, MAX_VISIBLE);
@@ -100,7 +194,13 @@ export function QuickOpen({ rootPath, onOpenFile, onClose }: QuickOpenProps) {
   function openAt(index: number) {
     const hit = visible[index];
     if (!hit) return;
-    onOpenFile({ name: hit.file.name, path: hit.file.path, isDir: false });
+    const file = hit.file as QuickOpenFile;
+    onOpenFile({
+      name: file.name,
+      path: file.path,
+      isDir: false,
+      workspaceRemote: file.workspaceRemote,
+    });
     onClose();
   }
 
@@ -126,12 +226,13 @@ export function QuickOpen({ rootPath, onOpenFile, onClose }: QuickOpenProps) {
     <div className="quick-open-backdrop" {...useModalDismiss(onClose)}>
       <div className="quick-open">
         <div className="quick-pick-title">Ir para arquivo</div>
-        <input
+        <SearchBox
           ref={inputRef}
-          className="quick-open-input"
-          type="text"
+          wrapperClassName="quick-open-field"
           placeholder={
-            rootPath ? "Digite o nome de um arquivo…" : "Abra uma pasta primeiro"
+            targets.length > 0
+              ? "Digite o nome de um arquivo…"
+              : "Abra uma pasta ou workspace primeiro"
           }
           value={query}
           aria-label="Quick Open: pesquisar arquivos por nome"
@@ -142,19 +243,32 @@ export function QuickOpen({ rootPath, onOpenFile, onClose }: QuickOpenProps) {
           onKeyDown={onKeyDown}
         />
 
+        {truncatedRoots.length > 0 && (
+          <div className="quick-open-notice" role="status">
+            {truncatedRoots
+              .map(
+                (r) =>
+                  `${targets.length > 1 ? `${r.label}: ` : ""}índice limitado aos primeiros ${r.cap.toLocaleString("pt-BR")} arquivos`
+              )
+              .join(" · ")}
+            {" — refine a busca ou ajuste fluent.quickOpen.maxFiles / search.exclude."}
+          </div>
+        )}
         <div className="quick-open-list" role="listbox" ref={listRef}>
           {visible.length === 0 ? (
             <div className="quick-open-empty">
-              {!rootPath
-                ? "Abra uma pasta para pesquisar arquivos."
-                : query.trim()
+              {targets.length === 0
+                ? "Abra uma pasta ou workspace para pesquisar arquivos."
+                : loading
+                  ? "Carregando arquivos…"
+                  : query.trim()
                   ? "Nenhum arquivo encontrado."
                   : "Nenhum arquivo."}
             </div>
           ) : (
             visible.map((hit, i) => (
               <div
-                key={hit.file.path}
+                key={`${(hit.file as QuickOpenFile).rootId ?? "root"}:${hit.file.path}`}
                 role="option"
                 aria-selected={i === selected}
                 className={

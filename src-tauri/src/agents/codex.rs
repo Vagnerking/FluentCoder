@@ -3,21 +3,47 @@
 //! CLI (rollouts em `~/.codex/sessions`), então uma conversa é retomada com
 //! `thread/resume` em vez de reenviar o histórico — e o histórico sobrevive a
 //! reinícios do app.
+//!
+//! Escalações do modo Agente (`approvalPolicy: on-request`) chegam como
+//! requests do servidor (`item/commandExecution/requestApproval`,
+//! `item/fileChange/requestApproval`) e viram cartões de aprovação no chat.
 
-use super::{prompt_for_session, AcpEvent, AgentMode, PromptJob};
+use super::{
+    cap_text, default_approval_options, knowledge_mcp_server, new_request_id, prompt_for_session,
+    AcpEvent, AgentMode, ApprovalReply, FileDiff, PromptJob, RunOptions, ToolCallEvent, UsageInfo,
+};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as AsyncBufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::mpsc;
+
+const OUTPUT_CAP: usize = 4000;
 
 pub(crate) struct CodexAppServer {
     child: Child,
     stdin: ChildStdin,
     stdout: Lines<AsyncBufReader<ChildStdout>>,
     next_request_id: u64,
+}
+
+/// Argumentos `-c` que registram o servidor MCP de conhecimento do editor no
+/// app-server (mesmo formato do `config.toml`: `mcp_servers.<nome>.*`). Os
+/// valores são TOML; strings/arrays JSON são TOML válido.
+fn knowledge_mcp_overrides(root: &Path) -> Vec<String> {
+    let Some((command, args)) = knowledge_mcp_server(root) else {
+        return Vec::new();
+    };
+    let command = serde_json::to_string(&command.to_string_lossy()).unwrap_or_default();
+    let args = serde_json::to_string(&args).unwrap_or_default();
+    vec![
+        "-c".into(),
+        format!("mcp_servers.fluent_knowledge.command={command}"),
+        "-c".into(),
+        format!("mcp_servers.fluent_knowledge.args={args}"),
+    ]
 }
 
 impl CodexAppServer {
@@ -30,6 +56,7 @@ impl CodexAppServer {
         let mut command = Command::new(binary);
         command
             .arg("app-server")
+            .args(knowledge_mcp_overrides(root))
             .current_dir(root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -179,11 +206,7 @@ impl CodexAppServer {
 
     /// Retoma uma thread persistida em execuções anteriores (mesmo depois de
     /// reiniciar o app ou o app-server). O histórico volta do rollout do CLI.
-    async fn resume_thread(
-        &mut self,
-        thread_id: &str,
-        mode: AgentMode,
-    ) -> Result<(), String> {
+    async fn resume_thread(&mut self, thread_id: &str, mode: AgentMode) -> Result<(), String> {
         let response = self
             .request(
                 "thread/resume",
@@ -217,26 +240,24 @@ impl CodexAppServer {
         &mut self,
         thread_id: &str,
         root: &Path,
-        mode: AgentMode,
-        model: &str,
+        job: &PromptJob,
         prompt: String,
-        on_event: &tauri::ipc::Channel<AcpEvent>,
-        cancel: &Notify,
     ) -> Result<String, String> {
+        let on_event = &job.on_event;
         let id = self.next_request_id;
         self.next_request_id += 1;
         let mut params = json!({
             "threadId": thread_id,
             "cwd": root,
-            "approvalPolicy": codex_approval_policy(mode),
-            "sandboxPolicy": codex_sandbox_policy(mode, root),
+            "approvalPolicy": codex_approval_policy(job.mode),
+            "sandboxPolicy": codex_sandbox_policy(job.mode, root, &job.options),
             "input": [{
                 "type": "text",
                 "text": prompt
             }]
         });
-        if !model.trim().is_empty() {
-            params["model"] = json!(model);
+        if !job.model.trim().is_empty() {
+            params["model"] = json!(job.model);
         }
         self.send(json!({
             "id": id,
@@ -251,8 +272,14 @@ impl CodexAppServer {
         let mut cancel_requested = false;
         let mut interrupt_request_id: Option<u64> = None;
         let mut announced_thinking = false;
-        let cancelled = cancel.notified();
+        let cancelled = job.cancel.notified();
         tokio::pin!(cancelled);
+        let (replies_tx, mut replies_rx) = mpsc::unbounded_channel::<ApprovalReply>();
+        // request_id do cartão → pedido do servidor aguardando decisão.
+        let mut pending: HashMap<String, PendingApproval> = HashMap::new();
+        // Alterações de arquivo vistas em `item/started` (para o cartão do
+        // `fileChange/requestApproval`, que não traz o diff).
+        let mut file_changes: HashMap<String, Vec<FileDiff>> = HashMap::new();
 
         loop {
             let message = tokio::select! {
@@ -261,16 +288,32 @@ impl CodexAppServer {
                     let _ = on_event.send(AcpEvent::Status {
                         message: "Interrompendo o Codex…".into(),
                     });
+                    for (request_id, approval) in pending.drain() {
+                        job.approvals.forget(&request_id);
+                        let _ = on_event.send(AcpEvent::ApprovalResolved { request_id });
+                        self.send(approval.response("cancel")).await?;
+                    }
                     if let Some(active_turn_id) = turn_id.as_deref() {
                         interrupt_request_id =
                             Some(self.interrupt_turn(thread_id, active_turn_id).await?);
                     }
                     continue;
                 }
+                Some(reply) = replies_rx.recv() => {
+                    if let Some(approval) = pending.remove(&reply.request_id) {
+                        let _ = on_event.send(AcpEvent::ApprovalResolved {
+                            request_id: reply.request_id.clone(),
+                        });
+                        self.send(approval.response(&reply.option_id)).await?;
+                    }
+                    continue;
+                }
                 message = self.next_message() => message?,
             };
 
-            if message.get("id").and_then(Value::as_u64) == Some(id) {
+            if message.get("id").and_then(Value::as_u64) == Some(id)
+                && message.get("method").is_none()
+            {
                 let result = ensure_rpc_success(&message, "iniciar a resposta do Codex")?;
                 turn_id = result
                     .pointer("/turn/id")
@@ -286,72 +329,109 @@ impl CodexAppServer {
                 }
             } else if interrupt_request_id.is_some_and(|interrupt_id| {
                 message.get("id").and_then(Value::as_u64) == Some(interrupt_id)
+                    && message.get("method").is_none()
             }) {
                 ensure_rpc_success(&message, "interromper a resposta do Codex")?;
             } else if let Some(method) = message.get("method").and_then(Value::as_str) {
+                let same_thread =
+                    message.pointer("/params/threadId").and_then(Value::as_str) == Some(thread_id);
+                if message.get("id").is_some() {
+                    // Request do servidor: aprovação interativa ou recusa.
+                    match approval_card(&message, &file_changes) {
+                        Some(card) if !cancel_requested => {
+                            let request_id = new_request_id("codex");
+                            job.approvals.register(&request_id, replies_tx.clone());
+                            let _ = on_event.send(AcpEvent::Approval {
+                                request_id: request_id.clone(),
+                                title: card.title,
+                                detail: card.detail,
+                                tool_kind: card.tool_kind,
+                                options: default_approval_options(true),
+                                diffs: card.diffs,
+                            });
+                            let _ = on_event.send(AcpEvent::Status {
+                                message: "Aguardando sua aprovação…".into(),
+                            });
+                            pending.insert(
+                                request_id,
+                                PendingApproval {
+                                    rpc_id: message["id"].clone(),
+                                    legacy: card.legacy,
+                                },
+                            );
+                        }
+                        Some(card) => {
+                            let approval = PendingApproval {
+                                rpc_id: message["id"].clone(),
+                                legacy: card.legacy,
+                            };
+                            self.send(approval.response("cancel")).await?;
+                        }
+                        None => self.reject_server_request(&message).await?,
+                    }
+                    continue;
+                }
                 match method {
                     // Resumo do raciocínio em streaming (e o raciocínio bruto,
                     // quando a conta o expõe) — o frontend mostra o texto ao
                     // vivo enquanto o modelo pensa, em vez de tela parada.
-                    "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta" => {
-                        if message.pointer("/params/threadId").and_then(Value::as_str)
-                            == Some(thread_id)
-                        {
-                            if let Some(delta) =
-                                message.pointer("/params/delta").and_then(Value::as_str)
-                            {
-                                let _ = on_event.send(AcpEvent::Thought {
-                                    content: delta.to_owned(),
-                                });
-                            }
+                    "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta" if same_thread => {
+                        if let Some(delta) = message.pointer("/params/delta").and_then(Value::as_str) {
+                            let _ = on_event.send(AcpEvent::Thought {
+                                content: delta.to_owned(),
+                            });
                         }
                     }
                     // Nova seção do resumo: vira quebra de parágrafo no texto
                     // pensado (a primeira seção não precisa de separador).
-                    "item/reasoning/summaryPartAdded" => {
-                        if message.pointer("/params/threadId").and_then(Value::as_str)
-                            == Some(thread_id)
-                            && message
-                                .pointer("/params/summaryIndex")
-                                .and_then(Value::as_u64)
-                                .is_some_and(|index| index > 0)
+                    "item/reasoning/summaryPartAdded" if same_thread => {
+                        if message
+                            .pointer("/params/summaryIndex")
+                            .and_then(Value::as_u64)
+                            .is_some_and(|index| index > 0)
                         {
                             let _ = on_event.send(AcpEvent::Thought {
                                 content: "\n\n".into(),
                             });
                         }
                     }
-                    "item/agentMessage/delta" => {
-                        if message.pointer("/params/threadId").and_then(Value::as_str)
-                            == Some(thread_id)
-                        {
-                            if let Some(delta) =
-                                message.pointer("/params/delta").and_then(Value::as_str)
-                            {
-                                let _ = on_event.send(AcpEvent::Text {
-                                    content: delta.to_owned(),
-                                });
-                            }
-                        }
-                    }
-                    "turn/completed" => {
-                        if message.pointer("/params/threadId").and_then(Value::as_str)
-                            == Some(thread_id)
-                        {
-                            completion = Some(if cancel_requested {
-                                Ok("Cancelled".into())
-                            } else {
-                                codex_turn_result(&message)
+                    "item/agentMessage/delta" if same_thread => {
+                        if let Some(delta) = message.pointer("/params/delta").and_then(Value::as_str) {
+                            let _ = on_event.send(AcpEvent::Text {
+                                content: delta.to_owned(),
                             });
                         }
                     }
-                    "error" => {
-                        if message.pointer("/params/threadId").and_then(Value::as_str)
-                            == Some(thread_id)
-                            && !message
-                                .pointer("/params/willRetry")
-                                .and_then(Value::as_bool)
-                                .unwrap_or(false)
+                    "turn/completed" if same_thread => {
+                        completion = Some(if cancel_requested {
+                            Ok("Cancelled".into())
+                        } else {
+                            codex_turn_result(&message)
+                        });
+                    }
+                    "thread/tokenUsage/updated" if same_thread => {
+                        if let Some(usage) = codex_usage(&message["params"]) {
+                            let _ = on_event.send(AcpEvent::Usage { usage });
+                        }
+                    }
+                    "serverRequest/resolved" => {
+                        let resolved = message.pointer("/params/requestId").cloned();
+                        let keys: Vec<String> = pending
+                            .iter()
+                            .filter(|(_, approval)| Some(&approval.rpc_id) == resolved.as_ref())
+                            .map(|(key, _)| key.clone())
+                            .collect();
+                        for request_id in keys {
+                            pending.remove(&request_id);
+                            job.approvals.forget(&request_id);
+                            let _ = on_event.send(AcpEvent::ApprovalResolved { request_id });
+                        }
+                    }
+                    "error" if same_thread => {
+                        if !message
+                            .pointer("/params/willRetry")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)
                         {
                             let error = message
                                 .pointer("/params/error/message")
@@ -360,38 +440,295 @@ impl CodexAppServer {
                             completion = Some(Err(error.to_owned()));
                         }
                     }
-                    "item/started" => {
-                        let status = match message
-                            .pointer("/params/item/type")
-                            .and_then(Value::as_str)
-                        {
-                            Some("commandExecution") => Some("Codex executando uma ferramenta…"),
-                            Some("fileChange") => Some("Codex aplicando alterações…"),
-                            Some("webSearch") => Some("Codex pesquisando…"),
-                            Some("reasoning") if !announced_thinking => {
-                                announced_thinking = true;
-                                Some("Codex pensando…")
+                    "item/started" | "item/completed" if same_thread => {
+                        let item = &message["params"]["item"];
+                        if method == "item/started" {
+                            let status = match item.get("type").and_then(Value::as_str) {
+                                Some("commandExecution") => Some("Codex executando uma ferramenta…"),
+                                Some("fileChange") => Some("Codex aplicando alterações…"),
+                                Some("webSearch") => Some("Codex pesquisando…"),
+                                Some("reasoning") if !announced_thinking => {
+                                    announced_thinking = true;
+                                    Some("Codex pensando…")
+                                }
+                                _ => None,
+                            };
+                            if let Some(message) = status {
+                                let _ = on_event.send(AcpEvent::Status {
+                                    message: message.into(),
+                                });
                             }
-                            _ => None,
-                        };
-                        if let Some(message) = status {
-                            let _ = on_event.send(AcpEvent::Status {
-                                message: message.into(),
-                            });
+                        }
+                        if let Some(call) = codex_tool_call(item) {
+                            if item.get("type").and_then(Value::as_str) == Some("fileChange") {
+                                file_changes.insert(call.id.clone(), call.diffs.clone());
+                            }
+                            let _ = on_event.send(AcpEvent::ToolCall { call });
                         }
                     }
                     _ => {}
                 }
-                self.reject_server_request(&message).await?;
             }
 
             if acknowledged {
                 if let Some(result) = completion.take() {
+                    for (request_id, _) in pending.drain() {
+                        job.approvals.forget(&request_id);
+                        let _ = on_event.send(AcpEvent::ApprovalResolved { request_id });
+                    }
                     return result;
                 }
             }
         }
     }
+}
+
+/// Um request de aprovação do servidor aguardando a decisão do usuário.
+struct PendingApproval {
+    rpc_id: Value,
+    /// Requests v1 (`execCommandApproval`/`applyPatchApproval`) usam o enum
+    /// `ReviewDecision` em snake_case.
+    legacy: bool,
+}
+
+impl PendingApproval {
+    fn response(&self, option_id: &str) -> Value {
+        let decision = if self.legacy {
+            match option_id {
+                "allow_once" => json!("approved"),
+                "allow_always" => json!("approved_for_session"),
+                "cancel" => json!("abort"),
+                _ => json!({ "denied": { "rejection": "O usuário negou no Fluent Chat." } }),
+            }
+        } else {
+            match option_id {
+                "allow_once" => json!("accept"),
+                "allow_always" => json!("acceptForSession"),
+                "cancel" => json!("cancel"),
+                _ => json!("decline"),
+            }
+        };
+        json!({ "id": self.rpc_id, "result": { "decision": decision } })
+    }
+}
+
+/// Conteúdo do cartão de um request de aprovação do servidor.
+#[derive(Debug, PartialEq)]
+struct ApprovalCard {
+    title: String,
+    detail: Option<String>,
+    tool_kind: String,
+    diffs: Vec<FileDiff>,
+    legacy: bool,
+}
+
+/// Interpreta um request de aprovação do app-server; `None` para requests que
+/// não são aprovações (esses continuam sendo recusados).
+fn approval_card(message: &Value, file_changes: &HashMap<String, Vec<FileDiff>>) -> Option<ApprovalCard> {
+    let params = &message["params"];
+    let text = |key: &str| params.get(key).and_then(Value::as_str).map(str::to_owned);
+    let with_reason = |base: Option<String>| -> Option<String> {
+        match (base, text("reason")) {
+            (Some(base), Some(reason)) => Some(format!("{base}\n\nMotivo: {reason}")),
+            (Some(base), None) => Some(base),
+            (None, reason) => reason,
+        }
+    };
+    match message.get("method").and_then(Value::as_str)? {
+        "item/commandExecution/requestApproval" => {
+            let command = text("command").map(|command| match text("cwd") {
+                Some(cwd) => format!("{command}\n(em {cwd})"),
+                None => command,
+            });
+            Some(ApprovalCard {
+                title: "Executar comando?".into(),
+                detail: with_reason(command),
+                tool_kind: "execute".into(),
+                diffs: vec![],
+                legacy: false,
+            })
+        }
+        "item/fileChange/requestApproval" => {
+            let item_id = text("itemId").unwrap_or_default();
+            let diffs = file_changes.get(&item_id).cloned().unwrap_or_default();
+            let files = diffs
+                .iter()
+                .map(|diff| diff.path.clone())
+                .collect::<Vec<_>>()
+                .join("\n");
+            Some(ApprovalCard {
+                title: "Aplicar alterações?".into(),
+                detail: with_reason((!files.is_empty()).then_some(files)),
+                tool_kind: "edit".into(),
+                diffs,
+                legacy: false,
+            })
+        }
+        "execCommandApproval" => {
+            let command = params
+                .get("command")
+                .and_then(Value::as_array)
+                .map(|parts| {
+                    parts
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                });
+            Some(ApprovalCard {
+                title: "Executar comando?".into(),
+                detail: with_reason(command),
+                tool_kind: "execute".into(),
+                diffs: vec![],
+                legacy: true,
+            })
+        }
+        "applyPatchApproval" => Some(ApprovalCard {
+            title: "Aplicar alterações?".into(),
+            detail: with_reason(params.get("fileChanges").and_then(Value::as_object).map(
+                |changes| changes.keys().cloned().collect::<Vec<_>>().join("\n"),
+            )),
+            tool_kind: "edit".into(),
+            diffs: vec![],
+            legacy: true,
+        }),
+        _ => None,
+    }
+}
+
+/// `item/started|completed` de ferramenta → cartão no transcript.
+fn codex_tool_call(item: &Value) -> Option<ToolCallEvent> {
+    let id = item.get("id").and_then(Value::as_str)?.to_owned();
+    let status = item.get("status").and_then(Value::as_str).map(|status| {
+        match status {
+            "inProgress" => "in_progress",
+            "completed" => "completed",
+            _ => "failed",
+        }
+        .to_owned()
+    });
+    match item.get("type").and_then(Value::as_str)? {
+        "commandExecution" => {
+            let command = item.get("command").and_then(Value::as_str).unwrap_or("");
+            let mut output = item
+                .get("aggregatedOutput")
+                .and_then(Value::as_str)
+                .map(|output| cap_text(output, OUTPUT_CAP));
+            if let Some(code) = item.get("exitCode").and_then(Value::as_i64) {
+                if code != 0 {
+                    output = Some(format!(
+                        "{}\n(código de saída {code})",
+                        output.unwrap_or_default()
+                    ));
+                }
+            }
+            Some(ToolCallEvent {
+                id,
+                kind: Some("execute".into()),
+                title: Some("Executar comando".into()),
+                status,
+                detail: Some(command.to_owned()),
+                output,
+                ..Default::default()
+            })
+        }
+        "fileChange" => {
+            let diffs: Vec<FileDiff> = item
+                .get("changes")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|change| {
+                    Some(FileDiff {
+                        path: change.get("path").and_then(Value::as_str)?.to_owned(),
+                        unified: change
+                            .get("diff")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        ..Default::default()
+                    })
+                })
+                .collect();
+            let title = match diffs.as_slice() {
+                [single] => format!(
+                    "Editar {}",
+                    single.path.rsplit(['/', '\\']).next().unwrap_or(&single.path)
+                ),
+                many => format!("Editar {} arquivos", many.len()),
+            };
+            Some(ToolCallEvent {
+                id,
+                kind: Some("edit".into()),
+                title: Some(title),
+                status,
+                locations: diffs.iter().map(|diff| diff.path.clone()).collect(),
+                diffs,
+                ..Default::default()
+            })
+        }
+        "mcpToolCall" => {
+            let server = item.get("server").and_then(Value::as_str).unwrap_or("");
+            let tool = item.get("tool").and_then(Value::as_str).unwrap_or("ferramenta");
+            let output = item
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .or_else(|| {
+                    item.pointer("/result/content")
+                        .and_then(Value::as_array)
+                        .map(|blocks| {
+                            blocks
+                                .iter()
+                                .filter_map(|block| block.get("text").and_then(Value::as_str))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        })
+                })
+                .filter(|text| !text.is_empty())
+                .map(|text| cap_text(&text, OUTPUT_CAP));
+            Some(ToolCallEvent {
+                id,
+                kind: Some("other".into()),
+                title: Some(format!("{server}: {tool}")),
+                status,
+                detail: item
+                    .get("arguments")
+                    .filter(|args| !args.is_null())
+                    .map(|args| cap_text(&args.to_string(), 1000)),
+                output,
+                ..Default::default()
+            })
+        }
+        "webSearch" => Some(ToolCallEvent {
+            id,
+            kind: Some("fetch".into()),
+            title: Some(format!(
+                "Pesquisar \"{}\"",
+                item.get("query").and_then(Value::as_str).unwrap_or("")
+            )),
+            status: status.or(Some("completed".into())),
+            ..Default::default()
+        }),
+        _ => None,
+    }
+}
+
+/// `thread/tokenUsage/updated` → consumo do último turno + janela de contexto.
+fn codex_usage(params: &Value) -> Option<UsageInfo> {
+    let last = params.pointer("/tokenUsage/last")?;
+    let read = |key: &str| last.get(key).and_then(Value::as_u64);
+    Some(UsageInfo {
+        input_tokens: read("inputTokens"),
+        output_tokens: read("outputTokens"),
+        cached_input_tokens: read("cachedInputTokens"),
+        cost_usd: None,
+        context_window: params
+            .pointer("/tokenUsage/modelContextWindow")
+            .and_then(Value::as_u64),
+        context_used: params
+            .pointer("/tokenUsage/total/totalTokens")
+            .and_then(Value::as_u64),
+    })
 }
 
 fn ensure_rpc_success<'a>(message: &'a Value, action: &str) -> Result<&'a Value, String> {
@@ -407,7 +744,7 @@ fn ensure_rpc_success<'a>(message: &'a Value, action: &str) -> Result<&'a Value,
         .ok_or_else(|| format!("O Codex não confirmou que conseguiu {action}."))
 }
 
-/// Sandbox nativo por modo (variantes validadas no app-server 0.136.0:
+/// Sandbox nativo por modo (variantes validadas no app-server 0.162:
 /// read-only, workspace-write, danger-full-access).
 fn codex_sandbox_mode(mode: AgentMode) -> &'static str {
     match mode {
@@ -418,9 +755,8 @@ fn codex_sandbox_mode(mode: AgentMode) -> &'static str {
 }
 
 /// approvalPolicy por modo (variantes validadas: untrusted, on-failure,
-/// on-request, granular, never). No Auto usamos `on-request`: o Codex pede
-/// escalações fora do sandbox e este cliente headless as nega automaticamente
-/// (`reject_server_request`) — igual ao Auto do Claude sem aprovador.
+/// on-request, granular, never). No Agente usamos `on-request`: o Codex pede
+/// escalações fora do sandbox e o chat as mostra como cartões de aprovação.
 fn codex_approval_policy(mode: AgentMode) -> &'static str {
     match mode {
         AgentMode::Auto => "on-request",
@@ -428,7 +764,7 @@ fn codex_approval_policy(mode: AgentMode) -> &'static str {
     }
 }
 
-fn codex_sandbox_policy(mode: AgentMode, root: &Path) -> Value {
+fn codex_sandbox_policy(mode: AgentMode, root: &Path, options: &RunOptions) -> Value {
     match mode {
         AgentMode::Ask | AgentMode::Plan => json!({
             "type": "readOnly",
@@ -437,7 +773,7 @@ fn codex_sandbox_policy(mode: AgentMode, root: &Path) -> Value {
         AgentMode::Edit | AgentMode::Auto => json!({
             "type": "workspaceWrite",
             "writableRoots": [root],
-            "networkAccess": false,
+            "networkAccess": options.network_access,
             "excludeSlashTmp": false,
             "excludeTmpdirEnvVar": false
         }),
@@ -505,15 +841,7 @@ pub(crate) async fn run_worker(
             // sem scaffolding: permissões são sandbox+approval nativos.
             let prompt = prompt_for_session(is_new_thread, &job.context_prompt, &job.prompt);
             let stop_reason = server
-                .run_turn(
-                    &thread_id,
-                    &root,
-                    job.mode,
-                    &job.model,
-                    prompt.to_owned(),
-                    &job.on_event,
-                    &job.cancel,
-                )
+                .run_turn(&thread_id, &root, &job, prompt.to_owned())
                 .await?;
             let _ = job.on_event.send(AcpEvent::Done { stop_reason });
             Ok(())
@@ -531,9 +859,7 @@ pub(crate) async fn run_worker(
             .try_wait()
             .map_err(|error| format!("Falha ao consultar o processo do Codex: {error}"))?
         {
-            return Err(format!(
-                "O Codex encerrou inesperadamente ({status})."
-            ));
+            return Err(format!("O Codex encerrou inesperadamente ({status})."));
         }
     }
     Ok(())
@@ -587,8 +913,8 @@ mod tests {
         assert_eq!(codex_sandbox_mode(AgentMode::Bypass), "danger-full-access");
     }
 
-    /// Só o Auto pede escalações (`on-request` — negadas automaticamente por
-    /// este cliente headless); os demais nunca pedem aprovação.
+    /// Só o Agente pede escalações (`on-request` — viram cartões de
+    /// aprovação); os demais nunca pedem aprovação.
     #[test]
     fn codex_approval_policy_matches_the_mode() {
         assert_eq!(codex_approval_policy(AgentMode::Ask), "never");
@@ -621,15 +947,130 @@ mod tests {
 
     #[test]
     fn edit_sandbox_policy_limits_writes_to_the_workspace() {
-        let policy = codex_sandbox_policy(AgentMode::Edit, Path::new("C:\\repo"));
+        let policy = codex_sandbox_policy(AgentMode::Edit, Path::new("C:\\repo"), &RunOptions::default());
         assert_eq!(policy["type"], "workspaceWrite");
         assert_eq!(policy["networkAccess"], false);
         assert_eq!(policy["writableRoots"][0], "C:\\repo");
     }
 
     #[test]
+    fn custom_agent_can_enable_sandbox_network() {
+        let options = RunOptions {
+            network_access: true,
+            ..Default::default()
+        };
+        let policy = codex_sandbox_policy(AgentMode::Auto, Path::new("/repo"), &options);
+        assert_eq!(policy["networkAccess"], true);
+        // Modos somente leitura nunca ganham rede.
+        let read_only = codex_sandbox_policy(AgentMode::Ask, Path::new("/repo"), &options);
+        assert_eq!(read_only["networkAccess"], false);
+    }
+
+    #[test]
     fn bypass_sandbox_policy_grants_full_access() {
-        let policy = codex_sandbox_policy(AgentMode::Bypass, Path::new("C:\\repo"));
+        let policy = codex_sandbox_policy(AgentMode::Bypass, Path::new("C:\\repo"), &RunOptions::default());
         assert_eq!(policy["type"], "dangerFullAccess");
+    }
+
+    #[test]
+    fn command_approval_becomes_a_card_and_answers_v2_decisions() {
+        let message = json!({
+            "id": 7,
+            "method": "item/commandExecution/requestApproval",
+            "params": { "threadId": "t", "turnId": "u", "itemId": "i", "command": "npm install", "cwd": "/w", "reason": "rede" }
+        });
+        let card = approval_card(&message, &HashMap::new()).unwrap();
+        assert_eq!(card.tool_kind, "execute");
+        assert!(card.detail.as_deref().unwrap().contains("npm install"));
+        assert!(card.detail.as_deref().unwrap().contains("Motivo: rede"));
+        let pending = PendingApproval { rpc_id: json!(7), legacy: false };
+        assert_eq!(pending.response("allow_once"), json!({"id": 7, "result": {"decision": "accept"}}));
+        assert_eq!(pending.response("allow_always")["result"]["decision"], "acceptForSession");
+        assert_eq!(pending.response("reject_once")["result"]["decision"], "decline");
+        assert_eq!(pending.response("cancel")["result"]["decision"], "cancel");
+    }
+
+    #[test]
+    fn file_change_approval_reuses_the_started_item_diff() {
+        let mut changes = HashMap::new();
+        changes.insert(
+            "item-1".to_string(),
+            vec![FileDiff { path: "/w/a.rs".into(), unified: Some("@@".into()), ..Default::default() }],
+        );
+        let card = approval_card(
+            &json!({ "id": 1, "method": "item/fileChange/requestApproval", "params": { "itemId": "item-1" } }),
+            &changes,
+        )
+        .unwrap();
+        assert_eq!(card.diffs.len(), 1);
+        assert_eq!(card.detail.as_deref(), Some("/w/a.rs"));
+    }
+
+    #[test]
+    fn legacy_approvals_use_review_decisions() {
+        let pending = PendingApproval { rpc_id: json!("x"), legacy: true };
+        assert_eq!(pending.response("allow_once")["result"]["decision"], "approved");
+        assert_eq!(pending.response("allow_always")["result"]["decision"], "approved_for_session");
+        assert!(pending.response("reject_once")["result"]["decision"]["denied"].is_object());
+    }
+
+    #[test]
+    fn non_approval_requests_are_not_cards() {
+        assert!(approval_card(
+            &json!({ "id": 1, "method": "item/tool/requestUserInput", "params": {} }),
+            &HashMap::new()
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn command_items_become_tool_cards() {
+        let call = codex_tool_call(&json!({
+            "type": "commandExecution", "id": "c1", "command": "ls", "status": "failed",
+            "aggregatedOutput": "erro", "exitCode": 2
+        }))
+        .unwrap();
+        assert_eq!(call.kind.as_deref(), Some("execute"));
+        assert_eq!(call.status.as_deref(), Some("failed"));
+        assert_eq!(call.detail.as_deref(), Some("ls"));
+        assert!(call.output.as_deref().unwrap().contains("código de saída 2"));
+    }
+
+    #[test]
+    fn file_change_items_carry_unified_diffs() {
+        let call = codex_tool_call(&json!({
+            "type": "fileChange", "id": "f1", "status": "completed",
+            "changes": [{ "path": "/w/src/a.rs", "kind": { "type": "update", "move_path": null }, "diff": "@@ -1 +1 @@\n-a\n+b" }]
+        }))
+        .unwrap();
+        assert_eq!(call.title.as_deref(), Some("Editar a.rs"));
+        assert_eq!(call.diffs[0].unified.as_deref(), Some("@@ -1 +1 @@\n-a\n+b"));
+        assert!(codex_tool_call(&json!({ "type": "agentMessage", "id": "m" })).is_none());
+    }
+
+    #[test]
+    fn token_usage_reports_the_last_turn() {
+        let usage = codex_usage(&json!({
+            "threadId": "t", "turnId": "u",
+            "tokenUsage": {
+                "total": { "totalTokens": 5000, "inputTokens": 4000, "cachedInputTokens": 0, "cacheWriteInputTokens": 0, "outputTokens": 1000, "reasoningOutputTokens": 0 },
+                "last": { "totalTokens": 300, "inputTokens": 200, "cachedInputTokens": 50, "cacheWriteInputTokens": 0, "outputTokens": 100, "reasoningOutputTokens": 20 },
+                "modelContextWindow": 272000
+            }
+        }))
+        .unwrap();
+        assert_eq!(usage.input_tokens, Some(200));
+        assert_eq!(usage.output_tokens, Some(100));
+        assert_eq!(usage.cached_input_tokens, Some(50));
+        assert_eq!(usage.context_window, Some(272000));
+        assert_eq!(usage.context_used, Some(5000));
+    }
+
+    #[test]
+    fn knowledge_mcp_is_registered_with_toml_values() {
+        let overrides = knowledge_mcp_overrides(Path::new("/w/proj"));
+        assert_eq!(overrides[0], "-c");
+        assert!(overrides[1].starts_with("mcp_servers.fluent_knowledge.command=\""));
+        assert_eq!(overrides[3], "mcp_servers.fluent_knowledge.args=[\"--mcp\",\"/w/proj\"]");
     }
 }

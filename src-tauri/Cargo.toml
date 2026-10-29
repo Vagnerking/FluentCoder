@@ -28,6 +28,12 @@ tauri-build = { version = "2", features = [] }
 # Atenção: apps com esta feature não podem ser publicados na Mac App Store.
 tauri = { version = "2", features = ["image-png", "macos-private-api"] }
 tauri-plugin-dialog = "2"
+# Deep links `fluent-coder://<extensão>/…` (window.registerUriHandler das
+# extensões VS Code hospedadas — src-tauri/src/ext_host/deep_link.rs).
+tauri-plugin-deep-link = "2"
+# `context.secrets` das extensões hospedadas no cofre do SO (Secret Service no
+# Linux, Keychain no macOS, Credential Manager no Windows).
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 portable-pty = "0.9"
@@ -61,6 +67,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
 uuid = { version = "1", features = ["v4"] }
+# CSPRNG do sistema para o token da ponte IDE do Claude Code
+# (src/agents/ide_bridge.rs). Já está no lock como dependência transitiva.
+getrandom = "0.2"
 # Roslyn/rzls acquisition (download + verify + extract).
 # `gzip`: the VS Marketplace `vspackage` endpoint serves the C# extension VSIX
 # with `Content-Encoding: gzip` (verified). Without this feature reqwest returns
@@ -68,7 +77,9 @@ uuid = { version = "1", features = ["v4"] }
 # silently falls back to standalone Roslyn (no Razor). nuget.org serves the
 # Roslyn .nupkg uncompressed, so that path is unaffected.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+# zip 9's umbrella `deflate` selects zlib-rs. Keep the existing flate2 Rust
+# backend (also used by gzip/SSH) and the writer used by archive fixtures.
+zip = { version = "9.1.3", default-features = false, features = ["deflate-flate2", "deflate-zopfli"] }
 sha2 = "0.10"
 flate2 = "1"
 tar = "0.4"
@@ -79,12 +90,21 @@ which = "6"
 # Windows — matching the project's openssl-free (rustls) stance.
 russh = { version = "0.61", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "2.3.0"
+# Watcher do Git (src/git/watcher.rs): `.git` (HEAD/index/refs) + árvore de
+# trabalho com filtro de .gitignore e teto global de diretórios no inotify.
+notify = "8"
+
+# Unix: checar pid vivo (locks órfãos da ponte IDE) e sinalizar o grupo de
+# processos do host de extensões. Já estava no lock (transitivo).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 # Win11 Snap Layouts on our frameless title bar (our own implementation in
 # src/snap.rs). Same `windows` version tao already builds, so it's reused.
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_System_Console",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
     "Win32_UI_Input_KeyboardAndMouse",
@@ -121,3 +141,7 @@ incremental = true
 # continua em opt-level baixo). Só o nosso crate recompila no ciclo de dev.
 [profile.dev.package."*"]
 opt-level = 2
+
+[dev-dependencies]
+# Repos git temporários nos testes de integração do módulo git.
+tempfile = "3"

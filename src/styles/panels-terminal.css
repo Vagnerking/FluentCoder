@@ -1,0 +1,109 @@
+/* ---- Terminal Panel ---- */
+.terminal-panel { flex-shrink: 0; display: flex; flex-direction: column; background: var(--editor-bg); overflow: hidden; }
+
+.terminal-panel.panel-right,
+.terminal-panel.panel-left { height: 100%; }
+
+.terminal-panel.panel-bottom { border-top: 1px solid var(--border-subtle); }
+
+.terminal-panel.panel-right { border-left: 1px solid var(--border-subtle); }
+
+.terminal-panel.panel-left { border-right: 1px solid var(--border-subtle); }
+
+.terminal-header {
+  height: 36px;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  background: var(--tabbar-bg);
+  padding: 0 var(--space-xs) 0 var(--space-sm);
+  cursor: grab;
+}
+
+.terminal-tabs, .terminal-actions { cursor: default; }
+
+.terminal-tabs { flex: 1; min-width: 0; }
+
+/* Drop delimiter while reordering: an accent line on the target's leading (left)
+   or trailing (right) edge, depending on which half the pointer is over. */
+.terminal-tab.drop-before { box-shadow: inset 2px 0 0 var(--accent); }
+
+.terminal-tab.drop-after { box-shadow: inset -2px 0 0 var(--accent); }
+
+.terminal-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding: var(--space-xs); }
+
+/* Whichever tab content shows fills the panel height (responsive to resizing).
+   The hidden terminal pane (display:none) drops out of the flex flow. */
+.terminal-body > * { flex: 1 1 0; min-height: 0; min-width: 0; }
+
+/* Header actions (new terminal / kill terminal / close panel). */
+.terminal-actions { display: flex; align-items: center; gap: var(--space-xxs); flex-shrink: 0; }
+
+/* ---- Multiple terminals: views area + right-rail list ---- */
+/* The terminal pane stays mounted (display toggled) while other tabs show, so
+   switching tabs never tears down a running shell. Flex chain (not height:100%)
+   so the views + terminal list always fill the panel as it's resized. */
+.terminal-pane { display: flex; flex-direction: column; }
+
+.terminal-split { flex: 1; min-height: 0; display: flex; gap: 6px; }
+
+.terminal-views { position: relative; flex: 1; min-width: 0; min-height: 0; }
+
+/* All views are stacked; only the active one is visible (kept mounted so the
+   shell keeps running). visibility (not display:none) preserves its size so
+   xterm's fit addon measures correctly. */
+.terminal-view-host { position: absolute; inset: 0; }
+
+.terminal-view-host.inactive { visibility: hidden; pointer-events: none; }
+
+.terminal-list {
+  flex: 0 0 150px;
+  overflow-y: auto;
+  padding: 2px;
+  border-left: 1px solid var(--acrylic-border);
+}
+
+.terminal-list-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 4px 0 8px;
+  margin: 1px 0;
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: var(--font-caption);
+}
+
+.terminal-list-item:hover { background: var(--fill-subtle-hover); color: var(--text-secondary); }
+
+.terminal-list-item.active { background: var(--fill-selected); color: var(--text); }
+
+/* Drag-to-reorder delimiter: an accent line on the top (before) or bottom (after)
+   edge of the drop target, depending on which half the pointer is over. */
+.terminal-list-item.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+
+.terminal-list-item.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
+
+.terminal-list-icon { flex-shrink: 0; }
+
+.terminal-list-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Per-terminal close (IconButton): compact, revealed on row hover/focus. */
+.ui-icon-button.terminal-list-close {
+  width: 20px;
+  height: 20px;
+  opacity: 0;
+}
+
+.terminal-list-close .ui-icon-button-icon { font-size: var(--font-caption); }
+
+.terminal-list-item:hover .terminal-list-close,
+.terminal-list-item:focus-within .terminal-list-close,
+.terminal-list-item.active .terminal-list-close { opacity: 1; }
+
+.xterm-container { width: 100%; height: 100%; }
+
+.xterm-container .xterm { height: 100%; }

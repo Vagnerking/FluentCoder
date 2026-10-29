@@ -8,13 +8,17 @@ import { snapSetMaxButtonRect } from "../api";
  * `snap.rs`): reports the button's rect so the native hit-test overlay sits over
  * it, re-reporting whenever it moves (resize / layout / DPI). Since the overlay
  * covers the button the webview can't `:hover` it, so it also relays the OS hover
- * (`snap-max-hover`) to `onHover`. No-op off Windows (the command is a no-op).
+ * (`snap-max-hover`) to `onHover`. Only mounts where the platform has Snap
+ * Layouts (`capabilities.snapLayouts`, Windows): elsewhere it would just make
+ * useless IPC calls.
  */
 export function useSnapLayout(
   buttonRef: RefObject<HTMLElement | null>,
-  onHover: (hovering: boolean) => void
+  onHover: (hovering: boolean) => void,
+  enabled = true
 ) {
   useEffect(() => {
+    if (!enabled) return;
     const win = getCurrentWindow();
     const report = () => {
       const el = buttonRef.current;
@@ -42,7 +46,7 @@ export function useSnapLayout(
       // Tear the overlay down when the title bar unmounts.
       void snapSetMaxButtonRect(0, 0, 0, 0);
     };
-    // Stable ref + setter → run once per mount.
+    // Stable ref + setter (and a per-platform constant) → run once per mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 }

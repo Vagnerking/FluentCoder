@@ -12,10 +12,13 @@
  * `.cshtml` via `#line`. `.razor` (Blazor) always stays on the cohost.
  *
  * The flag is read live at every decision point (language mapping, registry,
- * lint) so flipping it + reloading the window is enough — no rebuild. Follows the
- * codebase's `localStorage` boolean idiom (see `servers/typescript.ts`).
+ * lint) so flipping it + reloading the window is enough — no rebuild. Lido do
+ * sistema de settings.
  */
-export const RAZOR_PROJECTION_FLAG_KEY = "lsp.razorProjection";
+import { settings } from "../settings/instance.ts";
+
+/** Setting `fluent.razor.projection` (antes `localStorage["lsp.razorProjection"]`). */
+export const RAZOR_PROJECTION_FLAG_KEY = "fluent.razor.projection";
 
 /**
  * True when the CSHTML projection broker should serve `.cshtml`. Defaults to
@@ -23,12 +26,10 @@ export const RAZOR_PROJECTION_FLAG_KEY = "lsp.razorProjection";
  * is unavailable, e.g. during SSR/tests).
  */
 export function isRazorProjectionEnabled(): boolean {
-  try {
-    return (
-      typeof localStorage !== "undefined" &&
-      localStorage.getItem(RAZOR_PROJECTION_FLAG_KEY) === "1"
-    );
-  } catch {
-    return false;
-  }
+  return settings.get<boolean>(RAZOR_PROJECTION_FLAG_KEY) === true;
+}
+
+/** Liga/desliga (setting do usuário). */
+export function setRazorProjectionEnabled(on: boolean): Promise<void> {
+  return settings.update(RAZOR_PROJECTION_FLAG_KEY, on, "user");
 }

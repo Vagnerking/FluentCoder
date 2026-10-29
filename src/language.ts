@@ -43,6 +43,8 @@ const EXT_TO_LANG: Record<string, string> = {
   swift: "swift",
   kt: "kotlin",
   dockerfile: "dockerfile",
+  diff: "diff",
+  patch: "diff",
 };
 
 /**
@@ -73,6 +75,20 @@ export function getLanguageOverride(path: string): string | undefined {
 }
 
 /**
+ * Linguagens contribuídas por extensões (`contributes.languages`, modo somente
+ * contribuições — src/editor/textmate/grammarService.ts). Consultadas DEPOIS
+ * da escolha do usuário e ANTES do mapa nativo, exceto quando o mapa nativo
+ * dá uma linguagem com pipeline próprio (C#, Razor/CSHTML, TS/JS, JSON, CSS,
+ * HTML): essas nunca são sobrescritas por extensão.
+ */
+let contributedResolver: ((name: string, path?: string) => string | undefined) | null = null;
+const NATIVE_PIPELINES = new Set(["csharp", "cshtml", "aspnetcorerazor", "typescript", "typescriptreact", "javascript", "javascriptreact", "json", "css", "scss", "less", "html"]);
+
+export function setContributedLanguageResolver(resolver: ((name: string, path?: string) => string | undefined) | null): void {
+  contributedResolver = resolver;
+}
+
+/**
  * Best-effort Monaco language id for a filename. Falls back to plaintext.
  *
  * When `path` is given and the user picked a language mode for it (see
@@ -83,6 +99,15 @@ export function languageForFile(name: string, path?: string): string {
     const override = getLanguageOverride(path);
     if (override) return override;
   }
+  const native = nativeLanguageForFile(name);
+  if (contributedResolver && !NATIVE_PIPELINES.has(native)) {
+    const contributed = contributedResolver(name, path);
+    if (contributed) return contributed;
+  }
+  return native;
+}
+
+function nativeLanguageForFile(name: string): string {
   const lower = name.toLowerCase();
   if (lower === "dockerfile") return "dockerfile";
   const dot = lower.lastIndexOf(".");
@@ -115,6 +140,7 @@ export const LANGUAGE_LABELS: Record<string, string> = {
   json: "JSON",
   yaml: "YAML",
   dockerfile: "Dockerfile",
+  diff: "Diff",
   shell: "Shell Script",
   plaintext: "Texto sem formatação",
 };

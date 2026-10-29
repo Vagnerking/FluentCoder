@@ -1,0 +1,13 @@
+{
+  "name": "jupyter-keymap",
+  "publisher": "ms-toolsai",
+  "displayName": "Jupyter Keymap",
+  "version": "1.1.2",
+  "engines": { "vscode": "^1.60.0" },
+  "contributes": {
+    "keybindings": [
+      { "key": "shift+enter", "command": "notebook.cell.executeAndSelectBelow", "when": "notebookEditorFocused" },
+      { "key": "a", "command": "notebook.cell.insertCodeCellAbove", "when": "notebookEditorFocused && !inputFocus" }
+    ]
+  }
+}

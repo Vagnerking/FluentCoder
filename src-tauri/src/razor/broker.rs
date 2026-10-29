@@ -187,14 +187,18 @@ mod tests {
     #[test]
     fn shadow_csproj_references_user_and_framework() {
         let p = plan_for();
-        assert!(p.shadow_csproj_content.contains("Sdk=\"Microsoft.NET.Sdk\""));
+        assert!(p
+            .shadow_csproj_content
+            .contains("Sdk=\"Microsoft.NET.Sdk\""));
         assert!(p
             .shadow_csproj_content
             .contains("<ProjectReference Include=\"C:/ws/App/App.csproj\""));
         assert!(p
             .shadow_csproj_content
             .contains("<FrameworkReference Include=\"Microsoft.AspNetCore.App\" />"));
-        assert!(p.shadow_csproj_content.contains("<TargetFramework>net8.0</TargetFramework>"));
+        assert!(p
+            .shadow_csproj_content
+            .contains("<TargetFramework>net8.0</TargetFramework>"));
     }
 
     #[test]
@@ -219,7 +223,10 @@ mod tests {
             ),
             "got {emitted}"
         );
-        assert!(!emitted.contains("/obj/"), "pinned must not use the user obj layout: {emitted}");
+        assert!(
+            !emitted.contains("/obj/"),
+            "pinned must not use the user obj layout: {emitted}"
+        );
         // FALLBACK emit is the user project's default obj layout (for SDKs that
         // ignore the pin).
         let fallback = pf.emitted_gcs_fallback.to_string_lossy().replace('\\', "/");
@@ -242,10 +249,14 @@ mod tests {
         let (prog, args) = &p.emit_command;
         assert_eq!(prog, "dotnet");
         assert!(args.iter().any(|a| a.contains("App.csproj")));
-        assert!(args.iter().any(|a| a == "-p:EmitCompilerGeneratedFiles=true"));
+        assert!(args
+            .iter()
+            .any(|a| a == "-p:EmitCompilerGeneratedFiles=true"));
         // The output root is pinned so the emit lands where we read it.
-        assert!(args.iter().any(|a| a.starts_with("-p:CompilerGeneratedFilesOutputPath=")
-            && a.replace('\\', "/").contains("shadow/generated")));
+        assert!(args
+            .iter()
+            .any(|a| a.starts_with("-p:CompilerGeneratedFilesOutputPath=")
+                && a.replace('\\', "/").contains("shadow/generated")));
         // config propagated so the build emits into the <config> we read
         let ci = args.iter().position(|a| a == "-c").expect("-c present");
         assert_eq!(args[ci + 1], "Debug");

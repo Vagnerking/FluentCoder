@@ -1,0 +1,370 @@
+/* ---- ACP agents ---- */
+.agents-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.agents-scroll {
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 16px;
+}
+
+.agents-section {
+  padding: 4px 8px 12px;
+}
+
+.agents-section-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 4px;
+  color: var(--text-muted);
+  font-size: var(--font-caption-sm);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+/* Mensagens ocupam a largura do painel; o papel é dado pelo cabeçalho e pela
+   borda de acento, não pelo alinhamento (não há espaço lateral na sidebar). */
+.agent-message {
+  margin-bottom: 10px;
+  padding: 9px 11px;
+  /* Texto da conversa em contraste alto (não secundário/muted, que deixava o
+     chat lavado). */
+  color: var(--text);
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-card);
+}
+
+.agent-message.user {
+  background: var(--fill-selected);
+  border-color: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.agent-message.error {
+  border-color: color-mix(in srgb, var(--error) 30%, transparent);
+}
+
+.agent-message p {
+  font-size: var(--font-body);
+  line-height: 20px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Rendered Markdown from the assistant. Whitespace is normalized (not pre-wrap)
+   so Markdown's own block spacing drives the layout. */
+.agent-message-markdown {
+  font-size: var(--font-body);
+  line-height: 20px;
+  user-select: text;
+  -webkit-user-select: text;
+  overflow-wrap: anywhere;
+}
+
+.agent-message-markdown > :first-child {
+  margin-top: 0;
+}
+
+.agent-message-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.agent-message-markdown p {
+  margin: 0 0 10px;
+  white-space: normal;
+}
+
+.agent-message-markdown strong {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.agent-message-markdown a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.agent-message-markdown h1,
+.agent-message-markdown h2,
+.agent-message-markdown h3,
+.agent-message-markdown h4 {
+  color: var(--text);
+}
+
+.agent-message-markdown ul,
+.agent-message-markdown ol {
+  margin: 0 0 10px;
+  padding-left: 22px;
+}
+
+.agent-message-markdown li {
+  margin: 2px 0;
+}
+
+.agent-message-markdown li > p {
+  margin: 0;
+}
+
+.agent-message-markdown h1,
+.agent-message-markdown h2,
+.agent-message-markdown h3,
+.agent-message-markdown h4 {
+  margin: 14px 0 8px;
+  line-height: 1.3;
+  font-weight: 600;
+}
+
+.agent-message-markdown h1 { font-size: var(--font-subtitle); }
+
+.agent-message-markdown h2 { font-size: var(--font-subtitle); }
+
+.agent-message-markdown h3 { font-size: var(--font-body); }
+
+.agent-message-markdown h4 { font-size: var(--font-body); }
+
+.agent-message-markdown code {
+  font-family: var(--font-mono);
+  font-size: var(--font-caption);
+  padding: 1px 5px;
+  border-radius: var(--radius-control);
+  /* Base neutra (pontuação/operadores); os identificadores recebem cor por
+     token via `.tok-*` (tokenizeInline) — tudo-azul deixava os chips iguais. */
+  color: #d4d4d4;
+  background: var(--border-subtle);
+  border: 1px solid var(--acrylic-border);
+}
+
+/* Cores por token dos chips inline — a mesma paleta Dark+ do editor e dos
+   blocos realçados pelo Shiki, para o chat inteiro falar uma língua só. */
+.agent-message-markdown code .tok-control {
+  color: #c586c0;
+}
+
+.agent-message-markdown code .tok-keyword {
+  color: #569cd6;
+}
+
+.agent-message-markdown code .tok-type {
+  color: #4ec9b0;
+}
+
+.agent-message-markdown code .tok-fn {
+  color: #dcdcaa;
+}
+
+.agent-message-markdown code .tok-var {
+  color: #9cdcfe;
+}
+
+.agent-message-markdown code .tok-num {
+  color: #b5cea8;
+}
+
+.agent-message-markdown code .tok-str {
+  color: #ce9178;
+}
+
+/* Referência de arquivo clicável: aparência de link, mas abre no editor. */
+.agent-file-link {
+  appearance: none;
+  padding: 0;
+  color: var(--accent);
+  background: none;
+  border: none;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.agent-file-link:hover {
+  filter: brightness(1.12);
+}
+
+/* Variante monospace: um `code` inline que é caminho de arquivo. */
+.agent-file-link.code {
+  font-family: var(--font-mono);
+  font-size: var(--font-caption);
+  padding: 1px 5px;
+  border-radius: var(--radius-control);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  text-decoration: none;
+}
+
+.agent-file-link.code:hover {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.agent-message-markdown pre {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border-radius: var(--radius-control);
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+}
+
+.agent-message-markdown pre code {
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: var(--font-caption);
+  line-height: 18px;
+}
+
+/* Bloco cercado com realce (Shiki/Dark+) — mesma moldura acrílica do bloco
+   plano; o fundo/tema do Shiki é neutralizado para a superfície do app (os
+   estilos do tema vêm inline, daí os !important). */
+.agent-code-block {
+  margin: 0 0 10px;
+  border-radius: var(--radius-control);
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  overflow: hidden;
+}
+
+.agent-code-block pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  background: transparent !important;
+  border: 0;
+}
+
+.agent-code-block code {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--font-caption);
+  line-height: 18px;
+  white-space: pre;
+}
+
+.agent-message-markdown blockquote {
+  margin: 0 0 10px;
+  padding-left: 12px;
+  border-left: 3px solid var(--acrylic-border);
+  color: var(--text-muted);
+}
+
+/* Tabelas: o wrapper rola horizontalmente quando a tabela não cabe na
+   sidebar, em vez de espremer as colunas até quebrar palavras no meio. */
+.agent-table-wrap {
+  margin: 0 0 10px;
+  overflow-x: auto;
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-control);
+}
+
+.agent-message-markdown table {
+  margin: 0;
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-base);
+}
+
+.agent-message-markdown th,
+.agent-message-markdown td {
+  padding: 6px 10px;
+  border: 1px solid var(--acrylic-border);
+  text-align: left;
+  vertical-align: top;
+  /* Anula o `overflow-wrap: anywhere` herdado do chat: dentro de células o
+     texto quebra apenas em espaços ("Método" nunca vira "Méto do"); se a
+     coluna não couber, o wrapper rola. */
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+/* Bordas externas ficam por conta do wrapper arredondado. */
+.agent-message-markdown th:first-child,
+.agent-message-markdown td:first-child {
+  border-left: 0;
+}
+
+.agent-message-markdown th:last-child,
+.agent-message-markdown td:last-child {
+  border-right: 0;
+}
+
+.agent-message-markdown thead th {
+  border-top: 0;
+}
+
+.agent-message-markdown tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.agent-message-markdown th {
+  background: var(--acrylic-control);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Chips de código (`LogIn`, `AddDays(-1)`…) nunca partem no meio da célula. */
+.agent-message-markdown th code,
+.agent-message-markdown td code {
+  white-space: nowrap;
+}
+
+/* Zebra sutil para leitura de linhas longas. */
+.agent-message-markdown tbody tr:nth-child(even) td {
+  background: var(--stroke);
+}
+
+.agent-message-markdown hr {
+  margin: 12px 0;
+  border: none;
+  border-top: 1px solid var(--acrylic-border);
+}
+
+/* Raciocínio em streaming (thinking do Claude / resumo do Codex): bloco
+   discreto que mostra a cauda do pensamento enquanto o modelo trabalha. */
+.agent-chat-thought {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: var(--font-caption);
+}
+
+.agent-chat-thought-label {
+  margin-bottom: 2px;
+  font-size: var(--font-caption-sm);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+/* column-reverse ancora o único filho no fundo do clipe: quando o texto passa
+   da altura máxima, o excesso transborda por CIMA e é cortado — a cauda (o
+   trecho mais recente do raciocínio) permanece visível sem JS de scroll. */
+.agent-chat-thought-clip {
+  display: flex;
+  flex-direction: column-reverse;
+  max-height: 108px;
+  overflow: hidden;
+}
+
+.agent-chat-thought-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-style: italic;
+  line-height: 1.5;
+}

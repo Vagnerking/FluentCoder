@@ -12,9 +12,9 @@
  * side", "show `path` history", …); the App decides what each command does.
  *
  * Disabled items follow the épico's rule — they appear dimmed with an "em breve"
- * tooltip and never fire, because the base feature they need (split editor /
- * diff-compare view / timeline) does not exist yet. The structure is in place so
- * enabling them later is a one-line change (`enabled: true` + wire the command).
+ * tooltip and never fire when the base feature they need is still missing.
+ * File History and Open Changes are now real; broader arbitrary compare/timeline
+ * actions remain modeled for the next increment.
  */
 import type { ContextMenuItem } from "../types";
 
@@ -37,6 +37,8 @@ export interface AdvancedFileMenuHandlers {
   onOpenToSide?: (path: string) => void;
   /** ISSUE-70 — show the "Open With…" mode selector anchored at `x,y`. */
   onOpenWith?: (path: string, x: number, y: number) => void;
+  /** Open the working-tree diff for `path`, like VS Code's Open Changes. */
+  onOpenChanges?: (path: string) => void;
   /** ISSUE-71 — show this file's git history in the Source Control panel. */
   onFileHistory?: (path: string) => void;
   /** ISSUE-71 — memorize `path` for a future "Compare with Selected". */
@@ -96,14 +98,20 @@ export function buildAdvancedFileMenuItems(
   };
 
   // ----- ISSUE-71: Git actions -----
-  // File History works (git_log_file + GitPanel). The rest need a diff/compare
-  // view or a timeline, so they stay disabled with the "em breve" tooltip.
+  // File History and Open Changes work. Arbitrary compare/timeline are still
+  // disabled until we have a full compare picker/timeline surface.
   const openChanges: ContextMenuItem = {
     id: "explorer.git.openChanges",
     label: "Abrir Alterações",
     icon: "openChanges",
-    enabled: false,
-    title: SOON + " (visualização de diff)",
+    enabled: isGitRepo && Boolean(handlers.onOpenChanges),
+    title: isGitRepo
+      ? undefined
+      : "Disponível apenas em um repositório Git.",
+    run:
+      isGitRepo && handlers.onOpenChanges
+        ? () => handlers.onOpenChanges!(path)
+        : undefined,
   };
 
   const selectForCompare: ContextMenuItem = {

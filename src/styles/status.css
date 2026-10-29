@@ -1,0 +1,6 @@
+@import './status-base.css';
+@import './status-remote.css';
+@import './status-workspace.css';
+@import './status-blame.css';
+@import './status-git.css';
+@import './status-lsp.css';

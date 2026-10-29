@@ -36,10 +36,15 @@ pub struct ShadowSpec<'a> {
 pub fn render_shadow_csproj(spec: &ShadowSpec) -> String {
     let mut s = String::new();
     s.push_str("<!-- AUTO-GENERATED shadow project for Razor projection (ADR 0002).\n");
-    s.push_str("     Loaded in a Roslyn workspace alongside the user project; never dotnet-built. -->\n");
+    s.push_str(
+        "     Loaded in a Roslyn workspace alongside the user project; never dotnet-built. -->\n",
+    );
     s.push_str("<Project Sdk=\"Microsoft.NET.Sdk\">\n\n");
     s.push_str("  <PropertyGroup>\n");
-    s.push_str(&format!("    <TargetFramework>{}</TargetFramework>\n", esc(spec.target_framework)));
+    s.push_str(&format!(
+        "    <TargetFramework>{}</TargetFramework>\n",
+        esc(spec.target_framework)
+    ));
     s.push_str("    <Nullable>enable</Nullable>\n");
     s.push_str("    <ImplicitUsings>enable</ImplicitUsings>\n");
     s.push_str("    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>\n");
@@ -97,7 +102,10 @@ pub fn render_shadow_csproj(spec: &ShadowSpec) -> String {
         suppress_razor
     ));
     for fr in spec.framework_references {
-        s.push_str(&format!("    <FrameworkReference Include=\"{}\" />\n", esc(fr)));
+        s.push_str(&format!(
+            "    <FrameworkReference Include=\"{}\" />\n",
+            esc(fr)
+        ));
     }
     s.push_str("  </ItemGroup>\n\n");
     s.push_str("</Project>\n");
@@ -209,7 +217,10 @@ mod tests {
 
     #[test]
     fn no_root_namespace_when_absent() {
-        let s = ShadowSpec { root_namespace: None, ..spec() };
+        let s = ShadowSpec {
+            root_namespace: None,
+            ..spec()
+        };
         let xml = render_shadow_csproj(&s);
         assert!(!xml.contains("<RootNamespace>"));
     }

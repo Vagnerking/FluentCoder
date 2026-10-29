@@ -1,0 +1,287 @@
+/* Wrapper holds the scrollable row plus the edge fades/arrows for "more tabs". */
+.tab-bar-wrap {
+  position: relative;
+  min-width: 0;
+  container: tabwrap / inline-size;
+}
+
+/* Faixa de ~1 aba (grupos divididos): as setas cobririam o ícone e o fechar
+   da própria aba ativa — some; roda, fades e o tablist (←/→) seguem. */
+@container tabwrap (max-width: 180px) {
+  .tab-scroll { display: none; }
+}
+
+/* Soft gradient at each edge, shown only when tabs are hidden that way — a
+   cue that the row scrolls (the scrollbar itself is hidden). */
+.tab-fade {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 48px;
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--duration-medium) var(--ease-standard);
+}
+
+.tab-fade.show { opacity: 1; }
+
+.tab-fade.left {
+  left: 0;
+  background: linear-gradient(to right, var(--tabbar-bg) 35%, transparent);
+}
+
+.tab-fade.right {
+  right: 0;
+  background: linear-gradient(to left, var(--tabbar-bg) 35%, transparent);
+}
+
+/* Scroll arrows riding on the fades. */
+.tab-scroll {
+  position: absolute;
+  z-index: 3;
+  top: 50%;
+  width: 20px;
+  height: 20px;
+  margin-top: -10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  animation: fadeIn var(--duration-medium) var(--ease-standard);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.tab-scroll.left { left: var(--space-xxs); }
+
+.tab-scroll.right { right: var(--space-xxs); }
+
+.tab-scroll:hover { background: var(--fill-subtle-hover); color: var(--text); }
+
+.tab-scroll:active { background: var(--fill-subtle-active); }
+
+.tab-bar {
+  position: relative; /* offsetParent for the tabs (active-tab reveal) */
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  height: 36px;
+  min-height: 36px;
+  /* Tabs stay on one horizontal row and slide on overflow; the scrollbar is
+     hidden (it used to overlap the tabs) — wheel / arrows scroll the row. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none; /* Firefox */
+  padding: 0 var(--space-xs);
+  gap: var(--space-xxs);
+}
+
+.tab-bar::-webkit-scrollbar { height: 0; width: 0; display: none; }
+
+/* Fluent TabList-style tab: a 28px rounded chip; the selected one is lifted
+   (control fill + hairline) and carries a 2px accent underline. */
+.tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 var(--space-xs) 0 10px;
+  height: 28px;
+  /* Keep their width and overflow the row instead of being squeezed thinner. */
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+  font-size: var(--font-base);
+  color: var(--text-muted);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.tab:hover {
+  background: var(--fill-subtle-hover);
+  color: var(--text-secondary);
+}
+
+.tab:active {
+  background: var(--fill-subtle-active);
+}
+
+.tab.readonly .codicon-lock {
+  color: var(--text-muted);
+  opacity: 0.82;
+}
+
+.tab.active {
+  background: var(--acrylic-control);
+  border-color: var(--acrylic-border);
+  box-shadow: var(--shadow-rest);
+  color: var(--text);
+}
+
+.tab.active::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: var(--radius-xs);
+  background: var(--accent);
+  animation: tabIndicatorIn var(--duration-medium) var(--ease-decelerate);
+}
+
+@keyframes tabIndicatorIn {
+  from { transform: scaleX(0.3); opacity: 0; }
+  to { transform: scaleX(1); opacity: 1; }
+}
+
+/* Inactive split groups: the selected tab keeps its lift but drops the accent,
+   so only the focused group reads as "active". */
+.editor-split .editor-group:not(.active) .tab.active::after {
+  background: var(--text-disabled);
+}
+
+/* Drag-to-reorder: dim the tab being dragged and draw a vertical insertion bar
+   in the GAP next to the drop target (left or right edge), like VS Code — not a
+   border inside the tab chip. */
+.tab.dragging { opacity: 0.4; cursor: grabbing; }
+
+.tab.drag-over-left::before,
+.tab.drag-over-right::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  box-shadow: 0 0 5px var(--accent);
+  pointer-events: none;
+}
+
+/* Sit in the middle of the 2px gap between tabs. */
+.tab.drag-over-left::before { left: -3px; }
+
+.tab.drag-over-right::before { right: -3px; }
+
+/* Insertion bar after the last tab (dropping onto the empty strip area). */
+.tab-drop-end {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 2px;
+  margin: 6px 0;
+  border-radius: 1px;
+  background: var(--accent);
+  box-shadow: 0 0 5px var(--accent);
+  pointer-events: none;
+}
+
+/* Close button: 20px glyph box with a 24px hit area (::after). Hidden on
+   inactive tabs until hover/focus (space reserved so widths never jump);
+   always shown on the selected tab. A dirty tab shows the dot instead, and
+   swaps to the close glyph on hover. */
+.tab-close {
+  position: relative;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.tab-close::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+}
+
+.tab.active .tab-close,
+.tab:hover .tab-close,
+.tab:focus-visible .tab-close,
+.tab-close.dirty {
+  opacity: 1;
+}
+
+.tab-close:hover {
+  background: var(--fill-subtle-hover);
+  color: var(--text);
+}
+
+.tab-close:active {
+  background: var(--fill-subtle-active);
+}
+
+.tab-icon { flex-shrink: 0; }
+
+.tab-dirty-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+}
+
+.tab.active .tab-dirty-dot { background: var(--text); }
+
+.tab-close.dirty .tab-close-glyph { display: none; }
+
+.tab:hover .tab-close.dirty .tab-dirty-dot { display: none; }
+
+.tab:hover .tab-close.dirty .tab-close-glyph { display: inline-block; }
+
+/* Trailing gutter: scrolled fully right, the last tab clears the right scroll
+   arrow and fade instead of sitting under them. */
+.tab-bar::after {
+  content: "";
+  display: block;
+  flex-shrink: 0;
+  width: var(--space-xl);
+  min-width: var(--space-xl);
+  height: 1px;
+}
+
+/* Same-name tabs: dim parent-folder suffix (`index.ts  …/git`). */
+.tab-description {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-disabled);
+  font-size: var(--font-caption);
+}
+
+.tab.active .tab-description { color: var(--text-muted); }
+
+/* Preview tab: italic name until it's kept open (edit, double-click, pin). */
+.tab.preview .tab-name { font-style: italic; }
+
+/* Pinned tab: the close slot shows the pin (click = unpin); always visible. */
+.tab.pinned .tab-close { opacity: 1; }
+
+.tab.pinned .tab-close-glyph { color: var(--text-muted); }
+
+.tab.pinned .tab-close:hover .tab-close-glyph { color: var(--text); }

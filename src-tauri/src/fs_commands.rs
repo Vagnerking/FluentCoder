@@ -2,6 +2,16 @@ use serde::Serialize;
 use std::fs::{self, OpenOptions};
 use std::path::{Component, Path, PathBuf};
 
+/// Runs blocking filesystem work on Tauri's blocking pool. In Tauri 2 a sync
+/// `#[tauri::command] fn` runs on the MAIN thread, so every `read_dir`/`read_file`
+/// used to freeze the UI (and the GTK event loop) for the whole I/O. All the
+/// commands below are `async` wrappers over a `*_blocking` implementation.
+async fn off_main<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| format!("tarefa de arquivo falhou: {e}"))?
+}
+
 /// A single entry (file or directory) inside a folder, as shown in the explorer.
 #[derive(Serialize)]
 pub struct DirEntry {
@@ -33,36 +43,14 @@ fn validate_child_path(workspace_root: &str, parent: &str, name: &str) -> Result
     {
         return Err("O nome contém caracteres inválidos.".into());
     }
+    // Device names (`CON`, `COM1`…) are unusable only on Windows; on Linux and
+    // macOS they are ordinary (if non-portable) names, so they are allowed.
     let stem = name
         .split('.')
         .next()
         .unwrap_or_default()
         .to_ascii_uppercase();
-    if matches!(
-        stem.as_str(),
-        "CON"
-            | "PRN"
-            | "AUX"
-            | "NUL"
-            | "COM1"
-            | "COM2"
-            | "COM3"
-            | "COM4"
-            | "COM5"
-            | "COM6"
-            | "COM7"
-            | "COM8"
-            | "COM9"
-            | "LPT1"
-            | "LPT2"
-            | "LPT3"
-            | "LPT4"
-            | "LPT5"
-            | "LPT6"
-            | "LPT7"
-            | "LPT8"
-            | "LPT9"
-    ) {
+    if cfg!(windows) && is_windows_reserved_stem(&stem) {
         return Err("Esse nome é reservado pelo Windows.".into());
     }
     if Path::new(name)
@@ -83,6 +71,15 @@ fn validate_child_path(workspace_root: &str, parent: &str, name: &str) -> Result
         return Err("O destino selecionado não é uma pasta.".into());
     }
     Ok(parent.join(name))
+}
+
+/// Windows device names that can't be used as a file or folder stem.
+fn is_windows_reserved_stem(stem: &str) -> bool {
+    const RESERVED: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    RESERVED.contains(&stem)
 }
 
 /// Canonicalizes `path` and confirms it stays under `workspace_root`.
@@ -256,7 +253,12 @@ fn workspace_relative(entry: &Path, workspace_root: Option<&str>) -> Option<Stri
 /// patterns); the heavy walks (search, Quick Open) use the separate
 /// `walk::SKIP_DIRS` list and are unaffected.
 #[tauri::command]
-pub fn read_dir(
+pub async fn read_dir(path: String, exclude: Option<Vec<String>>, workspace_root: Option<String>) -> Result<Vec<DirEntry>, String> {
+    off_main(move || read_dir_blocking(path, exclude, workspace_root)).await
+}
+
+/// Blocking body of [`read_dir`].
+pub(crate) fn read_dir_blocking(
     path: String,
     exclude: Option<Vec<String>>,
     workspace_root: Option<String>,
@@ -313,16 +315,199 @@ pub fn read_dir(
 /// editor can show them in the status bar and round-trip them on save. This is
 /// why a UTF-16 or BOM-prefixed file (e.g. Roslyn's decompiled metadata) opens
 /// as clean text instead of showing a stray `◇`/`?` at the start.
+///
+/// Files above `HUGE_FILE_BYTES` are refused unless `allow_large` (the front
+/// end asks first and then opens them read-only in large-file mode); nothing
+/// above `MAX_TEXT_BYTES` is ever decoded (the IPC string would exhaust the
+/// WebView). Runs off the main thread.
 #[tauri::command]
-pub fn read_file(path: String) -> Result<crate::text_io::DecodedFile, String> {
-    let bytes = fs::read(&path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
-    Ok(crate::text_io::decode(&bytes))
+pub async fn read_file(path: String, allow_large: Option<bool>) -> Result<crate::text_io::DecodedFile, String> {
+    off_main(move || read_file_blocking(&path, allow_large.unwrap_or(false))).await
+}
+
+/// Above this the editor asks before opening (VS Code's
+/// `files.maxMemoryForLargeFilesMB` prompt) and opens read-only.
+pub(crate) const HUGE_FILE_BYTES: u64 = 50 * 1024 * 1024;
+/// Hard ceiling for decoding a file as text at all.
+pub(crate) const MAX_TEXT_BYTES: u64 = 512 * 1024 * 1024;
+/// How many leading bytes the binary sniff inspects.
+const SNIFF_BYTES: usize = 8 * 1024;
+
+fn check_text_size(size: u64, allow_large: bool) -> Result<(), String> {
+    if size > MAX_TEXT_BYTES {
+        return Err(format!(
+            "Arquivo grande demais para abrir como texto ({} MB).",
+            size / 1_048_576
+        ));
+    }
+    if size > HUGE_FILE_BYTES && !allow_large {
+        return Err(format!("FILE_TOO_LARGE:{size}"));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn unix_file_identity(meta: &fs::Metadata) -> String {
+    use std::os::unix::fs::MetadataExt;
+    format!("unix:{}:{}", meta.dev(), meta.ino())
+}
+
+#[cfg(unix)]
+fn read_open_file(
+    file: fs::File,
+    path: &str,
+    allow_large: bool,
+) -> Result<crate::text_io::DecodedFile, String> {
+    use std::io::Read;
+    let meta = file
+        .metadata()
+        .map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+    if !meta.is_file() {
+        return Err("O item não é um arquivo regular.".into());
+    }
+    check_text_size(meta.len(), allow_large)?;
+    let limit = if allow_large {
+        MAX_TEXT_BYTES
+    } else {
+        HUGE_FILE_BYTES
+    };
+    let mut bytes = Vec::new();
+    file.take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+    check_text_size(bytes.len() as u64, allow_large)?;
+    let mut decoded = crate::text_io::decode(&bytes);
+    decoded.local_identity = Some(unix_file_identity(&meta));
+    Ok(decoded)
+}
+
+pub(crate) fn read_file_blocking(
+    path: &str,
+    allow_large: bool,
+) -> Result<crate::text_io::DecodedFile, String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // A FIFO swapped into the path must not block the regular-file check.
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(path)
+            .map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+        read_open_file(file, path, allow_large)
+    }
+    #[cfg(not(unix))]
+    {
+        let meta = fs::metadata(path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+        check_text_size(meta.len(), allow_large)?;
+        let bytes = fs::read(path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+        Ok(crate::text_io::decode(&bytes))
+    }
+}
+
+/// Locate an already-open local file without assuming case behavior from its OS.
+#[derive(Serialize, Debug)]
+pub struct FileIdentityMatch {
+    pub identity: Option<String>,
+    pub index: Option<usize>,
+}
+
+fn find_same_file_blocking(path: &str, candidates: &[String]) -> Result<FileIdentityMatch, String> {
+    let target =
+        fs::metadata(path).map_err(|e| format!("Não foi possível identificar o arquivo: {e}"))?;
+    if !target.is_file() {
+        return Ok(FileIdentityMatch {
+            identity: None,
+            index: None,
+        });
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let index = candidates.iter().position(|candidate| {
+            fs::metadata(candidate).is_ok_and(|meta| {
+                meta.is_file() && meta.dev() == target.dev() && meta.ino() == target.ino()
+            })
+        });
+        Ok(FileIdentityMatch {
+            identity: Some(unix_file_identity(&target)),
+            index,
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let target = fs::canonicalize(path).map_err(|e| e.to_string())?;
+        let index = candidates.iter().position(|candidate| {
+            fs::canonicalize(candidate).is_ok_and(|candidate| candidate == target)
+        });
+        Ok(FileIdentityMatch {
+            identity: Some(format!("path:{}", target.to_string_lossy())),
+            index,
+        })
+    }
+}
+
+#[tauri::command]
+pub async fn find_same_file(
+    path: String,
+    candidates: Vec<String>,
+) -> Result<FileIdentityMatch, String> {
+    off_main(move || find_same_file_blocking(&path, &candidates)).await
+}
+
+/// What the editor needs to decide HOW to open a file before reading it.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct FileProbe {
+    pub size: u64,
+    /// NUL byte in the first 8 KB (and no UTF-16 BOM): almost surely binary.
+    pub binary: bool,
+}
+
+/// Binary sniff like git/VS Code: a NUL byte in the first block, unless the
+/// file starts with a UTF-16 BOM (UTF-16 text is full of NULs).
+pub(crate) fn looks_binary(head: &[u8]) -> bool {
+    if head.starts_with(&[0xFF, 0xFE]) || head.starts_with(&[0xFE, 0xFF]) {
+        return false;
+    }
+    head.contains(&0)
+}
+
+pub(crate) fn probe_file_blocking(path: &str) -> Result<FileProbe, String> {
+    use std::io::Read;
+    let meta = fs::metadata(path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+    if meta.is_dir() {
+        return Err(format!("'{path}' é uma pasta."));
+    }
+    let mut head = vec![0u8; SNIFF_BYTES];
+    let mut file = fs::File::open(path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
+    let mut filled = 0;
+    while filled < head.len() {
+        match file.read(&mut head[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(format!("Falha ao ler '{path}': {e}")),
+        }
+    }
+    Ok(FileProbe { size: meta.len(), binary: looks_binary(&head[..filled]) })
+}
+
+/// Size + binary sniff (reads at most 8 KB), off the main thread.
+#[tauri::command]
+pub async fn probe_file(path: String) -> Result<FileProbe, String> {
+    off_main(move || probe_file_blocking(&path)).await
 }
 
 /// Re-reads a file forcing a specific encoding ("Reopen with Encoding"). The EOL
 /// is still auto-detected from the freshly decoded text.
 #[tauri::command]
-pub fn read_file_with_encoding(
+pub async fn read_file_with_encoding(path: String, encoding: String) -> Result<crate::text_io::DecodedFile, String> {
+    off_main(move || read_file_with_encoding_blocking(path, encoding)).await
+}
+
+/// Blocking body of [`read_file_with_encoding`].
+pub(crate) fn read_file_with_encoding_blocking(
     path: String,
     encoding: String,
 ) -> Result<crate::text_io::DecodedFile, String> {
@@ -338,10 +523,14 @@ pub fn read_file_with_encoding(
 /// back to `application/octet-stream` (the browser still renders common images).
 /// Upper bound for inlining a file as a base64 `data:` URL. Beyond this, the
 /// memory + string overhead would freeze the WebView, so we refuse instead.
-pub(crate) const MAX_PREVIEW_BYTES: u64 = 256 * 1024 * 1024;
+pub(crate) const MAX_PREVIEW_BYTES: u64 = 64 * 1024 * 1024;
 
 #[tauri::command]
-pub fn read_file_base64(path: String) -> Result<String, String> {
+pub async fn read_file_base64(path: String) -> Result<String, String> {
+    off_main(move || read_file_base64_blocking(path)).await
+}
+
+pub(crate) fn read_file_base64_blocking(path: String) -> Result<String, String> {
     let meta = fs::metadata(&path).map_err(|e| format!("Falha ao abrir '{path}': {e}"))?;
     if meta.len() > MAX_PREVIEW_BYTES {
         return Err(format!(
@@ -431,7 +620,12 @@ fn base64_encode(input: &[u8]) -> String {
 /// BOM and line ending so an edit never silently rewrites those — matching
 /// VS Code's "preserve" default. Omitting them falls back to UTF-8 + LF.
 #[tauri::command]
-pub fn write_file(
+pub async fn write_file(path: String, contents: String, encoding: Option<String>, eol: Option<crate::text_io::Eol>, bom: Option<bool>) -> Result<(), String> {
+    off_main(move || write_file_blocking(path, contents, encoding, eol, bom)).await
+}
+
+/// Blocking body of [`write_file`].
+pub(crate) fn write_file_blocking(
     path: String,
     contents: String,
     encoding: Option<String>,
@@ -454,7 +648,12 @@ pub fn write_file(
 
 /// Creates an empty file without ever overwriting an existing path.
 #[tauri::command]
-pub fn create_file(
+pub async fn create_file(workspace_root: String, parent: String, name: String) -> Result<DirEntry, String> {
+    off_main(move || create_file_blocking(workspace_root, parent, name)).await
+}
+
+/// Blocking body of [`create_file`].
+pub(crate) fn create_file_blocking(
     workspace_root: String,
     parent: String,
     name: String,
@@ -470,7 +669,12 @@ pub fn create_file(
 
 /// Creates exactly one folder level and rejects collisions.
 #[tauri::command]
-pub fn create_folder(
+pub async fn create_folder(workspace_root: String, parent: String, name: String) -> Result<DirEntry, String> {
+    off_main(move || create_folder_blocking(workspace_root, parent, name)).await
+}
+
+/// Blocking body of [`create_folder`].
+pub(crate) fn create_folder_blocking(
     workspace_root: String,
     parent: String,
     name: String,
@@ -483,7 +687,12 @@ pub fn create_folder(
 /// Renames `path` to `new_name` within the same parent folder. Rejects a
 /// collision (never overwrites) and revalidates both ends against the workspace.
 #[tauri::command]
-pub fn rename_path(
+pub async fn rename_path(workspace_root: String, path: String, new_name: String) -> Result<DirEntry, String> {
+    off_main(move || rename_path_blocking(workspace_root, path, new_name)).await
+}
+
+/// Blocking body of [`rename_path`].
+pub(crate) fn rename_path_blocking(
     workspace_root: String,
     path: String,
     new_name: String,
@@ -508,15 +717,25 @@ pub fn rename_path(
 
 /// Sends `path` to the OS recycle bin (recoverable). Never deletes permanently.
 #[tauri::command]
-pub fn delete_to_trash(workspace_root: String, path: String) -> Result<(), String> {
+pub async fn delete_to_trash(workspace_root: String, path: String) -> Result<(), String> {
+    off_main(move || delete_to_trash_blocking(workspace_root, path)).await
+}
+
+/// Blocking body of [`delete_to_trash`].
+pub(crate) fn delete_to_trash_blocking(workspace_root: String, path: String) -> Result<(), String> {
     let target = validate_existing_path(&workspace_root, &path)?;
-    trash::delete(&target).map_err(|e| format!("Não foi possível mover para a Lixeira: {e}"))
+    crate::platform::move_to_trash(&target)
 }
 
 /// Copies `src` (file or directory, recursive) into `dest_parent`, resolving any
 /// name collision without overwriting. Revalidates both ends in the workspace.
 #[tauri::command]
-pub fn copy_path(
+pub async fn copy_path(workspace_root: String, src: String, dest_parent: String) -> Result<DirEntry, String> {
+    off_main(move || copy_path_blocking(workspace_root, src, dest_parent)).await
+}
+
+/// Blocking body of [`copy_path`].
+pub(crate) fn copy_path_blocking(
     workspace_root: String,
     src: String,
     dest_parent: String,
@@ -539,7 +758,12 @@ pub fn copy_path(
 /// Moves `src` (file or directory, recursive) into `dest_parent`, resolving any
 /// name collision without overwriting. Falls back to copy+remove across volumes.
 #[tauri::command]
-pub fn move_path(
+pub async fn move_path(workspace_root: String, src: String, dest_parent: String) -> Result<DirEntry, String> {
+    off_main(move || move_path_blocking(workspace_root, src, dest_parent)).await
+}
+
+/// Blocking body of [`move_path`].
+pub(crate) fn move_path_blocking(
     workspace_root: String,
     src: String,
     dest_parent: String,
@@ -569,38 +793,133 @@ pub fn move_path(
     entry_for(dest, is_dir)
 }
 
-/// Opens the OS file manager with `path` selected. On Windows this runs
-/// `explorer /select,<path>`; `explorer.exe` returns a non-zero exit code even
-/// on success, so the exit status is intentionally ignored.
+/// Opens the OS file manager with `path` selected — Explorer (`/select,`) on
+/// Windows, Finder (`open -R`) on macOS and, on Linux, the desktop's file
+/// manager via `org.freedesktop.FileManager1.ShowItems` (falling back to
+/// `xdg-open` on the parent folder). See `platform::reveal_in_file_manager`.
+///
+/// `async` + `spawn_blocking`: the D-Bus call waits for a reply, which must
+/// never block the main thread.
 #[tauri::command]
-pub fn reveal_in_explorer(workspace_root: String, path: String) -> Result<(), String> {
-    let target = validate_existing_path(&workspace_root, &path)?;
-    let target_str = target.to_string_lossy().to_string();
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .arg("/select,")
-            .arg(&target_str)
-            .spawn()
-            .map_err(|e| format!("Não foi possível abrir o Explorer: {e}"))?;
-        Ok(())
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = target_str;
-        Err("Revelar no Explorer só é suportado no Windows.".into())
-    }
+pub async fn reveal_in_explorer(workspace_root: String, path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let target = validate_existing_path(&workspace_root, &path)?;
+        crate::platform::reveal_in_file_manager(&target)
+    })
+    .await
+    .map_err(|e| format!("reveal join error: {e}"))?
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        build_exclude_matcher, copy_path, create_file, create_folder, move_path, rename_path,
-        workspace_relative,
+        build_exclude_matcher, copy_path_blocking as copy_path, create_file_blocking as create_file,
+        create_folder_blocking as create_folder, looks_binary, move_path_blocking as move_path,
+        probe_file_blocking, read_file_blocking, rename_path_blocking as rename_path, workspace_relative,
+        HUGE_FILE_BYTES,
     };
     use std::fs;
     use std::path::Path;
-    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[cfg(unix)]
+    #[test]
+    fn decoded_identity_follows_the_open_descriptor_when_the_path_is_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file.txt");
+        fs::write(&path, "original").unwrap();
+        let file = fs::File::open(&path).unwrap();
+        let identity = super::unix_file_identity(&file.metadata().unwrap());
+        fs::rename(&path, dir.path().join("original.txt")).unwrap();
+        fs::write(&path, "replacement").unwrap();
+        let original = super::read_open_file(file, path.to_str().unwrap(), false).unwrap();
+        let replacement = super::read_file_blocking(path.to_str().unwrap(), false).unwrap();
+        assert_eq!(original.content, "original");
+        assert_eq!(original.local_identity.as_deref(), Some(identity.as_str()));
+        assert_eq!(replacement.content, "replacement");
+        assert_ne!(replacement.local_identity, original.local_identity);
+        dir.close().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reading_a_fifo_is_rejected_without_waiting_for_a_writer() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pipe");
+        let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: name owns a valid NUL-terminated path for this private fixture.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            tx.send(super::read_file_blocking(path.to_str().unwrap(), false)).unwrap();
+        });
+        assert!(rx.recv_timeout(std::time::Duration::from_secs(2)).expect("FIFO read must not block").is_err());
+        worker.join().unwrap();
+        dir.close().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_identity_recognizes_aliases_without_merging_distinct_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("MixedName.txt");
+        let alias = dir.path().join("hard-link.txt");
+        let other = dir.path().join("other.txt");
+        fs::write(&first, "first").unwrap();
+        fs::hard_link(&first, &alias).unwrap();
+        fs::write(&other, "other").unwrap();
+        let candidates = vec![first.to_string_lossy().into_owned()];
+        let first_id = super::find_same_file_blocking(first.to_str().unwrap(), &[])
+            .unwrap()
+            .identity;
+        assert!(first_id.is_some());
+        assert_eq!(
+            super::find_same_file_blocking(alias.to_str().unwrap(), &[])
+                .unwrap()
+                .identity,
+            first_id
+        );
+        assert_ne!(
+            super::find_same_file_blocking(other.to_str().unwrap(), &[])
+                .unwrap()
+                .identity,
+            first_id
+        );
+
+        assert_eq!(
+            super::find_same_file_blocking(alias.to_str().unwrap(), &candidates)
+                .unwrap()
+                .index,
+            Some(0)
+        );
+        assert_eq!(
+            super::find_same_file_blocking(other.to_str().unwrap(), &candidates)
+                .unwrap()
+                .index,
+            None
+        );
+        let lower = dir.path().join("mixedname.txt");
+        if lower.exists() {
+            // Case-insensitive volume: the differently cased path is an alias.
+            assert_eq!(
+                super::find_same_file_blocking(lower.to_str().unwrap(), &candidates)
+                    .unwrap()
+                    .index,
+                Some(0)
+            );
+        } else {
+            // Case-sensitive volume: both names can back independent buffers.
+            fs::write(&lower, "distinct").unwrap();
+            assert_eq!(
+                super::find_same_file_blocking(lower.to_str().unwrap(), &candidates)
+                    .unwrap()
+                    .index,
+                None
+            );
+            assert_eq!(fs::read(&first).unwrap(), b"first");
+        }
+        dir.close().unwrap();
+    }
 
     #[test]
     fn exclude_matcher_hides_build_dirs_by_name() {
@@ -626,7 +945,10 @@ mod tests {
         // for directories so the dir itself is hidden too.
         let m = build_exclude_matcher(&["**/obj/**".to_string()]).expect("matcher");
         assert!(!m.is_match("obj"), "bare name doesn't match a subtree glob");
-        assert!(m.is_match("obj/"), "but `name/` does (how read_dir tests dirs)");
+        assert!(
+            m.is_match("obj/"),
+            "but `name/` does (how read_dir tests dirs)"
+        );
         assert!(m.is_match("obj/Debug"));
     }
 
@@ -641,7 +963,11 @@ mod tests {
 
     #[test]
     fn workspace_relative_computes_forward_slashed_relative_path() {
-        let root = if cfg!(windows) { r"C:\src\App" } else { "/src/App" };
+        let root = if cfg!(windows) {
+            r"C:\src\App"
+        } else {
+            "/src/App"
+        };
         let entry = if cfg!(windows) {
             r"C:\src\App\src\generated"
         } else {
@@ -656,10 +982,18 @@ mod tests {
         // The root itself is not "relative to itself".
         assert_eq!(workspace_relative(Path::new(root), Some(root)), None);
         // An entry outside the root → None.
-        let outside = if cfg!(windows) { r"C:\other\x" } else { "/other/x" };
+        let outside = if cfg!(windows) {
+            r"C:\other\x"
+        } else {
+            "/other/x"
+        };
         assert_eq!(workspace_relative(Path::new(outside), Some(root)), None);
         // A SIBLING sharing the root's prefix is NOT under it (directory boundary).
-        let sibling = if cfg!(windows) { r"C:\src\AppOther\x" } else { "/src/AppOther/x" };
+        let sibling = if cfg!(windows) {
+            r"C:\src\AppOther\x"
+        } else {
+            "/src/AppOther/x"
+        };
         assert_eq!(
             workspace_relative(Path::new(sibling), Some(root)),
             None,
@@ -683,53 +1017,109 @@ mod tests {
         assert!(!m.is_match("docs/generated"));
     }
 
-    fn workspace() -> std::path::PathBuf {
-        let id = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
+    fn workspace() -> tempfile::TempDir {
+        // Clock precision does not guarantee unique names in parallel tests.
+        // Own the directory so failures also clean up only this fixture.
+        tempfile::Builder::new()
+            .prefix("fluent-coder-explorer-")
+            .tempdir()
             .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("fluent-coder-explorer-{id}"));
-        fs::create_dir(&root).unwrap();
-        root
     }
 
     #[test]
     fn creates_file_without_overwriting() {
-        let root = workspace();
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
         let root_text = root.to_string_lossy().to_string();
         let created = create_file(root_text.clone(), root_text.clone(), "novo.txt".into()).unwrap();
         assert_eq!(created.name, "novo.txt");
         assert!(!created.is_dir);
         assert!(create_file(root_text.clone(), root_text, "novo.txt".into()).is_err());
-        fs::remove_dir_all(root).unwrap();
+        workspace_dir.close().unwrap();
     }
 
     #[test]
     fn creates_single_folder_and_rejects_paths() {
-        let root = workspace();
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
         let root_text = root.to_string_lossy().to_string();
         let created = create_folder(root_text.clone(), root_text.clone(), "src".into()).unwrap();
         assert!(created.is_dir);
         assert!(create_folder(root_text.clone(), root_text, "../fora".into()).is_err());
-        fs::remove_dir_all(root).unwrap();
+        workspace_dir.close().unwrap();
     }
 
     #[test]
     fn rejects_windows_reserved_or_invalid_names() {
-        let root = workspace();
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
         let root_text = root.to_string_lossy().to_string();
-        for name in ["CON", "aux.txt", "nome.", "nome ", "a/b"] {
+        let reserved: &[&str] = if cfg!(windows) { &["CON", "aux.txt"] } else { &[] };
+        for name in reserved.iter().copied().chain(["nome.", "nome ", "a/b"]) {
             assert!(
                 create_file(root_text.clone(), root_text.clone(), name.into()).is_err(),
                 "{name} deveria ser rejeitado"
             );
         }
-        fs::remove_dir_all(root).unwrap();
+        workspace_dir.close().unwrap();
+    }
+
+    #[test]
+    fn windows_device_names_are_detected_case_insensitively_by_stem() {
+        assert!(super::is_windows_reserved_stem("CON"));
+        assert!(super::is_windows_reserved_stem("LPT9"));
+        assert!(!super::is_windows_reserved_stem("CONSOLE"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_allows_windows_device_names() {
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
+        let root_text = root.to_string_lossy().to_string();
+        assert!(create_file(root_text.clone(), root_text, "con.txt".into()).is_ok());
+        workspace_dir.close().unwrap();
+    }
+
+    #[test]
+    fn binary_sniff_and_probe() {
+        assert!(looks_binary(b"MZ\x90\x00\x03"));
+        assert!(!looks_binary(b"fn main() {}\n"));
+        assert!(!looks_binary(&[0xFF, 0xFE, b'a', 0, b'b', 0]), "UTF-16 LE com BOM é texto");
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
+        let bin = root.join("a.bin");
+        fs::write(&bin, [1u8, 2, 0, 4]).unwrap();
+        let txt = root.join("a.txt");
+        fs::write(&txt, "olá").unwrap();
+        let p = probe_file_blocking(&bin.to_string_lossy()).unwrap();
+        assert!(p.binary && p.size == 4);
+        let p = probe_file_blocking(&txt.to_string_lossy()).unwrap();
+        assert!(!p.binary);
+        assert!(probe_file_blocking(&root.to_string_lossy()).is_err(), "pasta não é arquivo");
+        workspace_dir.close().unwrap();
+    }
+
+    #[test]
+    fn huge_files_need_explicit_consent() {
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
+        let big = root.join("big.log");
+        let f = fs::File::create(&big).unwrap();
+        // Sparse file: no real disk use.
+        f.set_len(HUGE_FILE_BYTES + 1).unwrap();
+        let err = read_file_blocking(&big.to_string_lossy(), false).unwrap_err();
+        assert!(err.starts_with("FILE_TOO_LARGE:"), "{err}");
+        let small = root.join("s.txt");
+        fs::write(&small, "x\r\ny").unwrap();
+        assert_eq!(read_file_blocking(&small.to_string_lossy(), false).unwrap().content, "x\ny");
+        workspace_dir.close().unwrap();
     }
 
     #[test]
     fn renames_file_and_rejects_collision() {
-        let root = workspace();
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
         let root_text = root.to_string_lossy().to_string();
         let a = create_file(root_text.clone(), root_text.clone(), "a.txt".into()).unwrap();
         create_file(root_text.clone(), root_text.clone(), "b.txt".into()).unwrap();
@@ -741,13 +1131,14 @@ mod tests {
 
         // Renaming onto an existing name must be rejected (no overwrite).
         assert!(rename_path(root_text.clone(), renamed.path, "b.txt".into()).is_err());
-        fs::remove_dir_all(root).unwrap();
+        workspace_dir.close().unwrap();
     }
 
     #[cfg(windows)]
     #[test]
     fn serializes_renamed_paths_without_windows_extended_prefix() {
-        let root = workspace();
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
         let root_text = root.to_string_lossy().to_string();
         let file = create_file(root_text.clone(), root_text.clone(), "before.txt".into()).unwrap();
 
@@ -758,12 +1149,13 @@ mod tests {
             "o frontend não deve receber caminho estendido: {}",
             renamed.path
         );
-        fs::remove_dir_all(root).unwrap();
+        workspace_dir.close().unwrap();
     }
 
     #[test]
     fn copies_file_with_collision_suffix() {
-        let root = workspace();
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
         let root_text = root.to_string_lossy().to_string();
         let f = create_file(root_text.clone(), root_text.clone(), "doc.txt".into()).unwrap();
         fs::write(&f.path, "hello").unwrap();
@@ -774,12 +1166,13 @@ mod tests {
         assert!(copied.name.contains("Cópia"));
         assert_eq!(fs::read_to_string(&copied.path).unwrap(), "hello");
         assert!(Path::new(&f.path).exists(), "origem deve permanecer");
-        fs::remove_dir_all(root).unwrap();
+        workspace_dir.close().unwrap();
     }
 
     #[test]
     fn copies_folder_recursively() {
-        let root = workspace();
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
         let root_text = root.to_string_lossy().to_string();
         let dir = create_folder(root_text.clone(), root_text.clone(), "pasta".into()).unwrap();
         create_file(root_text.clone(), dir.path.clone(), "inner.txt".into()).unwrap();
@@ -789,12 +1182,13 @@ mod tests {
         assert!(copied.is_dir);
         assert!(Path::new(&copied.path).join("inner.txt").exists());
         assert!(Path::new(&dir.path).exists(), "origem deve permanecer");
-        fs::remove_dir_all(root).unwrap();
+        workspace_dir.close().unwrap();
     }
 
     #[test]
     fn moves_file_and_folder() {
-        let root = workspace();
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
         let root_text = root.to_string_lossy().to_string();
         let dest = create_folder(root_text.clone(), root_text.clone(), "out".into()).unwrap();
 
@@ -813,15 +1207,17 @@ mod tests {
         assert!(moved_dir.is_dir);
         assert!(!Path::new(&folder.path).exists());
         assert!(Path::new(&moved_dir.path).join("k.txt").exists());
-        fs::remove_dir_all(root).unwrap();
+        workspace_dir.close().unwrap();
     }
 
     #[test]
     fn rejects_operations_outside_workspace() {
-        let root = workspace();
+        let workspace_dir = workspace();
+        let root = workspace_dir.path();
         let root_text = root.to_string_lossy().to_string();
         // A sibling temp dir, definitely outside `root`.
-        let outside = workspace();
+        let outside_dir = workspace();
+        let outside = outside_dir.path();
         let outside_file = create_file(
             outside.to_string_lossy().to_string(),
             outside.to_string_lossy().to_string(),
@@ -842,7 +1238,7 @@ mod tests {
             .is_err(),
             "copiar origem fora do workspace deve falhar"
         );
-        fs::remove_dir_all(root).unwrap();
-        fs::remove_dir_all(outside).unwrap();
+        workspace_dir.close().unwrap();
+        outside_dir.close().unwrap();
     }
 }

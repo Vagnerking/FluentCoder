@@ -1,0 +1,276 @@
+/* ---- Editor ---- */
+.editor-host {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  background: var(--editor-bg); /* opaque — keeps code readable over Mica */
+}
+
+.editor-host > * { flex: 1; min-width: 0; min-height: 0; }
+
+/* ---- Editor split grid (VS Code-style groups) ---- */
+.editor-split {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.editor-split-row { flex-direction: row; }
+
+.editor-split-column { flex-direction: column; }
+
+.editor-split-pane {
+  position: relative;
+  flex-basis: 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+.editor-split-pane > * { flex: 1; min-width: 0; min-height: 0; }
+
+/* Thin seam between panes; the ::after widens the grab area without taking
+   layout space. */
+.split-handle {
+  flex: 0 0 auto;
+  position: relative;
+  z-index: 3;
+  background: var(--acrylic-border);
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+
+.split-handle.split-row { width: 1px; cursor: col-resize; }
+
+.split-handle.split-column { height: 1px; cursor: row-resize; }
+
+.split-handle::after { content: ""; position: absolute; }
+
+.split-handle.split-row::after { inset: 0 -3px; }
+
+.split-handle.split-column::after { inset: -3px 0; }
+
+.split-handle:hover { background: var(--accent); }
+
+.split-handle:focus-visible {
+  background: var(--accent);
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.editor-group {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.editor-group-body {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+}
+
+.editor-group-body > *:not(.drop-zone) { flex: 1; min-width: 0; min-height: 0; }
+
+.editor-group-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-muted);
+  background: var(--editor-bg);
+}
+
+/* Highlight the active group's tab strip — only meaningful inside a split. */
+.editor-split .editor-group.active .tab-strip {
+  box-shadow: inset 0 1.5px 0 0 var(--accent);
+}
+
+/* Transparent overlay placed over the editor while a tab is in flight: it
+   CAPTURES the drag (pointer-events: auto) so Monaco underneath never receives
+   it — no stray cursor moves or auto-scroll while dragging. */
+.drop-capture {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 6;
+  pointer-events: auto;
+}
+
+/* A single highlight whose four insets are animated, so it GLIDES between the
+   edges/center instead of snapping. */
+.drop-zone {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 7;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border: 1.5px solid color-mix(in srgb, var(--accent) 80%, transparent);
+  border-radius: var(--radius-control);
+  box-shadow: inset 0 0 22px color-mix(in srgb, var(--accent) 20%, transparent);
+  animation: dropZoneIn var(--duration-fast) var(--ease-standard);
+  transition:
+    top var(--duration-medium) var(--ease-decelerate),
+    right var(--duration-medium) var(--ease-decelerate),
+    bottom var(--duration-medium) var(--ease-decelerate),
+    left var(--duration-medium) var(--ease-decelerate),
+    background var(--duration-medium) var(--ease-standard);
+}
+
+/* The recommendation pill ("Mover para este grupo" / "Dividir à direita"). */
+.drop-zone-label {
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  font-size: var(--font-caption);
+  font-weight: 600;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 55%, var(--editor-bg));
+  border: 1px solid color-mix(in srgb, var(--accent) 75%, transparent);
+  box-shadow: var(--shadow-flyout);
+  white-space: nowrap;
+}
+
+@keyframes dropZoneIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.drop-center { top: 0; right: 0; bottom: 0; left: 0; }
+
+.drop-left   { top: 0; right: 50%; bottom: 0; left: 0; }
+
+.drop-right  { top: 0; right: 0; bottom: 0; left: 50%; }
+
+.drop-top    { top: 0; right: 0; bottom: 50%; left: 0; }
+
+.drop-bottom { top: 50%; right: 0; bottom: 0; left: 0; }
+
+/* Cross-window insertion bar: a tab from another window is over THIS window's
+   tab strip; the bar marks exactly where it will land (before/after a tab). */
+.x-insert-bar {
+  position: fixed;
+  width: 2.5px;
+  z-index: 60;
+  pointer-events: none;
+  border-radius: var(--radius-xs);
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  animation: dropZoneIn var(--duration-fast) var(--ease-standard);
+}
+
+/* Whole-window highlight: a tab dragged from another window is over this one, so
+   it shows "release here to drop the tab" (cross-window drag feedback). */
+.window-drop-hint {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-surface);
+  box-shadow: inset 0 0 48px color-mix(in srgb, var(--accent) 22%, transparent);
+  animation: dropZoneIn var(--duration-fast) var(--ease-standard);
+}
+
+/* ---- Tabs ---- */
+/* Tab strip = scrolling tab row + editor-title actions. The DOM order is the
+   visual/focus order (EditorGroupHeader): tabs + actions → breadcrumbs →
+   content — no CSS `order` flip. */
+.tab-strip {
+  display: flex;
+  align-items: stretch;
+  background: var(--tabbar-bg);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* As abas têm prioridade: a faixa nunca fica abaixo de ~1 aba; as ações
+   transbordam para "Mais ações" (editorActionBudget) antes disso. */
+.tab-strip .tab-bar-wrap { flex: 1; min-width: 120px; }
+
+.tab-bar-actions {
+  flex: 0 0 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  padding: 0 var(--space-xs);
+}
+
+/* ---- Editor title actions (src/components/editor/EditorActions.tsx) ----
+   Discreet icon row at the right of the tabs: muted at rest so the code stays
+   the focus; full contrast on hover/focus/pressed. */
+.editor-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xxs);
+}
+
+.editor-actions .editor-action-btn {
+  color: var(--text-muted);
+}
+
+.editor-actions .editor-action-btn:hover:not(:disabled),
+.editor-actions .editor-action-btn:focus-visible,
+.editor-actions .editor-action-btn[aria-expanded="true"] {
+  color: var(--text);
+}
+
+.editor-actions .editor-action-btn[aria-expanded="true"] {
+  background: var(--fill-subtle-active);
+}
+
+/* An annotation is on in this editor: the Git button stays lit. */
+.editor-actions .editor-action-btn[aria-pressed="true"] {
+  color: var(--accent);
+}
+
+/* ---- Editor + bottom panel area (panel docks bottom / right / left) ---- */
+.editor-area { display: flex; flex: 1; min-height: 0; min-width: 0; }
+
+.editor-area.panel-bottom { flex-direction: column; }
+
+.editor-area.panel-right,
+.editor-area.panel-left { flex-direction: row; }
+
+/* Left dock: panel | handle | editor (reorder, keeping the handle in the seam). */
+.editor-area.panel-left .terminal-panel { order: 1; }
+
+.editor-area.panel-left .panel-resize-handle { order: 2; }
+
+.editor-area.panel-left .editor-host { order: 3; }
+
+.editor-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  background:
+    radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--accent) 5.5%, transparent), transparent 32%),
+    var(--editor-bg);
+  color: var(--text-muted);
+}
+
+.editor-empty-inner {
+  text-align: center;
+}
+
+.editor-empty-inner h2 {
+  font-weight: 300;
+  margin-bottom: 8px;
+  color: var(--text);
+}

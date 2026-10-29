@@ -10,21 +10,21 @@ pub mod diag;
 
 // Foundational bricks: consumed by the projection broker in a later slice.
 #[allow(dead_code)]
-pub mod sourcemap;
-#[allow(dead_code)]
-pub mod shadow;
-#[allow(dead_code)]
-pub mod remap;
-#[allow(dead_code)]
-pub mod projection_gen;
+pub mod broker;
+pub mod commands;
 #[allow(dead_code)]
 pub mod derive;
 #[allow(dead_code)]
-pub mod broker;
-#[allow(dead_code)]
 pub mod exec;
+#[allow(dead_code)]
+pub mod projection_gen;
+#[allow(dead_code)]
+pub mod remap;
 #[allow(dead_code)]
 pub mod runtime;
 #[allow(dead_code)]
+pub mod shadow;
+#[allow(dead_code)]
 pub mod sidecar;
-pub mod commands;
+#[allow(dead_code)]
+pub mod sourcemap;

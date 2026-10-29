@@ -2,6 +2,7 @@ import { useRef } from "react";
 import pkg from "../../package.json";
 import { useModalDismiss } from "./useModalDismiss";
 import { useModalFocus } from "./useModalFocus";
+import { formatKeybinding } from "../platform";
 
 interface AboutDialogProps {
   /** "about" shows app name/version/link; "shortcuts" lists the keybindings. */
@@ -76,7 +77,7 @@ export function AboutDialog({ mode, onClose }: AboutDialogProps) {
               {SHORTCUTS.map((s) => (
                 <li key={s.keys} className="about-shortcut-row">
                   <span className="about-shortcut-label">{s.label}</span>
-                  <kbd className="about-shortcut-keys">{s.keys}</kbd>
+                  <kbd className="about-shortcut-keys">{formatKeybinding(s.keys) ?? s.keys}</kbd>
                 </li>
               ))}
             </ul>

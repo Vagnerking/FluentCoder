@@ -1,28 +1,40 @@
 mod agents;
+mod child_process;
 mod dap;
 mod dotnet_tools;
+mod ext_host;
+mod extensions;
 mod file_index;
 mod fs_commands;
 mod git;
 mod graph;
 mod lsp;
 mod mcp;
+mod package_intel;
+mod platform;
 mod razor;
 mod runner;
 mod search;
 mod session;
+mod settings;
+mod shell_integration;
 mod snap;
 mod ssh;
 mod terminal;
+mod task_execution;
 mod testrunner;
 mod text_io;
 mod walk;
 mod window;
+mod workspace_open;
 
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Some(code) = task_execution::run_if_requested() {
+        std::process::exit(code);
+    }
     // `fluent-coder --mcp <root>` runs the knowledge MCP server (stdio) instead of
     // the GUI, so Claude Code / other MCP clients can query the project's brain.
     let args: Vec<String> = std::env::args().collect();
@@ -35,8 +47,28 @@ pub fn run() {
         return;
     }
 
+    // Aberto pelo Dock/`.desktop` (macOS/Linux): herda o PATH do shell de login
+    // para achar git/dotnet/node/claude. Antes de qualquer thread do Tauri.
+    platform::login_env::apply_login_shell_path();
+
+    let initial_workspace_files = workspace_open::workspace_files_from_args(&args);
+    // Deep link `fluent-coder://<extensão>/…` (Linux/Windows abrem um processo
+    // novo com a URL no argv): repassa à instância já aberta e sai. Sem
+    // instância aberta, este processo sobe e entrega o link ao frontend.
+    let deep_link_url = ext_host::deep_link::url_from_args(&args);
+    if let Some(url) = &deep_link_url {
+        if ext_host::deep_link::forward_to_running(url) {
+            return;
+        }
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_deep_link::init())
+        // SO/capacidades em `window.__FLUENT_PLATFORM__` antes do primeiro paint.
+        .plugin(platform::init_plugin())
+        // Ícones/fontes de temas de extensões (só da pasta delas; ver extensions/contrib.rs).
+        .register_asynchronous_uri_scheme_protocol(extensions::contrib::SCHEME, extensions::contrib::protocol)
         .setup(|app| {
             // Explicitly stamp every window with a crisp, high-resolution icon so
             // the Windows taskbar / Alt-Tab show the app logo (a frameless,
@@ -62,6 +94,13 @@ pub fn run() {
             if let Ok(dir) = app.path().app_data_dir() {
                 razor::diag::init(dir);
             }
+            // Ponte IDE do Claude Code: o `claude` rodando no terminal integrado
+            // (ou em qualquer terminal na pasta do workspace) enxerga o editor.
+            app.state::<agents::ide_bridge::IdeBridgeState>()
+                .start(app.handle());
+            // Cliente ACP: fs/* dos buffers abertos e terminal/* no painel.
+            agents::acp_client::set_app(app.handle().clone());
+            setup_deep_links(app);
             Ok(())
         })
         .manage(terminal::TerminalState::new())
@@ -69,11 +108,19 @@ pub fn run() {
         .manage(dap::DapState::new())
         .manage(search::SearchState::new())
         .manage(agents::AcpState::new())
+        .manage(agents::ide_bridge::IdeBridgeState::new())
+        .manage(ext_host::ExtHostState::new())
+        .manage(ext_host::deep_link::DeepLinkState::new(deep_link_url))
         .manage(razor::commands::RazorState::new())
         .manage(ssh::SshState::new())
+        .manage(git::watcher::GitWatchState::new())
+        .manage(settings::SettingsWatchState::new())
         .manage(window::WindowPlacementState::new())
         .manage(window::WindowHandoffState::new())
         .manage(window::ActiveEditorState::new())
+        .manage(workspace_open::WorkspaceOpenState::new(
+            initial_workspace_files,
+        ))
         .invoke_handler(tauri::generate_handler![
             agents::agents_load,
             agents::agents_save,
@@ -81,10 +128,52 @@ pub fn run() {
             agents::acp_warm,
             agents::acp_cancel,
             agents::acp_stop_workspace,
+            agents::acp_stop_all,
+            agents::chat_respond_approval,
+            agents::chat_providers,
+            agents::chat_global_agents_load,
+            agents::chat_global_agents_save,
+            agents::acp_client::acp_client_register,
+            agents::acp_client::acp_client_respond,
+            agents::acp_client::acp_terminal_snapshot,
+            agents::ide_bridge::ide_bridge_update,
+            agents::ide_bridge::ide_bridge_respond,
+            agents::ide_bridge::ide_bridge_status,
+            agents::ide_bridge::ide_bridge_restart,
+            agents::ide_bridge::ide_bridge_set_advertised,
             fs_commands::read_dir,
             fs_commands::read_file,
+            fs_commands::probe_file,
+            fs_commands::find_same_file,
             fs_commands::read_file_with_encoding,
             fs_commands::read_file_base64,
+            ext_host::ext_host_start,
+            ext_host::ext_host_send,
+            ext_host::ext_host_stop,
+            ext_host::ext_host_open_external,
+            extensions::extensions_paths,
+            extensions::extensions_list,
+            extensions::extensions_local_details,
+            extensions::extensions_sources_list,
+            extensions::extensions_sources_save,
+            extensions::extensions_search,
+            extensions::extensions_metadata,
+            extensions::extensions_fetch_text,
+            extensions::extensions_fetch_icon,
+            extensions::extensions_install,
+            extensions::extensions_install_vsix,
+            extensions::extensions_import_vscode,
+            extensions::extensions_uninstall,
+            extensions::extensions_set_enabled,
+            extensions::extensions_set_gate,
+            extensions::extensions_set_gates,
+            extensions::extensions_set_trust,
+            extensions::extensions_preflight,
+            extensions::extensions_check_updates,
+            extensions::contrib::extensions_read_contribution,
+            extensions::contrib::snippets_user_list,
+            ext_host::deep_link::deep_link_take_pending,
+            ext_host::deep_link::deep_link_ack,
             fs_commands::write_file,
             fs_commands::create_file,
             fs_commands::create_folder,
@@ -93,6 +182,11 @@ pub fn run() {
             fs_commands::copy_path,
             fs_commands::move_path,
             fs_commands::reveal_in_explorer,
+            platform::commands::platform_info,
+            platform::commands::platform_reveal_path,
+            platform::commands::platform_open_external,
+            platform::commands::platform_open_path,
+            platform::commands::platform_default_shell,
             search::search_in_dir,
             search::cancel_search,
             search::build_search_index,
@@ -101,32 +195,75 @@ pub fn run() {
             graph::build_context_graph,
             graph::build_knowledge_index,
             graph::build_context_bundle,
+            graph::build_graph_agent_digest,
+            package_intel::package_intel_audit,
+            package_intel::package_intel_outdated,
+            package_intel::package_intel_scan,
+            package_intel::package_intel_versions,
             mcp::mcp_config,
             mcp::mcp_write_project_config,
             snap::snap_set_max_button_rect,
             git::git_branch,
+            git::git_cancel,
+            git::watcher::git_watch_set,
+            git::discovery::git_repos_discover,
+            git::avatar::git_avatar,
             git::git_branches,
+            git::git_remote_branches,
+            git::git_remotes,
+            git::git_remote_add,
+            git::git_remote_remove,
+            git::git_remote_rename,
+            git::git_remote_set_url,
             git::git_checkout,
             git::git_create_branch,
+            git::git_rename_branch,
+            git::git_delete_branch,
+            git::git_delete_remote_branch,
+            git::git_checkout_remote_branch,
             git::git_status,
+            git::git_worktrees,
+            git::git_worktree_add,
+            git::git_worktree_remove,
+            git::git_worktree_prune,
             git::git_stage,
             git::git_unstage,
+            git::git_unstage_all,
             git::git_stage_all,
             git::git_commit,
             git::git_fetch,
+            git::git_fetch_remote,
             git::git_pull,
             git::git_push,
             git::git_publish,
             git::git_log,
+            git::git_graph,
+            git::graph::git_graph_page,
+            git::graph::git_commit_details,
+            git::graph::git_branch_lineage,
+            git::graph::git_diff_files,
+            git::graph::git_cherry_pick,
+            git::graph::git_create_branch_at,
+            git::git_compare_upstream,
             git::git_log_file,
+            git::git_log_line,
+            git::git_show_file_at_commit,
+            git::git_show_file_staged,
+            git::git_diff_file_revision,
+            git::git_diff_file,
+            git::git_diff_file_staged,
+            git::git_commit_files,
             git::git_blame,
             git::git_discard_file,
             git::git_discard_all,
             git::git_stash_push,
             git::git_stash_list,
+            git::git_stash_files,
             git::git_stash_apply,
             git::git_stash_pop,
             git::git_stash_drop,
+            git::git_revert_commit,
+            git::git_undo_last_commit,
             git::git_snapshot_create,
             git::git_snapshot_restore,
             runner::run_configs_load,
@@ -135,6 +272,13 @@ pub fn run() {
             session::session_load,
             session::session_set_last_folder,
             session::session_set_open_files,
+            session::session_set_workspace,
+            settings::settings_paths,
+            settings::settings_read_files,
+            settings::settings_write_file,
+            settings::settings_retire_legacy,
+            settings::settings_watch,
+            settings::editorconfig_chain,
             window::open_new_window,
             window::is_fresh_window,
             window::window_ready,
@@ -147,6 +291,7 @@ pub fn run() {
             window::set_active_editor,
             window::clear_active_editor,
             window::get_active_editor,
+            workspace_open::opened_workspace_files,
             terminal::term_create,
             terminal::term_write,
             terminal::term_resize,
@@ -214,32 +359,69 @@ pub fn run() {
             ssh::ssh_build_context_graph,
             ssh::ssh_build_knowledge_index,
             ssh::ssh_build_context_bundle,
+            ssh::ssh_build_graph_agent_digest,
             ssh::ssh_list_project_files,
+            ssh::ssh_package_intel_audit,
+            ssh::ssh_package_intel_outdated,
+            ssh::ssh_package_intel_versions,
             ssh::ssh_run_configs_detect,
             ssh::ssh_run_configs_load,
             ssh::ssh_run_configs_save,
             ssh::ssh_agents_load,
             ssh::ssh_agents_save,
             ssh::ssh_git_status,
+            ssh::ssh_git_worktrees,
+            ssh::ssh_git_worktree_add,
+            ssh::ssh_git_worktree_remove,
+            ssh::ssh_git_worktree_prune,
             ssh::ssh_git_branch,
             ssh::ssh_git_branches,
+            ssh::ssh_git_remote_branches,
+            ssh::ssh_git_remotes,
+            ssh::ssh_git_remote_add,
+            ssh::ssh_git_remote_remove,
+            ssh::ssh_git_remote_rename,
+            ssh::ssh_git_remote_set_url,
             ssh::ssh_git_checkout,
             ssh::ssh_git_create_branch,
+            ssh::ssh_git_rename_branch,
+            ssh::ssh_git_delete_branch,
+            ssh::ssh_git_delete_remote_branch,
+            ssh::ssh_git_checkout_remote_branch,
             ssh::ssh_git_stage,
             ssh::ssh_git_unstage,
+            ssh::ssh_git_unstage_all,
             ssh::ssh_git_stage_all,
             ssh::ssh_git_commit,
             ssh::ssh_git_fetch,
+            ssh::ssh_git_fetch_remote,
             ssh::ssh_git_pull,
             ssh::ssh_git_push,
             ssh::ssh_git_log,
+            ssh::ssh_git_graph,
+            ssh::ssh_git_graph_page,
+            ssh::ssh_git_commit_details,
+            ssh::ssh_git_branch_lineage,
+            ssh::ssh_git_diff_files,
+            ssh::ssh_git_cherry_pick,
+            ssh::ssh_git_create_branch_at,
+            ssh::ssh_git_compare_upstream,
             ssh::ssh_git_log_file,
+            ssh::ssh_git_show_file_at_commit,
+            ssh::ssh_git_show_file_staged,
+            ssh::ssh_git_diff_file_revision,
+            ssh::ssh_git_diff_file,
+            ssh::ssh_git_diff_file_staged,
+            ssh::ssh_git_commit_files,
             ssh::ssh_git_blame,
             ssh::ssh_git_stash_list,
+            ssh::ssh_git_stash_files,
             ssh::ssh_git_stash_push,
             ssh::ssh_git_stash_apply,
             ssh::ssh_git_stash_pop,
             ssh::ssh_git_stash_drop,
+            ssh::ssh_git_revert_commit,
+            ssh::ssh_git_undo_last_commit,
             ssh::ssh_git_discard_file,
             ssh::ssh_git_discard_all,
             ssh::ssh_lsp_start,
@@ -250,6 +432,12 @@ pub fn run() {
         .run(|app, event| {
             if let tauri::RunEvent::WindowEvent { label, event, .. } = &event {
                 window::record_main_window_event(app, label, event);
+                if let tauri::WindowEvent::Destroyed = event {
+                    // A janela some do lock file da ponte IDE (e seus diffs
+                    // pendentes contam como rejeitados).
+                    app.state::<agents::ide_bridge::IdeBridgeState>()
+                        .forget_window(label);
+                }
             }
             // Kill every child process (PTY shells + LSP servers) and their reader
             // threads, then force-quit. `portable-pty` doesn't kill its child on
@@ -272,9 +460,13 @@ pub fn run() {
                     eprintln!("[exit] last window destroyed — tearing down children");
                     app.state::<terminal::TerminalState>().shutdown_all();
                     app.state::<agents::AcpState>().shutdown_all();
+                    app.state::<agents::ide_bridge::IdeBridgeState>().shutdown();
+                    app.state::<ext_host::ExtHostState>().shutdown_all();
+                    ext_host::deep_link::cleanup(app);
                     app.state::<lsp::LspState>().shutdown_all();
                     app.state::<dap::DapState>().shutdown_all();
-                    app.state::<razor::commands::RazorState>().shutdown_sidecar();
+                    app.state::<razor::commands::RazorState>()
+                        .shutdown_sidecar();
                     app.state::<ssh::SshState>().shutdown_all();
                     eprintln!("[exit] teardown done — forcing process exit");
                     std::process::exit(0);
@@ -284,9 +476,13 @@ pub fn run() {
                     eprintln!("[exit] ExitRequested — tearing down children");
                     app.state::<terminal::TerminalState>().shutdown_all();
                     app.state::<agents::AcpState>().shutdown_all();
+                    app.state::<agents::ide_bridge::IdeBridgeState>().shutdown();
+                    app.state::<ext_host::ExtHostState>().shutdown_all();
+                    ext_host::deep_link::cleanup(app);
                     app.state::<lsp::LspState>().shutdown_all();
                     app.state::<dap::DapState>().shutdown_all();
-                    app.state::<razor::commands::RazorState>().shutdown_sidecar();
+                    app.state::<razor::commands::RazorState>()
+                        .shutdown_sidecar();
                     app.state::<ssh::SshState>().shutdown_all();
                     eprintln!("[exit] teardown done — forcing process exit");
                     std::process::exit(0);
@@ -294,4 +490,27 @@ pub fn run() {
                 _ => {}
             }
         });
+}
+
+/// Deep links das extensões hospedadas: receptor local (Linux/Windows), eventos
+/// do plugin (macOS) e, fora do dev, o registro do esquema para AppImage e
+/// instalações que não gravaram o `.desktop`/registro.
+fn setup_deep_links(app: &mut tauri::App) {
+    use tauri_plugin_deep_link::DeepLinkExt;
+    ext_host::deep_link::start_receiver(app.handle());
+    let handle = app.handle().clone();
+    app.deep_link().on_open_url(move |event| {
+        for url in event.urls() {
+            ext_host::deep_link::deliver(&handle, url.as_str());
+        }
+    });
+    #[cfg(any(target_os = "linux", windows))]
+    {
+        let dev = cfg!(debug_assertions) && std::env::var_os("FLUENT_REGISTER_DEEP_LINK").is_none();
+        if !dev && !app.deep_link().is_registered(ext_host::deep_link::SCHEME).unwrap_or(false) {
+            if let Err(e) = app.deep_link().register(ext_host::deep_link::SCHEME) {
+                eprintln!("[deep-link] falha ao registrar {}://: {e}", ext_host::deep_link::SCHEME);
+            }
+        }
+    }
 }

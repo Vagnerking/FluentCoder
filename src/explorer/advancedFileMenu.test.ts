@@ -35,10 +35,20 @@ test("Open With is enabled and fires the handler with path + coords", () => {
   assert.deepEqual(got, ["C:/repo/src/a.ts", 10, 20]);
 });
 
-test("git diff/compare/timeline items are disabled with a tooltip", () => {
+test("Open Changes is enabled inside a git repo and fires the handler", () => {
+  let opened: string | null = null;
+  const items = buildAdvancedFileMenuItems(baseCtx, {
+    onOpenChanges: (p) => (opened = p),
+  });
+  const item = byId(items, "explorer.git.openChanges");
+  assert.equal(item.enabled, true);
+  item.run?.();
+  assert.equal(opened, "C:/repo/src/a.ts");
+});
+
+test("compare/timeline items are disabled with a tooltip", () => {
   const items = buildAdvancedFileMenuItems(baseCtx, {});
   for (const id of [
-    "explorer.git.openChanges",
     "explorer.git.selectForCompare",
     "explorer.git.compareWithSelected",
     "explorer.git.openTimeline",

@@ -186,13 +186,22 @@ mod tests {
 
     #[test]
     fn relative_path_siblings() {
-        let r = relative_path(Path::new("C:/ws/.fluent-razor/shadow"), Path::new("C:/ws/App/App.csproj"));
-        assert_eq!(r.to_string_lossy().replace('\\', "/"), "../../App/App.csproj");
+        let r = relative_path(
+            Path::new("C:/ws/.fluent-razor/shadow"),
+            Path::new("C:/ws/App/App.csproj"),
+        );
+        assert_eq!(
+            r.to_string_lossy().replace('\\', "/"),
+            "../../App/App.csproj"
+        );
     }
 
     #[test]
     fn relative_path_into_self() {
-        let r = relative_path(Path::new("C:/ws/shadow"), Path::new("C:/ws/shadow/ShadowRazor.csproj"));
+        let r = relative_path(
+            Path::new("C:/ws/shadow"),
+            Path::new("C:/ws/shadow/ShadowRazor.csproj"),
+        );
         assert_eq!(r.to_string_lossy().replace('\\', "/"), "ShadowRazor.csproj");
     }
 
@@ -203,7 +212,10 @@ mod tests {
             sln_dir,
             &[
                 ("UserProject", Path::new("C:/ws/App/App.csproj")),
-                ("ShadowRazor", Path::new("C:/ws/.fluent-razor/shadow/ShadowRazor.csproj")),
+                (
+                    "ShadowRazor",
+                    Path::new("C:/ws/.fluent-razor/shadow/ShadowRazor.csproj"),
+                ),
             ],
         );
         assert!(sln.contains("Microsoft Visual Studio Solution File, Format Version 12.00"));
@@ -223,7 +235,10 @@ mod tests {
         assert_eq!(guid_for(p), guid_for(p)); // stable
         let g = guid_for(p);
         let parts: Vec<&str> = g.split('-').collect();
-        assert_eq!(parts.iter().map(|s| s.len()).collect::<Vec<_>>(), vec![8, 4, 4, 4, 12]);
+        assert_eq!(
+            parts.iter().map(|s| s.len()).collect::<Vec<_>>(),
+            vec![8, 4, 4, 4, 12]
+        );
         assert!(g.chars().all(|c| c.is_ascii_hexdigit() || c == '-'));
     }
 
@@ -255,7 +270,9 @@ mod tests {
                 cshtml_rel: PathBuf::from("Views/Home/Index.cshtml"),
                 emitted_gcs: emitted.clone(),
                 emitted_gcs_fallback: proj_dir.join("nonexistent-fallback.g.cs"),
-                shadow_gcs: shadow_dir.join("projected").join("Views/Home/Index_cshtml.g.cs"),
+                shadow_gcs: shadow_dir
+                    .join("projected")
+                    .join("Views/Home/Index_cshtml.g.cs"),
             }],
         };
 
@@ -263,7 +280,12 @@ mod tests {
 
         assert!(plan.shadow_csproj_path.exists());
         assert_eq!(
-            fs::read_to_string(shadow_dir.join("projected").join("Views/Home/Index_cshtml.g.cs")).unwrap(),
+            fs::read_to_string(
+                shadow_dir
+                    .join("projected")
+                    .join("Views/Home/Index_cshtml.g.cs")
+            )
+            .unwrap(),
             "// generated"
         );
         let sln = fs::read_to_string(&plan.solution_path).unwrap();
@@ -271,7 +293,10 @@ mod tests {
         // in transitively via the shadow's ProjectReference (not as its own
         // solution node), so Roslyn never double-compiles the Razor page class.
         assert!(sln.contains("ShadowRazor.csproj"));
-        assert!(!sln.contains("App.csproj"), "user project must NOT be a solution member:\n{sln}");
+        assert!(
+            !sln.contains("App.csproj"),
+            "user project must NOT be a solution member:\n{sln}"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -295,11 +320,17 @@ mod tests {
 
         // Only the fallback exists (SDK ignored the pin) → fallback.
         fs::write(&fallback, "// fb").unwrap();
-        assert_eq!(resolve_emitted(&mk(&pinned, &fallback)), Some(fallback.as_path()));
+        assert_eq!(
+            resolve_emitted(&mk(&pinned, &fallback)),
+            Some(fallback.as_path())
+        );
 
         // Pinned exists → pinned wins (preferred).
         fs::write(&pinned, "// pin").unwrap();
-        assert_eq!(resolve_emitted(&mk(&pinned, &fallback)), Some(pinned.as_path()));
+        assert_eq!(
+            resolve_emitted(&mk(&pinned, &fallback)),
+            Some(pinned.as_path())
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -339,7 +370,10 @@ mod tests {
         };
 
         materialize(&plan).unwrap();
-        assert_eq!(fs::read_to_string(&shadow_gcs).unwrap(), "// from obj fallback");
+        assert_eq!(
+            fs::read_to_string(&shadow_gcs).unwrap(),
+            "// from obj fallback"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }

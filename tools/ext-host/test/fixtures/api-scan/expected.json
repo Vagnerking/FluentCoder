@@ -1,0 +1,298 @@
+{
+ "esm-imports.js": {
+  "scannerVersion": 2,
+  "file": "esm-imports.js",
+  "filesWithApi": 1,
+  "bindings": 4,
+  "sites": 3,
+  "unresolved": 0,
+  "ignored": 0,
+  "typeCommand": false,
+  "paths": [
+   [
+    "commands",
+    1
+   ],
+   [
+    "commands.registerCommand",
+    1
+   ],
+   [
+    "languages.registerDocumentFormattingEditProvider",
+    1
+   ],
+   [
+    "window",
+    1
+   ],
+   [
+    "window.showWorkspaceFolderPick",
+    1
+   ],
+   [
+    "workspace",
+    1
+   ],
+   [
+    "workspace.onDidChangeWorkspaceFolders",
+    1
+   ]
+  ],
+  "called": [
+   "commands.registerCommand",
+   "languages.registerDocumentFormattingEditProvider",
+   "window.showWorkspaceFolderPick",
+   "workspace.onDidChangeWorkspaceFolders"
+  ],
+  "truncated": false,
+  "error": null
+ },
+ "strings-noise.js": {
+  "scannerVersion": 2,
+  "file": "strings-noise.js",
+  "filesWithApi": 1,
+  "bindings": 2,
+  "sites": 2,
+  "unresolved": 0,
+  "ignored": 6,
+  "typeCommand": false,
+  "paths": [
+   [
+    "ViewColumn",
+    1
+   ],
+   [
+    "commands.executeCommand",
+    2
+   ],
+   [
+    "window.createWebviewPanel",
+    1
+   ]
+  ],
+  "called": [
+   "commands.executeCommand",
+   "window.createWebviewPanel"
+  ],
+  "truncated": false,
+  "error": null
+ },
+ "tsc-commonjs.js": {
+  "scannerVersion": 2,
+  "file": "tsc-commonjs.js",
+  "filesWithApi": 1,
+  "bindings": 5,
+  "sites": 4,
+  "unresolved": 0,
+  "ignored": 1,
+  "typeCommand": false,
+  "paths": [
+   [
+    "Range",
+    1
+   ],
+   [
+    "Uri",
+    2
+   ],
+   [
+    "commands",
+    1
+   ],
+   [
+    "commands.registerCommand",
+    1
+   ],
+   [
+    "env.clipboard",
+    1
+   ],
+   [
+    "languages.registerCodeLensProvider",
+    1
+   ],
+   [
+    "window",
+    1
+   ],
+   [
+    "window.createOutputChannel",
+    1
+   ],
+   [
+    "workspace",
+    1
+   ],
+   [
+    "workspace.getConfiguration",
+    1
+   ]
+  ],
+  "called": [
+   "Range",
+   "Uri",
+   "commands.registerCommand",
+   "languages.registerCodeLensProvider",
+   "window.createOutputChannel",
+   "workspace.getConfiguration"
+  ],
+  "truncated": false,
+  "error": null
+ },
+ "unresolved.js": {
+  "scannerVersion": 2,
+  "file": "unresolved.js",
+  "filesWithApi": 1,
+  "bindings": 1,
+  "sites": 2,
+  "unresolved": 1,
+  "ignored": 0,
+  "typeCommand": false,
+  "paths": [
+   [
+    "window.showInformationMessage",
+    1
+   ]
+  ],
+  "called": [
+   "window.showInformationMessage"
+  ],
+  "truncated": false,
+  "error": null
+ },
+ "webpack-arrow.js": {
+  "scannerVersion": 2,
+  "file": "webpack-arrow.js",
+  "filesWithApi": 1,
+  "bindings": 1,
+  "sites": 1,
+  "unresolved": 0,
+  "ignored": 0,
+  "typeCommand": true,
+  "paths": [
+   [
+    "commands.executeCommand",
+    1
+   ],
+   [
+    "commands.registerCommand",
+    1
+   ],
+   [
+    "languages.createDiagnosticCollection",
+    1
+   ],
+   [
+    "window.activeTextEditor",
+    1
+   ],
+   [
+    "window.createTextEditorDecorationType",
+    1
+   ]
+  ],
+  "called": [
+   "commands.executeCommand",
+   "commands.registerCommand",
+   "languages.createDiagnosticCollection",
+   "window.createTextEditorDecorationType"
+  ],
+  "truncated": false,
+  "error": null
+ },
+ "webpack-dev-array.js": {
+  "scannerVersion": 2,
+  "file": "webpack-dev-array.js",
+  "filesWithApi": 1,
+  "bindings": 1,
+  "sites": 1,
+  "unresolved": 0,
+  "ignored": 0,
+  "typeCommand": false,
+  "paths": [
+   [
+    "NotebookCellStatusBarAlignment",
+    1
+   ],
+   [
+    "notebooks.registerNotebookCellStatusBarItemProvider",
+    1
+   ],
+   [
+    "window.registerTreeDataProvider",
+    1
+   ]
+  ],
+  "called": [
+   "notebooks.registerNotebookCellStatusBarItemProvider",
+   "window.registerTreeDataProvider"
+  ],
+  "truncated": false,
+  "error": null
+ },
+ "webpack5-object.js": {
+  "scannerVersion": 2,
+  "file": "webpack5-object.js",
+  "filesWithApi": 1,
+  "bindings": 3,
+  "sites": 1,
+  "unresolved": 0,
+  "ignored": 1,
+  "typeCommand": false,
+  "paths": [
+   [
+    "Hover",
+    1
+   ],
+   [
+    "ThemeIcon",
+    1
+   ],
+   [
+    "Uri",
+    3
+   ],
+   [
+    "commands.registerCommand",
+    1
+   ],
+   [
+    "env.openExternal",
+    1
+   ],
+   [
+    "languages.registerHoverProvider",
+    1
+   ],
+   [
+    "window",
+    1
+   ],
+   [
+    "window.createTreeView",
+    1
+   ],
+   [
+    "window.showInformationMessage",
+    1
+   ],
+   [
+    "workspace.onDidChangeConfiguration",
+    1
+   ]
+  ],
+  "called": [
+   "Hover",
+   "ThemeIcon",
+   "Uri",
+   "commands.registerCommand",
+   "env.openExternal",
+   "languages.registerHoverProvider",
+   "window.createTreeView",
+   "window.showInformationMessage",
+   "workspace.onDidChangeConfiguration"
+  ],
+  "truncated": false,
+  "error": null
+ }
+}

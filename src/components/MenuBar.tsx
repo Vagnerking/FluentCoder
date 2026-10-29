@@ -1,99 +1,51 @@
 import { useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
-import { createPortal } from "react-dom";
 import type { MenuDef, MenuItem } from "../types";
+import { Menu, type MenuCloseReason, type MenuItemSpec } from "./ui/Menu";
+import { isMac } from "../platform/os";
 
 interface MenuBarProps {
   menus: MenuDef[];
 }
 
-/** True when an item can receive focus / be activated (not a separator, not disabled). */
-function isFocusable(item: MenuItem): boolean {
-  return !item.separator && item.enabled !== false;
-}
-
-/** Renders a menu's items as a dropdown list (shared by inline + overflow). */
-function MenuItems({
-  items,
-  focusedItem,
-  itemRefs,
-  onRun,
-  onHover,
-}: {
-  items: MenuItem[];
-  focusedItem: number | null;
-  itemRefs?: React.MutableRefObject<(HTMLButtonElement | null)[]>;
-  onRun: (item: MenuItem) => void;
-  onHover: (index: number, item: MenuItem) => void;
-}) {
-  return (
-    <>
-      {items.map((item, itemIndex) =>
-        item.separator ? (
-          <div key={item.id} className="menubar-separator" role="separator" />
-        ) : (
-          <button
-            key={item.id}
-            ref={(el) => {
-              if (itemRefs) itemRefs.current[itemIndex] = el;
-            }}
-            role="menuitem"
-            className={`menubar-item${item.enabled === false ? " disabled" : ""}${
-              focusedItem === itemIndex ? " focused" : ""
-            }`}
-            disabled={item.enabled === false}
-            aria-disabled={item.enabled === false}
-            tabIndex={-1}
-            onMouseEnter={() => onHover(itemIndex, item)}
-            onClick={() => {
-              if (item.enabled === false) return;
-              onRun(item);
-            }}
-          >
-            <span className="menubar-item-label">{item.label}</span>
-            {item.accelerator && (
-              <span className="menubar-item-accel">{item.accelerator}</span>
-            )}
-          </button>
-        )
-      )}
-    </>
-  );
+/** Maps a menu-bar entry onto the shared menu primitive's item model. */
+function toMenuItems(items: readonly MenuItem[]): MenuItemSpec[] {
+  return items.map((item) => ({
+    id: item.id,
+    label: item.label,
+    shortcut: item.accelerator,
+    separator: item.separator,
+    disabled: item.enabled === false,
+    onSelect: item.run,
+  }));
 }
 
 /**
  * Data-driven, keyboard-accessible menu bar (File, Edit, …), VS Code-style.
  *
  * RESPONSIVE: it measures the available width and only renders the menus that
- * fit inline; the rest collapse into an overflow (☰) button whose dropdown lists
- * them and flies each one's items out to the side (cascade). When nothing fits,
- * the whole bar becomes a single hamburger menu.
+ * fit inline; the rest collapse into an overflow (⋯) button whose flyout lists
+ * them, each opening its items as a submenu. When nothing fits, the whole bar
+ * becomes a single hamburger menu.
  *
- * Inline menus keep the full keyboard model (Alt to focus, ←/→ between menus,
- * ↑/↓ in a dropdown, Enter/Esc). No business logic — items run via `run?.()`.
+ * Keyboard: Alt focuses the bar, ←/→ move between menus (also from inside an
+ * open dropdown), ↓/Enter/Space open one; inside, the shared {@link Menu}
+ * handles ↑/↓, Home/End, type-ahead, Enter and Esc (which returns focus to the
+ * menu's button). No business logic — items run via `run?.()`.
  */
 export function MenuBar({ menus }: MenuBarProps) {
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
-  const [focusedItem, setFocusedItem] = useState<number | null>(null);
   const [barFocused, setBarFocused] = useState(false);
 
-  // Responsive overflow: how many leading menus fit inline; the rest go to the ☰.
+  // Responsive overflow: how many leading menus fit inline; the rest go to the ⋯.
   const [fitCount, setFitCount] = useState(menus.length);
   const [overflowOpen, setOverflowOpen] = useState(false);
-  const [overflowSub, setOverflowSub] = useState<number | null>(null);
 
   const barRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLDivElement>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const overflowRef = useRef<HTMLDivElement>(null);
-  // The cascade submenu (overflow → row → items). It's a separate portal, so it
-  // needs its own ref or the outside-mousedown handler closes it before the item
-  // click can fire — which is exactly why the ⋯ actions "didn't work".
-  const submenuRef = useRef<HTMLDivElement>(null);
   const overflowBtnRef = useRef<HTMLButtonElement>(null);
   const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  // Per-menu natural widths (measured off-screen) + the overflow button's width.
+  // Per-menu natural widths (measured off-screen).
   const widthsRef = useRef<number[]>([]);
 
   // ---- Responsive measurement: recompute how many menus fit. ----
@@ -101,9 +53,7 @@ export function MenuBar({ menus }: MenuBarProps) {
     const bar = barRef.current;
     const measure = measureRef.current;
     if (!bar || !measure) return;
-    const buttons = Array.from(
-      measure.querySelectorAll<HTMLElement>(".menubar-menu")
-    );
+    const buttons = Array.from(measure.querySelectorAll<HTMLElement>(".menubar-menu"));
     widthsRef.current = buttons.map((b) => b.offsetWidth);
     const overflowW = 36; // the ⋯ / ☰ button
     const gap = 10; // breathing room so menus never crowd the title zone
@@ -144,97 +94,39 @@ export function MenuBar({ menus }: MenuBarProps) {
   // just collapsed into it (its button no longer exists).
   useEffect(() => {
     setOverflowOpen(false);
-    setOverflowSub(null);
     setOpenIndex((cur) => (cur !== null && cur >= fitCount ? null : cur));
   }, [fitCount]);
 
   const overflowing = fitCount < menus.length;
 
-  // ---- Outside-click / Escape close (inline dropdowns + overflow). ----
-  useEffect(() => {
-    if (openIndex === null && !overflowOpen) return;
-    function handleClick(e: MouseEvent) {
-      const t = e.target as Node;
-      if (
-        dropdownRef.current?.contains(t) ||
-        barRef.current?.contains(t) ||
-        overflowRef.current?.contains(t) ||
-        submenuRef.current?.contains(t)
-      )
-        return;
-      setOpenIndex(null);
-      setBarFocused(false);
-      setOverflowOpen(false);
-      setOverflowSub(null);
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [openIndex, overflowOpen]);
-
   const focusButton = useCallback((i: number) => {
     buttonRefs.current[i]?.focus();
   }, []);
 
-  const firstFocusable = useCallback(
-    (menuIndex: number): number | null => {
-      const items = menus[menuIndex]?.items ?? [];
-      for (let i = 0; i < items.length; i++) if (isFocusable(items[i])) return i;
-      return null;
-    },
-    [menus]
-  );
+  const openMenuAt = useCallback((menuIndex: number) => {
+    // Opening an inline menu always dismisses the overflow, so the two can
+    // never be open (and highlighted) at the same time.
+    setOverflowOpen(false);
+    setOpenIndex(menuIndex);
+    setActiveIndex(menuIndex);
+  }, []);
 
-  const openAndFocus = useCallback(
-    (menuIndex: number) => {
-      // Opening an inline menu always dismisses the overflow, so the two can
-      // never be open (and highlighted) at the same time.
-      setOverflowOpen(false);
-      setOverflowSub(null);
-      setOpenIndex(menuIndex);
-      setActiveIndex(menuIndex);
-      setFocusedItem(firstFocusable(menuIndex));
-    },
-    [firstFocusable]
-  );
+  const closeAll = useCallback(() => {
+    setOpenIndex(null);
+    setBarFocused(false);
+    setOverflowOpen(false);
+  }, []);
 
-  const nextItem = useCallback(
-    (menuIndex: number, from: number, dir: 1 | -1): number | null => {
-      const items = menus[menuIndex]?.items ?? [];
-      if (items.length === 0) return null;
-      let idx = from;
-      for (let step = 0; step < items.length; step++) {
-        idx = (idx + dir + items.length) % items.length;
-        if (isFocusable(items[idx])) return idx;
-      }
-      return isFocusable(items[from]) ? from : null;
-    },
-    [menus]
-  );
-
+  // Alt focuses/closes the bar (only meaningful for inline menus). Not on
+  // macOS: there Option is a typing modifier (accents, symbols) and menus
+  // aren't reached through Alt.
   useEffect(() => {
-    if (openIndex === null || focusedItem === null) return;
-    const el = itemRefs.current[focusedItem];
-    if (el) {
-      el.focus();
-      el.scrollIntoView({ block: "nearest" });
-    }
-  }, [openIndex, focusedItem]);
-
-  useEffect(() => {
-    itemRefs.current = [];
-  }, [openIndex]);
-
-  // Alt focuses/closes the bar (only meaningful for inline menus).
-  useEffect(() => {
+    if (isMac()) return;
     function handleAlt(e: KeyboardEvent) {
       if (e.key !== "Alt" || e.ctrlKey || e.shiftKey || e.metaKey) return;
       e.preventDefault();
       if (barFocused || openIndex !== null || overflowOpen) {
-        setOpenIndex(null);
-        setBarFocused(false);
-        setFocusedItem(null);
-        setOverflowOpen(false);
-        setOverflowSub(null);
+        closeAll();
       } else if (fitCount > 0) {
         setBarFocused(true);
         setActiveIndex(0);
@@ -247,7 +139,7 @@ export function MenuBar({ menus }: MenuBarProps) {
     }
     document.addEventListener("keydown", handleAlt);
     return () => document.removeEventListener("keydown", handleAlt);
-  }, [barFocused, openIndex, overflowOpen, focusButton, fitCount]);
+  }, [barFocused, openIndex, overflowOpen, focusButton, fitCount, closeAll]);
 
   useEffect(() => {
     if (barFocused && openIndex === null) focusButton(activeIndex);
@@ -258,9 +150,9 @@ export function MenuBar({ menus }: MenuBarProps) {
     (dir: 1 | -1) => {
       if (fitCount === 0) return;
       const target = (activeIndex + dir + fitCount) % fitCount;
-      openAndFocus(target);
+      openMenuAt(target);
     },
-    [activeIndex, fitCount, openAndFocus]
+    [activeIndex, fitCount, openMenuAt],
   );
 
   function onBarKeyDown(e: React.KeyboardEvent, i: number) {
@@ -269,7 +161,7 @@ export function MenuBar({ menus }: MenuBarProps) {
         e.preventDefault();
         const next = (i + 1) % fitCount;
         setActiveIndex(next);
-        if (openIndex !== null) openAndFocus(next);
+        if (openIndex !== null) openMenuAt(next);
         else focusButton(next);
         break;
       }
@@ -277,7 +169,7 @@ export function MenuBar({ menus }: MenuBarProps) {
         e.preventDefault();
         const prev = (i - 1 + fitCount) % fitCount;
         setActiveIndex(prev);
-        if (openIndex !== null) openAndFocus(prev);
+        if (openIndex !== null) openMenuAt(prev);
         else focusButton(prev);
         break;
       }
@@ -285,7 +177,7 @@ export function MenuBar({ menus }: MenuBarProps) {
       case "Enter":
       case " ":
         e.preventDefault();
-        openAndFocus(i);
+        openMenuAt(i);
         break;
       case "Escape":
         if (openIndex === null && barFocused) {
@@ -299,67 +191,26 @@ export function MenuBar({ menus }: MenuBarProps) {
     }
   }
 
-  function onDropdownKeyDown(e: React.KeyboardEvent) {
-    if (openIndex === null) return;
-    switch (e.key) {
-      case "ArrowDown": {
-        e.preventDefault();
-        const next = nextItem(openIndex, focusedItem ?? -1, 1);
-        if (next !== null) setFocusedItem(next);
-        break;
-      }
-      case "ArrowUp": {
-        e.preventDefault();
-        const prev = nextItem(openIndex, focusedItem ?? menus[openIndex].items.length, -1);
-        if (prev !== null) setFocusedItem(prev);
-        break;
-      }
-      case "ArrowRight":
-        e.preventDefault();
-        switchMenu(1);
-        break;
-      case "ArrowLeft":
-        e.preventDefault();
-        switchMenu(-1);
-        break;
-      case "Enter":
-      case " ": {
-        e.preventDefault();
-        if (focusedItem === null) break;
-        const item = menus[openIndex].items[focusedItem];
-        if (item && isFocusable(item)) runItem(item);
-        break;
-      }
-      case "Escape": {
-        e.preventDefault();
-        const btnIndex = openIndex;
+  // Closing an inline dropdown: Esc returns focus to its button (bar stays
+  // focused, like VS Code); anything else closes the whole bar.
+  const onDropdownClose = useCallback(
+    (reason: MenuCloseReason) => {
+      if (reason === "escape" && openIndex !== null) {
+        const btn = openIndex;
         setOpenIndex(null);
-        setFocusedItem(null);
         setBarFocused(true);
-        setActiveIndex(btnIndex);
-        focusButton(btnIndex);
-        break;
+        setActiveIndex(btn);
+        focusButton(btn);
+        return;
       }
-      default:
-        break;
-    }
-  }
-
-  const closeAll = useCallback(() => {
-    setOpenIndex(null);
-    setBarFocused(false);
-    setFocusedItem(null);
-    setOverflowOpen(false);
-    setOverflowSub(null);
-  }, []);
-
-  const runItem = useCallback(
-    (item: MenuItem) => {
-      if (item.enabled === false) return;
-      item.run?.();
       closeAll();
     },
-    [closeAll]
+    [openIndex, closeAll, focusButton],
+  );
+
+  const insideBar = useCallback(
+    (t: Node) => !!barRef.current?.contains(t),
+    [],
   );
 
   const openMenu = openIndex !== null ? menus[openIndex] : null;
@@ -369,15 +220,6 @@ export function MenuBar({ menus }: MenuBarProps) {
   const overflowRect = overflowOpen
     ? overflowBtnRef.current?.getBoundingClientRect()
     : undefined;
-  const subMenu =
-    overflowSub !== null ? menus[fitCount + overflowSub] : null;
-  // The hovered overflow row, for the cascade submenu position.
-  const subRowRect =
-    overflowSub !== null
-      ? overflowRef.current
-          ?.querySelectorAll<HTMLElement>(".menubar-overflow-row")
-          [overflowSub]?.getBoundingClientRect()
-      : undefined;
 
   return (
     <>
@@ -399,22 +241,18 @@ export function MenuBar({ menus }: MenuBarProps) {
             }}
             className={`menubar-menu${openIndex === i ? " active" : ""}`}
             role="menuitem"
-            aria-haspopup="true"
+            aria-haspopup="menu"
             aria-expanded={openIndex === i}
             tabIndex={activeIndex === i ? 0 : -1}
             onClick={() => {
               setActiveIndex(i);
-              // Clicking an inline menu dismisses the overflow (no two-open bug).
               setOverflowOpen(false);
-              setOverflowSub(null);
               setOpenIndex(openIndex === i ? null : i);
-              setFocusedItem(openIndex === i ? null : firstFocusable(i));
             }}
             onMouseEnter={() => {
               // While anything is open (an inline menu OR the overflow), hovering
               // another top-level menu switches to it — like VS Code.
-              if ((openIndex !== null && openIndex !== i) || overflowOpen)
-                openAndFocus(i);
+              if ((openIndex !== null && openIndex !== i) || overflowOpen) openMenuAt(i);
             }}
             onKeyDown={(e) => onBarKeyDown(e, i)}
           >
@@ -426,14 +264,12 @@ export function MenuBar({ menus }: MenuBarProps) {
           <button
             ref={overflowBtnRef}
             className={`menubar-menu menubar-overflow-btn${overflowOpen ? " active" : ""}`}
-            title="Mais"
             aria-label="Mais menus"
-            aria-haspopup="true"
+            aria-haspopup="menu"
             aria-expanded={overflowOpen}
             onClick={() => {
               setOpenIndex(null);
               setOverflowOpen((v) => !v);
-              setOverflowSub(null);
             }}
           >
             {fitCount === 0 ? <HamburgerIcon /> : "⋯"}
@@ -444,71 +280,38 @@ export function MenuBar({ menus }: MenuBarProps) {
         <div className="menubar-filler" data-tauri-drag-region />
       </div>
 
-      {/* Inline dropdown for a fitted menu. */}
-      {openMenu && rect && createPortal(
-        <div
-          ref={dropdownRef}
+      {/* Inline dropdown for a fitted menu (remounts per menu → focuses its
+          first item, like opening it fresh). */}
+      {openMenu && rect && (
+        <Menu
+          key={openIndex}
+          ariaLabel={openMenu.label}
           className="menubar-dropdown"
-          role="menu"
-          style={{ left: rect.left, top: rect.bottom }}
-          onKeyDown={onDropdownKeyDown}
-        >
-          <MenuItems
-            items={openMenu.items}
-            focusedItem={focusedItem}
-            itemRefs={itemRefs}
-            onRun={runItem}
-            onHover={(idx, item) => {
-              if (isFocusable(item)) setFocusedItem(idx);
-            }}
-          />
-        </div>,
-        document.body
+          anchor={{ rect, placement: "bottom-start" }}
+          items={toMenuItems(openMenu.items)}
+          onClose={onDropdownClose}
+          onArrowOut={switchMenu}
+          isInside={insideBar}
+        />
       )}
 
-      {/* Overflow (☰) dropdown: lists the collapsed menus; each flies its items
-          out to the side (cascade). */}
-      {overflowOpen && overflowRect && createPortal(
-        <div
-          ref={overflowRef}
+      {/* Overflow (⋯ / ☰): the collapsed menus, each as a submenu. */}
+      {overflowOpen && overflowRect && (
+        <Menu
+          ariaLabel="Mais menus"
           className="menubar-dropdown menubar-overflow"
-          role="menu"
-          style={{ left: overflowRect.left, top: overflowRect.bottom }}
-        >
-          {overflowMenus.map((menu, i) => (
-            <button
-              key={menu.label}
-              className={`menubar-item menubar-overflow-row${overflowSub === i ? " focused" : ""}`}
-              role="menuitem"
-              aria-haspopup="true"
-              aria-expanded={overflowSub === i}
-              onMouseEnter={() => setOverflowSub(i)}
-              onClick={() => setOverflowSub(overflowSub === i ? null : i)}
-            >
-              <span className="menubar-item-label">{menu.label}</span>
-              <span className="menubar-item-accel">›</span>
-            </button>
-          ))}
-        </div>,
-        document.body
-      )}
-
-      {/* Cascade submenu for the hovered overflow row. */}
-      {subMenu && subRowRect && createPortal(
-        <div
-          ref={submenuRef}
-          className="menubar-dropdown menubar-submenu"
-          role="menu"
-          style={{ left: subRowRect.right - 2, top: subRowRect.top }}
-        >
-          <MenuItems
-            items={subMenu.items}
-            focusedItem={null}
-            onRun={runItem}
-            onHover={() => {}}
-          />
-        </div>,
-        document.body
+          anchor={{ rect: overflowRect, placement: "bottom-start" }}
+          items={overflowMenus.map((menu) => ({
+            id: `menu-${menu.label}`,
+            label: menu.label,
+            submenu: toMenuItems(menu.items),
+          }))}
+          onClose={(reason) => {
+            closeAll();
+            if (reason === "escape") overflowBtnRef.current?.focus();
+          }}
+          isInside={insideBar}
+        />
       )}
     </>
   );

@@ -1,0 +1,10 @@
+{
+  "displayName": "GitLens — Git supercharged",
+  "description": "Supercharge Git within VS Code",
+  "commands.showCommitsView": "Show Commits View",
+  "views.commits.name": "Commits",
+  "views.home.name": "Home",
+  "viewsContainers.gitlens": "GitLens",
+  "configuration.title": "GitLens",
+  "config.codeLens.enabled": { "message": "Specifies whether to provide any Git CodeLens", "comment": ["markdown"] }
+}

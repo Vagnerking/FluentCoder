@@ -54,7 +54,9 @@ Implementação principal:
 - `src/lsp/client.ts`: bloqueio inicial do provider e descarte de respostas
   semânticas antigas;
 - `src/lsp/uri.ts`: serialização compatível das URIs Windows;
-- `src/components/EditorPane.tsx`: cores das categorias semânticas;
+- `src/theme/builtinThemes.ts` (Fluent Escuro/Claro/Alto Contraste) e
+  `src/theme/monacoTheme.ts` (temas de extensão): cores das categorias
+  semânticas — ver [Temas](temas.md);
 - `src/lsp/monacoSetup.ts`: registro e tokenizer léxico do C#.
 
 ### Regras que não podem ser removidas
@@ -136,7 +138,10 @@ Quando houver regressão:
    - se respostas antigas estão sendo descartadas;
    - se existem refreshes temporizados ou providers duplicados.
 5. Se a categoria estiver correta no log, mas a cor estiver errada, corrigir o
-   tema semântico em `EditorPane.tsx`.
+   tema semântico em `src/theme/builtinThemes.ts` (embutidos) ou a derivação em
+   `src/theme/monacoTheme.ts` (temas de extensão). Todo tema, inclusive de
+   extensão, TEM de ter regra para as categorias obrigatórias acima
+   (`REQUIRED_SEMANTIC`, testado em `src/theme/themes.test.ts`).
 
 Não corrigir problemas de classificação de tipos apenas alterando cores. A cor
 deve refletir a categoria correta fornecida pelo Roslyn.
@@ -185,3 +190,83 @@ O Roslyn usado pelo app aceita `textDocument/diagnostic`, mas pode omitir
 - ao associar diagnósticos de `dotnet build` a modelos Monaco no Windows,
   comparar URIs com drive canônico, pois `file:///C:/...` e `file:///c:/...`
   representam o mesmo arquivo.
+
+## Identidade dos arquivos locais
+
+Ao procurar uma aba já aberta ou restaurar a sessão, não inferir a identidade
+física de um arquivo POSIX pelo sistema operacional. Volumes macOS podem
+ignorar ou distinguir maiúsculas. Consultar o filesystem pelo comando assíncrono
+`find_same_file`; no Unix, comparar device/inode. Reutilizar o caminho e o
+buffer da aba encontrada, preservando edições não salvas. Manter arquivos
+fisicamente distintos separados. Caminhos SSH não devem ser consultados no
+filesystem local. `samePath` continua sendo uma comparação lexical, não uma
+prova de identidade em disco.
+
+Na conclusão de aberturas concorrentes, registrar buffer e foco numa única
+atualização da grade, comparando também a identidade transitória das leituras
+que se sobrepuseram. Uma resposta negativa recente para uma aba já conhecida
+prevalece sobre um identificador antigo. No Unix, a leitura inicial entrega a
+identidade do mesmo descriptor usado para obter os bytes. Essas identidades
+ficam fora da sessão persistida. A janela destacada aplica a mesma regra ao
+receber um pedido de abertura, preservando seu buffer sujo.
+
+Pedidos de salto de linha aguardam o arquivo e o modelo Monaco de destino;
+consumir o pedido uma única vez, no mount ou na troca efetiva do modelo. Usar
+o modelo existente preserva o lifecycle e o registro dos language services.
+
+## Temas, gramáticas e snippets de extensões
+
+- O tema do editor segue o tema de cor ATIVO (`src/theme/registry.ts`); nunca
+  passe nome fixo (`"fluent-acrylic-dark"`) a `<Editor>`/`create*`: use
+  `useMonacoThemeId()`/`getActiveColorTheme().monacoId` (o standalone aplica o
+  tema globalmente a cada criação). Caminho standalone (`defineTheme`), sem o
+  theme/textmate service override (ADR 0003, `src/lsp/vscodeServices.ts`).
+- Gramáticas/linguagens/snippets de extensões nunca tocam C#, Razor/CSHTML
+  nem TS/JS/JSON/CSS/HTML (mapeamento, tokenização, configuração, injeção,
+  provider de snippet em `cshtml`/`aspnetcorerazor`/`razor`). Detalhes em
+  [Temas](temas.md).
+
+## Ações do editor, origem da abertura e anotações Git
+
+- A barra de ações do título do editor (`src/components/editor/EditorActions.tsx`)
+  fica à direita das abas. Outras frentes contribuem itens com
+  `registerEditorAction({ id, icon, label, run | menu, when?, group?, order? })`
+  (`editorActionRegistry.ts`); o excedente vai para "Mais ações".
+- Não existe barra Git permanente. O menu Git (`GitEditorActions.tsx`) oferece
+  Comparar alterações, Histórico do arquivo e os toggles Autoria por linha
+  (blame) e Mapa de recência (heatmap).
+- Anotações são **por editor** (grupo + arquivo), começam em `off`, nunca são
+  persistidas e nunca ligam sozinhas — nem ao abrir pelo SCM. Carregamento e
+  decorações vivem em `src/editor/git/useGitAnnotations.ts`.
+- `OpenFile.openedFrom` registra a origem (`explorer`, `scm`, …) e
+  `OpenFile.diff` os lados da comparação. Clicar num item do Controle de
+  Código abre o **diff** com os lados de `scmOpenTarget` (`src/editor/openRouting.ts`):
+  preparado = HEAD ↔ Index; não preparado = Index ↔ Working tree quando também
+  há stage, senão HEAD ↔ Working tree; conflito/não rastreado abre o arquivo.
+  Abrir pelo Explorer mostra o editor normal.
+
+## Cabeçalho do grupo e breadcrumbs
+
+- `EditorGroupHeader` renderiza na ordem real do DOM: abas + ações →
+  breadcrumbs → conteúdo (sem `order` no CSS; ordem de foco = ordem visual).
+- Breadcrumbs (`Breadcrumbs.tsx` + `src/editor/breadcrumbs.ts`): `raiz ›
+  pasta › … › arquivo › símbolo`, com a raiz mais específica do workspace
+  (multi-root e SSH; `workspaceRemote.folderId` desambigua). Arquivo na raiz
+  mostra `raiz › arquivo`. Cada segmento abre o `BreadcrumbPicker`.
+- Símbolos vêm do `IOutlineModelService` do Monaco — o mesmo agregador de
+  `DocumentSymbolProvider`s do outline (Ctrl+Shift+O). Não registrar provider
+  novo nem criar outra instância do Monaco para isso.
+
+## Abas
+
+- `TabBar` é composição: `EditorTab` (apresentação), `useTabOverflow`
+  (fades/setas/roda/auto-rolagem), `useEditorTabDrag` (reordenar, mover entre
+  grupos/janelas, destacar; preview de arraste dedicado) e `TabContextMenu`.
+  Regras puras em `src/components/editor/tabLogic.ts`.
+- Teclado (tablist, ativação manual): ←/→/Home/End movem o foco itinerante;
+  Enter/Espaço ativam; Delete fecha; botão do meio fecha.
+- Homônimos ganham o sufixo de pasta esmaecido que os distingue (`…/git`).
+- Preview: clique simples no Explorer abre em itálico e substitui a preview
+  limpa do grupo; editar, duplo clique ou fixar tornam a aba permanente.
+  Abas fixadas ficam no início, mostram o pino e sobrevivem a "Fechar
+  outras/à esquerda/à direita/todas"; o estado fixado é salvo na sessão.

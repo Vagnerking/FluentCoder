@@ -233,11 +233,7 @@ pub async fn ensure_ts_cached(app: &AppHandle) -> Result<PathBuf, String> {
             "--loglevel",
             "error",
         ]);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-        }
+        crate::child_process::hide_console_window(&mut cmd);
         cmd.output()
     })
     .await
@@ -267,11 +263,7 @@ fn npm_global_root() -> Option<PathBuf> {
     let npm = which::which("npm").ok()?;
     let mut cmd = std::process::Command::new(npm);
     cmd.args(["root", "-g"]);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
+    crate::child_process::hide_console_window(&mut cmd);
     let output = cmd.output().ok()?;
     if !output.status.success() {
         return None;

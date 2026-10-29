@@ -1,0 +1,39 @@
+/* ---- Run / Debug panel ---- */
+.run-panel { display: flex; flex-direction: column; height: 100%; }
+
+.run-header { gap: 4px; }
+
+.run-root-body { padding-bottom: var(--space-sm); }
+
+.run-group { margin-top: var(--space-xxs); }
+
+.run-unavailable-root { margin: 4px 8px; padding: 6px 8px; border-radius: var(--radius-control); color: var(--text-muted); background: rgba(226,192,141,0.08); border: 1px solid rgba(226,192,141,0.14); font-size: var(--font-caption-sm); }
+
+.run-draft { display: flex; flex-direction: column; gap: 6px; padding: 4px 12px 10px; }
+
+.run-draft-actions { display: flex; align-items: center; gap: 8px; }
+
+.run-draft-actions .git-commit-btn { flex: 1; }
+
+
+.run-row { display: flex; align-items: center; gap: 8px; margin: 1px 6px; padding: 4px 6px; border-radius: var(--radius-control); cursor: default; }
+
+.run-row:hover { background: var(--fill-subtle-hover); }
+
+.ui-icon-button.run-play:not(:disabled) { color: var(--color-status-success); }
+
+.run-info { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+
+.run-name { font-size: var(--font-base); color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.run-cmd { font-size: var(--font-caption-xs); color: var(--text-disabled); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
+
+.run-remove { opacity: 0; }
+
+.run-row:hover .run-remove,
+.run-row:focus-within .run-remove { opacity: 1; }
+
+/* Entradas de .vscode/tasks.json e launch.json (VscodeSection). */
+.run-tag { margin-left: var(--space-xs); padding: 0 var(--space-xs); border-radius: var(--radius-pill); background: var(--acrylic-control); color: var(--text-muted); font-size: var(--font-caption-xs); }
+
+.run-row.is-disabled .run-name { color: var(--text-muted); }

@@ -1,0 +1,27 @@
+.status-remote {
+  color: var(--text-on-accent);
+  background: var(--accent);
+  font-weight: 600;
+}
+
+.status-remote[role="button"]:hover {
+  color: var(--text-on-accent);
+  background: var(--accent-hover);
+}
+
+.status-remote[role="button"]:active {
+  background: var(--accent-pressed);
+}
+
+/* Remote: the one accented chip (where am I connected). Local = accent-tinted
+   launcher (VS Code's `><`); attached = filled accent pill with the host. */
+.status-remote-local {
+  padding: 0 var(--space-sm);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.status-remote-local[role="button"]:hover {
+  color: var(--accent-hover);
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+}

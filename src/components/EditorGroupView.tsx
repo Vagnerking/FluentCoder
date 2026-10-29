@@ -1,18 +1,37 @@
-import { useEffect, useState } from "react";
-import type { MatchSelection, EditorActionsApi, FileDecoration, Problem } from "../types";
+import type { PendingEditorReveal } from "../editor/pendingReveal";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type {
+  BlameHunk,
+  MatchSelection,
+  EditorActionsApi,
+  FileDecoration,
+  GitAnnotationMode,
+  OpenFile,
+  Problem,
+} from "../types";
 import type { Edge, EditorGroup } from "../editorGroups";
 import { isDropMeaningful } from "../editorGroups";
-import { Breadcrumbs } from "./Breadcrumbs";
-import { TabBar, TAB_DRAG_MIME, type TabDragPayload } from "./TabBar";
+import { TAB_DRAG_MIME, type TabDragPayload } from "./TabBar";
+import { EditorGroupHeader } from "./editor/EditorGroupHeader";
+import type { BreadcrumbRoot } from "../editor/breadcrumbs";
+import type { editor } from "monaco-editor";
 import { EditorPane } from "./EditorPane";
 import { ImagePreview } from "./ImagePreview";
 import { MediaPreview } from "./MediaPreview";
 import { GraphView } from "./GraphView";
+import { SettingsEditor } from "./settings/SettingsEditor";
+import { KeybindingsEditor } from "./settings/KeybindingsEditor";
+import type { GitRevisionDiffTarget } from "../api";
+import { ExtensionWebviewTab, handleOfWebviewTab } from "../extensions";
+import { EditorActions, type EditorActionItem } from "./editor/EditorActions";
+import { gitEditorAction } from "./editor/GitEditorActions";
 
 export interface EditorGroupViewProps {
   group: EditorGroup;
   isActive: boolean;
   rootPath: string | null;
+  /** Raízes do workspace para os breadcrumbs (multi-root/SSH). */
+  breadcrumbRoots: readonly BreadcrumbRoot[];
   decorationFor: (path: string) => FileDecoration | undefined;
   onFocusGroup: () => void;
   // Tab actions (already bound to this group's id by the grid).
@@ -23,6 +42,9 @@ export interface EditorGroupViewProps {
   onCloseLeft: (path: string) => void;
   onCloseRight: (path: string) => void;
   onReorder: (from: string, to: string, before: boolean) => void;
+  /** Fixar/desafixar e "manter aberta" (sair do preview). */
+  onPin: (path: string, pinned: boolean) => void;
+  onKeepOpen: (path: string) => void;
   externalDragActive: boolean;
   onTabStripDrop: (
     payload: { groupId: string; path: string },
@@ -37,20 +59,36 @@ export interface EditorGroupViewProps {
   onCursorChange: (line: number, col: number) => void;
   onProblemsChange: (problems: Problem[]) => void;
   onOpenDefinition: (path: string, line: number, column: number) => void;
+  onShowFileHistory?: (path: string, line?: number) => void;
+  /** "Comparar alterações" do menu Git: abre o diff do arquivo. */
+  onCompareChanges?: (path: string) => void;
+  onOpenRevision?: (filePath: string, commitHash: string, shortHash: string) => void;
+  onOpenRevisionDiff?: (
+    filePath: string,
+    commitHash: string,
+    shortHash: string,
+    compareTo: GitRevisionDiffTarget
+  ) => void;
+  onCurrentBlameChange?: (hunk: BlameHunk | null, filePath: string | null) => void;
   revealRef?: React.MutableRefObject<
     ((line: number, selection?: MatchSelection) => void) | null
   >;
-  pendingReveal?: React.MutableRefObject<{
-    line: number;
-    selection?: MatchSelection;
-  } | null>;
+  pendingReveal?: React.MutableRefObject<PendingEditorReveal | null>;
   actionsRef?: React.MutableRefObject<EditorActionsApi | null>;
   // Drop a dragged tab onto this group (move into it, or split off an edge).
   onTabDrop: (edge: Edge, fromGroupId: string, path: string) => void;
   /** Opens a file by path (used by the graph view's node clicks). */
-  onOpenPath: (path: string) => void;
+  onOpenPath: (path: string, workspaceRemote?: OpenFile["workspaceRemote"]) => void;
   /** The workbench's active real file, highlighted in the graph view. */
   graphActivePath?: string | null;
+  /** Root scanned by the graph tab. Defaults to rootPath for single-root mode. */
+  graphRootPath?: string | null;
+  /** SSH connection id when graphRootPath points at a remote root. */
+  graphConnId?: string | null;
+  /** Explicit SSH origin for graph node opens. */
+  graphWorkspaceRemote?: OpenFile["workspaceRemote"];
+  /** 1-based column of this group in the grid (`WebviewPanel.viewColumn`). */
+  viewColumn?: number;
   /** True while ANY tab is being dragged — shields this group's editor with a
    *  capture overlay so Monaco doesn't move its cursor/scroll under the drag. */
   tabDragging: boolean;
@@ -122,6 +160,63 @@ export function EditorGroupView(props: EditorGroupViewProps) {
   const active = group.files.find((f) => f.path === group.activePath) ?? null;
   const mode = active?.mode ?? "text";
   const [dropEdge, setDropEdge] = useState<Edge | null>(null);
+  // Editor Monaco do grupo (breadcrumbs: símbolos sob o cursor).
+  const [editorInstance, setEditorInstance] = useState<editor.IStandaloneCodeEditor | null>(null);
+  // Anotações Git por editor (arquivo deste grupo): toggles explícitos, nunca
+  // persistidos — fechar a aba (ou reabrir pelo Explorer) volta a "off".
+  const [annotationModes, setAnnotationModes] = useState<Record<string, GitAnnotationMode>>({});
+  const [blameAvailable, setBlameAvailable] = useState<Record<string, boolean>>({});
+  const openPathsKey = group.files.map((f) => f.path).join("\n");
+  useEffect(() => {
+    const open = new Set(group.files.map((f) => f.path));
+    const prune = <T,>(rec: Record<string, T>) => {
+      const keys = Object.keys(rec);
+      return keys.every((k) => open.has(k))
+        ? rec
+        : Object.fromEntries(keys.filter((k) => open.has(k)).map((k) => [k, rec[k]]));
+    };
+    setAnnotationModes(prune);
+    setBlameAvailable(prune);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openPathsKey]);
+  const handleAnnotationsAvailable = useCallback((path: string, available: boolean) => {
+    setBlameAvailable((cur) => (cur[path] === available ? cur : { ...cur, [path]: available }));
+  }, []);
+  const annotationMode: GitAnnotationMode = active ? annotationModes[active.path] ?? "off" : "off";
+
+  const actionCtx = useMemo(
+    () => ({ file: active, groupId: group.id, isActiveGroup: isActive }),
+    [active, group.id, isActive]
+  );
+  const editorActions = useMemo<EditorActionItem[]>(
+    () => [
+      {
+        id: "open-source",
+        icon: "file",
+        label: "Abrir arquivo",
+        order: 10,
+        when: ({ file }) => !!file?.sourcePath && file.mode === "diff",
+        run: ({ file }) => file?.sourcePath && props.onOpenPath(file.sourcePath, file.workspaceRemote),
+      },
+      gitEditorAction({
+        mode: annotationMode,
+        onModeChange: (path, mode) => setAnnotationModes((cur) => ({ ...cur, [path]: mode })),
+        hasBlame: (path) => !!blameAvailable[path],
+        decorationFor: props.decorationFor,
+        onCompareChanges: props.onCompareChanges,
+        onShowFileHistory: props.onShowFileHistory ? (path) => props.onShowFileHistory?.(path) : undefined,
+      }),
+      {
+        id: "split",
+        icon: "splitEditor",
+        label: "Dividir editor para a direita",
+        order: 90,
+        run: () => props.onSplit("right"),
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [annotationMode, blameAvailable, props.decorationFor, props.onCompareChanges, props.onShowFileHistory, props.onSplit, props.onOpenPath]
+  );
 
   // When the drag finishes anywhere, drop the highlight in every group.
   useEffect(() => {
@@ -141,41 +236,86 @@ export function EditorGroupView(props: EditorGroupViewProps) {
       className={`editor-group${isActive ? " active" : ""}`}
       onMouseDownCapture={props.onFocusGroup}
     >
-      {mode !== "graph" && (
-        <Breadcrumbs filePath={group.activePath} rootPath={props.rootPath} />
-      )}
-      <TabBar
-        files={group.files}
-        activePath={group.activePath}
-        groupId={group.id}
-        onSelect={props.onSelect}
-        onClose={props.onClose}
-        onCloseAll={props.onCloseAll}
-        onCloseOthers={props.onCloseOthers}
-        onCloseLeft={props.onCloseLeft}
-        onCloseRight={props.onCloseRight}
-        onMoveToNewWindow={props.onMoveToNewWindow}
-        onDetach={props.onDetach}
-        onReorder={props.onReorder}
-        externalDragActive={props.externalDragActive}
-        onTabStripDrop={props.onTabStripDrop}
-        onSplit={props.onSplit}
-        onDragStateChange={(d) =>
-          d ? props.onTabDragStart(d) : props.onTabDragEnd()
+      <EditorGroupHeader
+        tabs={{
+        files: group.files,
+        activePath: group.activePath,
+        groupId: group.id,
+        onSelect: props.onSelect,
+        onClose: props.onClose,
+        onCloseAll: props.onCloseAll,
+        onCloseOthers: props.onCloseOthers,
+        onCloseLeft: props.onCloseLeft,
+        onCloseRight: props.onCloseRight,
+        onMoveToNewWindow: props.onMoveToNewWindow,
+        onDetach: props.onDetach,
+        onReorder: props.onReorder,
+        onPin: props.onPin,
+        onKeepOpen: props.onKeepOpen,
+        externalDragActive: props.externalDragActive,
+        onTabStripDrop: props.onTabStripDrop,
+        onDragStateChange: (d) => (d ? props.onTabDragStart(d) : props.onTabDragEnd()),
+        onDragMove: props.onDragMove,
+        decorationFor: props.decorationFor,
+        }}
+        breadcrumbs={
+          active && mode !== "graph" && mode !== "webview" && mode !== "settings" && mode !== "keybindings"
+            ? {
+                file: active,
+                roots: props.breadcrumbRoots,
+                editor: mode === "text" ? editorInstance : null,
+                onOpenFile: props.onOpenPath,
+              }
+            : null
         }
-        onDragMove={props.onDragMove}
-        decorationFor={props.decorationFor}
+        actions={
+          <EditorActions
+            ctx={actionCtx}
+            actions={editorActions}
+            maxPrimary={5}
+            moreItems={[
+              {
+                id: "split-down",
+                label: "Dividir editor para baixo",
+                icon: "splitEditor",
+                onSelect: () => props.onSplit("bottom"),
+              },
+              { id: "sep-close", separator: true },
+              {
+                id: "close-all",
+                label: "Fechar todas",
+                icon: "closeAll",
+                onSelect: () => props.onCloseAll(),
+              },
+            ]}
+          />
+        }
       />
       <div className="editor-group-body">
         {!active && props.welcome ? (
           props.welcome
         ) : active && mode === "image" ? (
-          <ImagePreview path={active.path} name={active.name} />
+          <ImagePreview
+            path={active.path}
+            name={active.name}
+            connId={active.workspaceRemote?.connId}
+          />
         ) : active && (mode === "video" || mode === "audio") ? (
-          <MediaPreview path={active.path} name={active.name} kind={mode} />
-        ) : active && mode === "graph" ? (
+          <MediaPreview
+            path={active.path}
+            name={active.name}
+            kind={mode}
+            connId={active.workspaceRemote?.connId}
+          />
+        ) : active && mode === "settings" ? (
+          <SettingsEditor onOpenFile={(p) => props.onOpenPath(p)} />
+        ) : active && mode === "keybindings" ? (
+          <KeybindingsEditor onOpenFile={(p) => props.onOpenPath(p)} />
+        ) : active && mode === "webview" ? null : active && mode === "graph" ? (
           <GraphView
-            rootPath={props.rootPath}
+            rootPath={props.graphRootPath ?? props.rootPath}
+            connId={props.graphConnId ?? null}
+            workspaceRemote={props.graphWorkspaceRemote}
             activePath={props.graphActivePath ?? null}
             onOpenFile={props.onOpenPath}
           />
@@ -192,8 +332,30 @@ export function EditorGroupView(props: EditorGroupViewProps) {
             pendingReveal={props.pendingReveal}
             actionsRef={props.actionsRef}
             onOpenDefinition={props.onOpenDefinition}
+            onShowFileHistory={props.onShowFileHistory}
+            onOpenRevision={props.onOpenRevision}
+            onOpenRevisionDiff={props.onOpenRevisionDiff}
+            fileDecoration={active ? props.decorationFor(active.path) : undefined}
+            onCurrentBlameChange={props.onCurrentBlameChange}
+            gitAnnotationMode={annotationMode}
+            onEditorReady={setEditorInstance}
+            onGitAnnotationsAvailable={handleAnnotationsAvailable}
           />
         )}
+        {/* Painéis de webview de extensões: ficam montados enquanto a aba está
+            no grupo (retainContextWhenHidden) e só o ativo aparece. */}
+        {group.files
+          .filter((f) => f.mode === "webview")
+          .map((f) => {
+            const handle = handleOfWebviewTab(f.path);
+            if (!handle) return null;
+            const shown = f.path === group.activePath;
+            return (
+              <div key={f.path} className="editor-webview-pane" hidden={!shown}>
+                <ExtensionWebviewTab handle={handle} visible={shown} active={shown && isActive} viewColumn={props.viewColumn ?? 1} />
+              </div>
+            );
+          })}
         {/* While a tab is in flight, an opaque-to-events overlay sits over the
             editor: it captures the drag (so Monaco never sees it and can't move
             its cursor/scroll) and computes the drop edge. The visual highlight

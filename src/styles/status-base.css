@@ -1,0 +1,175 @@
+/* ---- Status Bar ---- */
+/* Part of the window shell (no own fill/border); items are compact 20px pills
+   that light up on hover, so the bar reads as quiet chrome until touched. */
+.status-bar {
+  height: 24px;
+  min-height: 24px;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 0 var(--space-xs);
+  font-size: var(--font-caption);
+  color: var(--text-muted);
+  user-select: none;
+  -webkit-user-select: none;
+  overflow: hidden;
+  /* Lets the items below react to the bar's width (responsive hide). */
+  container-type: inline-size;
+}
+
+.status-left, .status-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  min-width: 0;
+  height: 100%;
+}
+
+/* Grupo esquerdo estreito: corta no fim em vez de sobrepor os itens. */
+.status-left {
+  overflow: hidden;
+}
+
+/* The left group (remote/git/diagnostics) keeps priority; the right group's
+   lower-value items drop out first as the bar narrows — and reappear in the
+   "Mais" menu (button.status-more; thresholds mirrored in
+   src/components/status/statusOverflow.ts, kept in sync by a unit test). */
+.status-right { flex-shrink: 0; margin-left: auto; }
+
+button.status-more {
+  flex-shrink: 0;
+  font: inherit;
+  border: 0;
+  background: transparent;
+}
+
+@container (max-width: 720px) {
+  .status-bar .status-tabsize { display: none; }
+
+}
+
+@container (max-width: 680px) {
+  .status-bar .status-eol { display: none; }
+
+}
+
+@container (max-width: 620px) {
+  .status-bar .status-encoding { display: none; }
+
+}
+
+@container (max-width: 520px) {
+  .status-bar .status-language { display: none; }
+
+}
+
+@container (max-width: 430px) {
+  .status-bar .status-cursor { display: none; }
+
+}
+
+@container (max-width: 360px) {
+  .status-bar .status-workspace { display: none; }
+
+}
+
+@container (max-width: 860px) {
+  .status-bar .status-blame-subject { display: none; }
+
+}
+
+@container (max-width: 680px) {
+  .status-bar .status-blame { display: none; }
+
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 0 6px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  cursor: default;
+  white-space: nowrap;
+  color: var(--text-muted);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.status-item[role="button"], .status-clickable { cursor: pointer; }
+
+.status-item[role="button"]:hover,
+.status-clickable:hover {
+  background: var(--fill-subtle-hover);
+  color: var(--text);
+}
+
+.status-item[role="button"]:active,
+.status-clickable:active {
+  background: var(--fill-subtle-active);
+}
+
+.status-item:focus-visible {
+  outline: var(--focus-ring-width) solid var(--stroke-focus);
+  outline-offset: -1px;
+}
+
+.status-bar .codicon { font-size: var(--icon-sm); line-height: 1; }
+
+/* Diagnostics: breathing room between the error and warning groups, and between
+   each icon and its count. Color is paired with the icon (never alone). */
+.status-diagnostics { gap: var(--space-sm); }
+
+.status-diag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.status-diag-error .codicon { color: var(--color-status-error); }
+
+.status-diag-warning .codicon { color: var(--color-status-warning-strong); }
+
+/* LSP servers: the glyph carries the state (spinner / check / error). */
+.status-lsp-ready .codicon { color: var(--color-status-success); }
+
+.status-lsp-error { color: var(--color-status-error); }
+
+.status-lsp-error .codicon { color: var(--color-status-error); }
+
+/* ---- Git indicator (branch + sync) ---- */
+.status-git-branch .codicon { color: var(--text-secondary); }
+
+.status-menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+}
+
+.status-claude .codicon { color: var(--accent); }
+
+/* Indicador "Claude conectado" na status bar. */
+.status-claude { color: var(--text); }
+
+.status-claude .codicon { color: var(--accent); }
+
+/* ---- Extensões VS Code hospedadas: itens de barra de status e avisos globais ---- */
+button.status-ext {
+  font: inherit;
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+}
+
+button.status-ext:hover {
+  background: var(--acrylic-control-hover);
+}
+
+button.status-ext:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}

@@ -6,6 +6,10 @@ export interface FileNode {
   name: string;
   path: string;
   isDir: boolean;
+  /** Owning workspace root, used to avoid path-only ambiguity in multi-root trees. */
+  workspaceRootId?: string;
+  /** Explicit remote origin when a node comes from a workspace SSH root. */
+  workspaceRemote?: OpenFile["workspaceRemote"];
   /** Lazily loaded children; undefined until the folder is first expanded. */
   children?: FileNode[];
   /** Whether the folder is currently expanded in the UI. */
@@ -23,9 +27,10 @@ export interface RawDirEntry {
  * How a file is rendered when open. `"text"` is the Monaco editor (the default
  * for every file); `"image"` is the read-only image preview. The "Open With…"
  * selector (ISSUE-70) lets the user pick which one, and `OpenFile.mode` records
- * the choice so the App can route the buffer to the right view.
+ * the choice so the App can route the buffer to the right view. `"webview"` is
+ * a VS Code extension's webview panel (`createWebviewPanel`) as an editor tab.
  */
-export type OpenMode = "text" | "image" | "video" | "audio" | "graph";
+export type OpenMode = "text" | "image" | "video" | "audio" | "graph" | "diff" | "webview" | "settings" | "keybindings";
 
 /** One file in the workspace "context graph" (Obsidian-style map). */
 export interface GraphNode {
@@ -92,12 +97,89 @@ export interface McpConfig {
 }
 
 /** A file currently open in the editor. */
+/** Origem da abertura de um editor (ver `OpenFile.openedFrom`). */
+export type EditorOpenOrigin =
+  | "explorer"
+  | "scm"
+  | "quickOpen"
+  | "search"
+  | "breadcrumb"
+  | "definition"
+  | "history"
+  | "agent"
+  | "session"
+  | "other";
+
+/** Um lado de uma comparação Git. `empty` = arquivo inexistente nesse lado. */
+export type GitDiffSide = "HEAD" | "index" | "workingTree" | "empty";
+
+/** Apresentação de uma aba de comparação: qual lado está à esquerda/direita. */
+export interface EditorDiffPresentation {
+  original: GitDiffSide;
+  modified: GitDiffSide;
+}
+
+/** Anotação Git de um editor (toggle explícito, por editor, nunca persistido). */
+export type GitAnnotationMode = "off" | "blame" | "heatmap";
+
 export interface OpenFile {
   path: string;
+  /** Transient local filesystem identity for racing opens; never persist in sessions. */
+  localIdentity?: string;
   name: string;
   content: string;
+  /**
+   * Remote origin for a file opened from an SSH root inside a multi-root
+   * workspace. This routes read/save by explicit connection id instead of the
+   * window-wide remote session.
+   */
+  workspaceRemote?: {
+    folderId: string;
+    connId: string;
+    host: string;
+    user: string;
+    rootPath: string;
+  };
   /** True when the buffer differs from what's on disk. */
   dirty: boolean;
+  /** Read-only tabs are virtual views such as Git revisions (or huge files). */
+  readOnly?: boolean;
+  /**
+   * Large-file mode (> 5 MB): opened as plaintext with the heavy Monaco
+   * features off and no LSP `didOpen`. See `editor/fileOpenPolicy.ts`.
+   */
+  largeFile?: boolean;
+  /** Original file represented by a virtual/read-only tab. */
+  sourcePath?: string;
+  /** Small UI hint shown by editor surfaces for virtual tabs. */
+  sourceLabel?: string;
+  /** Commit metadata for Git revision/diff tabs. */
+  revisionHash?: string;
+  revisionShort?: string;
+  revisionRemoteUrl?: string;
+  /** Left side of a side-by-side diff tab. */
+  originalContent?: string;
+  /** Right side of a side-by-side diff tab. */
+  modifiedContent?: string;
+  /** Labels shown above a side-by-side diff tab. */
+  originalLabel?: string;
+  modifiedLabel?: string;
+  /**
+   * De onde o editor foi aberto (apresentação, não documento). Abrir pelo
+   * Explorer mostra o editor normal, sem chrome Git; pelo Controle de Código
+   * abre a comparação. Nunca liga anotações (blame/heatmap) sozinho.
+   */
+  openedFrom?: EditorOpenOrigin;
+  /** Lados de uma comparação Git (só em abas `mode: "diff"`). */
+  diff?: EditorDiffPresentation;
+  /**
+   * Aba de preview (nome em itálico): a próxima abertura por clique simples no
+   * mesmo grupo a substitui. Editar, dar duplo clique ou fixar a torna
+   * permanente.
+   */
+  preview?: boolean;
+  /** Aba fixada: fica no início e não fecha por "Fechar outras/todas/…". */
+  pinned?: boolean;
   /**
    * Which view renders this file. Defaults to `"text"` when omitted (every
    * pre-Open-With caller). Image files opened by double-click default to
@@ -169,6 +251,33 @@ export interface OpenTab {
   path: string;
   /** Persisted view; omitted ⇒ let `defaultModeFor` decide on reopen. */
   mode?: OpenMode;
+  /** Aba fixada. */
+  pinned?: boolean;
+}
+
+/** Workspace shell persisted in the UI session, including unsaved workspaces. */
+export interface SessionWorkspace {
+  filePath: string | null;
+  data: {
+    fluentWorkspace: 1;
+    name?: string;
+    folders: {
+      id?: string;
+      name?: string;
+      path: string;
+      remote?: {
+        type: "ssh";
+        host: string;
+        user: string;
+        port?: number;
+        keyPath?: string;
+      };
+    }[];
+    git?: {
+      mode?: "perFolder";
+    };
+    settings?: Record<string, unknown>;
+  };
 }
 
 /** Persisted UI session, mirroring the Rust `Session`. */
@@ -181,6 +290,8 @@ export interface Session {
   activePath: string | null;
   /** Editor split grid as a JSON blob (tree + per-group tabs); null ⇒ flat. */
   layout?: string | null;
+  /** Multi-root workspace snapshot, present even before saving a .fluent-workspace file. */
+  workspace?: SessionWorkspace | null;
 }
 
 /** Search toggles + glob filters, mirroring the Rust `SearchOptions`. */
@@ -250,7 +361,10 @@ export interface ProjectFile {
 
 /** A changed path in `git status`, mirroring the Rust `GitFileStatus`. */
 export interface GitFileStatus {
+  /** Path relative to the repository top-level (`GitStatus.root`), raw (`-z`). */
   path: string;
+  /** Original path of a rename/copy. */
+  origPath?: string;
   /** Two-letter porcelain code, e.g. " M", "A ", "??", "UU". */
   code: string;
   staged: boolean;
@@ -261,6 +375,12 @@ export interface GitFileStatus {
 
 /** Overall repo state, mirroring the Rust `GitStatus`. */
 export interface GitStatus {
+  /**
+   * Repository top-level (`git rev-parse --show-toplevel`). `files[].path` are
+   * relative to THIS — not to the workspace folder that was queried, which can
+   * be a subfolder of the repo. Empty when not a repo.
+   */
+  root: string;
   branch: string;
   ahead: number;
   behind: number;
@@ -271,10 +391,26 @@ export interface GitStatus {
   files: GitFileStatus[];
 }
 
+/** One linked Git worktree. */
+export interface GitWorktreeInfo {
+  path: string;
+  branch: string;
+  head: string;
+  detached: boolean;
+  bare: boolean;
+  current: boolean;
+}
+
 /** One stash entry, mirroring the Rust `GitStashEntry`. */
 export interface GitStashEntry {
   index: number;
   message: string;
+}
+
+/** One file changed inside a stash entry. */
+export interface GitStashFile {
+  path: string;
+  status: string;
 }
 
 /** One commit in the history list, mirroring the Rust `GitCommit`. */
@@ -282,8 +418,56 @@ export interface GitCommit {
   hash: string;
   short: string;
   author: string;
+  authorEmail?: string;
+  avatarUrl?: string;
+  isCurrentUser?: boolean;
   date: string;
   subject: string;
+  additions?: number;
+  deletions?: number;
+  filesChanged?: number;
+  remoteUrl?: string;
+}
+
+/** Current branch comparison against its configured upstream. */
+export interface GitUpstreamComparison {
+  upstream: string;
+  ahead: GitCommit[];
+  behind: GitCommit[];
+}
+
+/** One row in the Git commit graph. */
+export interface GitGraphCommit {
+  hash: string;
+  short: string;
+  parents: string[];
+  refs: string[];
+  author: string;
+  authorEmail?: string;
+  avatarUrl?: string;
+  isCurrentUser?: boolean;
+  date: string;
+  subject: string;
+  remoteUrl?: string;
+}
+
+export interface GitHistoryTarget {
+  file: string;
+  /** Repo root that owns this file in a multi-root workspace. */
+  rootPath?: string;
+  /** SSH connection id when the repo root is remote. */
+  connId?: string;
+  /** 1-based line number. Present when the history is scoped like Git Fluent Line History. */
+  line?: number;
+}
+
+/** One file changed by a commit, used by Commit Details. */
+export interface GitCommitFile {
+  path: string;
+  oldPath?: string | null;
+  status: string;
+  additions: number;
+  deletions: number;
 }
 
 /**
@@ -312,6 +496,13 @@ export interface GitBranchInfo {
   hasUpstream: boolean;
 }
 
+/** One configured Git remote. */
+export interface GitRemoteInfo {
+  name: string;
+  fetchUrl: string;
+  pushUrl: string;
+}
+
 /** A run/debug configuration, mirroring the Rust `RunConfig`. */
 export interface RunConfig {
   name: string;
@@ -321,15 +512,139 @@ export interface RunConfig {
   cwd: string;
 }
 
+/** Package managers supported by the first dependency-intelligence pass. */
+export type PackageManager = "npm" | "pnpm" | "yarn" | "bun";
+
+export interface PackageLockfile {
+  name: string;
+  path: string;
+  manager: PackageManager;
+}
+
+export type DependencyKind =
+  | "dependencies"
+  | "devDependencies"
+  | "peerDependencies"
+  | "optionalDependencies";
+
+export interface PackageDependency {
+  name: string;
+  declaredVersion: string;
+  kind: DependencyKind;
+}
+
+export interface PackageManagerRecommendation {
+  manager: PackageManager;
+  confidence: "high" | "medium" | "low";
+  reason: string;
+}
+
+export interface DependencyBuckets {
+  dependencies: number;
+  devDependencies: number;
+  peerDependencies: number;
+  optionalDependencies: number;
+}
+
+/** A detected TypeScript/JavaScript package project. */
+export interface JsTsPackageProject {
+  name: string;
+  path: string;
+  dir: string;
+  relativeDir: string;
+  declaredPackageManager: string | null;
+  detectedManager: PackageManagerRecommendation;
+  lockfiles: PackageLockfile[];
+  scripts: string[];
+  dependencies: PackageDependency[];
+  dependencyCounts: DependencyBuckets;
+  hasWorkspaces: boolean;
+  warnings: string[];
+}
+
+export interface PackageOutdatedDependency {
+  name: string;
+  current: string | null;
+  wanted: string | null;
+  latest: string | null;
+  declaredVersion: string | null;
+}
+
+export interface PackageCommandResult {
+  projectPath: string;
+  manager: PackageManager;
+  command: string;
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+export interface PackageOutdatedReport extends PackageCommandResult {
+  outdated: PackageOutdatedDependency[];
+}
+
+export interface PackageAuditSummary {
+  total: number;
+  low: number;
+  moderate: number;
+  high: number;
+  critical: number;
+}
+
+export interface PackageAuditVulnerability {
+  package: string;
+  severity: string;
+  title: string;
+  url: string | null;
+  range: string | null;
+  fixAvailable: boolean;
+}
+
+export interface PackageAuditReport extends PackageCommandResult {
+  summary: PackageAuditSummary;
+  vulnerabilities: PackageAuditVulnerability[];
+}
+
+export interface PackageVersionsReport extends PackageCommandResult {
+  packageName: string;
+  versions: string[];
+}
+
+/** Workspace-level dependency/package intelligence summary. */
+export interface PackageWorkspaceSummary {
+  root: string;
+  projects: JsTsPackageProject[];
+  managerCounts: Record<string, number>;
+  warningCount: number;
+}
+
 /** Per-line blame info returned by `git_blame`, mirroring the Rust `BlameHunk`. */
 export interface BlameHunk {
+  /** Full SHA. Empty for uncommitted lines. */
+  hash: string;
   /** Short SHA (7 chars). Empty for uncommitted lines. */
   short: string;
   author: string;
+  /** Author email from git blame; used for avatars and identity matching. */
+  authorEmail?: string;
+  /** True when the author matches the current git user configured for the repo. */
+  isCurrentUser?: boolean;
+  /** Best-effort avatar URL derived from the author email. */
+  avatarUrl?: string;
   /** Relative date, e.g. "há 3 dias". */
   date: string;
   /** First line of the commit message. */
   subject: string;
+  /** First parent commit SHA, when available. */
+  previousHash?: string;
+  /** Lines added by this commit in this file, best-effort. */
+  additions?: number;
+  /** Lines deleted by this commit in this file, best-effort. */
+  deletions?: number;
+  /** Number of changed file entries reported for this commit/path. */
+  filesChanged?: number;
+  /** Remote commit URL when origin/upstream can be converted to a web URL. */
+  remoteUrl?: string;
   /** 1-based line number in the file. */
   line: number;
 }
@@ -456,5 +771,15 @@ export interface EditorActionsApi {
     text: string;
     startLine: number;
     endLine: number;
+  } | null;
+  /**
+   * Seleção/cursor atual em coordenadas 0-based (formato `vscode.Selection`),
+   * mesmo vazia. Publicada ao host de extensões VS Code como
+   * `activeTextEditor.selection`. Opcional: editores sem modelo de texto omitem.
+   */
+  getCursorState?: () => {
+    start: { line: number; character: number };
+    end: { line: number; character: number };
+    dirty: boolean;
   } | null;
 }

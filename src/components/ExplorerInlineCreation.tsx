@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { IconButton } from "./ui/IconButton";
 import { Codicon } from "../icons/codicons/Codicon";
 
 export type PendingCreation = {
@@ -35,7 +36,7 @@ export function ExplorerInlineCreation({
         <Codicon name={kind === "file" ? "newFile" : "newFolder"} size={16} />
         <input
           ref={inputRef}
-          className="explorer-inline-input"
+          className="ui-input ui-input-sm explorer-inline-input"
           aria-label={kind === "file" ? "Nome do novo arquivo" : "Nome da nova pasta"}
           value={name}
           disabled={busy}
@@ -50,16 +51,14 @@ export function ExplorerInlineCreation({
             }
           }}
         />
-        <button
+        <IconButton
+          icon="success"
+          size="sm"
+          label="Confirmar criação"
           className="explorer-inline-confirm"
-          type="button"
-          aria-label="Confirmar criação"
-          title="Confirmar criação"
           disabled={busy || !name.trim()}
           onClick={() => onSubmit(name)}
-        >
-          <Codicon name="success" size={14} />
-        </button>
+        />
       </div>
       {error && (
         <div className="explorer-inline-error" role="alert" style={{ paddingLeft: depth * 12 + 34 }}>

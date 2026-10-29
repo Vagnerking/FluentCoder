@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import type { TerminalCommand } from "../settings/taskExecution";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Input } from "./ui/Input";
 import {
   dotnetBuild,
   dotnetClean,
@@ -16,6 +18,10 @@ import {
   type DotnetTestResult,
 } from "../api";
 import type { RunConfig } from "../types";
+import { loadVscodeRunEntries, type VscodeRunEntries } from "../settings/vscodeFiles";
+import { taskExecutionPlan, launchExecutionPlan } from "../settings/taskExecution";
+import { taskCommandLine } from "../settings/vscodeCompat";
+import { getPlatform } from "../platform/os";
 import {
   debugSession,
   type VariableView,
@@ -28,14 +34,14 @@ import {
   applyCoverageDecorations,
   clearCoverageDecorations,
 } from "../testing/coverageDecorations";
-import { Tooltip } from "./Tooltip";
+import { Checkbox, IconButton, SectionHeader, Select, ViewPaneContainer, type ViewPaneDescriptor } from "./ui";
 
 /** Loads the workspace's `.csproj` paths once per root (shared by the .NET sections). */
-function useCsprojs(rootPath: string): string[] {
+function useCsprojs(rootPath: string, connId?: string): string[] {
   const [csprojs, setCsprojs] = useState<string[]>([]);
   useEffect(() => {
     let cancelled = false;
-    void listProjectFiles(rootPath)
+    void listProjectFiles(rootPath, connId)
       .then((files) => {
         if (cancelled) return;
         setCsprojs(
@@ -46,7 +52,7 @@ function useCsprojs(rootPath: string): string[] {
     return () => {
       cancelled = true;
     };
-  }, [rootPath]);
+  }, [connId, rootPath]);
   return csprojs;
 }
 
@@ -59,11 +65,22 @@ export interface PendingTest {
   mode: "run" | "debug";
 }
 
+export interface RunWorkspaceRoot {
+  id: string;
+  name: string;
+  path: string;
+  provider: "local" | "ssh";
+  connId?: string;
+  status?: "connected" | "connecting" | "error";
+}
+
 interface RunPanelProps {
   /** Open folder; configs live in `<root>/.project/run.json`. Null = none. */
   rootPath: string | null;
+  /** Roots in a Fluent workspace. SSH roots are runnable when connected. */
+  workspaceRoots?: RunWorkspaceRoot[];
   /** Asks the app to run `command` in the integrated terminal. */
-  onRun: (command: string) => void;
+  onRun: (command: TerminalCommand, cwd: string, connId?: string) => void;
   /** Latest test-run request from a CodeLens (App-level listener), or null. */
   pendingTest?: PendingTest | null;
 }
@@ -79,22 +96,159 @@ const EMPTY_DRAFT: RunConfig = { name: "", command: "", cwd: "" };
  * Debugging (breakpoints/step via DAP) is a planned next phase; for now this
  * covers the "Executar" half end-to-end.
  */
-export function RunPanel({ rootPath, onRun, pendingTest }: RunPanelProps) {
+export function RunPanel({ rootPath, workspaceRoots = [], onRun, pendingTest }: RunPanelProps) {
+  const targets = useMemo(
+    () =>
+      workspaceRoots.length > 0
+        ? workspaceRoots.flatMap((root) => {
+            if (root.provider === "ssh") {
+              return root.status === "connected" && root.connId
+                ? [{ ...root, connId: root.connId }]
+                : [];
+            }
+            return [root];
+          })
+        : rootPath
+          ? [
+              {
+                id: rootPath,
+                name: rootPath.split(/[\\/]/).pop() || rootPath,
+                path: rootPath,
+                provider: "local" as const,
+              },
+            ]
+          : [],
+    [rootPath, workspaceRoots]
+  );
+  const unavailableSshRoots = workspaceRoots.filter(
+    (root) => root.provider === "ssh" && root.status !== "connected"
+  );
+  // Formulário "nova configuração" aberto por root (a ação vive no cabeçalho do pane).
+  const [draftFor, setDraftFor] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleDraft = useCallback((id: string, open?: boolean) => {
+    setDraftFor((cur) => {
+      const next = new Set(cur);
+      if (open ?? !next.has(id)) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+
+  if (targets.length === 0) {
+    return (
+      <div className="run-panel">
+        <div className="explorer-header">
+          <span className="explorer-title">EXECUTAR E DEPURAR</span>
+        </div>
+        <div className="panel-empty">
+          {workspaceRoots.length > 0
+            ? "Nenhuma pasta executável conectada neste workspace."
+            : "Abra uma pasta para configurar a execução."}
+        </div>
+        {unavailableSshRoots.map((root) => (
+          <div key={root.id} className="run-unavailable-root">
+            {root.name} · SSH {root.status === "connecting" ? "conectando" : "indisponível"}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  const panes: ViewPaneDescriptor[] = targets.map((target) => ({
+    id: `root:${target.id}`,
+    title: target.name,
+    badge: target.provider === "ssh" ? "SSH" : "LOCAL",
+    badgeLabel: target.provider === "ssh" ? "Pasta SSH" : "Pasta local",
+    minBodySize: 72,
+    actions: [
+      {
+        id: "new-config",
+        icon: "add",
+        label: draftFor.has(target.id) ? "Fechar nova configuração" : "Nova configuração",
+        pressed: draftFor.has(target.id),
+        run: () => toggleDraft(target.id),
+      },
+    ],
+    children: (
+      <RunRootSection
+        target={target}
+        draftOpen={draftFor.has(target.id)}
+        onDraftClosed={() => toggleDraft(target.id, false)}
+        onRun={onRun}
+        pendingTest={pendingTestForRoot(pendingTest ?? null, target)}
+      />
+    ),
+  }));
+  if (unavailableSshRoots.length > 0) {
+    panes.push({
+      id: "ssh-unavailable",
+      title: "SSH indisponível",
+      badge: unavailableSshRoots.length,
+      badgeLabel: `${unavailableSshRoots.length} pastas SSH indisponíveis`,
+      minBodySize: 36,
+      defaultWeight: 0.35,
+      children: unavailableSshRoots.map((root) => (
+        <div key={root.id} className="run-unavailable-root">
+          {root.name} · {root.status === "connecting" ? "conectando" : "desconectado"}
+        </div>
+      )),
+    });
+  }
+
+  return (
+    <div className="run-panel">
+      <div className="explorer-header run-header">
+        <span className="explorer-title">EXECUTAR E DEPURAR</span>
+      </div>
+      <ViewPaneContainer id="run" panes={panes} ariaLabel="Pastas de execução" />
+    </div>
+  );
+}
+
+/**
+ * A CodeLens test request belongs to the local root that contains its `.csproj`.
+ * Single-root (or unmatched) requests fall back to the only local root so the
+ * classic one-folder flow keeps working exactly as before.
+ */
+function pendingTestForRoot(
+  pending: PendingTest | null,
+  target: RunWorkspaceRoot
+): PendingTest | null {
+  if (!pending || target.connId) return null;
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const root = norm(target.path);
+  const csproj = norm(pending.csprojPath);
+  return csproj === root || csproj.startsWith(`${root}/`) ? pending : null;
+}
+
+function RunRootSection({
+  target,
+  draftOpen,
+  onDraftClosed,
+  onRun,
+  pendingTest,
+}: {
+  target: RunWorkspaceRoot;
+  draftOpen: boolean;
+  onDraftClosed: () => void;
+  onRun: (command: TerminalCommand, cwd: string, connId?: string) => void;
+  pendingTest: PendingTest | null;
+}) {
   const [configs, setConfigs] = useState<RunConfig[]>([]);
   const [suggestions, setSuggestions] = useState<RunConfig[]>([]);
-  const [draft, setDraft] = useState<RunConfig | null>(null);
+  const [draft, setDraftState] = useState<RunConfig | null>(null);
+  useEffect(() => setDraftState(draftOpen ? { ...EMPTY_DRAFT } : null), [draftOpen]);
+  const setDraft = (next: RunConfig | null) => {
+    setDraftState(next);
+    if (!next) onDraftClosed();
+  };
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
-    if (!rootPath) {
-      setConfigs([]);
-      setSuggestions([]);
-      return;
-    }
     try {
       const [saved, detected] = await Promise.all([
-        runConfigsLoad(rootPath),
-        runConfigsDetect(rootPath),
+        runConfigsLoad(target.path, target.connId),
+        runConfigsDetect(target.path, target.connId),
       ]);
       setConfigs(saved);
       // Hide suggestions that already exist (by command) among saved configs.
@@ -104,16 +258,15 @@ export function RunPanel({ rootPath, onRun, pendingTest }: RunPanelProps) {
     } catch (err) {
       setError(String(err));
     }
-  }, [rootPath]);
+  }, [target.connId, target.path]);
 
   useEffect(() => {
     reload();
   }, [reload]);
 
   async function persist(next: RunConfig[]) {
-    if (!rootPath) return;
     try {
-      await runConfigsSave(rootPath, next);
+      await runConfigsSave(target.path, next, target.connId);
       await reload();
     } catch (err) {
       setError(String(err));
@@ -138,51 +291,30 @@ export function RunPanel({ rootPath, onRun, pendingTest }: RunPanelProps) {
     setDraft(null);
   }
 
-  if (!rootPath) {
-    return (
-      <div className="run-panel">
-        <div className="explorer-header">
-          <span className="explorer-title">EXECUTAR E DEPURAR</span>
-        </div>
-        <div className="panel-empty">Abra uma pasta para configurar a execução.</div>
-      </div>
-    );
-  }
-
   return (
-    <div className="run-panel">
-      <div className="explorer-header run-header">
-        <span className="explorer-title">EXECUTAR E DEPURAR</span>
-        <Tooltip label={draft ? "Fechar nova configuração" : "Nova configuração"}>
-          <button
-            className="git-icon-btn"
-            aria-label={draft ? "Fechar nova configuração" : "Nova configuração"}
-            aria-expanded={Boolean(draft)}
-            onClick={() => setDraft(draft ? null : { ...EMPTY_DRAFT })}
-          >
-            +
-          </button>
-        </Tooltip>
-      </div>
+    <div className="run-root-section">
 
       {error && <div className="git-error">{error}</div>}
 
       {draft && (
         <div className="run-draft">
-          <input
-            className="search-input"
+          <Input
+            size="sm"
+            aria-label="Nome da configuração"
             placeholder="Nome (ex.: dev)"
             value={draft.name}
             onChange={(e) => setDraft({ ...draft, name: e.target.value })}
           />
-          <input
-            className="search-input"
+          <Input
+            size="sm"
+            aria-label="Comando"
             placeholder="Comando (ex.: npm run dev)"
             value={draft.command}
             onChange={(e) => setDraft({ ...draft, command: e.target.value })}
           />
-          <input
-            className="search-input"
+          <Input
+            size="sm"
+            aria-label="Diretório de trabalho"
             placeholder="Diretório (opcional, relativo à raiz)"
             value={draft.cwd}
             onChange={(e) => setDraft({ ...draft, cwd: e.target.value })}
@@ -202,83 +334,141 @@ export function RunPanel({ rootPath, onRun, pendingTest }: RunPanelProps) {
         </div>
       )}
 
-      <div className="run-lists">
-        <DebugSection rootPath={rootPath} />
-        <TestsSection rootPath={rootPath} pendingTest={pendingTest ?? null} />
-        <ProjectActionsSection rootPath={rootPath} />
+      <div className="run-root-body">
+        {!target.connId && <DebugSection rootPath={target.path} />}
+        {!target.connId && <TestsSection rootPath={target.path} pendingTest={pendingTest} />}
+        {!target.connId && <ProjectActionsSection rootPath={target.path} />}
 
-        <div className="git-group">
-          <div className="git-group-header">
-            <span>Configurações</span>
-            <span className="git-count">{configs.length}</span>
-          </div>
+        <div className="run-group">
+          <SectionHeader level={2} title="Configurações" badge={configs.length} />
           {configs.length === 0 ? (
             <div className="panel-empty">Nenhuma configuração salva.</div>
           ) : (
             configs.map((c, i) => (
               <div key={`${c.name}-${i}`} className="run-row" title={c.command}>
-                <Tooltip label={`Executar: ${c.command}`}>
-                  <button
-                    className="run-play"
-                    aria-label={`Executar: ${c.command}`}
-                    onClick={() => onRun(buildCommand(c))}
-                  >
-                    ▶
-                  </button>
-                </Tooltip>
+                <IconButton
+                  icon="run"
+                  size="sm"
+                  label={`Executar: ${c.command}`}
+                  className="run-play"
+                  onClick={() => onRun(buildCommand(c), target.path, target.connId)}
+                />
                 <div className="run-info">
                   <span className="run-name">{c.name}</span>
                   <span className="run-cmd">{c.command}</span>
                 </div>
-                <Tooltip label="Remover">
-                  <button
-                    className="run-remove"
-                    aria-label="Remover"
-                    onClick={() => removeConfig(i)}
-                  >
-                    ✕
-                  </button>
-                </Tooltip>
+                <IconButton
+                  icon="close"
+                  size="sm"
+                  label="Remover"
+                  className="run-remove"
+                  onClick={() => removeConfig(i)}
+                />
               </div>
             ))
           )}
         </div>
 
+        {!target.connId && <VscodeSection rootPath={target.path} onRun={(cmd) => onRun(cmd, target.path)} />}
+
         {suggestions.length > 0 && (
-          <div className="git-group">
-            <div className="git-group-header">
-              <span>Detectadas no projeto</span>
-              <span className="git-count">{suggestions.length}</span>
-            </div>
+          <div className="run-group">
+            <SectionHeader level={2} title="Detectadas no projeto" badge={suggestions.length} />
             {suggestions.map((s, i) => (
               <div key={`sug-${i}`} className="run-row" title={s.command}>
-                <Tooltip label={`Executar: ${s.command}`}>
-                  <button
-                    className="run-play"
-                    aria-label={`Executar: ${s.command}`}
-                    onClick={() => onRun(buildCommand(s))}
-                  >
-                    ▶
-                  </button>
-                </Tooltip>
+                <IconButton
+                  icon="run"
+                  size="sm"
+                  label={`Executar: ${s.command}`}
+                  className="run-play"
+                  onClick={() => onRun(buildCommand(s), target.path, target.connId)}
+                />
                 <div className="run-info">
                   <span className="run-name">{s.name}</span>
                   <span className="run-cmd">{s.command}</span>
                 </div>
-                <Tooltip label="Adicionar às configurações">
-                  <button
-                    className="git-link-btn"
-                    aria-label="Adicionar às configurações"
-                    onClick={() => addConfig(s)}
-                  >
-                    +
-                  </button>
-                </Tooltip>
+                <IconButton
+                  icon="add"
+                  size="sm"
+                  label="Adicionar às configurações"
+                  onClick={() => addConfig(s)}
+                />
               </div>
             ))}
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * `.vscode/tasks.json` e `.vscode/launch.json` (compatibilidade com o VS Code):
+ * tarefas shell/process/npm rodam no terminal (com `dependsOn`); configurações
+ * node/coreclr/python com `program` rodam "sem depurar" (o `preLaunchTask`
+ * roda antes). O que não tem equivalente aparece desabilitado com o motivo.
+ */
+function VscodeSection({ rootPath, onRun }: { rootPath: string; onRun: (command: TerminalCommand) => void }) {
+  const [entries, setEntries] = useState<VscodeRunEntries | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void loadVscodeRunEntries(rootPath).then((e) => alive && setEntries(e));
+    return () => {
+      alive = false;
+    };
+  }, [rootPath]);
+  if (!entries || (!entries.hasTasks && !entries.hasLaunch)) return null;
+  const windows = getPlatform().os === "windows";
+  return (
+    <div className="run-group">
+      <SectionHeader level={2} title="Do VS Code (.vscode)" badge={entries.tasks.length + entries.launches.length} />
+      {entries.tasks.map((t, i) => {
+        const line = taskCommandLine(t, entries.tasks, windows);
+        return (
+          <div key={`task-${i}`} className={`run-row${line ? "" : " is-disabled"}`} title={line ?? t.unsupported}>
+            <IconButton
+              icon="run"
+              size="sm"
+              label={line ? `Executar tarefa: ${t.label}` : `Tarefa não suportada: ${t.label}`}
+              className="run-play"
+              disabled={!line}
+              onClick={() => {
+                try { onRun(taskExecutionPlan(t, entries.tasks, rootPath)); }
+                catch (err) { alert(String(err)); }
+              }}
+            />
+            <div className="run-info">
+              <span className="run-name">
+                {t.label}
+                {t.group && <span className="run-tag">{t.group === "build" ? "build" : "teste"}{t.isDefault ? " · padrão" : ""}</span>}
+              </span>
+              <span className="run-cmd">{line ?? t.unsupported ?? "sem comando"}</span>
+            </div>
+          </div>
+        );
+      })}
+      {entries.launches.map((l, i) => (
+        <div key={`launch-${i}`} className={`run-row${l.command ? "" : " is-disabled"}`} title={l.command ?? l.unsupported}>
+          <IconButton
+            icon="run"
+            size="sm"
+            label={l.command ? `Executar sem depurar: ${l.name}` : `Configuração sem equivalente: ${l.name}`}
+            className="run-play"
+            disabled={!l.command}
+            onClick={() => {
+              try { onRun(launchExecutionPlan(l, entries.tasks, rootPath)); }
+              catch (err) { alert(String(err)); }
+            }}
+          />
+          <div className="run-info">
+            <span className="run-name">
+              {l.name}
+              <span className="run-tag">launch · {l.type || "?"}</span>
+            </span>
+            <span className="run-cmd">{l.command ?? l.unsupported}</span>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -340,46 +530,42 @@ function DebugSection({ rootPath }: { rootPath: string }) {
   };
 
   return (
-    <div className="git-group debug-section">
-      <div className="git-group-header">
-        <span>Depurar (.NET)</span>
-        <span className={`debug-status debug-status-${state.status}`}>
-          {state.status === "idle" && "pronto"}
-          {state.status === "starting" && "iniciando…"}
-          {state.status === "running" && "executando"}
-          {state.status === "stopped" && "pausado"}
-          {state.status === "error" && "erro"}
-        </span>
-      </div>
+    <div className="run-group debug-section">
+      <SectionHeader
+        level={2}
+        title="Depurar (.NET)"
+        meta={
+          <span className={`debug-status debug-status-${state.status}`}>
+            {state.status === "idle" && "pronto"}
+            {state.status === "starting" && "iniciando…"}
+            {state.status === "running" && "executando"}
+            {state.status === "stopped" && "pausado"}
+            {state.status === "error" && "erro"}
+          </span>
+        }
+      />
 
       {!active && (
         <div className="debug-launcher">
-          <select
-            className="search-input"
+          <Select
+            ariaLabel="Projeto a depurar"
             value={selected}
-            onChange={(e) => setSelected(e.target.value)}
+            onChange={setSelected}
             disabled={busy}
-          >
-            {csprojs.map((p) => (
-              <option key={p} value={p}>
-                {p.split(/[\\/]/).pop()}
-              </option>
-            ))}
-          </select>
+            options={csprojs.map((p) => ({
+              value: p,
+              label: p.split(/[\\/]/).pop() ?? p,
+            }))}
+          />
           {profiles.length > 0 && (
-            <select
-              className="search-input"
+            <Select
+              ariaLabel="Perfil de inicialização"
               value={profileName}
-              onChange={(e) => setProfileName(e.target.value)}
+              onChange={setProfileName}
               disabled={busy}
               title="Perfil do launchSettings.json (env, args, URL)"
-            >
-              {profiles.map((p) => (
-                <option key={p.name} value={p.name}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
+              options={profiles.map((p) => ({ value: p.name, label: p.name }))}
+            />
           )}
           <div className="run-draft-actions">
             <button
@@ -426,54 +612,54 @@ function DebugSection({ rootPath }: { rootPath: string }) {
 
       {active && (
         <>
-          <div className="debug-toolbar">
-            <button
-              className="debug-btn"
-              title="Continuar (F5)"
+          <div className="debug-toolbar" role="toolbar" aria-label="Controles de depuração">
+            <IconButton
+              icon="continue"
+              size="sm"
+              label="Continuar (F5)"
+              className="debug-btn debug-btn-continue"
               disabled={state.status !== "stopped"}
               onClick={() => void debugSession.continue_()}
-            >
-              ▶
-            </button>
-            <button
+            />
+            <IconButton
+              icon="debugPause"
+              size="sm"
+              label="Pausar"
               className="debug-btn"
-              title="Pausar"
               disabled={state.status !== "running"}
               onClick={() => void debugSession.pause()}
-            >
-              ⏸
-            </button>
-            <button
+            />
+            <IconButton
+              icon="stepOver"
+              size="sm"
+              label="Passo (step over)"
               className="debug-btn"
-              title="Passo (step over)"
               disabled={state.status !== "stopped"}
               onClick={() => void debugSession.stepOver()}
-            >
-              ⤼
-            </button>
-            <button
+            />
+            <IconButton
+              icon="stepInto"
+              size="sm"
+              label="Entrar (step in)"
               className="debug-btn"
-              title="Entrar (step in)"
               disabled={state.status !== "stopped"}
               onClick={() => void debugSession.stepIn()}
-            >
-              ⤵
-            </button>
-            <button
+            />
+            <IconButton
+              icon="stepOut"
+              size="sm"
+              label="Sair (step out)"
               className="debug-btn"
-              title="Sair (step out)"
               disabled={state.status !== "stopped"}
               onClick={() => void debugSession.stepOut()}
-            >
-              ⤴
-            </button>
-            <button
+            />
+            <IconButton
+              icon="stop"
+              size="sm"
+              label="Parar depuração"
               className="debug-btn debug-btn-stop"
-              title="Parar depuração"
               onClick={() => void debugSession.stop()}
-            >
-              ⏹
-            </button>
+            />
           </div>
 
           {state.frames.length > 0 && (
@@ -607,8 +793,9 @@ function WatchPanel({ watches }: { watches: WatchView[] }) {
     <div className="debug-block">
       <div className="debug-block-title">Watch</div>
       <div className="debug-watch-input">
-        <input
-          className="search-input"
+        <Input
+          size="sm"
+          aria-label="Expressão de watch"
           placeholder="Expressão (ex.: cliente.Nome)…"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -621,13 +808,13 @@ function WatchPanel({ watches }: { watches: WatchView[] }) {
           <span className={"debug-var-value" + (w.error ? " debug-var-error" : "")}>
             {w.error ?? w.value}
           </span>
-          <button
+          <IconButton
+            icon="close"
+            size="sm"
+            label="Remover"
             className="debug-watch-remove"
-            title="Remover"
             onClick={() => debugSession.removeWatch(w.expression)}
-          >
-            ✕
-          </button>
+          />
         </div>
       ))}
     </div>
@@ -771,37 +958,30 @@ function TestsSection({
     });
 
   return (
-    <div className="git-group debug-section">
-      <div className="git-group-header">
-        <span>Testes (.NET)</span>
-        {tests && <span className="git-count">{tests.length}</span>}
-      </div>
+    <div className="run-group debug-section">
+      <SectionHeader level={2} title="Testes (.NET)" badge={tests ? tests.length : undefined} />
       <div className="debug-launcher">
-        <select
-          className="search-input"
+        <Select
+          ariaLabel="Projeto de testes"
           value={selected}
-          onChange={(e) => setSelected(e.target.value)}
+          onChange={setSelected}
           disabled={busy !== ""}
-        >
-          {csprojs.map((p) => (
-            <option key={p} value={p}>
-              {p.split(/[\/]/).pop()}
-            </option>
-          ))}
-        </select>
-        <label className="test-coverage-toggle">
-          <input
-            type="checkbox"
-            checked={coverage}
-            disabled={busy !== ""}
-            onChange={(e) => {
-              setCoverage(e.target.checked);
-              // Desligar limpa as faixas na hora (não esperam o próximo run).
-              if (!e.target.checked) clearCoverageDecorations();
-            }}
-          />
-          Cobertura
-        </label>
+          options={csprojs.map((p) => ({
+            value: p,
+            label: p.split(/[\/]/).pop() ?? p,
+          }))}
+        />
+        <Checkbox
+          className="test-coverage-toggle"
+          label="Cobertura"
+          checked={coverage}
+          disabled={busy !== ""}
+          onChange={(e) => {
+            setCoverage(e.target.checked);
+            // Desligar limpa as faixas na hora (não esperam o próximo run).
+            if (!e.target.checked) clearCoverageDecorations();
+          }}
+        />
         <div className="run-draft-actions">
           <button
             className="git-commit-btn"
@@ -874,14 +1054,14 @@ function TestsSection({
                     className="test-row test-leaf"
                     title={r?.message ?? leaf.fqn}
                   >
-                    <button
+                    <IconButton
+                      icon="run"
+                      size="sm"
+                      label={`Executar ${leaf.method}`}
                       className="run-play"
-                      title={`Executar ${leaf.method}`}
                       disabled={busy !== ""}
                       onClick={() => void run([leaf.fqn])}
-                    >
-                      ▶
-                    </button>
+                    />
                     <button
                       className="run-play test-debug-btn"
                       title={`Depurar ${leaf.method}`}
@@ -948,24 +1128,19 @@ function ProjectActionsSection({ rootPath }: { rootPath: string }) {
   };
 
   return (
-    <div className="git-group debug-section">
-      <div className="git-group-header">
-        <span>Ações do projeto (.NET)</span>
-      </div>
+    <div className="run-group debug-section">
+      <SectionHeader level={2} title="Ações do projeto (.NET)" />
       <div className="debug-launcher">
-        <select
-          className="search-input"
+        <Select
+          ariaLabel="Alvo das ações"
           value={target}
-          onChange={(e) => setTarget(e.target.value)}
+          onChange={setTarget}
           disabled={busy !== ""}
-        >
-          <option value="">Solução inteira</option>
-          {csprojs.map((p) => (
-            <option key={p} value={p}>
-              {p.split(/[\/]/).pop()}
-            </option>
-          ))}
-        </select>
+          options={[
+            { value: "", label: "Solução inteira" },
+            ...csprojs.map((p) => ({ value: p, label: p.split(/[\/]/).pop() ?? p })),
+          ]}
+        />
         <div className="run-draft-actions">
           {PROJECT_ACTIONS.map((a) => (
             <button

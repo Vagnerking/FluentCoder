@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
+import { createLayout, type EditorGroup } from "../editorGroups";
+import { commitFileOpen, resolveFileOpen } from "../editor/existingFile";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen, emitTo } from "@tauri-apps/api/event";
 import { EditorPane } from "./EditorPane";
@@ -6,7 +8,8 @@ import { ImagePreview } from "./ImagePreview";
 import { MediaPreview } from "./MediaPreview";
 import { TabBar } from "./TabBar";
 import { Codicon } from "../icons/codicons/Codicon";
-import { pickSavePath, writeFile } from "../api";
+import { Tooltip } from "./Tooltip";
+import { pickSavePath, resolveLocalFileIdentity, writeFile, writeSshTextFile } from "../api";
 import { useSnapLayout } from "../snap/useSnapLayout";
 import { reorderFiles } from "../tabOrder";
 import { setActiveRemote } from "../remote/host";
@@ -24,7 +27,7 @@ import {
   type DetachedRemote,
 } from "../detach/editorWindow";
 import { dropTargetAt } from "../detach/dropTarget";
-import type { OpenFile } from "../types";
+import type { OpenFile, OpenMode } from "../types";
 
 const UNTITLED_PREFIX = "untitled:";
 
@@ -41,8 +44,14 @@ function fileName(path: string): string {
  */
 export function DetachedEditor({ token }: { token: string }) {
   const win = getCurrentWindow();
-  const [files, setFiles] = useState<OpenFile[]>([]);
-  const [activePath, setActivePath] = useState<string | null>(null);
+  const [group, setGroup] = useState<EditorGroup>({ id: "detached", files: [], activePath: null });
+  const { files, activePath } = group;
+  const setFiles = useCallback((action: SetStateAction<OpenFile[]>) => {
+    setGroup((current) => ({ ...current, files: typeof action === "function" ? action(current.files) : action }));
+  }, []);
+  const setActivePath = useCallback((action: SetStateAction<string | null>) => {
+    setGroup((current) => ({ ...current, activePath: typeof action === "function" ? action(current.activePath) : action }));
+  }, []);
   const [remote, setRemote] = useState<DetachedRemote | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [missing, setMissing] = useState(false);
@@ -126,9 +135,21 @@ export function DetachedEditor({ token }: { token: string }) {
       });
       setActivePath(f.path);
     };
-    const a = listen<{ file: OpenFile }>("open-in-detached", (e) =>
-      insertAt(e.payload.file, null, false)
-    );
+    const a = listen<{ file: OpenFile; options?: { mode?: OpenMode; permanent?: boolean } }>("open-in-detached", async (e) => {
+      const file = e.payload.file;
+      const local = !remoteRef.current && !file.workspaceRemote;
+      const candidates = local ? filesRef.current.filter((candidate) => !candidate.workspaceRemote) : filesRef.current;
+      const target = await resolveFileOpen(candidates, file.path, local ? resolveLocalFileIdentity : undefined);
+      const incoming = {
+        ...file,
+        path: target.file?.path ?? file.path,
+        localIdentity: local ? target.identity : undefined,
+        mode: file.mode ?? "text" as const,
+      };
+      setGroup((current) => commitFileOpen(createLayout(current), incoming, {
+        ...e.payload.options, observedPaths: target.observedPaths,
+      }).groups[current.id]);
+    });
     const b = listen<{ file: OpenFile; x?: number; y?: number }>(
       "adopt-tab",
       (e) => {
@@ -159,11 +180,23 @@ export function DetachedEditor({ token }: { token: string }) {
         if (!picked) return;
         targetPath = picked;
       }
-      await writeFile(targetPath, active.content);
+      if (active.workspaceRemote && !active.path.startsWith(UNTITLED_PREFIX)) {
+        await writeSshTextFile(active.workspaceRemote.connId, targetPath, active.content);
+      } else {
+        await writeFile(targetPath, active.content);
+      }
       setFiles((prev) =>
         prev.map((f) =>
           f.path === active.path
-            ? { ...f, path: targetPath, name: fileName(targetPath), dirty: false }
+            ? {
+                ...f,
+                path: targetPath,
+                name: fileName(targetPath),
+                dirty: false,
+                workspaceRemote: active.path.startsWith(UNTITLED_PREFIX)
+                  ? undefined
+                  : f.workspaceRemote,
+              }
             : f
         )
       );
@@ -393,6 +426,8 @@ export function DetachedEditor({ token }: { token: string }) {
   }
 
   const mode = active?.mode ?? "text";
+  const activeRemoteConnId = active?.workspaceRemote?.connId ?? remote?.connId;
+  const activeRootPath = active?.workspaceRemote?.rootPath ?? remote?.rootPath ?? null;
 
   return (
     <div className="detached-window">
@@ -416,58 +451,59 @@ export function DetachedEditor({ token }: { token: string }) {
             <Codicon name="splitEditor" />
             Acoplar de volta
           </button>
-          <button
-            type="button"
-            className={`caption-btn detached-pin${onTop ? " active" : ""}`}
-            title={onTop ? "Desafixar janela" : "Fixar janela sempre no topo"}
-            aria-label="Fixar janela no topo"
-            aria-pressed={onTop}
-            onClick={toggleOnTop}
-          >
-            <svg width="13" height="13" viewBox="0 0 16 16">
-              <path
-                d="M9.6 1.8 L14.2 6.4 L11.7 6.9 L9.1 9.5 L8.7 12.4 L7.3 11 L4.4 13.9 L3.7 13.2 L6.6 10.3 L5.2 8.9 L7.8 6.3 L8.3 3.8 Z"
-                stroke="currentColor"
-                strokeWidth="1"
-                strokeLinejoin="round"
-                fill={onTop ? "currentColor" : "none"}
-              />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className="caption-btn"
-            title="Minimizar"
-            aria-label="Minimizar"
-            onClick={() => win.minimize()}
-          >
-            <svg width="10" height="10" viewBox="0 0 10 10">
-              <rect x="0" y="4.5" width="10" height="1" fill="currentColor" />
-            </svg>
-          </button>
-          <button
-            ref={maxBtnRef}
-            type="button"
-            className={`caption-btn${maxHover ? " nc-hover" : ""}`}
-            title="Maximizar"
-            aria-label="Maximizar"
-            onClick={() => win.toggleMaximize()}
-          >
-            <svg width="10" height="10" viewBox="0 0 10 10">
-              <rect x="0.5" y="0.5" width="9" height="9" stroke="currentColor" fill="none" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className="caption-btn caption-close"
-            title="Fechar"
-            aria-label="Fechar"
-            onClick={() => closeWindow()}
-          >
-            <svg width="10" height="10" viewBox="0 0 10 10">
-              <path d="M0 0 L10 10 M10 0 L0 10" stroke="currentColor" strokeWidth="1" />
-            </svg>
-          </button>
+          <Tooltip label={onTop ? "Desafixar janela" : "Fixar janela sempre no topo"} placement="bottom">
+            <button
+              type="button"
+              className={`caption-btn detached-pin${onTop ? " active" : ""}`}
+              aria-label="Fixar janela no topo"
+              aria-pressed={onTop}
+              onClick={toggleOnTop}
+            >
+              <Codicon name={onTop ? "pinned" : "pin"} />
+            </button>
+          </Tooltip>
+          <Tooltip label="Minimizar" placement="bottom">
+            <button
+              type="button"
+              className="caption-btn"
+              aria-label="Minimizar"
+              onClick={() => win.minimize()}
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                <rect x="0" y="4.5" width="10" height="1" fill="currentColor" />
+              </svg>
+            </button>
+          </Tooltip>
+          <Tooltip label="Maximizar" placement="bottom">
+            <button
+              ref={maxBtnRef}
+              type="button"
+              className={`caption-btn${maxHover ? " nc-hover" : ""}`}
+              aria-label="Maximizar"
+              onClick={() => win.toggleMaximize()}
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                <rect x="0.5" y="0.5" width="9" height="9" rx="1.5" stroke="currentColor" fill="none" />
+              </svg>
+            </button>
+          </Tooltip>
+          <Tooltip label="Fechar" placement="bottom">
+            <button
+              type="button"
+              className="caption-btn caption-close"
+              aria-label="Fechar"
+              onClick={() => closeWindow()}
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                <path
+                  d="M0.5 0.5 L9.5 9.5 M9.5 0.5 L0.5 9.5"
+                  stroke="currentColor"
+                  strokeWidth="1"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </button>
+          </Tooltip>
         </div>
       </div>
 
@@ -511,13 +547,18 @@ export function DetachedEditor({ token }: { token: string }) {
         {!active ? (
           <div className="detached-empty">Sem arquivos abertos.</div>
         ) : mode === "image" ? (
-          <ImagePreview path={active.path} name={active.name} />
+          <ImagePreview path={active.path} name={active.name} connId={activeRemoteConnId} />
         ) : mode === "video" || mode === "audio" ? (
-          <MediaPreview path={active.path} name={active.name} kind={mode} />
+          <MediaPreview
+            path={active.path}
+            name={active.name}
+            kind={mode}
+            connId={activeRemoteConnId}
+          />
         ) : (
           <EditorPane
             file={active}
-            rootPath={null}
+            rootPath={activeRootPath}
             onChange={(v) =>
               setFiles((prev) =>
                 prev.map((f) =>

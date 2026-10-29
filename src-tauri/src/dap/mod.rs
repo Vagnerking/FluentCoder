@@ -9,8 +9,8 @@
 pub mod bridge;
 pub mod netcoredbg;
 
-use bridge::{start_bridge, BridgeHandle, BridgeInfo};
 use crate::lsp::process::LspProcess;
+use bridge::{start_bridge, BridgeHandle, BridgeInfo};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -33,7 +33,10 @@ impl DapState {
             .enable_all()
             .build()
             .expect("failed to build DAP tokio runtime");
-        DapState { runtime, sessions: Mutex::new(HashMap::new()) }
+        DapState {
+            runtime,
+            sessions: Mutex::new(HashMap::new()),
+        }
     }
 
     /// Shuts down every active debug session (each bridge kills its adapter).
@@ -140,9 +143,22 @@ pub async fn dap_resolve_dotnet_target(csproj_path: String) -> Result<String, St
         let stdout = String::from_utf8_lossy(&out.stdout);
         // The property is the last non-empty stdout line; build errors also land
         // on stdout with MSBuild, so surface a tail when the path looks wrong.
-        let target = stdout.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
+        let target = stdout
+            .lines()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if !out.status.success() || !target.to_lowercase().ends_with(".dll") {
-            let tail: String = stdout.chars().rev().take(600).collect::<String>().chars().rev().collect();
+            let tail: String = stdout
+                .chars()
+                .rev()
+                .take(600)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
             return Err(format!("build falhou ou TargetPath inválido: {tail}"));
         }
         Ok(target)
@@ -173,7 +189,9 @@ pub fn dap_list_dotnet_processes() -> Vec<DotnetProcess> {
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
-        let Ok(out) = cmd.output() else { return Vec::new() };
+        let Ok(out) = cmd.output() else {
+            return Vec::new();
+        };
         let text = String::from_utf8_lossy(&out.stdout);
         text.lines()
             .filter_map(|line| {

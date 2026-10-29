@@ -165,6 +165,25 @@ export function openInGroup(
   return { ...next, activeGroup: groupId };
 }
 
+/** Like {@link openInGroup}, but if the path is already open in the group its
+ *  tab is REPLACED by `file` (fresh content for a re-opened comparison). */
+export function upsertInGroup(
+  layout: EditorLayout,
+  groupId: GroupId,
+  file: OpenFile
+): EditorLayout {
+  const next = withGroup(layout, groupId, (g) =>
+    g.files.some((f) => f.path === file.path)
+      ? {
+          ...g,
+          files: g.files.map((f) => (f.path === file.path ? file : f)),
+          activePath: file.path,
+        }
+      : { ...g, files: [...g.files, file], activePath: file.path }
+  );
+  return { ...next, activeGroup: groupId };
+}
+
 /** Focuses a file within a group (and makes that group active). */
 export function activateFile(
   layout: EditorLayout,
@@ -467,7 +486,7 @@ export function insertFileInGroup(
 
 export interface SerializedGroup {
   id: GroupId;
-  tabs: { path: string; mode?: OpenFile["mode"] }[];
+  tabs: { path: string; mode?: OpenFile["mode"]; pinned?: boolean }[];
   activePath: string | null;
 }
 export interface SerializedLayout {
@@ -485,7 +504,7 @@ export function serializeLayout(layout: EditorLayout): SerializedLayout {
     groups: Object.values(layout.groups).map((g) => ({
       id: g.id,
       activePath: g.activePath,
-      tabs: g.files.map((f) => ({ path: f.path, mode: f.mode })),
+      tabs: g.files.map((f) => ({ path: f.path, mode: f.mode, pinned: f.pinned || undefined })),
     })),
   };
 }

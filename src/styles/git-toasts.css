@@ -1,0 +1,62 @@
+/* ---- Avisos do Git (substituem alert()) ----
+   Canto inferior ESQUERDO, acima do chip de branch da status bar — não
+   disputa o canto direito com os avisos das extensões. */
+.git-toast-stack {
+  position: fixed;
+  left: 60px;
+  bottom: 40px;
+  z-index: 900;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: var(--space-sm);
+  width: min(420px, calc(100vw - 80px));
+  pointer-events: none;
+}
+
+.git-toast {
+  pointer-events: auto;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-sm) var(--space-sm) var(--space-md);
+  color: var(--text);
+  font-size: var(--font-base);
+  line-height: var(--line-height-base);
+  background: var(--color-surface-overlay);
+  border: 1px solid var(--color-surface-overlay-border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-dialog);
+  animation: git-panel-section-in 120ms ease-out;
+}
+
+.git-toast > .codicon { margin-top: 2px; color: var(--accent); }
+.git-toast.error { border-left-color: var(--color-status-error); }
+.git-toast.error > .codicon { color: var(--color-status-error); }
+.git-toast.warning { border-left-color: var(--color-status-warning); }
+.git-toast.warning > .codicon { color: var(--color-status-warning); }
+
+.git-toast-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.git-toast-title { font-weight: 600; }
+
+.git-toast-detail {
+  max-height: 120px;
+  overflow: auto;
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-caption);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .git-toast { animation: none; }
+}

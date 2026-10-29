@@ -1,0 +1,13 @@
+{
+  "name": "git-graph",
+  "publisher": "mhutchie",
+  "displayName": "Git Graph",
+  "version": "1.30.0",
+  "engines": { "vscode": "^1.38.0" },
+  "main": "./out/extension.js",
+  "activationEvents": ["*"],
+  "contributes": {
+    "commands": [{ "category": "Git Graph", "command": "git-graph.view", "title": "View Git Graph (git log)" }],
+    "configuration": { "type": "object", "title": "Git Graph", "properties": { "git-graph.maxDepthOfRepoSearch": { "type": "number", "default": 0 } } }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "python",
+  "publisher": "ms-python",
+  "displayName": "Python",
+  "version": "2026.16.0",
+  "engines": { "vscode": "^1.95.0" },
+  "main": "./out/client/extension",
+  "activationEvents": ["onLanguage:python", "workspaceContains:mspythonconfig.json", "onDebugResolve:python"],
+  "contributes": {
+    "commands": [{ "command": "python.execInTerminal", "title": "Run Python File in Terminal" }],
+    "languages": [{ "id": "python", "extensions": [".py"] }],
+    "debuggers": [{ "type": "python", "label": "Python" }],
+    "views": { "test": [{ "id": "python_tests", "name": "Python" }] }
+  }
+}

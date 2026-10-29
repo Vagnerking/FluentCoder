@@ -51,19 +51,31 @@ de alinhamento com ícones. Preferir espaçamento a divisores para separar grupo
 
 ### Raio
 
-Já em uso: `--radius-control: 6px`, `--radius-card: 8px`.
+| Token | Valor | Uso |
+|---|---:|---|
+| `--radius-xs` | 2 | barras indicadoras, realces inline |
+| `--radius-sm` | 4 | controles compactos (botão, input, item de menu/lista) |
+| `--radius-control` | 6 | chips, abas, cards pequenos |
+| `--radius-surface` / `--radius-card` | 8 | superfícies (side bar, editor, flyout, diálogo) |
+| `--radius-pill` | 999 | badges, contadores, chips redondos |
+
+`src/components/ui/tokens.test.ts` falha se surgir `border-radius` ou
+`font-size` em px fora do `:root`.
 
 ### Tipografia
 
 - Família: `Segoe UI Variable` com fallbacks (já definida no `body`).
 - Type ramp semântico (não definir tamanho manual por componente):
 
-| Papel | Tamanho / line-height |
-|---|---:|
-| Caption | 12px / 16px |
-| Body | 14px / 20px |
-| Subtitle | 16px / 22px |
-| Title | 24px / 32px |
+| Papel | Token | Tamanho / line-height |
+|---|---|---:|
+| Caption 2 | `--font-caption-xs` | 10px |
+| Overline / hint | `--font-caption-sm` | 11px / 14px |
+| Caption | `--font-caption` | 12px / 16px |
+| Base (densidade da UI) | `--font-base` | 13px / 18px |
+| Body | `--font-body` | 14px / 20px |
+| Subtitle | `--font-subtitle` | 16px / 22px |
+| Title | `--font-title` | 24px / 32px |
 
 - Pesos: Regular, Semibold, Bold. Line-height confortável em textos longos.
 
@@ -92,6 +104,27 @@ expressa isso via tokens `--fill-subtle-hover`, `--fill-subtle-active`,
 `--fill-selected*`. Área clicável adequada e foco sempre visível.
 
 ---
+
+### Primitivos (`src/components/ui`)
+
+Use-os em vez de recriar controles por feature:
+
+| Primitivo | Quando usar |
+|---|---|
+| `Button` / `IconButton` | ações; botão só-ícone **sempre** `IconButton` (label vira `aria-label` + Tooltip; nada de `title` nativo) |
+| `Input` / `SearchBox` / `Textarea` | campos de texto (sublinhado de destaque no foco; `SearchBox` tem limpar) |
+| `Select`, `Checkbox`, `Switch` | escolhas |
+| `Tabs` | qualquer tablist (`underline` em painéis/diálogos, `pill` para alternância segmentada) |
+| `Menu` | todo menu/flyout de ações (contexto, dropdown da menu bar, menus da status bar) |
+
+Regras puras de teclado/posição ficam em `*Logic.ts` com testes unitários.
+
+### Shell da janela
+
+Title bar, calhas entre os cards e status bar formam **uma superfície só**
+(`--shell-bg`); side bar, editor, painéis e activity bar flutuam como cards
+(`--radius-surface`, borda acrílica). Não pinte fundo próprio na title bar ou
+na status bar.
 
 ## 4. Ícones
 

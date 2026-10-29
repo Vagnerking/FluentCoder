@@ -1,64 +1,38 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent,
-} from "react";
+import type { TerminalCommand } from "../settings/taskExecution";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { TerminalView } from "./TerminalView";
-import { ProblemsPanel } from "./ProblemsPanel";
-import { OutputPanel } from "./OutputPanel";
 import { Codicon } from "../icons/codicons/Codicon";
-import type { Problem } from "../types";
+import { IconButton } from "./ui/IconButton";
+import { ViewToolbar } from "../workbench/WorkbenchViews";
+import type { TermSpawnOptions } from "../api";
+import { ptyClosed, ptyReady, subscribeExtTerminals } from "../extensions/terminalBridge";
+import { listen } from "@tauri-apps/api/event";
+import { defaultTerminalTarget } from "../git/activeRepository";
 
-interface TerminalPanelProps {
-  open: boolean;
-  height: number;
-  /** Panel width when docked to a side (right/left). */
-  width?: number;
-  /** Where the panel is docked relative to the editor. */
-  pos?: "bottom" | "right" | "left";
+interface TerminalsViewProps {
+  /** A view "Terminal" está visível (ativa numa região aberta). */
+  visible: boolean;
+  /** Pede para revelar a view (criar/mostrar um terminal a foca, onde estiver). */
+  onReveal: () => void;
   cwd: string | null;
-  onClose: () => void;
-  /** Begins dragging the panel to reposition it (from empty header area). */
-  onDragStart?: (e: PointerEvent<HTMLElement>) => void;
-  problems: Problem[];
-  onOpenProblem: (problem: Problem) => void;
   /** Command line a "Run" requested, or null for a plain interactive shell. */
-  runCommand?: string | null;
+  runCommand?: TerminalCommand | null;
+  /** Working directory for the requested run command. */
+  runCwd?: string | null;
+  /** SSH connection for the requested run command, when it belongs to an SSH root. */
+  runConnId?: string | null;
   /** Identifies the current run; changing it spawns a fresh terminal. */
   runNonce?: number;
   /** Working directory requested by "Abrir no Terminal", or null. */
   openCwd?: string | null;
+  /** SSH connection for the requested terminal, when opening from an SSH root. */
+  openConnId?: string | null;
   /** Bumps on each "Abrir no Terminal" to spawn a fresh terminal at `openCwd`. */
   openNonce?: number;
-  /** Tab to focus (e.g. the status bar opening Problems), applied on nonce bump. */
-  focusTab?: PanelTab;
-  /** Bumps to (re)apply `focusTab`, even if it's the same tab as before. */
-  focusNonce?: number;
 }
 
+/** Abas do painel inferior antes do registro de views (ids estáveis das views). */
 export type PanelTab = "terminal" | "problems" | "output";
-
-const DEFAULT_TAB_ORDER: PanelTab[] = ["problems", "output", "terminal"];
-
-/** Reads the persisted tab order, validating it still holds exactly the known tabs. */
-function readTabOrder(): PanelTab[] {
-  try {
-    const parsed = JSON.parse(localStorage.getItem("ui.panelTabOrder") ?? "");
-    if (
-      Array.isArray(parsed) &&
-      parsed.length === DEFAULT_TAB_ORDER.length &&
-      DEFAULT_TAB_ORDER.every((t) => parsed.includes(t))
-    ) {
-      return parsed as PanelTab[];
-    }
-  } catch {
-    /* missing or malformed — fall back */
-  }
-  return DEFAULT_TAB_ORDER;
-}
 
 /** Last path segment, used to name a terminal after its folder. */
 function baseName(path: string): string {
@@ -71,35 +45,38 @@ interface TermInstance {
   id: string;
   title: string;
   cwd: string;
-  command: string | null;
+  connId?: string;
+  command: TerminalCommand | null;
+  /** Terminal criado por uma extensão VS Code (shell/env próprios). */
+  spawn?: TermSpawnOptions;
+  /** Processo saiu (o terminal fica aberto mostrando a saída, como no VS Code). */
+  exited?: boolean;
+  /** PTY criado pelo backend (terminal/* de um agente ACP): só se conecta a ele. */
+  attach?: boolean;
+  /** Pseudoterminal de extensão (sem PTY; o host escreve/lê — pseudoTerminal.ts). */
+  pseudo?: boolean;
 }
 
-export function TerminalPanel({
-  open,
-  height,
-  width = 360,
-  pos = "bottom",
+/**
+ * View "Terminal" do registro (padrão: painel). Fica SEMPRE montada (retém o
+ * conteúdo quando oculta) para os shells continuarem rodando com o painel
+ * fechado ou a view movida para outra região — só morrem ao fechar a sessão
+ * ou o app. As ações (+ / encerrar) vão para o cabeçalho da região.
+ */
+export function TerminalsView({
+  visible,
+  onReveal,
   cwd,
-  onClose,
-  onDragStart,
-  problems,
-  onOpenProblem,
   runCommand,
+  runCwd = null,
+  runConnId = null,
   runNonce = 0,
   openCwd = null,
+  openConnId = null,
   openNonce = 0,
-  focusTab,
-  focusNonce = 0,
-}: TerminalPanelProps) {
-  const [activeTab, setActiveTab] = useState<PanelTab>("terminal");
-  // Drag-reorderable tab order (VSCode-style), persisted across sessions. The drop
-  // target tracks which side (before/after) so a tab can reach either end.
-  const [tabOrder, setTabOrder] = useState<PanelTab[]>(readTabOrder);
-  const dragTabRef = useRef<PanelTab | null>(null);
-  const [dropTab, setDropTab] = useState<{ tab: PanelTab; after: boolean } | null>(null);
-  // DOM nodes of the panel tabs, so arrow-key navigation can move focus (roving
-  // tabIndex), keyed by tab id and kept in sync as the order changes.
-  const tabRefs = useRef<Partial<Record<PanelTab, HTMLButtonElement | null>>>({});
+}: TerminalsViewProps) {
+  const revealRef = useRef(onReveal);
+  revealRef.current = onReveal;
 
   // Drag-reorderable terminal list. Terminals are live sessions (not persisted
   // across app restarts), so this order is session-scoped by nature.
@@ -115,34 +92,41 @@ export function TerminalPanel({
   // every terminal by hand doesn't immediately respawn one.
   const seededRef = useRef(false);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem("ui.panelTabOrder", JSON.stringify(tabOrder));
-    } catch {
-      /* storage unavailable — ignore */
-    }
-  }, [tabOrder]);
-
   /** Spawns a new terminal and focuses it (switches to the terminal tab). */
   const createTerminal = useCallback(
-    (opts?: { cwd?: string | null; command?: string | null; title?: string }) => {
-      const dir = opts?.cwd ?? cwd;
+    (opts?: {
+      cwd?: string | null;
+      connId?: string | null;
+      command?: TerminalCommand | null;
+      title?: string;
+    }) => {
+      // "+"/primeiro terminal: abre no repositório ativo (multi-repo).
+      const fallback = opts?.cwd ? null : defaultTerminalTarget(cwd);
+      const dir = opts?.cwd ?? fallback?.cwd ?? cwd;
       if (!dir) return;
       termCounter.current += 1;
       const id = `term-${crypto.randomUUID()}`;
       const title = opts?.title ?? `Terminal ${termCounter.current}`;
       setTerminals((prev) => [
         ...prev,
-        { id, title, cwd: dir, command: opts?.command ?? null },
+        {
+          id,
+          title,
+          cwd: dir,
+          connId: (opts?.cwd ? opts.connId : fallback?.connId) ?? undefined,
+          command: opts?.command ?? null,
+        },
       ]);
       setActiveTermId(id);
-      setActiveTab("terminal");
+      revealRef.current();
     },
     [cwd]
   );
 
   /** Closes a terminal, moving focus to the last remaining one (or none). */
   const closeTerminal = useCallback((id: string) => {
+    // Terminal de extensão: o host recebe onDidCloseTerminal (no-op nos demais).
+    ptyClosed(id, null);
     setTerminals((prev) => {
       const next = prev.filter((t) => t.id !== id);
       setActiveTermId((cur) =>
@@ -152,10 +136,69 @@ export function TerminalPanel({
     });
   }, []);
 
+  // Terminais pedidos por extensões VS Code (window.createTerminal/show/dispose).
+  useEffect(
+    () =>
+      subscribeExtTerminals((a) => {
+        if (a.type === "create") {
+          const { spec } = a;
+          const dir = spec.cwd || cwd;
+          if (!dir) return;
+          setTerminals((prev) =>
+            prev.some((t) => t.id === spec.ptyId)
+              ? prev
+              : [
+                  ...prev,
+                  {
+                    id: spec.ptyId,
+                    title: spec.name,
+                    cwd: dir,
+                    command: null,
+                    ...(spec.pseudo
+                      ? { pseudo: true }
+                      : { spawn: { shellPath: spec.shellPath, shellArgs: spec.shellArgs, env: spec.env, strictEnv: spec.strictEnv, shellIntegration: spec.shellIntegration } }),
+                  },
+                ]
+          );
+        } else if (a.type === "show") {
+          setActiveTermId(a.ptyId);
+          revealRef.current();
+        } else if (a.type === "dispose") {
+          closeTerminal(a.ptyId);
+        } else if (a.type === "rename") {
+          setTerminals((prev) => prev.map((t) => (t.id === a.ptyId ? { ...t, title: a.name } : t)));
+        } else if (a.type === "exited") {
+          setTerminals((prev) => prev.map((t) => (t.id === a.ptyId ? { ...t, exited: true } : t)));
+        }
+      }),
+    [cwd, closeTerminal]
+  );
+
+  // Terminais dos agentes ACP (`terminal/create`): o PTY já existe no backend
+  // (src-tauri/src/agents/acp_client.rs); a aba só se conecta a ele, sem roubar
+  // o foco, e continua mostrando a saída depois do `release`.
+  useEffect(() => {
+    const un = listen<{ id: string; name: string; cwd: string }>("acp-terminal://created", (e) => {
+      const { id, name } = e.payload;
+      setTerminals((prev) =>
+        prev.some((t) => t.id === id)
+          ? prev
+          : [...prev, { id, title: `Agente: ${name}`, cwd: e.payload.cwd || cwd || "", command: null, attach: true }]
+      );
+      setActiveTermId((cur) => cur ?? id);
+    });
+    return () => void un.then((f) => f());
+  }, [cwd]);
+
   // "Run ▶" → a fresh terminal that runs the command.
   useEffect(() => {
     if (runNonce > 0 && runCommand) {
-      createTerminal({ command: runCommand, title: "Run" });
+      createTerminal({
+        cwd: runCwd,
+        connId: runConnId,
+        command: runCommand,
+        title: "Run",
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runNonce]);
@@ -163,7 +206,7 @@ export function TerminalPanel({
   // "Abrir no Terminal" → a fresh terminal at the requested folder.
   useEffect(() => {
     if (openNonce > 0 && openCwd) {
-      createTerminal({ cwd: openCwd, title: baseName(openCwd) });
+      createTerminal({ cwd: openCwd, connId: openConnId, title: baseName(openCwd) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openNonce]);
@@ -172,69 +215,11 @@ export function TerminalPanel({
   // folder open. Not re-run after the user closes them all (seededRef guards it),
   // and not while the panel is hidden — so we don't spawn a shell nobody asked for.
   useEffect(() => {
-    if (open && !seededRef.current && activeTab === "terminal" && cwd) {
+    if (visible && !seededRef.current && cwd) {
       seededRef.current = true;
       createTerminal();
     }
-  }, [open, activeTab, cwd, createTerminal]);
-
-  // Focus a specific tab on request (e.g. the status bar opening Problems).
-  useEffect(() => {
-    if (focusNonce > 0 && focusTab) setActiveTab(focusTab);
-  }, [focusNonce, focusTab]);
-
-  /** Label for a panel tab (Problemas shows the diagnostic count). */
-  function tabLabel(tab: PanelTab): string {
-    if (tab === "problems") {
-      return `Problemas${problems.length ? ` (${problems.length})` : ""}`;
-    }
-    return tab === "output" ? "Saída" : "Terminal";
-  }
-
-  /**
-   * Arrow-key navigation for the panel tablist (WAI-ARIA tabs pattern): Left/Right
-   * move to the adjacent tab, Home/End jump to the ends, all with wrap. Selection
-   * follows focus (the tab under focus becomes active), matching the click behavior.
-   */
-  function onTabsKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
-    const idx = tabOrder.indexOf(activeTab);
-    if (idx < 0) return;
-    let next = idx;
-    switch (e.key) {
-      case "ArrowLeft":
-        next = (idx - 1 + tabOrder.length) % tabOrder.length;
-        break;
-      case "ArrowRight":
-        next = (idx + 1) % tabOrder.length;
-        break;
-      case "Home":
-        next = 0;
-        break;
-      case "End":
-        next = tabOrder.length - 1;
-        break;
-      default:
-        return;
-    }
-    e.preventDefault();
-    const target = tabOrder[next];
-    setActiveTab(target);
-    tabRefs.current[target]?.focus();
-  }
-
-  /** Drops the dragged tab before/after `target`, reordering the bar. */
-  function reorderTabs(target: PanelTab, after: boolean) {
-    const from = dragTabRef.current;
-    dragTabRef.current = null;
-    setDropTab(null);
-    if (!from || from === target) return;
-    setTabOrder((prev) => {
-      const next = prev.filter((t) => t !== from);
-      const idx = next.indexOf(target) + (after ? 1 : 0);
-      next.splice(idx, 0, from);
-      return next;
-    });
-  }
+  }, [visible, cwd, createTerminal]);
 
   /** Drops the dragged terminal before/after `targetId`, reordering the list. */
   function reorderTerminals(targetId: string, after: boolean) {
@@ -257,130 +242,28 @@ export function TerminalPanel({
   const showTermList = terminals.length >= 1;
 
   return (
-    // Stays mounted while hidden (display:none) so terminals keep running when
-    // the panel is minimized — the shells only die on close or app exit.
-    <div
-      className={`terminal-panel panel-${pos}`}
-      style={
-        open
-          ? pos === "right" || pos === "left"
-            ? { width }
-            : { height }
-          : { display: "none" }
-      }
-    >
-      <div
-        className="terminal-header"
-        onPointerDown={(e) => {
-          // Drag-to-reposition starts only from empty header area — not the tabs
-          // (which reorder) or the action buttons.
-          if (
-            onDragStart &&
-            !(e.target as HTMLElement).closest(".terminal-tab, .terminal-actions")
-          ) {
-            onDragStart(e);
-          }
-        }}
-      >
-        {/*
-          Panel tabs follow the WAI-ARIA tablist pattern (not aria-pressed buttons):
-          role="tablist" on the container, role="tab" + aria-selected per tab, with a
-          roving tabIndex (only the active tab is tabbable) and arrow/Home/End keys
-          driving focus + selection. Drag-and-drop reordering is preserved untouched.
-        */}
-        <div
-          className="terminal-tabs"
-          role="tablist"
-          aria-label="Painel inferior"
-          onKeyDown={onTabsKeyDown}
-        >
-          {tabOrder.map((tab) => (
-            <button
-              key={tab}
-              ref={(el) => {
-                tabRefs.current[tab] = el;
-              }}
-              type="button"
-              role="tab"
-              draggable
-              className={`terminal-tab${activeTab === tab ? " active" : ""}${
-                dropTab?.tab === tab
-                  ? dropTab.after
-                    ? " drop-after"
-                    : " drop-before"
-                  : ""
-              }`}
-              onClick={() => setActiveTab(tab)}
-              aria-selected={activeTab === tab}
-              tabIndex={activeTab === tab ? 0 : -1}
-              onDragStart={() => {
-                dragTabRef.current = tab;
-              }}
-              onDragEnd={() => {
-                dragTabRef.current = null;
-                setDropTab(null);
-              }}
-              onDragOver={(e) => {
-                if (!dragTabRef.current || dragTabRef.current === tab) return;
-                e.preventDefault();
-                const rect = e.currentTarget.getBoundingClientRect();
-                const after = e.clientX > rect.left + rect.width / 2;
-                if (dropTab?.tab !== tab || dropTab.after !== after) {
-                  setDropTab({ tab, after });
-                }
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                const rect = e.currentTarget.getBoundingClientRect();
-                reorderTabs(tab, e.clientX > rect.left + rect.width / 2);
-              }}
-            >
-              {tabLabel(tab)}
-            </button>
-          ))}
-        </div>
-        <div className="terminal-actions">
-          {activeTab === "terminal" && (
-            <>
-              <button
-                type="button"
-                className="terminal-action"
-                onClick={() => createTerminal()}
-                disabled={!cwd}
-                title="Novo terminal"
-                aria-label="Novo terminal"
-              >
-                <Codicon name="add" size={16} />
-              </button>
-              {activeTermId && (
-                <button
-                  type="button"
-                  className="terminal-action"
-                  onClick={() => closeTerminal(activeTermId)}
-                  title="Encerrar terminal"
-                  aria-label="Encerrar terminal"
-                >
-                  <Codicon name="trash" size={16} />
-                </button>
-              )}
-            </>
-          )}
-          <button
-            type="button"
-            className="terminal-close"
-            onClick={onClose}
-            title="Fechar painel"
-            aria-label="Fechar painel"
-          >
-            <Codicon name="close" size={16} />
-          </button>
-        </div>
-      </div>
+    <div className="terminal-panel-view">
+      <ViewToolbar>
+        <IconButton
+          icon="add"
+          size="sm"
+          label="Novo terminal"
+          tooltipPlacement="bottom"
+          onClick={() => createTerminal()}
+          disabled={!cwd}
+        />
+        {activeTermId && (
+          <IconButton
+            icon="trash"
+            size="sm"
+            label="Encerrar terminal"
+            tooltipPlacement="bottom"
+            onClick={() => closeTerminal(activeTermId)}
+          />
+        )}
+      </ViewToolbar>
       <div className="terminal-body">
-        <div
-          className="terminal-pane"
-          style={{ display: activeTab === "terminal" ? undefined : "none" }}
-        >
+        <div className="terminal-pane">
           {terminals.length === 0 ? (
             <div className="panel-empty">
               {cwd
@@ -397,7 +280,24 @@ export function TerminalPanel({
                       t.id === activeTermId ? "" : " inactive"
                     }`}
                   >
-                    <TerminalView id={t.id} cwd={t.cwd} command={t.command} />
+                    <TerminalView
+                      id={t.id}
+                      cwd={t.cwd}
+                      connId={t.connId}
+                      command={t.command}
+                      spawn={t.spawn}
+                      attach={t.attach}
+                      pseudo={t.pseudo}
+                      onReady={t.spawn || t.pseudo ? (pid) => ptyReady(t.id, pid) : undefined}
+                      onExit={
+                        t.spawn || t.attach || t.pseudo
+                          ? (code) => {
+                              ptyClosed(t.id, code);
+                              setTerminals((prev) => prev.map((x) => (x.id === t.id ? { ...x, exited: true } : x)));
+                            }
+                          : undefined
+                      }
+                    />
                   </div>
                 ))}
               </div>
@@ -462,19 +362,20 @@ export function TerminalPanel({
                         size={14}
                         className="terminal-list-icon"
                       />
-                      <span className="terminal-list-title">{t.title}</span>
-                      <button
-                        type="button"
+                      <span className="terminal-list-title">
+                        {t.title}
+                        {t.exited ? " (encerrado)" : ""}
+                      </span>
+                      <IconButton
+                        icon="close"
+                        size="sm"
+                        label="Encerrar terminal"
                         className="terminal-list-close"
-                        title="Encerrar terminal"
-                        aria-label="Encerrar terminal"
                         onClick={(e) => {
                           e.stopPropagation();
                           closeTerminal(t.id);
                         }}
-                      >
-                        <Codicon name="close" size={12} />
-                      </button>
+                      />
                     </div>
                   ))}
                 </div>
@@ -482,10 +383,6 @@ export function TerminalPanel({
             </div>
           )}
         </div>
-        {activeTab === "problems" && (
-          <ProblemsPanel problems={problems} onOpenProblem={onOpenProblem} />
-        )}
-        {activeTab === "output" && <OutputPanel />}
       </div>
     </div>
   );

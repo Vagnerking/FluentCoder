@@ -76,7 +76,9 @@ fn build_fingerprint(src: &Path) -> String {
 /// Recursively collect source files under `dir`, skipping build outputs
 /// (`bin`/`obj`) which are derived, not source.
 fn collect_source_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in rd.flatten() {
         let path = entry.path();
         let name = entry.file_name();
@@ -93,7 +95,9 @@ fn collect_source_files(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// True if `path` holds exactly `want` (the recorded fingerprint matches).
 fn fingerprint_matches(path: &Path, want: &str) -> bool {
-    std::fs::read_to_string(path).map(|s| s == want).unwrap_or(false)
+    std::fs::read_to_string(path)
+        .map(|s| s == want)
+        .unwrap_or(false)
 }
 
 /// The fingerprint of the sidecar build currently in `cache` (written by
@@ -220,22 +224,55 @@ impl Sidecar {
     /// hundreds of reference DLLs + the TagHelper scan — killing the child at 5s
     /// (the old single timeout) threw the warm state away and looped kill/retry
     /// forever on big projects.
-    pub fn warm(&self, inputs: &ProjectInputs, cshtml_path: &str, cshtml_text: &str) -> Result<(), String> {
-        let _ = self.request("warm", inputs, Some(cshtml_path), Some(cshtml_text), COLD_TIMEOUT)?;
+    pub fn warm(
+        &self,
+        inputs: &ProjectInputs,
+        cshtml_path: &str,
+        cshtml_text: &str,
+    ) -> Result<(), String> {
+        let _ = self.request(
+            "warm",
+            inputs,
+            Some(cshtml_path),
+            Some(cshtml_text),
+            COLD_TIMEOUT,
+        )?;
         Ok(())
     }
 
     /// Emit the `.g.cs` for `cshtml_path` from `cshtml_text` on the per-keystroke
     /// budget (the session is warm: ~ms). Returns the text.
-    pub fn emit(&self, inputs: &ProjectInputs, cshtml_path: &str, cshtml_text: &str) -> Result<String, String> {
-        let text = self.request("emit", inputs, Some(cshtml_path), Some(cshtml_text), LIVE_TIMEOUT)?;
+    pub fn emit(
+        &self,
+        inputs: &ProjectInputs,
+        cshtml_path: &str,
+        cshtml_text: &str,
+    ) -> Result<String, String> {
+        let text = self.request(
+            "emit",
+            inputs,
+            Some(cshtml_path),
+            Some(cshtml_text),
+            LIVE_TIMEOUT,
+        )?;
         text.ok_or_else(|| "sidecar emit returned no text".to_string())
     }
 
     /// [`emit`] on the COLD budget — for prepare-time (open/save) emits that may
     /// create the project session first. Never used on the keystroke path.
-    pub fn emit_cold(&self, inputs: &ProjectInputs, cshtml_path: &str, cshtml_text: &str) -> Result<String, String> {
-        let text = self.request("emit", inputs, Some(cshtml_path), Some(cshtml_text), COLD_TIMEOUT)?;
+    pub fn emit_cold(
+        &self,
+        inputs: &ProjectInputs,
+        cshtml_path: &str,
+        cshtml_text: &str,
+    ) -> Result<String, String> {
+        let text = self.request(
+            "emit",
+            inputs,
+            Some(cshtml_path),
+            Some(cshtml_text),
+            COLD_TIMEOUT,
+        )?;
         text.ok_or_else(|| "sidecar emit returned no text".to_string())
     }
 
@@ -279,7 +316,10 @@ impl Sidecar {
         }
         // Serialize the build: two concurrent `dotnet build -o <out>` would corrupt
         // the shared output dir. The first builds; the rest see the cached dll.
-        let _build_guard = self.build_lock.lock().map_err(|_| "build lock poisoned".to_string())?;
+        let _build_guard = self
+            .build_lock
+            .lock()
+            .map_err(|_| "build lock poisoned".to_string())?;
         let up_to_date = dll.exists() && fingerprint_matches(&fingerprint_path, &want_fingerprint);
         if !up_to_date {
             std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
@@ -390,7 +430,10 @@ impl Sidecar {
     /// Write one request line and read one response line, spawning the process if
     /// needed. Serialized by the `handle` mutex (one request in flight).
     fn round_trip(&self, line: &str, timeout: Duration) -> Result<Response, String> {
-        let mut guard = self.handle.lock().map_err(|_| "sidecar lock poisoned".to_string())?;
+        let mut guard = self
+            .handle
+            .lock()
+            .map_err(|_| "sidecar lock poisoned".to_string())?;
         if guard.is_none() {
             *guard = Some(self.spawn()?);
         }
@@ -444,7 +487,9 @@ impl Sidecar {
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
-        let mut child = cmd.spawn().map_err(|e| format!("sidecar spawn failed: {e}"))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("sidecar spawn failed: {e}"))?;
         let stdin = child.stdin.take().ok_or("no sidecar stdin")?;
         let stdout = child.stdout.take().ok_or("no sidecar stdout")?;
         // Reader thread: push each complete response line into the channel. Ends on
@@ -464,7 +509,11 @@ impl Sidecar {
                 }
             }
         });
-        Ok(Handle { child, stdin, lines: rx })
+        Ok(Handle {
+            child,
+            stdin,
+            lines: rx,
+        })
     }
 }
 
@@ -530,7 +579,8 @@ mod tests {
 
     #[test]
     fn response_parses_ok_and_error() {
-        let ok: Response = serde_json::from_str(r#"{"id":1,"ok":true,"generatedText":"x"}"#).unwrap();
+        let ok: Response =
+            serde_json::from_str(r#"{"id":1,"ok":true,"generatedText":"x"}"#).unwrap();
         assert!(ok.ok && ok.generated_text.as_deref() == Some("x"));
         let err: Response = serde_json::from_str(r#"{"id":2,"ok":false,"error":"boom"}"#).unwrap();
         assert!(!err.ok && err.error.as_deref() == Some("boom"));
@@ -539,7 +589,10 @@ mod tests {
     #[test]
     fn build_fingerprint_changes_when_source_changes() {
         use std::time::{SystemTime, UNIX_EPOCH};
-        let id = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let src = std::env::temp_dir().join(format!("fluent-razor-sidecar-fp-{id}"));
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("Program.cs"), "// v1").unwrap();

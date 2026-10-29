@@ -1,0 +1,114 @@
+.git-file-row { display: flex; align-items: center; gap: 6px; height: 24px; margin: 1px 6px; padding: 0 6px; cursor: default; border-radius: var(--radius-control); contain: layout paint style; content-visibility: auto; contain-intrinsic-size: 24px; }
+
+.git-file-row:hover { background: var(--fill-subtle-hover); }
+
+.git-file-icon { flex-shrink: 0; }
+
+.git-file-name { font-size: var(--font-caption); color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+
+.git-file-name:hover { color: var(--text); text-decoration: underline; }
+
+.git-file-spacer { flex: 1; min-width: 0; }
+
+/* Row actions: revealed on row hover or keyboard focus within the row. */
+.git-file-action { opacity: 0; transition: opacity var(--duration-fast) var(--ease-standard), background-color var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard); }
+
+.git-file-row:hover .git-file-action,
+.git-file-row:focus-within .git-file-action { opacity: 1; }
+
+.git-file-badge { width: 16px; text-align: center; flex-shrink: 0; font-size: var(--font-caption); font-weight: 700; font-family: var(--font-mono); }
+
+.git-badge-modified { color: var(--color-git-modified); }
+
+.git-badge-added, .git-badge-untracked { color: var(--color-git-added); }
+
+.git-badge-deleted { color: var(--color-git-deleted); }
+
+.git-badge-renamed { color: var(--color-git-renamed); }
+
+/* Merge-conflict group + its files stand out in amber. */
+.git-group-conflict { color: var(--color-git-conflict-strong); }
+
+.git-group-conflict > span:first-child { display: inline-flex; align-items: center; gap: 5px; }
+
+.git-group-conflict .codicon { color: var(--color-git-conflict-strong); }
+
+/* Grupos de recursos (Conflitos / Preparadas / Alterações) dentro da view:
+   linha de árvore nível 2 — rótulo sem caixa alta, contagem simples e ações
+   só no hover/foco. Substitui o cabeçalho de seção repetido ("ALTERAÇÕES" ›
+   "ALTERAÇÕES") e o cartão "Index preparado", que duplicava as ações. */
+.git-resource-group-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 4px;
+  min-height: 22px;
+  margin: 0 4px;
+  padding-right: 6px;
+  border-radius: var(--radius-control);
+}
+
+.git-resource-group-row:hover { background: var(--fill-subtle-hover); }
+
+.git-resource-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 22px;
+  padding: 0 4px 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-caption);
+  font-weight: 600;
+  text-align: left;
+}
+
+.git-resource-group-toggle:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.git-resource-group-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-resource-group-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  visibility: hidden;
+}
+
+.git-resource-group-row:is(:hover, :focus-within) .git-resource-group-actions { visibility: visible; }
+
+.git-resource-group-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--acrylic-control-hover);
+  color: var(--text-secondary);
+  font-size: var(--font-caption-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  text-align: center;
+}
+
+.git-resource-group-row.is-danger .git-resource-group-toggle,
+.git-resource-group-row.is-danger .git-resource-group-count {
+  color: var(--color-git-conflict-strong);
+}
+
+@media (hover: none) {
+  .git-resource-group-actions { visibility: visible; }
+}
+
+/* Container para as container queries do grafo (meta/chips somem < 430 px). */
+.git-group-graph { container-type: inline-size; }

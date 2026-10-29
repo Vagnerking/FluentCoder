@@ -7,6 +7,10 @@ export interface RemoteAttach {
   rootPath: string;
 }
 
+export interface LocalAttach {
+  rootPath: string;
+}
+
 /** A new SSH connection only replaces a workbench that has no project open. */
 export function shouldOpenRemoteInNewWindow(
   currentRootPath: string | null,
@@ -16,21 +20,47 @@ export function shouldOpenRemoteInNewWindow(
 }
 
 /** Encodes the payload with URL-safe base64, including Unicode paths and users. */
-export function encodeRemoteAttach(attach: RemoteAttach): string {
+function encodeAttachPayload(attach: RemoteAttach | LocalAttach): string {
   const bytes = new TextEncoder().encode(JSON.stringify(attach));
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-export function decodeRemoteAttach(payload: string): RemoteAttach | null {
+function decodeAttachPayload(payload: string): unknown {
   try {
     const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
     const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
     const binary = atob(padded);
     const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-    const attach = JSON.parse(new TextDecoder().decode(bytes)) as RemoteAttach;
-    if (!attach.connId || !attach.rootPath) return null;
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return null;
+  }
+}
+
+export function encodeRemoteAttach(attach: RemoteAttach): string {
+  return encodeAttachPayload(attach);
+}
+
+export function encodeLocalAttach(attach: LocalAttach): string {
+  return encodeAttachPayload(attach);
+}
+
+export function decodeRemoteAttach(payload: string): RemoteAttach | null {
+  try {
+    const attach = decodeAttachPayload(payload) as RemoteAttach | null;
+    if (!attach?.connId || !attach.rootPath) return null;
+    return attach;
+  } catch {
+    return null;
+  }
+}
+
+export function decodeLocalAttach(payload: string): LocalAttach | null {
+  try {
+    const attach = decodeAttachPayload(payload) as LocalAttach | null;
+    if (!attach?.rootPath) return null;
     return attach;
   } catch {
     return null;
@@ -51,6 +81,17 @@ export function readRemoteAttach(): RemoteAttach | null {
   }
 }
 
+/** Reads this window's local-folder attach payload from the URL, if present. */
+export function readLocalAttach(): LocalAttach | null {
+  try {
+    const raw = new URLSearchParams(window.location.search).get("localAttach");
+    if (!raw) return null;
+    return decodeLocalAttach(raw);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Removes the `remoteAttach` query param from the URL after consuming it, so a
  * window reload doesn't try to re-attach a stale connection id.
@@ -59,6 +100,14 @@ export function clearRemoteAttachParam(): void {
   const url = new URL(window.location.href);
   if (url.searchParams.has("remoteAttach")) {
     url.searchParams.delete("remoteAttach");
+    window.history.replaceState(null, "", url.toString());
+  }
+}
+
+export function clearLocalAttachParam(): void {
+  const url = new URL(window.location.href);
+  if (url.searchParams.has("localAttach")) {
+    url.searchParams.delete("localAttach");
     window.history.replaceState(null, "", url.toString());
   }
 }

@@ -458,11 +458,17 @@ pub(crate) fn parse_trx(xml: &str) -> Vec<DotnetTestResult> {
         // attributes and this result's optional <Message>.
         let end = chunk.find("</UnitTestResult>").unwrap_or(chunk.len());
         let scope = &chunk[..end];
-        let Some(name) = attr(scope, "testName") else { continue };
+        let Some(name) = attr(scope, "testName") else {
+            continue;
+        };
         let outcome = attr(scope, "outcome").unwrap_or("NotExecuted");
         let message = scope
             .find("<Message>")
-            .and_then(|s| scope[s + 9..].find("</Message>").map(|e| (s + 9, s + 9 + e)))
+            .and_then(|s| {
+                scope[s + 9..]
+                    .find("</Message>")
+                    .map(|e| (s + 9, s + 9 + e))
+            })
             .map(|(s, e)| unescape(&scope[s..e]));
         results.push(DotnetTestResult {
             name: unescape(name),
@@ -503,7 +509,10 @@ mod tests {
         assert_eq!(r[0].outcome, "Passed");
         assert!((r[0].duration_ms.unwrap() - 12.3456).abs() < 0.01);
         assert_eq!(r[1].outcome, "Failed");
-        assert_eq!(r[1].message.as_deref(), Some("Assert.Equal() Failure: 1 < 2"));
+        assert_eq!(
+            r[1].message.as_deref(),
+            Some("Assert.Equal() Failure: 1 < 2")
+        );
         assert!((r[1].duration_ms.unwrap() - 1500.0).abs() < 0.01);
     }
 

@@ -81,11 +81,7 @@ fn push_generator_relative(mut p: PathBuf, cshtml_rel: &Path) -> PathBuf {
 /// `obj/<Config>/<Tfm>/generated` layout. Pure: no IO. Use
 /// [`generated_path_for_output`] when the broker pins
 /// `CompilerGeneratedFilesOutputPath` (the robust path).
-pub fn generated_path_for(
-    project_dir: &Path,
-    cshtml_rel: &Path,
-    ctx: &GenContext,
-) -> PathBuf {
+pub fn generated_path_for(project_dir: &Path, cshtml_rel: &Path, ctx: &GenContext) -> PathBuf {
     let mut p = project_dir.join("obj");
     p.push(ctx.config);
     p.push(ctx.tfm);
@@ -177,13 +173,19 @@ mod tests {
     use super::*;
 
     fn ctx() -> GenContext<'static> {
-        GenContext { config: "Debug", tfm: "net8.0" }
+        GenContext {
+            config: "Debug",
+            tfm: "net8.0",
+        }
     }
 
     #[test]
     fn generated_file_name_replaces_dot() {
         assert_eq!(generated_file_name("Index.cshtml"), "Index_cshtml.g.cs");
-        assert_eq!(generated_file_name("_ViewImports.cshtml"), "_ViewImports_cshtml.g.cs");
+        assert_eq!(
+            generated_file_name("_ViewImports.cshtml"),
+            "_ViewImports_cshtml.g.cs"
+        );
     }
 
     #[test]
@@ -220,13 +222,17 @@ mod tests {
         let (prog, args) = emit_command(Path::new("C:/proj/App/App.csproj"), "Release");
         assert_eq!(prog, "dotnet");
         assert_eq!(args[0], "build");
-        assert!(args.iter().any(|a| a == "-p:EmitCompilerGeneratedFiles=true"));
+        assert!(args
+            .iter()
+            .any(|a| a == "-p:EmitCompilerGeneratedFiles=true"));
         assert!(args.iter().any(|a| a.contains("App.csproj")));
         // config must be passed so the emitted obj/<config> tree matches generated_path_for
         let ci = args.iter().position(|a| a == "-c").expect("-c present");
         assert_eq!(args[ci + 1], "Release");
         // The plain command does NOT pin the output path.
-        assert!(!args.iter().any(|a| a.starts_with("-p:CompilerGeneratedFilesOutputPath=")));
+        assert!(!args
+            .iter()
+            .any(|a| a.starts_with("-p:CompilerGeneratedFilesOutputPath=")));
     }
 
     #[test]
@@ -238,9 +244,10 @@ mod tests {
             out,
             Some("net8.0"),
         );
-        assert!(args.iter().any(|a| a
-            == "-p:CompilerGeneratedFilesOutputPath=C:/shadow/gen"
-            || a == "-p:CompilerGeneratedFilesOutputPath=C:\\shadow\\gen"));
+        assert!(args
+            .iter()
+            .any(|a| a == "-p:CompilerGeneratedFilesOutputPath=C:/shadow/gen"
+                || a == "-p:CompilerGeneratedFilesOutputPath=C:\\shadow\\gen"));
         // Scoped to ONE project and ONE TFM — never the whole graph.
         assert!(args.iter().any(|a| a == "-p:BuildProjectReferences=false"));
         let fi = args.iter().position(|a| a == "-f").expect("-f present");
@@ -252,6 +259,9 @@ mod tests {
             s.ends_with("shadow/gen/Microsoft.CodeAnalysis.Razor.Compiler/Microsoft.NET.Sdk.Razor.SourceGenerators.RazorSourceGenerator/Views/Home/Index_cshtml.g.cs"),
             "got: {s}"
         );
-        assert!(!s.contains("/obj/"), "pinned output must not use the obj layout: {s}");
+        assert!(
+            !s.contains("/obj/"),
+            "pinned output must not use the obj layout: {s}"
+        );
     }
 }

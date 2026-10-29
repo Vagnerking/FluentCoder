@@ -230,7 +230,9 @@ impl RazorSourceMap {
             return None;
         }
         let col = if dl == 0 {
-            r.gen_start.col.saturating_add(p.col.saturating_sub(r.src_start.col))
+            r.gen_start
+                .col
+                .saturating_add(p.col.saturating_sub(r.src_start.col))
         } else {
             p.col
         };
@@ -255,7 +257,13 @@ impl RazorSourceMap {
     /// `end-1` then re-add a column, else — for the common "through end of line"
     /// form whose exclusive end sits at COLUMN 1 OF THE NEXT LINE — map the end
     /// of the previous line. All attempts must stay in the SAME region.
-    fn map_excl_end<RI, MP>(&self, end: Pos, region: usize, region_index: RI, map: MP) -> Option<Pos>
+    fn map_excl_end<RI, MP>(
+        &self,
+        end: Pos,
+        region: usize,
+        region_index: RI,
+        map: MP,
+    ) -> Option<Pos>
     where
         RI: Fn(Pos) -> Option<usize>,
         MP: Fn(Pos) -> Option<Pos>,
@@ -296,7 +304,12 @@ impl RazorSourceMap {
         }
         let region = self.gen_region_index(start)?;
         let s = self.to_source(start)?;
-        let e = self.map_excl_end(end, region, |p| self.gen_region_index(p), |p| self.to_source(p))?;
+        let e = self.map_excl_end(
+            end,
+            region,
+            |p| self.gen_region_index(p),
+            |p| self.to_source(p),
+        )?;
         Some((s, e))
     }
 
@@ -330,7 +343,12 @@ impl RazorSourceMap {
         }
         let region = self.src_region_index(start)?;
         let s = self.to_generated(start)?;
-        let e = self.map_excl_end(end, region, |p| self.src_region_index(p), |p| self.to_generated(p))?;
+        let e = self.map_excl_end(
+            end,
+            region,
+            |p| self.src_region_index(p),
+            |p| self.to_generated(p),
+        )?;
         Some((s, e))
     }
 
@@ -583,12 +601,20 @@ Model.City
         // start in region 1 (gen line 5), end in region 2 (gen line 11): the
         // strict mapper rejects, the clamped one truncates at region 1's src end.
         assert_eq!(m.to_source_range(Pos::new(5, 1), Pos::new(11, 2)), None);
-        let (s, e) = m.to_source_range_clamped(Pos::new(5, 1), Pos::new(11, 2)).unwrap();
+        let (s, e) = m
+            .to_source_range_clamped(Pos::new(5, 1), Pos::new(11, 2))
+            .unwrap();
         assert_eq!(s, Pos::new(8, 13));
         assert_eq!(e, Pos::new(8, 23)); // region 1 source end
-        // Reversed input still rejected; fully synthetic start still None.
-        assert_eq!(m.to_source_range_clamped(Pos::new(5, 7), Pos::new(5, 1)), None);
-        assert_eq!(m.to_source_range_clamped(Pos::new(1, 1), Pos::new(5, 2)), None);
+                                        // Reversed input still rejected; fully synthetic start still None.
+        assert_eq!(
+            m.to_source_range_clamped(Pos::new(5, 7), Pos::new(5, 1)),
+            None
+        );
+        assert_eq!(
+            m.to_source_range_clamped(Pos::new(1, 1), Pos::new(5, 2)),
+            None
+        );
     }
 
     #[test]
@@ -600,9 +626,17 @@ Model.City
         // Named classic for the target, then default, then a BARE #line.
         let gen = "#line 10 \"C:\\proj\\Views\\Home\\Index.cshtml\"\nreal();\n#line default\nsynthetic();\n#line 99\nghost();\n#line default\n";
         let m = RazorSourceMap::parse(gen, target);
-        assert_eq!(m.region_count(), 1, "bare #line after default must not map to target");
+        assert_eq!(
+            m.region_count(),
+            1,
+            "bare #line after default must not map to target"
+        );
         assert_eq!(m.to_source(Pos::new(2, 1)), Some(Pos::new(10, 1)));
-        assert_eq!(m.to_source(Pos::new(6, 1)), None, "ghost() reports the .g.cs, not the target");
+        assert_eq!(
+            m.to_source(Pos::new(6, 1)),
+            None,
+            "ghost() reports the .g.cs, not the target"
+        );
 
         // A bare #line while the target IS the reported file keeps mapping to it.
         let gen2 = "#line 10 \"C:\\proj\\Views\\Home\\Index.cshtml\"\nreal();\n#line 20\nmore();\n#line default\n";

@@ -9,7 +9,13 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "test:unit": "node --experimental-strip-types --test \"src/**/*.test.ts\""
+    "test:unit": "node --experimental-strip-types --test \"src/**/*.test.ts\" \"tools/ext-host/test/*.test.js\"",
+    "test:ext-host": "node --test \"tools/ext-host/test/*.test.js\"",
+    "ext-host:check": "node tools/ext-host/scripts/headless-check.js",
+    "ext-host:flows": "node tools/ext-host/scripts/flows-check.js",
+    "ext-host:orphan-check": "node tools/ext-host/scripts/orphan-check.js",
+    "ext-host:capabilities": "node tools/ext-host/discovery/capabilities.js",
+    "ext-host:catalog-check": "node --experimental-strip-types tools/ext-host/scripts/catalog-check.mts"
   },
   "dependencies": {
     "@codingame/monaco-vscode-api": "^25.1.2",
@@ -31,7 +37,7 @@
     "@codingame/monaco-vscode-workbench-service-override": "^25.1.2",
     "@monaco-editor/react": "^4.6.0",
     "@shikijs/monaco": "^3.23.0",
-    "@tauri-apps/api": "^2.1.1",
+    "@tauri-apps/api": "^2.12.2",
     "@tauri-apps/plugin-dialog": "^2.2.0",
     "@vscode/codicons": "^0.0.45",
     "@xterm/addon-fit": "^0.10.0",
@@ -58,19 +64,19 @@
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "^5.7.2",
-    "vite": "^6.0.3"
+    "vite": "^6.4.5"
   },
   "comments": {
-    "overrides": "Force-patch transitive vulnerabilities pulled in by material-icon-theme -> biome@0.3.3 (an unused build-time CLI that drags in the legacy request/inquirer chain). None of these packages execute at runtime; the overrides exist only to clear the Dependabot alerts. The deprecated, unpatchable 'request' is aliased to its maintained, SSRF-fixed fork @cypress/request.",
-    "overrides-dompurify": "@codingame/monaco-vscode-api@25.1.2 hard-pins dompurify@3.3.1, which has 16 open XSS/prototype-pollution advisories. Forced to 3.4.11 (latest 3.x, same stable public API) to clear the alerts without doing a risky major bump of the whole @codingame/monaco stack. dompurify runs at runtime inside monaco-vscode-api."
+    "overrides": "Patch legacy transitives from material-icon-theme -> biome@0.3.3. These dependencies are not part of the product's runtime path, but installation/build tooling still requires security review. The deprecated request package is aliased to @cypress/request. Keep compatible fixes locked and validate the affected consumers after updates.",
+    "overrides-dompurify": "@codingame/monaco-vscode-api@25.1.2 pins dompurify@3.3.1. Require at least 3.4.17 to address the currently reported advisories while preserving the coordinated Monaco 25 stack. DOMPurify executes in the editor at runtime; browser validation of the actual sanitizer remains required."
   },
   "overrides": {
     "lodash": "^4.18.1",
     "form-data": "^4.0.6",
     "tough-cookie": "^4.1.4",
-    "qs": "^6.15.2",
+    "qs": "^6.17.0",
     "uuid": "^11.1.1",
     "request": "npm:@cypress/request@^4.0.1",
-    "dompurify": "^3.4.11"
+    "dompurify": "^3.4.17"
   }
 }

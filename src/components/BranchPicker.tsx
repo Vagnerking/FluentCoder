@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { SearchBox } from "./ui/Input";
 import { gitBranches } from "../api";
 import { Codicon } from "../icons/codicons/Codicon";
 import { useModalDismiss } from "./useModalDismiss";
@@ -7,6 +8,8 @@ import type { GitBranchInfo } from "../types";
 interface BranchPickerProps {
   /** Repo root (workspace folder). Null when no folder is open. */
   rootPath: string | null;
+  /** SSH connection id when the repo lives in a remote workspace root. */
+  connId?: string | null;
   /** Checks out an existing branch by name. */
   onCheckout: (branch: string) => void;
   /** Creates a new branch from HEAD (prompts for the name itself). */
@@ -55,6 +58,7 @@ type Row =
  */
 export function BranchPicker({
   rootPath,
+  connId = null,
   onCheckout,
   onCreateBranch,
   onClose,
@@ -75,7 +79,7 @@ export function BranchPicker({
     }
     let cancelled = false;
     setLoading(true);
-    gitBranches(rootPath)
+    gitBranches(rootPath, connId ?? undefined)
       .then((list) => {
         if (!cancelled) setBranches(list);
       })
@@ -89,7 +93,7 @@ export function BranchPicker({
     return () => {
       cancelled = true;
     };
-  }, [rootPath]);
+  }, [rootPath, connId]);
 
   // Case-insensitive substring filter over actions (by label) and branches (by
   // name). The actions stay pinned above the matching branches.
@@ -157,10 +161,9 @@ export function BranchPicker({
     <div className="quick-open-backdrop" {...useModalDismiss(onClose)}>
       <div className="quick-open branch-picker">
         <div className="quick-pick-title">Selecionar branch</div>
-        <input
+        <SearchBox
           ref={inputRef}
-          className="quick-open-input"
-          type="text"
+          wrapperClassName="quick-open-field"
           placeholder="Selecione uma branch para fazer checkout"
           value={query}
           aria-label="Seletor de branch: filtrar branches"

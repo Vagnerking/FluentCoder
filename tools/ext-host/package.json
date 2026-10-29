@@ -1,0 +1,6 @@
+{
+  "name": "fluent-ext-host",
+  "private": true,
+  "type": "commonjs",
+  "description": "Mini extension host (PoC) que roda extensões VS Code instaladas localmente dentro do Fluent Coder."
+}

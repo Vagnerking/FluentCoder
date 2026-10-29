@@ -19,6 +19,7 @@ export type IconAction =
   | "refresh"
   | "reload"
   | "collapseAll"
+  | "expandAll"
   | "expand"
   | "collapse"
   | "folder"
@@ -61,6 +62,12 @@ export type IconAction =
   | "gitPush"
   | "sync"
   | "gitMerge"
+  | "gitRepo"
+  | "gitGraph"
+  | "gitRemote"
+  | "gitStash"
+  | "gitWorktree"
+  | "gitContributor"
   | "cloudUpload"
   | "add"
   | "remove"
@@ -85,6 +92,7 @@ export type IconAction =
   | "extensions"
   | "account"
   | "settings"
+  | "packages"
   | "commandPalette"
   | "menu"
   | "agents"
@@ -120,8 +128,118 @@ export type IconAction =
   | "arrowUp"
   | "arrowLeft"
   // Misc
+  | "tag"
   | "bookmark"
-  | "key";
+  | "key"
+  | "lock"
+  // Form controls (src/components/ui)
+  | "checkmark"
+  | "indeterminate"
+  // Fluent Chat (sidebar secundária de IA)
+  | "fluentChat"
+  | "sparkle"
+  | "robot"
+  | "retry"
+  | "editMessage"
+  | "thinking"
+  | "toolRead"
+  | "toolEdit"
+  | "toolExecute"
+  | "toolSearch"
+  | "toolFetch"
+  | "toolPlan"
+  | "toolOther"
+  | "toolDelete"
+  | "toolMove"
+  | "usage"
+  | "selection"
+  | "workspaceContext"
+  | "linkExternal"
+  | "globe"
+  | "pending"
+  | "duplicate"
+  // Ícones escolhíveis de agentes personalizados
+  | "agentHubot"
+  | "agentRobot"
+  | "agentSparkle"
+  | "agentBeaker"
+  | "agentBug"
+  | "agentBook"
+  | "agentRocket"
+  | "agentShield"
+  | "agentTools"
+  | "agentLaw"
+  | "agentMortarBoard"
+  | "agentPulse"
+  | "agentDatabase"
+  | "agentPaintcan"
+  | "agentGlobe"
+  | "agentOrganization"
+  // Workbench chrome (title bar layout toggles, tab strip, menus)
+  | "layoutSidebarLeft"
+  | "layoutSidebarLeftOff"
+  | "layoutSidebarRight"
+  | "layoutSidebarRightOff"
+  | "layoutPanel"
+  | "layoutPanelOff"
+  | "chevronLeft"
+  | "more"
+  | "dirty"
+  | "clearAll"
+  | "filter"
+  | "debugPause"
+  | "stepInto"
+  | "stepOut"
+  | "zoomIn"
+  | "zoomOut"
+  | "zoomFit"
+  | "list"
+  | "pin"
+  | "pinned"
+  | "annotationBlame"
+  | "annotationHeatmap"
+  | "symbolFile"
+  | "symbolModule"
+  | "symbolNamespace"
+  | "symbolClass"
+  | "symbolMethod"
+  | "symbolProperty"
+  | "symbolField"
+  | "symbolConstructor"
+  | "symbolEnum"
+  | "symbolInterface"
+  | "symbolFunction"
+  | "symbolVariable"
+  | "symbolConstant"
+  | "symbolString"
+  | "symbolKey"
+  | "symbolEnumMember"
+  | "symbolStruct"
+  | "symbolEvent"
+  | "symbolOperator"
+  | "symbolTypeParameter"
+  | "symbolMisc"
+  | "workspaceRoot"
+  // View Extensões
+  | "cloudDownload"
+  | "verified"
+  | "circleSlash"
+  | "pass"
+  // Views & layout (registro de views, mover entre regiões)
+  | "output"
+  | "problems"
+  | "moveView"
+  | "hideView"
+  | "layout"
+  // Grafo de commits
+  | "cloud"
+  | "arrowDown"
+  | "gitPullRequest"
+  | "gitCompare"
+  | "gitFetch"
+  | "cherryPick"
+  | "history"
+  | "target";
 
 /** action → codicon name (without the `codicon-` prefix). */
 export const CODICON_MAP: Record<IconAction, string> = {
@@ -135,6 +253,7 @@ export const CODICON_MAP: Record<IconAction, string> = {
   refresh: "refresh",
   reload: "sync",
   collapseAll: "collapse-all",
+  expandAll: "expand-all",
   expand: "chevron-down",
   collapse: "chevron-right",
   folder: "folder",
@@ -182,6 +301,12 @@ export const CODICON_MAP: Record<IconAction, string> = {
   gitPush: "arrow-up",
   sync: "sync",
   gitMerge: "git-merge",
+  gitRepo: "repo",
+  gitGraph: "git-commit",
+  gitRemote: "cloud",
+  gitStash: "archive",
+  gitWorktree: "folder-library",
+  gitContributor: "organization",
   cloudUpload: "cloud-upload",
   add: "add",
   remove: "remove",
@@ -209,6 +334,7 @@ export const CODICON_MAP: Record<IconAction, string> = {
   extensions: "extensions",
   account: "account",
   settings: "settings-gear",
+  packages: "package",
   commandPalette: "symbol-color",
   menu: "menu",
   agents: "hubot",
@@ -249,8 +375,116 @@ export const CODICON_MAP: Record<IconAction, string> = {
   arrowLeft: "arrow-left",
 
   // Misc
+  tag: "tag",
   bookmark: "bookmark",
   key: "key",
+  lock: "lock",
+
+  // Form controls (src/components/ui)
+  checkmark: "check",
+  indeterminate: "dash",
+
+  // Fluent Chat
+  fluentChat: "chat-sparkle",
+  sparkle: "sparkle",
+  robot: "robot",
+  retry: "debug-rerun",
+  editMessage: "edit",
+  thinking: "lightbulb",
+  toolRead: "eye",
+  toolEdit: "edit",
+  toolExecute: "terminal",
+  toolSearch: "search",
+  toolFetch: "globe",
+  toolPlan: "checklist",
+  toolOther: "tools",
+  toolDelete: "trash",
+  toolMove: "arrow-swap",
+  usage: "dashboard",
+  selection: "selection",
+  workspaceContext: "folder-library",
+  linkExternal: "link-external",
+  globe: "globe",
+  pending: "circle-large-outline",
+  duplicate: "copy",
+  agentHubot: "hubot",
+  agentRobot: "robot",
+  agentSparkle: "sparkle",
+  agentBeaker: "beaker",
+  agentBug: "bug",
+  agentBook: "book",
+  agentRocket: "rocket",
+  agentShield: "shield",
+  agentTools: "tools",
+  agentLaw: "law",
+  agentMortarBoard: "mortar-board",
+  agentPulse: "pulse",
+  agentDatabase: "database",
+  agentPaintcan: "paintcan",
+  agentGlobe: "globe",
+  agentOrganization: "organization",
+  layoutSidebarLeft: "layout-sidebar-left",
+  layoutSidebarLeftOff: "layout-sidebar-left-off",
+  layoutSidebarRight: "layout-sidebar-right",
+  layoutSidebarRightOff: "layout-sidebar-right-off",
+  layoutPanel: "layout-panel",
+  layoutPanelOff: "layout-panel-off",
+  chevronLeft: "chevron-left",
+  more: "ellipsis",
+  dirty: "circle-filled",
+  clearAll: "clear-all",
+  filter: "filter",
+  debugPause: "debug-pause",
+  stepInto: "debug-step-into",
+  stepOut: "debug-step-out",
+  zoomIn: "zoom-in",
+  zoomOut: "zoom-out",
+  zoomFit: "screen-full",
+  list: "list-unordered",
+  pin: "pin",
+  pinned: "pinned",
+  // Anotações Git do editor e ícones de símbolo (breadcrumbs)
+  annotationBlame: "person",
+  annotationHeatmap: "flame",
+  symbolFile: "symbol-file",
+  symbolModule: "symbol-module",
+  symbolNamespace: "symbol-namespace",
+  symbolClass: "symbol-class",
+  symbolMethod: "symbol-method",
+  symbolProperty: "symbol-property",
+  symbolField: "symbol-field",
+  symbolConstructor: "symbol-constructor",
+  symbolEnum: "symbol-enum",
+  symbolInterface: "symbol-interface",
+  symbolFunction: "symbol-function",
+  symbolVariable: "symbol-variable",
+  symbolConstant: "symbol-constant",
+  symbolString: "symbol-string",
+  symbolKey: "symbol-key",
+  symbolEnumMember: "symbol-enum-member",
+  symbolStruct: "symbol-structure",
+  symbolEvent: "symbol-event",
+  symbolOperator: "symbol-operator",
+  symbolTypeParameter: "symbol-parameter",
+  symbolMisc: "symbol-misc",
+  workspaceRoot: "root-folder",
+  cloudDownload: "cloud-download",
+  verified: "verified-filled",
+  circleSlash: "circle-slash",
+  pass: "pass",
+  output: "output",
+  problems: "issues",
+  moveView: "arrow-swap",
+  hideView: "eye-closed",
+  layout: "layout",
+  cloud: "cloud",
+  arrowDown: "arrow-down",
+  gitPullRequest: "git-pull-request",
+  gitCompare: "git-compare",
+  gitFetch: "git-fetch",
+  cherryPick: "git-stash-apply",
+  history: "history",
+  target: "target",
 };
 
 /** Codicon names that should spin (loading/sync feedback). */

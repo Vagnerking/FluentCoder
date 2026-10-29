@@ -1,0 +1,20 @@
+.status-git-sync { gap: var(--space-sm); }
+
+.status-git-count {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  font-variant-numeric: tabular-nums;
+}
+
+.status-git-sync.synced { color: var(--text-muted); }
+
+/* Conflict badge riding on the branch chip during a merge/rebase. */
+.status-git-conflict {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  margin-left: 6px;
+  color: var(--color-status-warning-strong);
+  font-variant-numeric: tabular-nums;
+}

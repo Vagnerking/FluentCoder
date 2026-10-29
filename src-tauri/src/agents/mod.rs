@@ -1,55 +1,40 @@
-//! Backend do chat de agentes (Claude Code / Codex CLI).
+//! Backend do Fluent Chat (Claude Code, Codex e agentes ACP).
 //!
 //! Cada provedor mantém um processo de longa duração por workspace, no mesmo
 //! protocolo usado pelas extensões oficiais de editor:
 //! - Codex: `codex app-server` (JSON-RPC por stdio) com threads persistentes;
-//! - Claude: CLI `claude` em modo headless `stream-json` bidirecional.
+//! - Claude: CLI `claude` em modo headless `stream-json` bidirecional;
+//! - Gemini CLI, opencode, Qwen Code, Goose…: Agent Client Protocol (ACP,
+//!   JSON-RPC por stdio) pelo cliente genérico de [`acp`].
+//!
+//! Os provedores ficam num registro ([`registry`]) atrás do trait
+//! [`registry::AgentProvider`]; o despacho de workers não conhece nenhum CLI.
 //!
 //! As conversas guardam o id nativo de sessão/thread do provedor
 //! (`nativeSessionId` no store do frontend), então retomar uma conversa nunca
 //! reenvia o transcript inteiro — o provedor recarrega o próprio histórico.
 
+mod acp;
+pub mod acp_client;
 mod claude;
 mod codex;
+mod events;
+pub mod ide_bridge;
+mod registry;
 
-use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tauri::{ipc::Channel, State};
+use tauri::{ipc::Channel, Manager, State};
 use tokio::sync::{mpsc, oneshot, Notify};
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum AcpEvent {
-    Text {
-        content: String,
-    },
-    /// Delta do raciocínio do modelo (extended thinking do Claude, resumo de
-    /// reasoning do Codex). Exibido ao vivo pelo frontend enquanto o modelo
-    /// pensa; não entra no transcript persistido.
-    Thought {
-        content: String,
-    },
-    Status {
-        message: String,
-    },
-    /// Id nativo da sessão (Claude) ou thread (Codex) desta conversa. O
-    /// frontend persiste o id para retomar a conversa em envios futuros.
-    #[serde(rename_all = "camelCase")]
-    Session {
-        session_id: String,
-    },
-    #[serde(rename_all = "camelCase")]
-    Done {
-        stop_reason: String,
-    },
-    Error {
-        message: String,
-    },
-}
+pub(crate) use events::{
+    approval_label, cap_text, default_approval_options, new_request_id, AcpEvent,
+    ApprovalBroker, ApprovalOption, ApprovalReply, EventSink, FileDiff, ModelInfo, ToolCallEvent,
+    UsageInfo,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct WorkerKey {
@@ -61,6 +46,7 @@ struct WorkerKey {
 pub struct AcpState {
     workers: Mutex<HashMap<WorkerKey, mpsc::UnboundedSender<PromptJob>>>,
     cancel: Arc<Notify>,
+    approvals: Arc<ApprovalBroker>,
 }
 
 impl AcpState {
@@ -68,6 +54,7 @@ impl AcpState {
         Self {
             workers: Mutex::new(HashMap::new()),
             cancel: Arc::new(Notify::new()),
+            approvals: Arc::new(ApprovalBroker::default()),
         }
     }
 
@@ -86,11 +73,12 @@ impl AcpState {
             }
         }
 
+        let provider = registry::find_provider(&key.provider)
+            .ok_or_else(|| format!("Provedor desconhecido: {}", key.provider))?;
         let (sender, receiver) = mpsc::unbounded_channel();
-        let provider = key.provider.clone();
-        let root = key.root.clone();
+        let worker = provider.spawn_worker(key.root.clone(), receiver);
         tauri::async_runtime::spawn(async move {
-            if let Err(error) = run_worker(provider, root, receiver).await {
+            if let Err(error) = worker.await {
                 eprintln!("[agent] worker encerrado: {error}");
             }
         });
@@ -130,20 +118,36 @@ impl Default for AcpState {
 }
 
 pub(crate) struct PromptJob {
-    conversation_id: String,
-    context_prompt: String,
-    prompt: String,
-    mode: AgentMode,
+    pub(crate) conversation_id: String,
+    pub(crate) context_prompt: String,
+    pub(crate) prompt: String,
+    pub(crate) mode: AgentMode,
     /// Modelo escolhido no frontend (id do catálogo do provedor). Vazio ⇒ o CLI
     /// usa o modelo padrão configurado do provedor.
-    model: String,
-    /// Id nativo salvo pelo frontend (sessão Claude / thread Codex), presente
-    /// quando a conversa já falou com o provedor antes (inclusive em execuções
-    /// anteriores do app).
-    native_session_id: Option<String>,
-    on_event: Channel<AcpEvent>,
-    cancel: Arc<Notify>,
-    done: oneshot::Sender<Result<(), String>>,
+    pub(crate) model: String,
+    /// Id nativo salvo pelo frontend (sessão Claude / thread Codex / sessão
+    /// ACP), presente quando a conversa já falou com o provedor antes
+    /// (inclusive em execuções anteriores do app).
+    pub(crate) native_session_id: Option<String>,
+    /// Restrições do agente personalizado (ferramentas, rede do sandbox).
+    pub(crate) options: RunOptions,
+    pub(crate) on_event: EventSink,
+    pub(crate) cancel: Arc<Notify>,
+    /// Broker onde o worker registra pedidos de aprovação interativos.
+    pub(crate) approvals: Arc<ApprovalBroker>,
+    pub(crate) done: oneshot::Sender<Result<(), String>>,
+}
+
+/// Restrições por agente personalizado, aplicadas pelo mecanismo NATIVO de
+/// cada provedor (flags `--allowedTools`/`--disallowedTools` do Claude; rede
+/// do sandbox `workspace-write` do Codex). Fazem parte da identidade do
+/// processo no Claude: mudar derruba e recria o processo (como o modo).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub(crate) struct RunOptions {
+    pub(crate) allowed_tools: Vec<String>,
+    pub(crate) disallowed_tools: Vec<String>,
+    pub(crate) network_access: bool,
 }
 
 /// What the agent is allowed to do for a given send, espelhando os modos de
@@ -158,14 +162,14 @@ pub(crate) enum AgentMode {
     Plan,
     /// Edita arquivos do workspace automaticamente.
     Edit,
-    /// O agente escolhe o nível; escalações arriscadas são negadas.
+    /// O agente escolhe o nível; escalações viram cartões de aprovação.
     Auto,
     /// Acesso total, sem confirmações.
     Bypass,
 }
 
 impl AgentMode {
-    fn parse(value: &str) -> Result<Self, String> {
+    pub(crate) fn parse(value: &str) -> Result<Self, String> {
         match value {
             "ask" => Ok(Self::Ask),
             "plan" => Ok(Self::Plan),
@@ -226,6 +230,7 @@ pub async fn acp_prompt(
     mode: String,
     model: String,
     native_session_id: Option<String>,
+    options: Option<RunOptions>,
     on_event: Channel<AcpEvent>,
     state: State<'_, AcpState>,
 ) -> Result<(), String> {
@@ -237,13 +242,9 @@ pub async fn acp_prompt(
     }
 
     let mode = AgentMode::parse(&mode)?;
-    let root = fs::canonicalize(&workspace_root)
-        .map_err(|error| format!("Não foi possível validar o workspace: {error}"))?;
-    if !root.is_dir() {
-        return Err("O workspace informado não é uma pasta.".into());
-    }
-
+    let root = canonical_workspace(&workspace_root)?;
     let label = provider_label(&provider)?;
+    let on_event = EventSink::from_channel(on_event);
     let key = WorkerKey {
         provider: provider.clone(),
         root,
@@ -267,8 +268,10 @@ pub async fn acp_prompt(
         mode,
         model,
         native_session_id,
+        options: options.unwrap_or_default(),
         on_event: on_event.clone(),
         cancel: Arc::clone(&state.cancel),
+        approvals: Arc::clone(&state.approvals),
         done,
     };
     if let Err(error) = worker.send(job) {
@@ -296,6 +299,15 @@ pub async fn acp_prompt(
     }
 }
 
+fn canonical_workspace(workspace_root: &str) -> Result<PathBuf, String> {
+    let root = fs::canonicalize(workspace_root)
+        .map_err(|error| format!("Não foi possível validar o workspace: {error}"))?;
+    if !root.is_dir() {
+        return Err("O workspace informado não é uma pasta.".into());
+    }
+    Ok(root)
+}
+
 /// Pré-aquece o worker do provedor para o workspace: garante que o processo
 /// (e, no Codex, o app-server + `initialize`) já esteja de pé antes do
 /// primeiro envio, tirando o boot do caminho da primeira resposta. Idempotente
@@ -307,11 +319,7 @@ pub fn acp_warm(
     state: State<'_, AcpState>,
 ) -> Result<(), String> {
     provider_label(&provider)?;
-    let root = fs::canonicalize(&workspace_root)
-        .map_err(|error| format!("Não foi possível validar o workspace: {error}"))?;
-    if !root.is_dir() {
-        return Err("O workspace informado não é uma pasta.".into());
-    }
+    let root = canonical_workspace(&workspace_root)?;
     state.worker_for(WorkerKey { provider, root })?;
     Ok(())
 }
@@ -321,14 +329,22 @@ pub fn acp_stop_workspace(
     workspace_root: String,
     state: State<'_, AcpState>,
 ) -> Result<(), String> {
-    let root = fs::canonicalize(&workspace_root)
-        .map_err(|error| format!("Não foi possível validar o workspace: {error}"))?;
+    let root = canonical_workspace(&workspace_root)?;
     state.stop_workspace(&root)
 }
 
+/// Derruba todos os processos de agentes (todas as pastas). Usado pelo
+/// comando "Fluent Chat: Reiniciar Agentes de IA" da Paleta; o próximo envio
+/// sobe o processo de novo e retoma a sessão nativa.
+#[tauri::command]
+pub fn acp_stop_all(state: State<'_, AcpState>) {
+    state.shutdown_all();
+}
+
 /// Cancels the single in-flight prompt. Codex interrupts only the current turn
-/// and keeps its app-server/session alive; Claude kills the CLI process and the
-/// next send resumes the persisted session with `--resume`.
+/// and keeps its app-server/session alive; ACP sends `session/cancel`; Claude
+/// kills the CLI process and the next send resumes the persisted session with
+/// `--resume`.
 #[tauri::command]
 pub fn acp_cancel(state: State<'_, AcpState>) {
     // `notify_one` stores a permit when cancellation races worker startup, so a
@@ -336,24 +352,71 @@ pub fn acp_cancel(state: State<'_, AcpState>) {
     state.cancel.notify_one();
 }
 
-async fn run_worker(
-    provider: String,
-    root: PathBuf,
-    jobs: mpsc::UnboundedReceiver<PromptJob>,
+/// Resposta do usuário a um cartão de aprovação (`AcpEvent::Approval`).
+#[tauri::command]
+pub fn chat_respond_approval(
+    request_id: String,
+    option_id: String,
+    state: State<'_, AcpState>,
 ) -> Result<(), String> {
-    match provider.as_str() {
-        "codex" => codex::run_worker(root, jobs).await,
-        "claude" => claude::run_worker(root, jobs).await,
-        _ => Err(format!("Provedor desconhecido: {provider}")),
-    }
+    state.approvals.resolve(&request_id, &option_id)
 }
 
-pub(crate) fn provider_label(provider: &str) -> Result<&'static str, String> {
-    match provider {
-        "codex" => Ok("Codex"),
-        "claude" => Ok("Claude"),
-        _ => Err(format!("Provedor desconhecido: {provider}")),
+/// Provedores registrados (nativos + ACP) com a disponibilidade no PATH.
+#[tauri::command]
+pub async fn chat_providers() -> Result<Vec<registry::ProviderStatus>, String> {
+    tauri::async_runtime::spawn_blocking(registry::provider_statuses)
+        .await
+        .map_err(|error| format!("Falha ao detectar os agentes instalados: {error}"))
+}
+
+fn global_agents_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Pasta de dados do app indisponível: {error}"))?;
+    Ok(dir.join("fluent-chat").join("agents.json"))
+}
+
+/// Agentes personalizados globais (valem para todas as pastas), guardados nos
+/// dados do app — complementam os agentes do workspace em `.project/agents.json`.
+#[tauri::command]
+pub fn chat_global_agents_load(app: tauri::AppHandle) -> Result<Value, String> {
+    let path = global_agents_file(&app)?;
+    if !path.exists() {
+        return Ok(json!({ "version": 2, "agents": [] }));
     }
+    let raw = fs::read_to_string(&path)
+        .map_err(|error| format!("Falha ao ler os agentes globais: {error}"))?;
+    serde_json::from_str(&raw)
+        .map_err(|error| format!("O arquivo de agentes globais está inválido: {error}"))
+}
+
+#[tauri::command]
+pub fn chat_global_agents_save(app: tauri::AppHandle, store: Value) -> Result<(), String> {
+    let path = global_agents_file(&app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Falha ao criar a pasta de agentes globais: {error}"))?;
+    }
+    let json = serde_json::to_string_pretty(&store)
+        .map_err(|error| format!("Falha ao serializar os agentes globais: {error}"))?;
+    fs::write(path, json).map_err(|error| format!("Falha ao salvar os agentes globais: {error}"))
+}
+
+pub(crate) fn provider_label(provider: &str) -> Result<String, String> {
+    registry::find_provider(provider)
+        .map(|provider| provider.descriptor().label.clone())
+        .ok_or_else(|| format!("Provedor desconhecido: {provider}"))
+}
+
+/// Comando do servidor MCP de conhecimento do editor (`fluent-coder --mcp
+/// <root>`), injetado em todos os provedores: `--mcp-config` no Claude,
+/// `-c mcp_servers.*` no Codex e `mcpServers` no `session/new` do ACP.
+/// `None` quando o executável não pode ser localizado (a sessão segue sem ele).
+pub(crate) fn knowledge_mcp_server(root: &Path) -> Option<(PathBuf, Vec<String>)> {
+    let exe = std::env::current_exe().ok()?;
+    Some((exe, vec!["--mcp".into(), root.to_string_lossy().into_owned()]))
 }
 
 /// Escolhe entre o contexto completo (agente + histórico) e apenas a nova
@@ -373,7 +436,7 @@ pub(crate) fn prompt_for_session<'a>(
 
 pub(crate) fn empty_store() -> Value {
     json!({
-        "version": 1,
+        "version": 2,
         "agents": [],
         "conversations": []
     })

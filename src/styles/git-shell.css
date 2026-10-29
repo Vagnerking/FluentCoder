@@ -1,0 +1,327 @@
+/* ---- Git / Source control panel ---- */
+.git-panel { display: flex; flex-direction: column; height: 100%; }
+
+.git-panel-embedded { height: auto; min-height: 0; }
+
+.git-panel-flow {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding-bottom: 6px;
+}
+
+.git-panel-embedded .git-panel-flow {
+  flex: 0 0 auto;
+  overflow: visible;
+  padding-bottom: 4px;
+}
+
+.git-panel-view-stack {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.git-panel-embedded .git-panel-view-stack {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+.git-header { gap: 4px; }
+
+.git-header-embedded { display: flex; justify-content: flex-end; min-height: 26px; padding: 0 8px 4px; }
+
+.git-actions { display: flex; gap: 2px; flex-shrink: 0; align-items: center; }
+
+.git-icon-btn { min-width: 24px; height: 24px; padding: 0 5px; background: transparent; border: none; border-radius: var(--radius-control); color: var(--text-secondary); cursor: pointer; font-size: var(--icon-sm); font-variant-numeric: tabular-nums; }
+
+.git-icon-btn:hover:not(:disabled) { background: var(--fill-subtle-hover); color: var(--text); }
+
+.git-icon-btn:disabled { opacity: var(--opacity-disabled); cursor: default; }
+
+.git-branch-row { padding: 0 12px 8px; font-size: var(--font-caption); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.git-hidden-count {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid rgba(210, 228, 242, 0.08);
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  background: rgba(210, 228, 242, 0.045);
+  font-size: var(--font-caption-xs);
+  font-weight: 650;
+}
+
+.git-commit-box { padding: 4px 10px 8px; display: flex; flex-direction: column; gap: 6px; }
+
+.git-message .ui-field-input { min-height: 52px; }
+
+.git-message-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.git-message { width: 100%; resize: vertical; min-height: 42px; padding: 7px 38px 7px 9px; font-family: inherit; font-size: var(--font-base); color: var(--text); background: var(--acrylic-control); border: 1px solid var(--acrylic-border); border-bottom-color: var(--acrylic-border-strong); border-radius: var(--radius-control); outline: none; box-shadow: inset 0 1px 0 rgba(255,255,255,0.025); }
+
+.git-message:hover { background: var(--acrylic-control-hover); }
+
+.git-message:focus { border-color: var(--accent); box-shadow: inset 0 -1px 0 var(--accent); }
+
+.git-message-assist-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(96, 205, 255, 0.16);
+  border-radius: var(--radius-control);
+  color: var(--accent);
+  background: rgba(96, 205, 255, 0.055);
+  cursor: pointer;
+}
+
+.git-message-assist-btn:hover:not(:disabled) {
+  border-color: rgba(96, 205, 255, 0.28);
+  background: rgba(96, 205, 255, 0.11);
+}
+
+.git-message-assist-btn:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.git-commit-actions-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.git-assist-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid rgba(96, 205, 255, 0.2);
+  border-radius: var(--radius-control);
+  color: var(--accent);
+  background: rgba(96, 205, 255, 0.08);
+  font-size: var(--font-caption);
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.git-assist-btn:hover:not(:disabled) { background: rgba(96, 205, 255, 0.14); border-color: rgba(96, 205, 255, 0.32); }
+
+.git-assist-btn:disabled { opacity: 0.4; cursor: default; }
+
+.git-commit-btn { height: 26px; background: var(--accent); color: var(--text-on-accent); border: none; border-radius: var(--radius-control); font-weight: 600; font-size: var(--font-caption); cursor: pointer; }
+
+.git-commit-btn:hover:not(:disabled) { filter: brightness(1.08); }
+
+.git-commit-btn:disabled { opacity: var(--opacity-disabled); cursor: default; }
+
+.git-group-commit { order: 20; }
+
+.git-error { margin: 0 12px 8px; padding: 6px 8px; font-size: var(--font-caption-sm); color: var(--error); background: color-mix(in srgb, var(--color-status-error) 18%, transparent); border: 1px solid color-mix(in srgb, var(--color-status-error) 40%, transparent); border-radius: var(--radius-control); white-space: pre-wrap; overflow-wrap: break-word; order: 25; }
+
+.git-view-section {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 0;
+  margin-top: 0;
+  border-top: 1px solid rgba(210, 228, 242, 0.055);
+  /* Quando as views não cabem, cada uma encolhe e rola o próprio corpo — o
+     corpo de "Alterações" não pode mais ser desenhado por cima do Grafo. */
+  overflow: hidden;
+}
+
+.git-view-section > .git-section-header { flex: none; }
+
+/* Recolhida = só o cabeçalho: ações aparecem só no hover/foco. */
+.git-view-section:not(.is-expanded) > .git-section-header .git-section-actions > :not(.git-count) {
+  display: none;
+}
+
+.git-view-section:not(.is-expanded) > .git-section-header:is(:hover, :focus-within) .git-section-actions > :not(.git-count) {
+  display: inline-flex;
+}
+
+.git-panel-embedded .git-view-section { overflow: visible; }
+
+.git-view-section:first-child {
+  border-top: 0;
+}
+
+.git-view-section.is-dragging {
+  opacity: 0.58;
+}
+
+.git-view-section.is-fill-available {
+  flex: 1 1 auto;
+}
+
+.git-view-section.is-fill-available .git-source-view-body,
+.git-view-section.is-fill-available .git-view-pane-body,
+.git-view-section.is-fill-available .git-fluent-board {
+  flex: 1 1 auto;
+  height: auto;
+}
+
+.git-view-section.is-fill-available .git-view-resize-handle {
+  display: none;
+}
+
+.git-view-pane-body {
+  flex: 0 1 var(--git-view-height, 240px);
+  height: auto;
+  min-width: 0;
+  min-height: 72px;
+  padding: 0 0 8px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  animation: git-panel-section-in 90ms ease-out;
+}
+
+/* O grafo virtualizado rola por dentro (lista + detalhes). */
+.git-graph-pane-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  contain: content;
+}
+
+.git-source-views {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.git-source-view-body {
+  /* Antes `flex: 0 0 auto; height: 178px`: a section encolhia mas o corpo
+     não, e transbordava sobre o cabeçalho do Grafo. */
+  flex: 0 1 var(--git-view-height, 178px);
+  height: auto;
+  min-height: 72px;
+  overflow: auto;
+  padding: 0 0 12px;
+  scrollbar-gutter: stable;
+  contain: content;
+}
+
+.git-commit-box-inline {
+  padding: 4px 10px 5px;
+  gap: 5px;
+}
+
+/* Campo de 1 a 6 linhas (altura via JS: autoGrowCommitMessage). O botão do
+   assistente fica no canto inferior direito, numa faixa reservada pelo
+   padding — não cobre o texto nem o placeholder. */
+.git-commit-box-inline .git-message {
+  display: block;
+  min-height: 28px;
+  max-height: 118px;
+  line-height: 18px;
+  resize: none;
+  overflow-y: hidden;
+  padding: 4px 32px 4px 8px;
+}
+
+.git-commit-box-inline .git-message::placeholder {
+  color: var(--text-muted);
+}
+
+.git-commit-box-inline .git-message-assist-btn {
+  top: auto;
+  bottom: 3px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+}
+
+.git-source-subsection {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+
+.git-source-subsection-body {
+  min-width: 0;
+  animation: git-panel-section-in 90ms ease-out;
+}
+
+.git-panel-embedded .git-source-views {
+  flex: 0 0 auto;
+}
+
+.git-panel-embedded .git-source-view-body {
+  flex: none;
+  overflow: visible;
+  height: auto;
+  min-height: 0;
+  padding-bottom: 8px;
+}
+
+.git-panel-embedded .git-view-pane-body,
+.git-panel-embedded .git-fluent-board {
+  flex: none;
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+}
+
+.git-panel-embedded .git-view-resize-handle {
+  display: none;
+}
+
+.git-view-resize-handle {
+  position: relative;
+  flex: 0 0 5px;
+  min-height: 5px;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.git-view-resize-handle::before {
+  content: "";
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  top: 2px;
+  height: 1px;
+  border-radius: var(--radius-pill);
+  background: rgba(210, 228, 242, 0.055);
+  transition: background 90ms ease;
+}
+
+.git-view-resize-handle:hover::before,
+.git-pane-resizing .git-view-resize-handle::before {
+  background: rgba(96, 205, 255, 0.38);
+}
+
+.git-pane-resizing {
+  cursor: ns-resize;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.git-lists { flex: 1; overflow-y: auto; padding-bottom: 12px; order: 30; scrollbar-gutter: stable; }
+
+.git-panel-embedded .git-lists { flex: none; overflow: visible; padding-bottom: 8px; }

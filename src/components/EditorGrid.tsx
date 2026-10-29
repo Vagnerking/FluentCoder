@@ -1,5 +1,6 @@
 import { Fragment } from "react";
 import { groupOrder, type LayoutNode, type Orientation } from "../editorGroups";
+import { startPointerDrag } from "../workbench/workbenchDrag";
 
 export interface EditorGridProps {
   node: LayoutNode;
@@ -54,23 +55,26 @@ function SplitHandle({
         const prev = handle.previousElementSibling as HTMLElement | null;
         const next = handle.nextElementSibling as HTMLElement | null;
         if (!prev || !next) return;
-        handle.setPointerCapture(e.pointerId);
         const start = horiz ? e.clientX : e.clientY;
         const aStart = horiz ? prev.offsetWidth : prev.offsetHeight;
         const bStart = horiz ? next.offsetWidth : next.offsetHeight;
         const total = aStart + bStart;
         const MIN = 80;
-        const move = (me: PointerEvent) => {
-          const delta = (horiz ? me.clientX : me.clientY) - start;
-          const a = Math.max(MIN, Math.min(aStart + delta, total - MIN));
-          onResize(a / total, (total - a) / total);
-        };
-        const up = () => {
-          window.removeEventListener("pointermove", move);
-          window.removeEventListener("pointerup", up);
-        };
-        window.addEventListener("pointermove", move);
-        window.addEventListener("pointerup", up);
+        startPointerDrag({
+          kind: "resize",
+          cursor: horiz ? "col-resize" : "row-resize",
+          captureTarget: handle,
+          pointerId: e.pointerId,
+          onMove: (me) => {
+            const delta = (horiz ? me.clientX : me.clientY) - start;
+            const a = Math.max(MIN, Math.min(aStart + delta, total - MIN));
+            onResize(a / total, (total - a) / total);
+          },
+          // Escape/pointercancel devolve a divisão ao tamanho de antes.
+          onEnd: (committed) => {
+            if (!committed) onResize(aStart / total, bStart / total);
+          },
+        });
       }}
     />
   );

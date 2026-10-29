@@ -15,8 +15,9 @@ test("hover abre acima da linha (hover.above), como o VS Code", () => {
   );
 });
 
-test("styles.css desloca o balão de hover pra cima (folga da linha do símbolo)", () => {
-  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+test("o CSS do editor desloca o balão de hover pra cima (folga da linha do símbolo)", () => {
+  // Folhas divididas: a regra de hover do Monaco vive em styles/editor-monaco-hover.css.
+  const css = readFileSync(new URL("../styles/editor-monaco-hover.css", import.meta.url), "utf8");
   const rule = /\.monaco-resizable-hover\s*\{[^}]*transform:\s*translateY\(\s*(-\d+(?:\.\d+)?)px\s*\)/.exec(
     css
   );

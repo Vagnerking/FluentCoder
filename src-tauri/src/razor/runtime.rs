@@ -61,7 +61,11 @@ fn derive_inputs_fingerprint(csproj: &Path, project_dir: &Path) -> Option<System
 /// projects (mirrors `canonical_key` in `commands.rs`).
 fn project_key(csproj: &Path) -> String {
     let k = csproj.to_string_lossy().replace('\\', "/");
-    if cfg!(windows) { k.to_ascii_lowercase() } else { k }
+    if cfg!(windows) {
+        k.to_ascii_lowercase()
+    } else {
+        k
+    }
 }
 
 /// Run one derive eval and parse it, mapping every failure to an error that
@@ -113,7 +117,9 @@ fn derive_cached(csproj: &Path, project_dir: &Path, timeout: Duration) -> io::Re
         Ok(d) => d,
         Err(first_err) => {
             // One-shot restore retry: covers the "assets missing" first-ever case.
-            crate::rdiag!("[razor:derive] no-restore eval failed ({first_err}); retrying with restore");
+            crate::rdiag!(
+                "[razor:derive] no-restore eval failed ({first_err}); retrying with restore"
+            );
             run_derive(
                 derive::derive_command_with_restore(&csproj_str, None),
                 project_dir,
@@ -215,11 +221,14 @@ impl Captured {
     pub fn stderr_tail(&self) -> String {
         const CAP: usize = 2048;
         let start = self.stderr.len().saturating_sub(CAP);
-        String::from_utf8_lossy(&self.stderr[start..]).trim().to_string()
+        String::from_utf8_lossy(&self.stderr[start..])
+            .trim()
+            .to_string()
     }
 
     pub fn exit_code_display(&self) -> String {
-        self.exit_code.map_or_else(|| "signal".to_string(), |c| c.to_string())
+        self.exit_code
+            .map_or_else(|| "signal".to_string(), |c| c.to_string())
     }
 }
 
@@ -227,7 +236,12 @@ impl Captured {
 /// exceeds `timeout`. Prevents a hung `dotnet` from blocking the caller forever.
 /// Callers decide what a non-zero exit means (`Captured::success`) — a failing
 /// user compile still emits generator output, but a failing restore is fatal.
-fn run_capturing(program: &str, args: &[String], cwd: &Path, timeout: Duration) -> io::Result<Captured> {
+fn run_capturing(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    timeout: Duration,
+) -> io::Result<Captured> {
     let mut cmd = Command::new(program);
     cmd.args(args)
         .current_dir(cwd)
@@ -266,9 +280,9 @@ fn run_capturing(program: &str, args: &[String], cwd: &Path, timeout: Duration) 
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait(); // reap the killed child
-            // The reader threads are detached (we hold only the receivers): a
-            // `dotnet` descendant (e.g. VBCSCompiler) may still hold the pipes, so
-            // we never block on them — dropping the receivers lets them finish.
+                                  // The reader threads are detached (we hold only the receivers): a
+                                  // `dotnet` descendant (e.g. VBCSCompiler) may still hold the pipes, so
+                                  // we never block on them — dropping the receivers lets them finish.
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!("`{program}` timed out after {}s", timeout.as_secs()),
@@ -289,9 +303,10 @@ fn run_capturing(program: &str, args: &[String], cwd: &Path, timeout: Duration) 
         }
     };
     // stderr is best-effort context: don't fail the call over a lagging pipe.
-    let stderr_buf = erx.try_recv().or_else(|_| {
-        erx.recv_timeout(Duration::from_millis(200))
-    }).unwrap_or_default();
+    let stderr_buf = erx
+        .try_recv()
+        .or_else(|_| erx.recv_timeout(Duration::from_millis(200)))
+        .unwrap_or_default();
     Ok(Captured {
         stdout: stdout_buf,
         stderr: stderr_buf,
@@ -525,8 +540,10 @@ pub fn emit_fallback(
 
     // Skip the build when every emitted file is already newer than its inputs
     // (re-open with no edit).
-    let emit_current = plan.projections.iter().all(|pf| {
-        match exec::resolve_emitted(pf) {
+    let emit_current = plan
+        .projections
+        .iter()
+        .all(|pf| match exec::resolve_emitted(pf) {
             Some(emitted) => {
                 let cshtml = user_project_dir.join(&pf.cshtml_rel);
                 is_newer_or_equal(emitted, &cshtml)
@@ -536,8 +553,7 @@ pub fn emit_fallback(
                         .all(|g| is_newer_or_equal(emitted, g))
             }
             None => false,
-        }
-    });
+        });
     if emit_current {
         crate::rdiag!("[razor:timing] emit-fallback SKIPPED (projections up-to-date)");
     } else {
@@ -665,16 +681,26 @@ mod tests {
         assert!(prepared.plan.solution_path.exists());
 
         // one projection, nothing missing (the deliberate CS1061 still emits the .g.cs)
-        assert!(prepared.missing.is_empty(), "unexpected missing: {:?}", prepared.missing);
+        assert!(
+            prepared.missing.is_empty(),
+            "unexpected missing: {:?}",
+            prepared.missing
+        );
         assert_eq!(prepared.projections.len(), 1);
         let proj = &prepared.projections[0];
         assert!(proj.shadow_gcs.exists());
-        assert!(proj.source_map.region_count() > 0, "no #line regions parsed");
+        assert!(
+            proj.source_map.region_count() > 0,
+            "no #line regions parsed"
+        );
 
         // the map actually remaps the `.cshtml` `@Model.City` (Index.cshtml line 8,
         // 1-based; LSP 0-based line 7) into the generated projection.
         let gen_pos = source_pos_to_generated(&proj.source_map, LspPos::new(7, 12));
-        assert!(gen_pos.is_some(), "Model.City did not remap into the projection");
+        assert!(
+            gen_pos.is_some(),
+            "Model.City did not remap into the projection"
+        );
 
         let _ = std::fs::remove_dir_all(&ws);
     }

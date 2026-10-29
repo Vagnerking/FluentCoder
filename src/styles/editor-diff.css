@@ -1,0 +1,183 @@
+/* ---- Side-by-side Git diff editor ---- */
+.editor-diff-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: var(--editor-bg);
+}
+
+.editor-diff-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 46%);
+  align-items: center;
+  gap: 12px;
+  min-height: 34px;
+  padding: 4px 12px;
+  border-bottom: 1px solid rgba(210, 228, 242, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.034), rgba(255,255,255,0.012)),
+    var(--editor-bg);
+  color: var(--text-secondary);
+  font-size: var(--font-caption);
+  flex-shrink: 0;
+}
+
+.editor-diff-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-weight: 650;
+}
+
+.editor-diff-title span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-diff-title .codicon {
+  color: var(--accent);
+}
+
+.editor-diff-labels {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--font-caption-sm);
+  font-weight: 750;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.editor-diff-labels span {
+  min-width: 0;
+  padding: 2px 8px;
+  border: 1px solid rgba(210, 228, 242, 0.09);
+  border-radius: var(--radius-control);
+  background: rgba(255,255,255,0.024);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-diff-shell .monaco-diff-editor {
+  flex: 1;
+  min-height: 0;
+}
+
+.editor-diff-shell .diffOverview {
+  background: rgba(255,255,255,0.02);
+}
+
+.claude-diff {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  background: var(--editor-bg);
+}
+
+.claude-diff-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--acrylic-border);
+}
+
+.claude-diff-icon { color: var(--accent); flex: none; }
+
+.claude-diff-heading { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+
+.claude-diff-title {
+  margin: 0;
+  font-size: var(--font-body);
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.claude-diff-path {
+  font-size: var(--font-caption);
+  line-height: 16px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.claude-diff-queue {
+  flex: none;
+  font-size: var(--font-caption);
+  line-height: 16px;
+  padding: 2px 8px;
+  border-radius: var(--radius-control);
+  background: var(--acrylic-control);
+  color: var(--text-secondary);
+}
+
+.claude-diff-actions { display: flex; gap: 8px; flex: none; }
+
+.claude-diff-actions .confirm-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: center;
+}
+
+.claude-diff-actions .confirm-button:disabled { opacity: var(--opacity-disabled); cursor: default; }
+
+.claude-diff-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: var(--font-caption);
+  line-height: 16px;
+  color: var(--error);
+  border-bottom: 1px solid var(--acrylic-border);
+}
+
+.claude-diff-editor { flex: 1; min-height: 0; }
+
+.ext-diff-dialog {
+  width: min(1100px, calc(100vw - 48px));
+  height: min(720px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  background: var(--acrylic-tint-strong);
+  border: 1px solid var(--acrylic-border-strong);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-dialog);
+  backdrop-filter: blur(40px) saturate(140%);
+  -webkit-backdrop-filter: blur(40px) saturate(140%);
+  outline: none;
+}
+
+.ext-diff-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ext-diff-body {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  overflow: hidden;
+}

@@ -1,0 +1,224 @@
+:root {
+  /* Windows 11 / Fluent dark palette. Surfaces use alpha so the native
+     Mica backdrop shows through; the editor stays opaque for legibility. */
+  --accent: #60cdff; /* Win11 dark-mode accent */
+  --accent-strong: #0e639c;
+
+  --text: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.82);
+  --text-muted: rgba(255, 255, 255, 0.54);
+  --text-disabled: rgba(255, 255, 255, 0.36);
+  --error: #ff99a4;
+
+  /* Window shell: one continuous surface behind the title bar, the gutters
+     between the floating cards and the status bar (Mica shows through on
+     Windows; Linux/macOS paint the solid equivalent). */
+  --shell-bg: rgba(15, 18, 23, 0.84);
+  --shell-bg-solid: #12161c;
+  --shell-glow: radial-gradient(circle at 16% 0%, rgba(74, 111, 143, 0.16), transparent 42%);
+  /* Win11 caption close button (the one red in the chrome). */
+  --color-caption-close: #c42b1c;
+  --color-caption-close-pressed: #b9281b;
+  --text-on-danger: #ffffff;
+
+  /* Fluent 2 dark surfaces: cool gray-blue tint with acrylic luminosity. */
+  --titlebar-bg: rgba(25, 31, 40, 0.82);
+  --titlebar-height: 32px; /* keep in sync with `.titlebar` height */
+  --acrylic-tint: rgba(31, 38, 48, 0.78);
+  --acrylic-tint-strong: rgba(28, 34, 43, 0.9);
+  --acrylic-control: rgba(211, 229, 243, 0.075);
+  --acrylic-control-hover: rgba(211, 229, 243, 0.12);
+  --acrylic-control-pressed: rgba(211, 229, 243, 0.055);
+  --acrylic-luminosity: rgba(132, 170, 201, 0.08);
+  --acrylic-border: rgba(210, 228, 242, 0.13);
+  --acrylic-border-strong: rgba(210, 228, 242, 0.2);
+  --sidebar-bg: var(--acrylic-tint);
+  --tabbar-bg: rgba(35, 43, 54, 0.76);
+
+  --editor-bg: #1c222b;
+
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --stroke: rgba(255, 255, 255, 0.06);
+
+  /* Fluent control fills (hover/active layering). */
+  --fill-subtle-hover: var(--acrylic-control-hover);
+  --fill-subtle-active: var(--acrylic-control-pressed);
+  --fill-selected: rgba(96, 205, 255, 0.16);
+  --fill-selected-hover: rgba(96, 205, 255, 0.22);
+  /* Recessed track (segmented control, darker field). */
+  --fill-recessed: rgba(0, 0, 0, 0.16);
+
+  --radius-control: 6px;
+  --radius-card: 8px;
+  /* Fluent 2 radius scale used by the `src/components/ui` primitives: compact
+     controls (button/input/select/checkbox) sit at 4px, surfaces (flyouts,
+     dialogs, cards) at 8px. */
+  --radius-xs: 2px; /* indicator bars, inline highlights */
+  --radius-sm: 4px;
+  --radius-surface: var(--radius-card);
+  --radius-pill: 999px; /* chips, badges, count bubbles */
+
+  /* ---- Accent states ----
+     Filled accent (primary buttons, checked checkbox/switch). Text on top of
+     the accent fill must use `--text-on-accent` for AA contrast. */
+  --accent-hover: #7ad6ff;
+  --accent-pressed: #4cb8ec;
+  --text-on-accent: #06223a;
+
+  /* Raised surface — opaque layer one step above the editor (cards, popups
+     that must not let content bleed through). */
+  --color-surface-raised: #262e3b;
+
+  /* ---- Spacing (Fluent 2, base 4px) ---- */
+  --space-none: 0;
+  --space-xxs: 2px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+
+  /* ---- Type ramp (Fluent 2) ----
+     Semantic sizes + line-heights; components pick a role, never a raw px.
+     `--font-base` is the app's compact body (the global 13px), used by
+     medium-size controls so they match the surrounding UI density. */
+  --font-caption-xs: 10px; /* Fluent Caption 2: tiny tags/counters */
+  --font-caption-sm: 11px; /* overlines, badges, shortcut hints */
+  --line-height-caption-sm: 14px;
+  --font-caption: 12px;
+  --line-height-caption: 16px;
+  --font-base: 13px;
+  --line-height-base: 18px;
+  --font-body: 14px;
+  --line-height-body: 20px;
+  --font-subtitle: 16px;
+  --line-height-subtitle: 22px;
+  --font-title: 24px;
+  --line-height-title: 32px;
+  /* Font stacks — Windows-first defaults, redefined per OS below (the same
+     stacks live in src/platform/fonts.ts for JS consumers: xterm, canvas). */
+  --font-ui: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI",
+    system-ui, sans-serif;
+  --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, ui-monospace,
+    monospace;
+
+  /* ---- Control metrics ---- */
+  --control-h-sm: 24px;
+  --control-h-md: 32px;
+  --control-h-lg: 36px;
+  --icon-sm: 14px;
+  --icon-md: 16px;
+  --opacity-disabled: 0.4;
+
+  /* ---- Legacy aliases ----
+     Names older rules referenced without ever defining (they only rendered
+     through their inline fallbacks). Mapped onto the real tokens so every
+     surface resolves from one palette. Prefer the target token in new code. */
+  --bg-elevated: var(--acrylic-control-hover);
+  --fill-subtle: var(--acrylic-control-hover);
+  --acrylic-bg: var(--color-surface-overlay);
+  --danger: var(--color-status-error);
+  --mono-font: var(--font-mono);
+
+  /* ---- Semantic status tokens (F2-AUD-001 / F2-AUD-012) ----
+     Single source of truth for error/warning/success/info. Status must never
+     rely on color alone — pair these with an icon or text label at the call
+     site. Tuned for AA contrast over the dark Mica surfaces. */
+  --color-status-error: #f14c4c;
+  --color-status-error-muted: #c74e39;
+  --color-status-warning: #cca700;
+  --color-status-warning-strong: #e0a23b;
+  --color-status-success: #73c991;
+  --color-status-info: var(--accent);
+
+  /* Git decoration tokens — mirror VSCode's gitDecoration.* roles. */
+  --color-git-modified: #e2c08d;
+  --color-git-added: #73c991;
+  --color-git-untracked: #73c991;
+  --color-git-deleted: #f14c4c;
+  --color-git-deleted-strong: #c74e39;
+  --color-git-renamed: var(--accent);
+  --color-git-conflict: #e4676b;
+  --color-git-conflict-strong: #e0a23b;
+
+  /* Overlay surface for flyouts / menus / suggest widgets — opaque enough that
+     editor text never bleeds through. */
+  --color-surface-overlay: #202734;
+  --color-surface-overlay-border: #3a4150;
+  /* Flyout surface (menus): opaque like the overlay so code never bleeds
+     through; the acrylic feel comes from the luminosity gradient on top. */
+  --color-surface-flyout: var(--color-surface-overlay);
+  /* Modal scrim behind dialogs. */
+  --color-scrim: rgba(0, 0, 0, 0.4);
+  /* Find/search match highlight (rest / hovered row). */
+  --color-find-match: rgba(255, 197, 61, 0.3);
+  --color-find-match-strong: rgba(255, 197, 61, 0.42);
+
+  /* Graph node roles (F2-AUD-001 / F2-AUD-015) — consumed by GraphView. */
+  --color-graph-markdown: var(--accent);
+  --color-graph-code: #3ec9a7;
+
+  /* Lanes do grafo de commits (src/git/graphLayout.ts, GRAPH_PALETTE_SIZE =
+     10): cor por hash do nome da branch; contraste ≥ 3:1 sobre o card. */
+  --graph-lane-0: #60cdff;
+  --graph-lane-1: #ffb547;
+  --graph-lane-2: #f17cb8;
+  --graph-lane-3: #4fd1b5;
+  --graph-lane-4: #b794ff;
+  --graph-lane-5: #ff8a5c;
+  --graph-lane-6: #93d46f;
+  --graph-lane-7: #f2d16b;
+  --graph-lane-8: #6fa8ff;
+  --graph-lane-9: #ff7b8a;
+  /* Miolo dos nós vazados (merge, HEAD, recebidos). */
+  --graph-node-bg: #1f2630;
+
+  /* ---- Focus (F2-AUD-003) ----
+     One focus contract for every interactive element. Apply via the
+     `:focus-visible` rule near the end of this file; never `outline: none`
+     without substituting an equivalent ring. */
+  --stroke-focus: var(--accent);
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 1px;
+  --focus-ring: 0 0 0 var(--focus-ring-width) var(--stroke-focus);
+
+  /* ---- Elevation / shadow (F2-AUD-010) ----
+     Permanent surfaces stay flat (rest); strong shadows are reserved for
+     transient overlays (flyout/dialog). */
+  --shadow-rest: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-flyout:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 8px 24px rgba(0, 0, 0, 0.24);
+  --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.5);
+
+  /* ---- Motion (F2-AUD-004) ----
+     Durations/easings consumed by transitions and animations. The global
+     `prefers-reduced-motion` block collapses these to near-zero. */
+  --duration-fast: 100ms;
+  --duration-medium: 180ms;
+  --duration-slow: 280ms;
+  --ease-standard: cubic-bezier(0.33, 0, 0.1, 1);
+  --ease-decelerate: cubic-bezier(0.1, 0.9, 0.2, 1);
+
+  /* Only dark theme exists today; declare it so native form controls,
+     scrollbars and the canvas match (F2-AUD-002). */
+  color-scheme: dark;
+
+  font-synthesis: none;
+  --duration-tree: 110ms;
+}
+
+/* Per-OS font stacks (`html.platform-*` is set before first paint from the
+   Rust-injected platform info). Linux ships no Segoe/Cascadia: without this
+   the UI fell back to Noto Sans and the mono to the wide DejaVu Sans Mono. */
+html.platform-linux {
+  --font-ui: system-ui, Cantarell, "Noto Sans", Ubuntu, "DejaVu Sans", sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", "Ubuntu Mono",
+    "Noto Sans Mono", "DejaVu Sans Mono", monospace;
+}
+
+html.platform-macos {
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+    system-ui, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, Menlo, Monaco, "Cascadia Code", monospace;
+}

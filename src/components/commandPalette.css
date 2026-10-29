@@ -1,0 +1,15 @@
+/* Atalho à direita de cada linha da Paleta de Comandos (mesmo visual do
+   atalho do command center da title bar). */
+.command-palette-kbd {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0 var(--space-xs);
+  font-family: inherit;
+  font-size: var(--font-caption-sm);
+  line-height: var(--line-height-caption);
+  color: var(--text-muted);
+  white-space: nowrap;
+  background: var(--acrylic-control);
+  border: 1px solid var(--acrylic-border);
+  border-radius: var(--radius-sm);
+}

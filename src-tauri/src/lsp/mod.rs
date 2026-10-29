@@ -241,4 +241,3 @@ pub fn lsp_ensure_system_server(server_id: String) -> Result<system_server::Laun
         .ok_or_else(|| format!("servidor LSP desconhecido: {server_id}"))?;
     system_server::resolve_system_server(&spec)
 }
-
