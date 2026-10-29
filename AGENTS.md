@@ -13,7 +13,7 @@ Instruções para o Claude Code neste repositório. A documentação de contexto
 ## Qualidade e aprendizado contínuo
 
 - Antes de implementar ou abrir PR, siga [Qualidade de PRs e segurança](docs/context/pr-quality.md). Registre o contrato afetado, os chamadores e a validação necessária.
-- Cada PR deve ter um objetivo e até 100 arquivos alterados, incluindo lockfiles e fixtures. Divida trabalhos maiores em PRs dependentes com base explícita; não esconda arquivos dos revisores.
+- Concentre a remediação no PR existente. Não abrir PRs auxiliares, criar workflows, configurar gates automáticos ou disparar/reexecutar CI sem solicitação explícita do autor. Usar skills e testes locais pertinentes; organizar a revisão em lotes menores sem ocultar arquivos.
 - Use CodeGraph para impacto/dependências e Serena para símbolos/referências quando disponíveis. Ative o caminho da worktree atual, atualize o índice e confirme resultados no código; ausência de arestas não prova ausência de impacto.
 - Use RTK (`rtk git status`, `rtk test npm run test:pr-check`) para resumir saídas rotineiras. Para revisão de segurança, diffs completos e diagnóstico de falhas, consulte a saída original; saída filtrada não prova ausência de problemas.
 - Em Rust/Tauri, use as skills instaladas `rust-skills`, `tauri-ipc`, `tauri-security` e `tauri-framework-security` conforme o escopo. Preserve a edição/MSRV, os perfis Cargo e os contratos locais. Skills não autorizam upgrades ou novas dependências por si só.

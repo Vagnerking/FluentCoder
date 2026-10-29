@@ -5,11 +5,10 @@ as evidências iniciais estão em [Melhoria contínua](../roadmap/pr-quality.md)
 
 ## Antes de implementar
 
-1. Criar uma worktree separada e identificar a base real do trabalho. Manter um
-   objetivo por PR e dividir incrementos antes de ultrapassar 100 arquivos,
-   incluindo lockfiles, fixtures e gerados. Não aumentar exclusões do revisor
-   para contornar o limite. PRs dependentes precisam apontar para a branch
-   anterior até ela ser integrada; depois, recalcular o diff contra `main`.
+1. Criar uma worktree separada e identificar a base real do trabalho. Manter
+   a correção no PR existente e organizar lotes menores para leitura e análise.
+   Não abrir PRs auxiliares nem criar workflows, gates ou disparar/reexecutar
+   CI sem solicitação explícita do autor. Usar skills e testes locais pertinentes.
 2. Ler os contratos em `AGENTS.md` e `CLAUDE.md` e a documentação do subsistema.
    Mapear entrada, validação, efeito externo, chamadores e fronteiras de confiança.
 3. Usar CodeGraph para impacto e Serena para símbolos/referências quando
@@ -111,8 +110,6 @@ Não foi necessário reinstalar o binário ou ativar hooks globais para este uso
 
 ```sh
 npm ci
-npm run pr:check -- --base origin/main
-npm run test:pr-check
 npm run test:unit
 npm run build
 cargo test --manifest-path src-tauri/Cargo.toml --locked --lib
@@ -120,18 +117,10 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D c
 git diff --check
 ```
 
-Usar a base real em vez de `origin/main` em PRs dependentes. O check local inclui
-commits, alterações rastreadas e arquivos novos não ignorados. Com `--head`,
-verifica apenas os commits, como no CI. As refs devem estar atualizadas.
-O script verifica escopo/metadados, não segurança; não usar regex heurística
-como substituta do CodeQL ou da revisão do fluxo de dados.
-
-O workflow `PR Quality` executa validação de escopo/metadados, testes do check,
-unidades e build do frontend, além de testes/Clippy Rust no Linux e Windows.
-Usa `pull_request`, token de leitura e não interpola título/body como shell.
-Ele passa a rodar quando publicado no GitHub. Torná-lo obrigatório depende de
-ruleset/proteção da branch; adicionar o arquivo não configura essa proteção.
-Não duplicar a configuração de CodeQL já ativa no GitHub sem inspecioná-la.
+Escolher os comandos locais conforme o caminho alterado. Não executar toda
+esta lista repetidamente para mudanças que não afetam o comportamento testado.
+Não criar nem disparar CI de qualidade para esta meta; preservar as automações
+preexistentes do projeto. Skills de análise e revisão não exigem GitHub Actions.
 
 Executar `cargo fmt --check` para avaliar formatação Rust; dívida histórica deve
 ser tratada separadamente, sem reformatar o repositório inteiro em um PR de

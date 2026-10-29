@@ -1,4 +1,5 @@
 language: "pt-BR"
+focus: "balanced"
 
 reviews:
   profile: "chill"
@@ -20,8 +21,6 @@ reviews:
       - "fix/.*"
       - "feature/.*"
       - "feat/.*"
-      - "^ci/.*$"
-      - "^refactor/.*$"
     ignore_title_keywords:
       - "WIP"
       - "[skip review]"
