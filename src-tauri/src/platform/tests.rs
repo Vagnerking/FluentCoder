@@ -394,39 +394,48 @@ fn init_script_exposes_platform_snapshot() {
     assert!(s.contains("\"customCaptionButtons\":"));
 }
 
-/// Linux real: o plano executa de verdade com binários que não abrem janela
-/// (stub no PATH), provando que o fallback chega ao `xdg-open` da pasta-pai.
+/// Linux real: subprocessos controlados exercitam falha, executável ausente
+/// e fallback assíncrono, sem abrir o gerenciador de arquivos do desktop.
 #[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn linux_plan_executes_with_real_processes() {
-    use std::os::unix::fs::PermissionsExt;
     let fixture = tempfile::tempdir().unwrap();
-    let dir = fixture.path();
-    let log = dir.join("log");
-    let stub = |name: &str, code: i32| {
-        let p = dir.join(name);
-        std::fs::write(
-            &p,
-            format!(
-                "#!/bin/sh\nroot=${{0%/*}}\necho {name} \"$@\" >> \"$root/log\"\nexit {code}\n"
-            ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-        p.to_string_lossy().to_string()
+    let log = fixture.path().join("log");
+    let stub = |inv: &mut Invocation, code: i32| {
+        // Use an existing executable: freshly written scripts can fail with
+        // ETXTBSY when another test forks while their write handle is open.
+        let name = inv.program.clone();
+        let args = std::mem::take(&mut inv.args);
+        inv.program = "/bin/sh".into();
+        inv.args = vec![
+            "-c".into(),
+            r#"log=$1; name=$2; code=$3; shift 3
+printf '%s\n' "$name $*" >> "$log"
+exit "$code""#
+                .into(),
+            "fixture".into(),
+            log.to_string_lossy().to_string(),
+            name,
+            code.to_string(),
+        ];
+        inv.args.extend(args);
     };
-    let gdbus = stub("gdbus", 1);
-    let xdg = stub("xdg-open", 0);
     let mut plan = for_os(Os::Linux).reveal_plan(Path::new("/tmp/pasta/a.txt"));
-    plan[0].program = gdbus;
-    plan[1].program = dir.join("nao-existe").to_string_lossy().to_string();
-    plan[2].program = xdg;
+    stub(&mut plan[0], 1);
+    plan[1].program = fixture
+        .path()
+        .join("nao-existe")
+        .to_string_lossy()
+        .to_string();
+    stub(&mut plan[2], 0);
     execute_plan(&plan, &SystemRunner).unwrap();
-    // O spawn do xdg-open é assíncrono: espera o log.
-    for _ in 0..100 {
-        if std::fs::read_to_string(&log)
-            .map(|s| s.contains("xdg-open"))
-            .unwrap_or(false)
+    // Wait for the complete asynchronous fallback record, not a prefix that
+    // could be observed before its arguments have been written.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        if text.lines().any(|line| line == "xdg-open /tmp/pasta")
+            || std::time::Instant::now() >= deadline
         {
             break;
         }

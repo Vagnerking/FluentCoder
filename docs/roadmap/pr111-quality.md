@@ -197,3 +197,29 @@ coleção gerenciada do Codex Security; este roadmap acompanha a execução.
 Após integrar, medir os cinco PRs seguintes conforme a meta de melhoria
 contínua. Esse acompanhamento posterior não substitui nem prolonga os
 critérios de conclusão específicos do #111.
+
+
+## Consolidação no PR original — 29/10/2026
+
+Por orientação do autor, a entrega volta a ser concentrada no PR #111.
+Os PRs auxiliares #112–#120 deixam de ser o caminho de integração; preservar
+suas correções na branch original antes de encerrá-los. Não abrir novos PRs
+para continuar esta remediação. Usar commits e lotes de revisão de até 100
+arquivos dentro do PR original, mantendo visível o tamanho total do diff.
+
+O candidato combinado contém as correções de execução estruturada de tarefas,
+dependências npm/Cargo/ZIP, URLs Azure, estado temporário de descoberta,
+regressões de plataforma e infraestrutura de validação. A consolidação não
+representa aceite: o último CI Windows do candidato de tarefas falhou nas
+comparações de aliases de caminho Git e nos separadores da fixture de shell;
+o teste ACP fake_agent_end_to_end permaneceu ativo até o limite do job.
+Os aceites de release/ConPTY ainda precisam executar e passar.
+
+Ajustes adicionais de fixtures usam diretórios temporários exclusivos com
+limpeza explícita no sucesso e automática em panic. O fallback Linux continua
+executando subprocessos reais; usa /bin/sh já instalado e espera a linha
+completa do processo assíncrono. Nenhuma asserção de comportamento foi removida.
+Validação Linux do conjunto: cargo test --locked --lib, 421 aprovados,
+0 falhas e 15 ignorados; ignorados permanecem pendências quando obrigatórios.
+O gate do diff total permanece ativo: consolidar não elimina o problema de
+revisabilidade do PR grande nem autoriza suprimir essa falha.
