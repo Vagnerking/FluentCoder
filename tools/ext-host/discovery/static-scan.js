@@ -11,7 +11,7 @@ function scanSource(src) {
   while ((m = re.exec(src))) names.add(m[1]);
   const paths = new Map();
   for (const n of names) {
-    const esc = n.replace(/\$/g, '\\$');
+    const esc = n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const pr = new RegExp(`(?<![\\w$.])${esc}\\.([A-Za-z_$][\\w$]*)(?:\\.([A-Za-z_$][\\w$]*))?`, 'g');
     let p;
     while ((p = pr.exec(src))) {

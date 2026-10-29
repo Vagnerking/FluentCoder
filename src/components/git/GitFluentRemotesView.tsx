@@ -10,6 +10,7 @@ import type { GitBranchInfo, GitRemoteInfo } from "../../types";
 import { Codicon } from "../../icons/codicons/Codicon";
 import { Tooltip } from "../Tooltip";
 import { GitFluentFilterInput } from "./GitFluentFilterInput";
+import { remoteProviderLabel } from "../../git/remoteLabels";
 
 interface GitFluentRemotesViewProps {
   remotes: GitRemoteInfo[];
@@ -155,14 +156,6 @@ function remoteUrlLabel(url: string): string {
   } catch {
     return trimmed.replace(/\.git$/, "");
   }
-}
-
-function remoteProviderLabel(url: string): string {
-  const normalized = url.trim().toLowerCase();
-  if (normalized.includes("github.com")) return "GitHub";
-  if (normalized.includes("gitlab.com")) return "GitLab";
-  if (normalized.includes("bitbucket.org")) return "Bitbucket";
-  return "Git";
 }
 
 function renderRemoteBranches({

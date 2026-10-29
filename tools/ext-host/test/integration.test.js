@@ -352,7 +352,7 @@ test('URI handler: ativa a extensão dona da autoridade (onUri) e entrega a URI'
     assert.equal(ext.isActive, false);
     assert.equal(await host.handleUri('fluent-coder://fluent.flows/connector/oauth_callback?code=42'), true);
     assert.ok(ext.isActive);
-    assert.deepEqual(ext.exports.state.uris, ['fluent-coder://fluent.flows/connector/oauth_callback?code%3D42'.replace('%3D', '=')]);
+    assert.deepEqual(ext.exports.state.uris, ['fluent-coder://fluent.flows/connector/oauth_callback?code=42']);
     assert.equal(await host.handleUri('fluent-coder://outra.extensao/x'), false);
     assert.equal(ext.api.env.uriScheme, 'fluent-coder');
   } finally {

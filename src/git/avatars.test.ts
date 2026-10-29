@@ -16,7 +16,7 @@ test("padrão é github; off nunca chama o backend; resultados são cacheados e 
   const calls: string[] = [];
   setGitAvatarResolverForTests(async (email, mode) => {
     calls.push(`${mode}:${email}`);
-    return email.endsWith("noreply.github.com") ? "data:image/png;base64,AA" : null;
+    return email.endsWith("@users.noreply.github.com") ? "data:image/png;base64,AA" : null;
   });
   const [a, b] = await Promise.all([
     resolveGitAvatar("1+ana@users.noreply.github.com"),

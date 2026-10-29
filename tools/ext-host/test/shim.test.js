@@ -168,9 +168,20 @@ test('compareVersions', () => {
 });
 
 // ------------------------------------------------------------- preâmbulo
+// buildPreamble emits one script followed by styles. This reads that fixed
+// generated format; it is not a sanitizer for extension HTML.
+function generatedPreambleScript(html) {
+  assert.ok(html.startsWith('<script>'));
+  const end = html.indexOf('</script>', '<script>'.length);
+  assert.ok(end >= '<script>'.length);
+  assert.equal(html.indexOf('<script>', '<script>'.length), -1);
+  assert.equal(html.indexOf('</script>', end + '</script>'.length), -1);
+  return html.slice('<script>'.length, end);
+}
+
 function runPreamble(opts) {
   const html = buildPreamble({ handle: 'wv9', viewType: 'v', state: { saved: true }, themeVars: {}, themeKind: 'dark', ...opts });
-  const script = /<script>([\s\S]*?)<\/script>/.exec(html)[1];
+  const script = generatedPreambleScript(html);
   const posted = [];
   const winListeners = {};
   const docListeners = {};
@@ -245,10 +256,8 @@ test('preâmbulo gerado é JavaScript válido (escapes do template não quebram 
   const vm = require('node:vm');
   for (const debug of [false, true]) {
     const html = buildPreamble({ handle: 'wv1', viewType: 'v', state: { s: "a'b\n</script>" }, themeVars: { '--vscode-foreground': '#fff' }, themeKind: 'dark', debug });
-    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
-    assert.ok(scripts.length > 0);
     // Só compila (não executa): um `\n` literal dentro de string vira SyntaxError aqui.
-    for (const src of scripts) assert.doesNotThrow(() => new vm.Script(src), SyntaxError);
+    assert.doesNotThrow(() => new vm.Script(generatedPreambleScript(html)), SyntaxError);
   }
 });
 
